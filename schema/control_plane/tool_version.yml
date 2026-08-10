@@ -1,0 +1,40 @@
+table: tool_version
+comment: Immutable tool endpoint and data contract
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: tool_id
+    type: VARCHAR(80)
+  - name: tool_version
+    type: VARCHAR(80)
+  - name: endpoint_uri
+    type: TEXT
+  - name: input_schema
+    type: TEXT
+  - name: output_schema
+    type: TEXT
+  - name: credential_ref
+    type: TEXT
+    nullable: true
+  - name: timeout_ms
+    type: INTEGER
+  - name: max_attempts
+    type: SMALLINT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, tool_id, tool_version]
+foreign_keys:
+  - name: tool_versions
+    columns: [tenant_id, tool_id]
+    references:
+      table: tool_profile
+      columns: [tenant_id, tool_id]
+indexes:
+  - name: tool_version_created_ix
+    columns: [tenant_id, tool_id, created_at]
+checks:
+  - name: tool_version_timeout_ck
+    expression: timeout_ms > 0
+  - name: tool_version_attempts_ck
+    expression: max_attempts BETWEEN 1 AND 10

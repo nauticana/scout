@@ -1,0 +1,27 @@
+table: tool_egress_rule
+comment: Network destinations allowed for a tool version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: tool_id
+    type: VARCHAR(80)
+  - name: tool_version
+    type: VARCHAR(80)
+  - name: protocol
+    type: VARCHAR(10)
+  - name: host
+    type: VARCHAR(253)
+  - name: port
+    type: INTEGER
+primary_key: [tenant_id, tool_id, tool_version, protocol, host, port]
+foreign_keys:
+  - name: tool_egress_rules
+    columns: [tenant_id, tool_id, tool_version]
+    references:
+      table: tool_version
+      columns: [tenant_id, tool_id, tool_version]
+checks:
+  - name: tool_egress_rule_protocol_ck
+    expression: protocol IN ('http', 'https')
+  - name: tool_egress_rule_port_ck
+    expression: port BETWEEN 1 AND 65535

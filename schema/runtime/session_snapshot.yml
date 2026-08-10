@@ -1,0 +1,37 @@
+table: session_snapshot
+comment: Latest durable checkpoint pointer for a conversation
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: latest_turn_no
+    type: BIGINT
+  - name: latest_step_no
+    type: INTEGER
+  - name: state_uri
+    type: TEXT
+  - name: state_digest
+    type: CHAR(64)
+  - name: revision
+    type: BIGINT
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, conversation_id]
+foreign_keys:
+  - name: session_snapshots
+    columns: [tenant_id, conversation_id]
+    references:
+      table: conversation
+      columns: [tenant_id, conversation_id]
+  - name: checkpoint_session_snapshots
+    columns: [tenant_id, conversation_id, latest_turn_no, latest_step_no]
+    references:
+      table: step_checkpoint
+      columns: [tenant_id, conversation_id, turn_no, step_no]
+checks:
+  - name: session_snapshot_digest_ck
+    expression: CHAR_LENGTH(state_digest) = 64
+  - name: session_snapshot_revision_ck
+    expression: revision > 0

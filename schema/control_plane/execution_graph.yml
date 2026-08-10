@@ -1,0 +1,26 @@
+table: execution_graph
+comment: Compiled execution graph for an agent version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: graph_digest
+    type: CHAR(64)
+  - name: compiler_version
+    type: VARCHAR(80)
+  - name: compiled_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_id, agent_version]
+foreign_keys:
+  - name: execution_graphs
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+checks:
+  - name: execution_graph_digest_ck
+    expression: CHAR_LENGTH(graph_digest) = 64

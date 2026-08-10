@@ -1,0 +1,25 @@
+table: agent_tool_binding
+comment: Tool versions authorized for an agent version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: tool_id
+    type: VARCHAR(80)
+  - name: tool_version
+    type: VARCHAR(80)
+primary_key: [tenant_id, agent_id, agent_version, tool_id]
+foreign_keys:
+  - name: agent_tool_bindings
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+  - name: tool_agent_bindings
+    columns: [tenant_id, tool_id, tool_version]
+    references:
+      table: tool_version
+      columns: [tenant_id, tool_id, tool_version]

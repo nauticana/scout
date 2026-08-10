@@ -1,0 +1,76 @@
+table: step_checkpoint
+comment: Durable state and usage after a completed execution step
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: BIGINT
+  - name: step_no
+    type: INTEGER
+  - name: execution_step_id
+    type: BIGINT
+  - name: idempotency_key
+    type: VARCHAR(200)
+  - name: state_uri
+    type: TEXT
+  - name: state_digest
+    type: CHAR(64)
+  - name: fingerprint
+    type: CHAR(64)
+  - name: input_tokens
+    type: BIGINT
+    default: "0"
+  - name: output_tokens
+    type: BIGINT
+    default: "0"
+  - name: tool_calls
+    type: INTEGER
+    default: "0"
+  - name: cost_minor_units
+    type: BIGINT
+    default: "0"
+  - name: currency_code
+    type: CHAR(3)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, conversation_id, turn_no, step_no]
+foreign_keys:
+  - name: step_checkpoints
+    columns: [tenant_id, conversation_id, turn_no]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, conversation_id, turn_no]
+  - name: execution_step_checkpoints
+    columns: [execution_step_id]
+    references:
+      table: execution_step
+      columns: [id]
+  - name: currency_step_checkpoints
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: step_checkpoint_idempotency_uq
+    columns: [tenant_id, idempotency_key]
+    unique: true
+  - name: step_checkpoint_execution_step_ix
+    columns: [execution_step_id]
+checks:
+  - name: step_checkpoint_number_ck
+    expression: step_no > 0
+  - name: step_checkpoint_state_digest_ck
+    expression: CHAR_LENGTH(state_digest) = 64
+  - name: step_checkpoint_fingerprint_ck
+    expression: CHAR_LENGTH(fingerprint) = 64
+  - name: step_checkpoint_input_tokens_ck
+    expression: input_tokens >= 0
+  - name: step_checkpoint_output_tokens_ck
+    expression: output_tokens >= 0
+  - name: step_checkpoint_tool_calls_ck
+    expression: tool_calls >= 0
+  - name: step_checkpoint_cost_ck
+    expression: cost_minor_units >= 0

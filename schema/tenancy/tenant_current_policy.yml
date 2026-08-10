@@ -1,0 +1,14 @@
+table: tenant_current_policy
+comment: Active runtime policy pointer for each tenant
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: policy_version
+    type: VARCHAR(80)
+primary_key: [tenant_id]
+foreign_keys:
+  - name: tenant_current_policies
+    columns: [tenant_id, policy_version]
+    references:
+      table: tenant_runtime_policy
+      columns: [tenant_id, policy_version]

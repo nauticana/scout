@@ -1,0 +1,19 @@
+table: tenant_ring_member
+comment: Platform rollout cohort assigned to a tenant
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: ring_code
+    type: VARCHAR(30)
+primary_key: [tenant_id]
+foreign_keys:
+  - name: tenant_ring_members
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: ring_members
+    columns: [ring_code]
+    references:
+      table: tenant_ring
+      columns: [ring_code]

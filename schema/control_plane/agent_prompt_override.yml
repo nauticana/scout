@@ -1,0 +1,36 @@
+table: agent_prompt_override
+comment: Agent-specific prompt override guarded by the parent draft revision
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: prompt_section_id
+    type: BIGINT
+  - name: language_code
+    type: VARCHAR(16)
+  - name: overwrite
+    type: BOOLEAN
+    default: FALSE
+  - name: instruction
+    type: TEXT
+  - name: output
+    type: TEXT
+    nullable: true
+primary_key: [tenant_id, agent_id, prompt_section_id, language_code]
+foreign_keys:
+  - name: agent_prompt_overrides
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_draft
+      columns: [tenant_id, agent_id]
+  - name: section_agent_prompt_overrides
+    columns: [prompt_section_id]
+    references:
+      table: prompt_section
+      columns: [id]
+checks:
+  - name: agent_prompt_override_instruction_ck
+    expression: CHAR_LENGTH(instruction) BETWEEN 1 AND 16000
+  - name: agent_prompt_override_output_ck
+    expression: output IS NULL OR CHAR_LENGTH(output) <= 16000

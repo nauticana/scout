@@ -1,0 +1,45 @@
+table: step_idempotency
+comment: Claim and committed result for replay-safe step execution
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: execution_step_id
+    type: BIGINT
+  - name: status_code
+    type: VARCHAR(30)
+  - name: result_uri
+    type: TEXT
+    nullable: true
+  - name: result_digest
+    type: CHAR(64)
+    nullable: true
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, request_id, execution_step_id]
+foreign_keys:
+  - name: step_idempotencies
+    columns: [tenant_id, request_id]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, request_id]
+  - name: execution_step_idempotencies
+    columns: [execution_step_id]
+    references:
+      table: execution_step
+      columns: [id]
+  - name: status_step_idempotencies
+    columns: [status_code]
+    references:
+      table: idempotency_status
+      columns: [code]
+indexes:
+  - name: step_idempotency_status_ix
+    columns: [status_code, updated_at]
+checks:
+  - name: step_idempotency_result_ck
+    expression: (result_uri IS NULL AND result_digest IS NULL) OR (result_uri IS NOT NULL AND result_digest IS NOT NULL)
+  - name: step_idempotency_digest_ck
+    expression: result_digest IS NULL OR CHAR_LENGTH(result_digest) = 64

@@ -1,0 +1,26 @@
+table: guardrail_config
+comment: Immutable agent guardrail configuration
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: guardrail_version
+    type: VARCHAR(80)
+  - name: rules
+    type: TEXT
+  - name: rules_digest
+    type: CHAR(64)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_id, guardrail_version]
+foreign_keys:
+  - name: guardrail_configs
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+checks:
+  - name: guardrail_config_digest_ck
+    expression: CHAR_LENGTH(rules_digest) = 64

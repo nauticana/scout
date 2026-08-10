@@ -1,0 +1,38 @@
+table: conversation
+comment: Tenant conversation pinned to an agent version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: end_user_ref
+    type: VARCHAR(200)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: closed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [tenant_id, conversation_id]
+foreign_keys:
+  - name: conversations
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: agent_version_conversations
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+indexes:
+  - name: conversation_created_ix
+    columns: [tenant_id, created_at]
+checks:
+  - name: conversation_dates_ck
+    expression: closed_at IS NULL OR closed_at >= created_at

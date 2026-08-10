@@ -1,0 +1,23 @@
+table: knowledge_base_version
+comment: Immutable embedding configuration for a knowledge base
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: knowledge_version
+    type: VARCHAR(80)
+  - name: embedding_provider
+    type: VARCHAR(80)
+  - name: embedding_model
+    type: VARCHAR(120)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, knowledge_base_id, knowledge_version]
+foreign_keys:
+  - name: knowledge_base_versions
+    columns: [tenant_id, knowledge_base_id]
+    references:
+      table: knowledge_base
+      columns: [tenant_id, knowledge_base_id]

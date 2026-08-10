@@ -1,0 +1,30 @@
+table: knowledge_document
+comment: Immutable source document in a knowledge version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: knowledge_version
+    type: VARCHAR(80)
+  - name: document_id
+    type: VARCHAR(120)
+  - name: source_uri
+    type: TEXT
+  - name: content_digest
+    type: CHAR(64)
+  - name: media_type
+    type: VARCHAR(120)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+foreign_keys:
+  - name: knowledge_documents
+    columns: [tenant_id, knowledge_base_id, knowledge_version]
+    references:
+      table: knowledge_base_version
+      columns: [tenant_id, knowledge_base_id, knowledge_version]
+checks:
+  - name: knowledge_document_digest_ck
+    expression: CHAR_LENGTH(content_digest) = 64

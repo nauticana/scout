@@ -1,0 +1,5 @@
+tables:
+  - agent_tenant
+  - tenant_runtime_policy
+  - tenant_current_policy
+  - tenant_quota

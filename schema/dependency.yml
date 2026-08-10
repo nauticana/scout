@@ -1,0 +1,22 @@
+# Scout tenancy requires keel tenant_management, which depends on core and geo.
+version: 1
+groups:
+  - name: catalog
+    path: catalog
+    depends_on: []
+  - name: tenancy
+    path: tenancy
+    seed: seed/tenancy.yml
+    depends_on: [catalog]
+    seed_depends_on: [core]
+  - name: control_plane
+    path: control_plane
+    seed: seed/control_plane.yml
+    depends_on: [catalog, tenancy]
+    seed_depends_on: [core]
+  - name: runtime
+    path: runtime
+    depends_on: [catalog, tenancy, control_plane]
+  - name: release
+    path: release
+    depends_on: [catalog, tenancy, control_plane]

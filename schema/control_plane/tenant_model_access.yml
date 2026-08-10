@@ -1,0 +1,34 @@
+table: tenant_model_access
+comment: Models authorized for a tenant and scheduling class
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: provider_id
+    type: VARCHAR(80)
+  - name: model_id
+    type: VARCHAR(120)
+  - name: priority_class_code
+    type: VARCHAR(30)
+  - name: daily_token_limit
+    type: BIGINT
+    nullable: true
+primary_key: [tenant_id, provider_id, model_id]
+foreign_keys:
+  - name: tenant_model_accesses
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: model_tenant_accesses
+    columns: [provider_id, model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
+  - name: priority_tenant_accesses
+    columns: [priority_class_code]
+    references:
+      table: priority_class
+      columns: [code]
+checks:
+  - name: tenant_model_access_limit_ck
+    expression: daily_token_limit IS NULL OR daily_token_limit > 0

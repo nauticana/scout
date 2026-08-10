@@ -1,0 +1,14 @@
+table: platform_release
+comment: Immutable deployable platform artifact
+columns:
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: artifact_digest
+    type: CHAR(64)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [platform_version]
+checks:
+  - name: platform_release_digest_ck
+    expression: CHAR_LENGTH(artifact_digest) = 64

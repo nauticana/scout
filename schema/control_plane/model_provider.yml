@@ -1,0 +1,15 @@
+table: model_provider
+comment: Configured inference provider endpoint
+columns:
+  - name: provider_id
+    type: VARCHAR(80)
+  - name: display_name
+    type: VARCHAR(200)
+  - name: endpoint_uri
+    type: TEXT
+  - name: credential_ref
+    type: TEXT
+  - name: is_active
+    type: BOOLEAN
+    default: TRUE
+primary_key: [provider_id]

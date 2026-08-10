@@ -1,0 +1,11 @@
+table: currency
+comment: Currency catalog with minor-unit precision
+columns:
+  - name: code
+    type: CHAR(3)
+  - name: exponent
+    type: SMALLINT
+primary_key: [code]
+checks:
+  - name: currency_exponent_ck
+    expression: exponent BETWEEN 0 AND 6

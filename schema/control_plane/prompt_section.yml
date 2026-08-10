@@ -1,0 +1,24 @@
+table: prompt_section
+comment: Platform prompt section catalog shared by drafts and releases
+columns:
+  - name: id
+    type: BIGINT
+  - name: caption
+    type: VARCHAR(80)
+  - name: display_order
+    type: BIGINT
+  - name: description
+    type: VARCHAR(500)
+primary_key: [id]
+sequence:
+  name: prompt_section_seq
+  column: id
+indexes:
+  - name: prompt_section_caption_uq
+    columns: [caption]
+    unique: true
+  - name: prompt_section_order_ix
+    columns: [display_order, id]
+checks:
+  - name: prompt_section_order_ck
+    expression: display_order >= 0

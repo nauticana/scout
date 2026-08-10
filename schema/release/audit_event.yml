@@ -1,0 +1,32 @@
+table: audit_event
+comment: Redacted tenant governance and security event
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: category
+    type: VARCHAR(80)
+  - name: payload_uri
+    type: TEXT
+  - name: payload_digest
+    type: CHAR(64)
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: audit_event_seq
+  column: id
+foreign_keys:
+  - name: audit_events
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+indexes:
+  - name: audit_event_tenant_time_ix
+    columns: [tenant_id, occurred_at]
+checks:
+  - name: audit_event_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64

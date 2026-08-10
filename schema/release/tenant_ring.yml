@@ -1,0 +1,17 @@
+table: tenant_ring
+comment: Ordered tenant cohorts for platform rollout
+columns:
+  - name: ring_code
+    type: VARCHAR(30)
+  - name: rollout_order
+    type: SMALLINT
+  - name: description
+    type: VARCHAR(200)
+primary_key: [ring_code]
+indexes:
+  - name: tenant_ring_order_uq
+    columns: [rollout_order]
+    unique: true
+checks:
+  - name: tenant_ring_order_ck
+    expression: rollout_order > 0

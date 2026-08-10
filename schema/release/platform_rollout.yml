@@ -1,0 +1,45 @@
+table: platform_rollout
+comment: Traffic state for a platform release and tenant ring
+columns:
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: ring_code
+    type: VARCHAR(30)
+  - name: traffic_percentage
+    type: SMALLINT
+  - name: status_code
+    type: VARCHAR(30)
+  - name: started_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: halt_reason
+    type: TEXT
+    nullable: true
+primary_key: [platform_version, ring_code]
+foreign_keys:
+  - name: platform_rollouts
+    columns: [platform_version]
+    references:
+      table: platform_release
+      columns: [platform_version]
+  - name: ring_platform_rollouts
+    columns: [ring_code]
+    references:
+      table: tenant_ring
+      columns: [ring_code]
+  - name: status_platform_rollouts
+    columns: [status_code]
+    references:
+      table: rollout_status
+      columns: [code]
+indexes:
+  - name: platform_rollout_status_ix
+    columns: [status_code, started_at]
+checks:
+  - name: platform_rollout_percentage_ck
+    expression: traffic_percentage BETWEEN 0 AND 100
+  - name: platform_rollout_dates_ck
+    expression: completed_at IS NULL OR completed_at >= started_at

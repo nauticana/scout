@@ -1,0 +1,124 @@
+package contract
+
+import (
+	"context"
+	"time"
+
+	"github.com/nauticana/scout/domain"
+)
+
+// ConversationRuntime executes end-user turns in the data plane.
+type ConversationRuntime interface {
+	// HandleTurn executes one end-user turn against a pinned agent version.
+	HandleTurn(ctx context.Context, request domain.TurnRequest) (domain.TurnResult, error)
+}
+
+// ConversationIngress admits a turn and returns its asynchronous reply stream.
+type ConversationIngress interface {
+	// OpenTurn subscribes the reply route before durably dispatching the turn.
+	OpenTurn(ctx context.Context, request domain.TurnRequest) (TurnReplySubscription, error)
+}
+
+// TurnDispatcher writes turns to shuffle-sharded durable partitions.
+type TurnDispatcher interface {
+	// Enqueue durably accepts a turn using its request ID for deduplication.
+	Enqueue(ctx context.Context, dispatch domain.TurnDispatch) error
+}
+
+// FairTurnScheduler leases work using tenant weights and concurrency limits.
+type FairTurnScheduler interface {
+	// Claim leases the next fairly scheduled turn to a stateless worker.
+	Claim(ctx context.Context, workerID string, leaseDuration time.Duration) (domain.QueueLease, error)
+	// Extend renews a live lease while a worker is making progress.
+	Extend(ctx context.Context, messageID, workerID string, leaseDuration time.Duration) error
+	// Ack removes a successfully completed turn from the queue.
+	Ack(ctx context.Context, messageID, workerID string) error
+	// Nack releases a failed turn for bounded retry or dead-letter handling.
+	Nack(ctx context.Context, messageID, workerID, reason string) error
+}
+
+// DurableSessionStore is the authoritative store for recoverable session state.
+type DurableSessionStore interface {
+	// Load returns the latest durable conversation snapshot.
+	Load(ctx context.Context, tenantID int64, conversationID string) (domain.SessionSnapshot, error)
+	// Checkpoint atomically persists a completed step with optimistic concurrency.
+	Checkpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint) error
+	// Complete atomically records the final turn result.
+	Complete(ctx context.Context, tenantID int64, conversationID string, expectedRevision int64, result domain.TurnResult) error
+}
+
+// HotSessionCache accelerates access to durable conversation snapshots.
+type HotSessionCache interface {
+	// Get returns a cached session and whether it was found.
+	Get(ctx context.Context, tenantID int64, conversationID string) (domain.SessionSnapshot, bool, error)
+	// Put caches a durable session snapshot for low-latency access.
+	Put(ctx context.Context, tenantID int64, snapshot domain.SessionSnapshot) error
+	// Invalidate removes a stale conversation snapshot.
+	Invalidate(ctx context.Context, tenantID int64, conversationID string) error
+}
+
+// SessionCoordinator composes the hot cache with durable step checkpointing.
+type SessionCoordinator interface {
+	// Load returns the newest valid snapshot from the tiered session path.
+	Load(ctx context.Context, tenantID int64, conversationID string) (domain.SessionSnapshot, error)
+	// Checkpoint persists a step durably before refreshing the hot cache.
+	Checkpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint) error
+	// Complete durably records the final result before refreshing the hot cache.
+	Complete(ctx context.Context, tenantID int64, conversationID string, expectedRevision int64, result domain.TurnResult) error
+}
+
+// TurnReplyPublisher sends ordered worker response frames to conversation ingress.
+type TurnReplyPublisher interface {
+	// Publish sends one reply frame using tenant and request routing keys.
+	Publish(ctx context.Context, reply domain.TurnReply) error
+}
+
+// TurnReplySubscriber creates a short-lived response stream before dispatch.
+type TurnReplySubscriber interface {
+	// Subscribe opens the response stream for one admitted request.
+	Subscribe(ctx context.Context, tenantID int64, requestID string) (TurnReplySubscription, error)
+}
+
+// TurnReplySubscription receives ordered response frames for one request.
+type TurnReplySubscription interface {
+	// Route returns the opaque worker reply destination for this subscription.
+	Route() string
+	// Receive waits for the next reply frame.
+	Receive(ctx context.Context) (domain.TurnReply, error)
+	// Close releases the response subscription.
+	Close() error
+}
+
+// StepIdempotencyStore makes interrupted step execution safely replayable.
+type StepIdempotencyStore interface {
+	// Begin acquires the right to execute a step or returns its prior result.
+	Begin(ctx context.Context, tenantID int64, requestID, stepID string) (domain.StepResult, bool, error)
+	// Commit durably binds a step result to its idempotency key.
+	Commit(ctx context.Context, tenantID int64, requestID, stepID string, result domain.StepResult) error
+	// Abandon releases an unfinished step so another worker can replay it.
+	Abandon(ctx context.Context, tenantID int64, requestID, stepID string) error
+}
+
+// StepExecutor executes one node of an agent execution graph.
+type StepExecutor interface {
+	// Execute runs one graph step without owning orchestration state.
+	Execute(ctx context.Context, input domain.StepInput) (domain.StepResult, error)
+}
+
+// StepExecutorRegistry resolves executors by graph step kind.
+type StepExecutorRegistry interface {
+	// ExecutorFor returns the executor registered for a graph step kind.
+	ExecutorFor(ctx context.Context, stepKind string) (StepExecutor, error)
+}
+
+// DefinitionResolver retrieves the graph pinned to an agent version.
+type DefinitionResolver interface {
+	// Resolve returns a cached or persisted graph for a tenant-selected version.
+	Resolve(ctx context.Context, tenantID int64, agentID, version string) (domain.ExecutionGraph, error)
+}
+
+// DeadLetterQueue retains terminally failed turns for investigation.
+type DeadLetterQueue interface {
+	// Publish stores a terminally failed turn for investigation or replay.
+	Publish(ctx context.Context, message domain.QueueMessage, reason string) error
+}

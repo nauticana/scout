@@ -1,0 +1,26 @@
+table: model_definition
+comment: Model catalog and token limits for a provider
+columns:
+  - name: provider_id
+    type: VARCHAR(80)
+  - name: model_id
+    type: VARCHAR(120)
+  - name: context_token_limit
+    type: BIGINT
+  - name: output_token_limit
+    type: BIGINT
+  - name: is_active
+    type: BOOLEAN
+    default: TRUE
+primary_key: [provider_id, model_id]
+foreign_keys:
+  - name: model_definitions
+    columns: [provider_id]
+    references:
+      table: model_provider
+      columns: [provider_id]
+checks:
+  - name: model_definition_context_ck
+    expression: context_token_limit > 0
+  - name: model_definition_output_ck
+    expression: output_token_limit > 0 AND output_token_limit <= context_token_limit

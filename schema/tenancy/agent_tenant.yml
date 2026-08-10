@@ -1,0 +1,23 @@
+table: agent_tenant
+comment: Agent platform extension of a keel business partner
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: tenant_key
+    type: VARCHAR(80)
+  - name: home_region
+    type: VARCHAR(80)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id]
+foreign_keys:
+  - name: agent_tenants
+    columns: [partner_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: agent_tenant_key_uq
+    columns: [tenant_key]
+    unique: true

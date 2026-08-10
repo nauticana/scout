@@ -1,0 +1,8 @@
+tables:
+  - conversation
+  - conversation_turn
+  - step_checkpoint
+  - session_snapshot
+  - step_idempotency
+  - budget_reservation
+  - usage_event

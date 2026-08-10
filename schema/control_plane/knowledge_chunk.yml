@@ -1,0 +1,35 @@
+table: knowledge_chunk
+comment: Authorized source chunk and external vector reference
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: knowledge_version
+    type: VARCHAR(80)
+  - name: document_id
+    type: VARCHAR(120)
+  - name: chunk_no
+    type: INTEGER
+  - name: content_uri
+    type: TEXT
+  - name: content_digest
+    type: CHAR(64)
+  - name: vector_ref
+    type: TEXT
+  - name: token_count
+    type: INTEGER
+primary_key: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+foreign_keys:
+  - name: knowledge_chunks
+    columns: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+    references:
+      table: knowledge_document
+      columns: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+checks:
+  - name: knowledge_chunk_number_ck
+    expression: chunk_no >= 0
+  - name: knowledge_chunk_tokens_ck
+    expression: token_count > 0
+  - name: knowledge_chunk_digest_ck
+    expression: CHAR_LENGTH(content_digest) = 64

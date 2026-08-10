@@ -1,0 +1,50 @@
+table: budget_reservation
+comment: Token and cost reservation for an admitted request
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: reservation_id
+    type: VARCHAR(120)
+  - name: request_id
+    type: VARCHAR(120)
+  - name: status_code
+    type: VARCHAR(30)
+  - name: granted_tokens
+    type: BIGINT
+  - name: granted_cost_minor_units
+    type: BIGINT
+  - name: currency_code
+    type: CHAR(3)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: settled_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [tenant_id, reservation_id]
+foreign_keys:
+  - name: budget_reservations
+    columns: [tenant_id, request_id]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, request_id]
+  - name: status_budget_reservations
+    columns: [status_code]
+    references:
+      table: reservation_status
+      columns: [code]
+  - name: currency_budget_reservations
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: budget_reservation_status_ix
+    columns: [tenant_id, status_code, created_at]
+checks:
+  - name: budget_reservation_tokens_ck
+    expression: granted_tokens > 0
+  - name: budget_reservation_cost_ck
+    expression: granted_cost_minor_units >= 0
+  - name: budget_reservation_dates_ck
+    expression: settled_at IS NULL OR settled_at >= created_at

@@ -1,0 +1,8 @@
+tables:
+  - currency
+  - priority_class
+  - turn_status
+  - idempotency_status
+  - reservation_status
+  - rollout_status
+  - usage_category

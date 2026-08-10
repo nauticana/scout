@@ -1,0 +1,26 @@
+table: contract_test_run
+comment: Compatibility evaluation run for a platform release
+columns:
+  - name: id
+    type: BIGINT
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: started_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: contract_test_run_seq
+  column: id
+foreign_keys:
+  - name: contract_test_runs
+    columns: [platform_version]
+    references:
+      table: platform_release
+      columns: [platform_version]
+checks:
+  - name: contract_test_run_dates_ck
+    expression: completed_at IS NULL OR completed_at >= started_at

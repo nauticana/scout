@@ -1,0 +1,9 @@
+tables:
+  - platform_release
+  - tenant_ring
+  - tenant_ring_member
+  - contract_test_case
+  - contract_test_run
+  - contract_test_result
+  - platform_rollout
+  - audit_event

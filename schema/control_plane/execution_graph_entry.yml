@@ -1,0 +1,27 @@
+table: execution_graph_entry
+comment: Entry node for a compiled execution graph
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: execution_step_id
+    type: BIGINT
+primary_key: [tenant_id, agent_id, agent_version]
+foreign_keys:
+  - name: execution_graph_entries
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: execution_graph
+      columns: [tenant_id, agent_id, agent_version]
+  - name: step_graph_entries
+    columns: [tenant_id, agent_id, agent_version, execution_step_id]
+    references:
+      table: execution_step
+      columns: [tenant_id, agent_id, agent_version, id]
+indexes:
+  - name: execution_graph_entry_step_uq
+    columns: [execution_step_id]
+    unique: true

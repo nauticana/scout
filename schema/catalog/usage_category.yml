@@ -1,0 +1,8 @@
+table: usage_category
+comment: Metered runtime usage categories
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

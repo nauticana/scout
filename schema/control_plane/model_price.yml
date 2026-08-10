@@ -1,0 +1,32 @@
+table: model_price
+comment: Effective model pricing in currency minor units
+columns:
+  - name: provider_id
+    type: VARCHAR(80)
+  - name: model_id
+    type: VARCHAR(120)
+  - name: currency_code
+    type: CHAR(3)
+  - name: effective_at
+    type: TIMESTAMP
+  - name: input_minor_units_per_million
+    type: BIGINT
+  - name: output_minor_units_per_million
+    type: BIGINT
+primary_key: [provider_id, model_id, currency_code, effective_at]
+foreign_keys:
+  - name: model_prices
+    columns: [provider_id, model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
+  - name: currency_model_prices
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+checks:
+  - name: model_price_input_ck
+    expression: input_minor_units_per_million >= 0
+  - name: model_price_output_ck
+    expression: output_minor_units_per_million >= 0

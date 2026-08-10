@@ -1,0 +1,66 @@
+table: agent_version
+comment: Immutable agent definition version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: definition
+    type: TEXT
+  - name: definition_digest
+    type: CHAR(64)
+  - name: guardrail_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: draft_revision
+    type: BIGINT
+    nullable: true
+  - name: prompt_profile_revision
+    type: BIGINT
+    nullable: true
+  - name: change_summary
+    type: VARCHAR(400)
+    nullable: true
+  - name: published_by
+    type: BIGINT
+    nullable: true
+  - name: restored_from_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: published_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_id, agent_version]
+foreign_keys:
+  - name: agent_versions
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: agent_versions_guardrail
+    columns: [tenant_id, agent_id, guardrail_version]
+    references:
+      table: guardrail_config
+      columns: [tenant_id, agent_id, guardrail_version]
+  - name: published_agent_versions
+    columns: [published_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: restored_agent_versions
+    columns: [tenant_id, agent_id, restored_from_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+indexes:
+  - name: agent_version_created_ix
+    columns: [tenant_id, agent_id, published_at]
+checks:
+  - name: agent_version_digest_ck
+    expression: CHAR_LENGTH(definition_digest) = 64
+  - name: agent_version_draft_revision_ck
+    expression: draft_revision IS NULL OR draft_revision > 0
+  - name: agent_version_prompt_revision_ck
+    expression: prompt_profile_revision IS NULL OR prompt_profile_revision > 0

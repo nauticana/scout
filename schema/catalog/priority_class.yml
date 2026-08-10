@@ -1,0 +1,17 @@
+table: priority_class
+comment: Tenant scheduling priority catalog
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: dispatch_rank
+    type: SMALLINT
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]
+indexes:
+  - name: priority_class_dispatch_rank_uq
+    columns: [dispatch_rank]
+    unique: true
+checks:
+  - name: priority_class_dispatch_rank_ck
+    expression: dispatch_rank > 0

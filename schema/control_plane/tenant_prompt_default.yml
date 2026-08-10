@@ -1,0 +1,33 @@
+table: tenant_prompt_default
+comment: Tenant default prompt value inherited by agents of one logical kind
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_kind
+    type: VARCHAR(80)
+  - name: prompt_section_id
+    type: BIGINT
+  - name: language_code
+    type: VARCHAR(16)
+  - name: instruction
+    type: TEXT
+  - name: output
+    type: TEXT
+    nullable: true
+primary_key: [tenant_id, agent_kind, prompt_section_id, language_code]
+foreign_keys:
+  - name: tenant_prompt_defaults
+    columns: [tenant_id, agent_kind]
+    references:
+      table: agent_alias
+      columns: [tenant_id, agent_kind]
+  - name: section_tenant_prompt_defaults
+    columns: [prompt_section_id]
+    references:
+      table: prompt_section
+      columns: [id]
+checks:
+  - name: tenant_prompt_default_instruction_ck
+    expression: CHAR_LENGTH(instruction) BETWEEN 1 AND 16000
+  - name: tenant_prompt_default_output_ck
+    expression: output IS NULL OR CHAR_LENGTH(output) <= 16000

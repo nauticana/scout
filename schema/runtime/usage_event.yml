@@ -1,0 +1,64 @@
+table: usage_event
+comment: Immutable runtime usage ledger entry
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: BIGINT
+  - name: category_code
+    type: VARCHAR(30)
+  - name: subject_ref
+    type: VARCHAR(200)
+  - name: input_tokens
+    type: BIGINT
+    default: "0"
+  - name: output_tokens
+    type: BIGINT
+    default: "0"
+  - name: tool_calls
+    type: INTEGER
+    default: "0"
+  - name: cost_minor_units
+    type: BIGINT
+    default: "0"
+  - name: currency_code
+    type: CHAR(3)
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: usage_event_seq
+  column: id
+foreign_keys:
+  - name: usage_events
+    columns: [tenant_id, conversation_id, turn_no]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, conversation_id, turn_no]
+  - name: category_usage_events
+    columns: [category_code]
+    references:
+      table: usage_category
+      columns: [code]
+  - name: currency_usage_events
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: usage_event_tenant_time_ix
+    columns: [tenant_id, occurred_at]
+checks:
+  - name: usage_event_input_tokens_ck
+    expression: input_tokens >= 0
+  - name: usage_event_output_tokens_ck
+    expression: output_tokens >= 0
+  - name: usage_event_tool_calls_ck
+    expression: tool_calls >= 0
+  - name: usage_event_cost_ck
+    expression: cost_minor_units >= 0

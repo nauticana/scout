@@ -1,0 +1,34 @@
+table: execution_step
+comment: Node in a compiled execution graph
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: step_id
+    type: VARCHAR(120)
+  - name: step_kind_code
+    type: VARCHAR(30)
+  - name: configuration
+    type: TEXT
+primary_key: [id]
+sequence:
+  name: execution_step_seq
+  column: id
+foreign_keys:
+  - name: execution_steps
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: execution_graph
+      columns: [tenant_id, agent_id, agent_version]
+indexes:
+  - name: execution_step_identity_uq
+    columns: [tenant_id, agent_id, agent_version, step_id]
+    unique: true
+  - name: execution_step_graph_id_uq
+    columns: [tenant_id, agent_id, agent_version, id]
+    unique: true

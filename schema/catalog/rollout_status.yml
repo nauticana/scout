@@ -1,0 +1,10 @@
+table: rollout_status
+comment: Platform rollout lifecycle states
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: is_terminal
+    type: BOOLEAN
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

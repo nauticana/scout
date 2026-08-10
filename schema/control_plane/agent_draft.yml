@@ -1,0 +1,79 @@
+table: agent_draft
+comment: Revisioned mutable configuration for one tenant agent
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: draft_revision
+    type: BIGINT
+    default: "1"
+  - name: enabled
+    type: BOOLEAN
+    default: TRUE
+  - name: require_approval
+    type: BOOLEAN
+    default: FALSE
+  - name: text_model_provider
+    type: VARCHAR(80)
+    nullable: true
+  - name: text_model_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: image_model_provider
+    type: VARCHAR(80)
+    nullable: true
+  - name: image_model_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: video_model_provider
+    type: VARCHAR(80)
+    nullable: true
+  - name: video_model_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: extension
+    type: TEXT
+    nullable: true
+  - name: modified_by
+    type: BIGINT
+    nullable: true
+  - name: modified_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_id]
+foreign_keys:
+  - name: agent_drafts
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: text_model_agent_drafts
+    columns: [text_model_provider, text_model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
+  - name: image_model_agent_drafts
+    columns: [image_model_provider, image_model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
+  - name: video_model_agent_drafts
+    columns: [video_model_provider, video_model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
+  - name: modified_agent_drafts
+    columns: [modified_by]
+    references:
+      table: user_account
+      columns: [id]
+checks:
+  - name: agent_draft_revision_ck
+    expression: draft_revision > 0
+  - name: agent_draft_text_model_ck
+    expression: (text_model_provider IS NULL AND text_model_id IS NULL) OR (text_model_provider IS NOT NULL AND text_model_id IS NOT NULL)
+  - name: agent_draft_image_model_ck
+    expression: (image_model_provider IS NULL AND image_model_id IS NULL) OR (image_model_provider IS NOT NULL AND image_model_id IS NOT NULL)
+  - name: agent_draft_video_model_ck
+    expression: (video_model_provider IS NULL AND video_model_id IS NULL) OR (video_model_provider IS NOT NULL AND video_model_id IS NOT NULL)

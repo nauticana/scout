@@ -1,0 +1,42 @@
+table: agent_deployment
+comment: Stable and canary traffic policy for a tenant agent
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: stable_version
+    type: VARCHAR(80)
+  - name: canary_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: canary_percentage
+    type: SMALLINT
+    default: "0"
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_id]
+foreign_keys:
+  - name: agent_deployments
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: stable_agent_deployments
+    columns: [tenant_id, agent_id, stable_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+  - name: canary_agent_deployments
+    columns: [tenant_id, agent_id, canary_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+checks:
+  - name: agent_deployment_percentage_ck
+    expression: canary_percentage BETWEEN 0 AND 100
+  - name: agent_deployment_canary_ck
+    expression: (canary_version IS NULL AND canary_percentage = 0) OR (canary_version IS NOT NULL AND canary_percentage BETWEEN 1 AND 100)
+  - name: agent_deployment_distinct_ck
+    expression: canary_version IS NULL OR canary_version <> stable_version

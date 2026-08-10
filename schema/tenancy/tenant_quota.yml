@@ -1,0 +1,41 @@
+table: tenant_quota
+comment: Tenant token and monetary quota windows
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: quota_name
+    type: VARCHAR(80)
+  - name: window_seconds
+    type: INTEGER
+  - name: token_limit
+    type: BIGINT
+    nullable: true
+  - name: cost_limit_minor_units
+    type: BIGINT
+    nullable: true
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+primary_key: [tenant_id, quota_name]
+foreign_keys:
+  - name: tenant_quotas
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: currency_tenant_quotas
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+checks:
+  - name: tenant_quota_window_ck
+    expression: window_seconds > 0
+  - name: tenant_quota_tokens_ck
+    expression: token_limit IS NULL OR token_limit > 0
+  - name: tenant_quota_cost_ck
+    expression: cost_limit_minor_units IS NULL OR cost_limit_minor_units >= 0
+  - name: tenant_quota_limit_ck
+    expression: token_limit IS NOT NULL OR cost_limit_minor_units IS NOT NULL
+  - name: tenant_quota_currency_ck
+    expression: cost_limit_minor_units IS NULL OR currency_code IS NOT NULL
