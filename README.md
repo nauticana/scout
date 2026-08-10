@@ -182,6 +182,18 @@ Between an immutable definition and a provider call sit two shared pieces.
 
 `runtime.PublishedAgentRuntime` composes `PublishedAgentResolver`, `AgentProviderFactory`, and `PromptRenderer`. It selects the requested compiled language with an explicit fallback, binds text/image/video executors, and returns immutable release provenance. The live profile state enforced by `PublishedAgentResolver` is the only runtime kill switch; a historical definition's `Enabled` value is never re-applied. `runtime.ProviderAgent` is the reusable executable binding and can be embedded by products that add billing or quota concerns.
 
+`runtime.MultimodalGenerator` composes those executors into one turn: it runs the text executor, then any requested media, and styles the media prompts from the agent's own compiled sections so illustrations match its configured voice. A nil `Image` or `Video` on the `domain.MultimodalTask` means that modality is not requested; requesting one the release has no model for is `ErrNotReady` rather than a silently text-only result, and a media failure fails the whole turn. Products supply `OutputFormat` and `AssetBaseName`; Scout returns `domain.NamedMedia` with an extension derived from the provider's content type, plus the billable `ImageCount` and `VideoSeconds`.
+
+```go
+result, err := runtime.MultimodalGenerator{
+    Text: agents.Text(), Image: agents.Image(), Video: agents.Video(),
+}.Generate(ctx, domain.MultimodalTask{
+    AgentTask:     domain.AgentTask{Task: topic, OutputFormat: "Please generate a blog post in HTML format."},
+    Image:         &domain.ImageRequest{Count: 1, AspectRatio: "16:9"},
+    AssetBaseName: slug,
+})
+```
+
 `service/provider` holds the concrete inference adapters behind `contract.ModelProvider` and `contract.MediaProvider`:
 
 | Adapter | Text | Image | Video |

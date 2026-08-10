@@ -41,3 +41,29 @@ type GeneratedMedia struct {
 	Data     []byte
 	MimeType string
 }
+
+// NamedMedia is generated media with a stable asset name for storage.
+type NamedMedia struct {
+	GeneratedMedia
+	FileName string
+}
+
+// MultimodalTask is one turn that produces text and, when requested, media
+// illustrating it. A nil Image or Video means that modality is not requested;
+// the product owns OutputFormat and the asset naming.
+type MultimodalTask struct {
+	AgentTask
+	Image         *ImageRequest
+	Video         *VideoRequest
+	AssetBaseName string
+}
+
+// MultimodalResult carries the text, its usage, and every produced asset.
+// ImageCount and VideoSeconds are the billable media quantities.
+type MultimodalResult struct {
+	Text         string
+	Usage        Usage
+	Media        []NamedMedia
+	ImageCount   int
+	VideoSeconds int
+}
