@@ -25,6 +25,16 @@ const (
 	PromptSourceAgentOverride
 )
 
+// ValidationPhase distinguishes editing a draft from producing executable
+// state, so product validators can gate release-only requirements such as
+// provider credentials without blocking an ordinary save.
+type ValidationPhase string
+
+const (
+	ValidateDraft   ValidationPhase = "draft"
+	ValidateRelease ValidationPhase = "release"
+)
+
 // PromptResetScope selects the editable prompt levels removed by a reset.
 type PromptResetScope string
 
@@ -165,6 +175,7 @@ type AgentSummary struct {
 	PromptProfileRevision int64
 	PublishedVersion      string
 	PublishedAt           *time.Time
+	LastRunAt             *time.Time
 }
 
 // AgentFieldError identifies one invalid Studio field.
@@ -267,6 +278,37 @@ type AgentStudioEvent struct {
 	Detail     string
 	ActorID    *int64
 	OccurredAt time.Time
+}
+
+// TenantIdentity is the agent-platform registration of a keel business partner.
+type TenantIdentity struct {
+	TenantKey  string
+	HomeRegion string
+}
+
+// AgentSeed is one idempotent agent provisioning request: the identity, its
+// mutable draft configuration, and the logical alias it should serve.
+type AgentSeed struct {
+	AgentID         string
+	AgentKind       string
+	AliasID         string
+	DisplayName     string
+	Enabled         bool
+	RequireApproval bool
+	Models          AgentModelSelection
+}
+
+// DeployedAgent is one tenant alias with its operational state and the
+// immutable definition currently serving traffic. Definition is nil when the
+// alias has no stable deployment.
+type DeployedAgent struct {
+	AliasID    string
+	AgentID    string
+	AgentKind  string
+	Active     bool
+	Enabled    bool
+	Version    string
+	Definition *AgentDefinition
 }
 
 // AgentAlias maps a tenant logical role to one named agent.

@@ -177,6 +177,8 @@ github.com/mark3labs/mcp-go v0.46.0 h1:8KRibF4wcKejbLsHxCA/QBVUr5fQ9nwz/n8lGqmaA
 github.com/mark3labs/mcp-go v0.46.0/go.mod h1:JKTC7R2LLVagkEWK7Kwu7DbmA6iIvnNAod6yrHiQMag=
 github.com/nauticana/keel v1.2.46 h1:IksJv8u+nOY5R8VDYkJeSsvNLdAr84eZbzVvxK60/P8=
 github.com/nauticana/keel v1.2.46/go.mod h1:ybfW0eq7JcRAbJ3z1Av/J2cEA6dSsrY9/bdWdM+lQ1U=
+github.com/nauticana/keel v1.2.47 h1:mDDJvcK6uyR+KzvQLp26/0OQjb8RJymuHJ8qHCXC/tg=
+github.com/nauticana/keel v1.2.47/go.mod h1:86AD5lhs6rpOrl3bKIcT9xdaigdL9n7+iZMv6UO+C4c=
 github.com/nyaruka/phonenumbers v1.7.2 h1:biMUpF5TWuHtYXVzuNE7pSCjlA9tkvd8Vaq8b1CYaaQ=
 github.com/nyaruka/phonenumbers v1.7.2/go.mod h1:fsKPJ70O9JetEA4ggnJadYTFWwtGPvu/lETTXNXq6Cs=
 github.com/oracle/oci-go-sdk/v65 v65.95.2 h1:0HJ0AgpLydp/DtvYrF2d4str2BjXOVAeNbuW7E07g94=

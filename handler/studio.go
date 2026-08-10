@@ -468,7 +468,7 @@ func apiSummary(value domain.AgentSummary) api.AgentSummary {
 		Purpose: value.Purpose, Enabled: value.Active && value.Enabled, Default: value.Default,
 		Readiness: string(value.Readiness), ReadinessReason: value.ReadinessReason,
 		TypeDefaultsRevision: value.PromptProfileRevision, AgentRevision: value.DraftRevision,
-		PublishedVersion: version, PublishedAt: value.PublishedAt,
+		PublishedVersion: version, PublishedAt: value.PublishedAt, LastRunAt: value.LastRunAt,
 	}
 }
 

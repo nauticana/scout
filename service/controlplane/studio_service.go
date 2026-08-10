@@ -37,6 +37,7 @@ type StudioService struct {
 	Tester     contract.AgentDraftTestExecutor
 	Kinds      contract.AgentKindCatalog
 	Catalog    contract.StudioModelCatalog
+	Activity   contract.AgentActivityReporter
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -75,6 +76,10 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 			descriptors[item.AgentKind] = item
 		}
 	}
+	lastRun, err := s.lastActivity(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
 	summaries := make([]domain.AgentSummary, 0, len(res.Rows))
 	for _, row := range res.Rows {
 		summary := domain.AgentSummary{
@@ -92,10 +97,41 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 				summary.DisplayName = descriptor.DisplayName
 			}
 		}
+		if at, ok := lastRun[summary.AgentID]; ok {
+			summary.LastRunAt = &at
+		}
 		summary.Readiness, summary.ReadinessReason = readiness(summary, row[10])
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
+}
+
+// lastActivity merges Studio test runs with the product's own execution
+// history; the newest of the two is what an operator means by "last run".
+func (s *StudioService) lastActivity(ctx context.Context, tenantID int64) (map[string]time.Time, error) {
+	res, err := s.qs.Query(ctx, qStudioLastTest, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load studio test activity: %w", err)
+	}
+	lastRun := make(map[string]time.Time, len(res.Rows))
+	for _, row := range res.Rows {
+		if at, ok := row[1].(time.Time); ok {
+			lastRun[common.AsString(row[0])] = at
+		}
+	}
+	if s.Activity == nil {
+		return lastRun, nil
+	}
+	product, err := s.Activity.LastRun(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load agent activity: %w", err)
+	}
+	for agentID, at := range product {
+		if current, seen := lastRun[agentID]; !seen || at.After(current) {
+			lastRun[agentID] = at
+		}
+	}
+	return lastRun, nil
 }
 
 func readiness(summary domain.AgentSummary, encodedDefinition any) (domain.AgentReadiness, string) {
@@ -755,8 +791,12 @@ func (s *StudioService) validateDraft(ctx context.Context, tenantID int64, draft
 		}
 		fields = append(fields, catalogFields...)
 	}
+	phase := domain.ValidateDraft
+	if publishing {
+		phase = domain.ValidateRelease
+	}
 	for _, validator := range s.Validators {
-		validatorFields, err := validator.Validate(ctx, tenantID, draft)
+		validatorFields, err := validator.Validate(ctx, tenantID, draft, phase)
 		if err != nil {
 			return fmt.Errorf("validate agent draft: %w", err)
 		}

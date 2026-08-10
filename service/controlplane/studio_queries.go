@@ -33,6 +33,7 @@ const (
 	qStudioResetDefaultLng  = "scout_studio_reset_default_language"
 	qStudioResetDefaultOne  = "scout_studio_reset_default_one"
 	qStudioActiveDefinition = "scout_studio_active_definition"
+	qStudioLastTest         = "scout_studio_last_test"
 )
 
 var studioQueries = map[string]string{
@@ -139,6 +140,9 @@ UPDATE agent_draft SET draft_revision = draft_revision + 1, modified_by = ?, mod
 	qStudioResetDefaultSec:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ? AND prompt_section_id = ?`,
 	qStudioResetDefaultLng:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ? AND language_code = ?`,
 	qStudioResetDefaultOne:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ? AND prompt_section_id = ? AND language_code = ?`,
+	qStudioLastTest: `
+SELECT agent_id, MAX(occurred_at) FROM agent_studio_event
+ WHERE tenant_id = ? AND event = 'TEST' GROUP BY agent_id`,
 	qStudioActiveDefinition: `
 SELECT v.agent_version, v.definition
   FROM agent_deployment dep

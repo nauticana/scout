@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"time"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -29,11 +30,19 @@ func (f BaselineSelector) Select(ctx context.Context, tenantID int64, agentID, a
 }
 
 type DraftValidator struct {
-	ValidateFunc func(context.Context, int64, domain.AgentDraft) ([]domain.AgentFieldError, error)
+	ValidateFunc func(context.Context, int64, domain.AgentDraft, domain.ValidationPhase) ([]domain.AgentFieldError, error)
 }
 
-func (f DraftValidator) Validate(ctx context.Context, tenantID int64, draft domain.AgentDraft) ([]domain.AgentFieldError, error) {
-	return f.ValidateFunc(ctx, tenantID, draft)
+func (f DraftValidator) Validate(ctx context.Context, tenantID int64, draft domain.AgentDraft, phase domain.ValidationPhase) ([]domain.AgentFieldError, error) {
+	return f.ValidateFunc(ctx, tenantID, draft, phase)
+}
+
+type ActivityReporter struct {
+	LastRunFunc func(context.Context, int64) (map[string]time.Time, error)
+}
+
+func (f ActivityReporter) LastRun(ctx context.Context, tenantID int64) (map[string]time.Time, error) {
+	return f.LastRunFunc(ctx, tenantID)
 }
 
 type DraftTester struct {
@@ -74,6 +83,7 @@ var (
 	_ contract.PromptSourceRepository = PromptSources{}
 	_ contract.PromptBaselineSelector = BaselineSelector{}
 	_ contract.AgentDraftValidator    = DraftValidator{}
+	_ contract.AgentActivityReporter  = ActivityReporter{}
 	_ contract.AgentDraftTestExecutor = DraftTester{}
 	_ contract.AgentKindCatalog       = KindCatalog{}
 	_ contract.StudioModelCatalog     = ModelCatalog{}

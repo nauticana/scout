@@ -33,6 +33,7 @@ type AgentSummary struct {
 	AgentRevision        int64      `json:"agent_revision"`
 	PublishedVersion     int64      `json:"published_version"`
 	PublishedAt          *time.Time `json:"published_at,omitempty"`
+	LastRunAt            *time.Time `json:"last_run_at,omitempty"`
 }
 
 // AgentFieldError is one studio-v1 field validation failure.
