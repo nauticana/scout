@@ -74,3 +74,30 @@ func (query *agentRunQueryFake) Query(_ context.Context, name string, args ...an
 }
 
 func (*agentRunQueryFake) GenID() int64 { return 0 }
+
+func TestAgentRunStorePurgeIsBoundedAndOptional(t *testing.T) {
+	query := &agentRunQueryFake{rows: map[string][][]any{qPurgeAgentRuns: {{int64(1)}, {int64(2)}}}}
+	store := &AgentRunStore{qs: query}
+
+	purged, err := store.Purge(context.Background(), 30, 200)
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if purged != 2 {
+		t.Fatalf("purged = %d, want 2", purged)
+	}
+	if args := query.args[qPurgeAgentRuns]; len(args) != 2 || args[0] != 30 || args[1] != 200 {
+		t.Fatalf("purge args = %+v", args)
+	}
+
+	query.args = map[string][]any{}
+	if purged, err = store.Purge(context.Background(), 0, 200); err != nil || purged != 0 {
+		t.Fatalf("zero retention must keep everything: purged=%d err=%v", purged, err)
+	}
+	if _, ran := query.args[qPurgeAgentRuns]; ran {
+		t.Fatal("zero retention must not issue a delete")
+	}
+	if _, err = store.Purge(context.Background(), 30, 0); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("unbounded purge error = %v", err)
+	}
+}

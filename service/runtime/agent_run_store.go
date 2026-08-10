@@ -17,6 +17,7 @@ import (
 const (
 	qRecordAgentRun = "scout_runtime_record_agent_run"
 	qAgentLastRun   = "scout_runtime_agent_last_run"
+	qPurgeAgentRuns = "scout_runtime_purge_agent_runs"
 )
 
 var agentRunQueries = map[string]string{
@@ -31,6 +32,13 @@ SELECT agent_id, MAX(completed_at)
   FROM agent_run
  WHERE tenant_id = ?
  GROUP BY agent_id`,
+	qPurgeAgentRuns: `
+DELETE FROM agent_run
+ WHERE id IN (SELECT id FROM agent_run
+               WHERE completed_at < CURRENT_TIMESTAMP - make_interval(days => ?)
+               ORDER BY completed_at
+               LIMIT ?)
+RETURNING id`,
 }
 
 // AgentRunStore records successful release executions and reports their newest
@@ -44,6 +52,7 @@ type AgentRunStore struct {
 
 var _ contract.AgentRunRecorder = (*AgentRunStore)(nil)
 var _ contract.AgentActivityReporter = (*AgentRunStore)(nil)
+var _ contract.AgentRunPurger = (*AgentRunStore)(nil)
 
 func (store *AgentRunStore) init(ctx context.Context) error {
 	if store.qs != nil {
@@ -107,4 +116,23 @@ func (store *AgentRunStore) LastRun(ctx context.Context, tenantID int64) (map[st
 		lastRun[agentID] = completedAt
 	}
 	return lastRun, nil
+}
+
+// Purge deletes run activity older than retentionDays, at most limit rows per
+// call. A non-positive retention keeps activity forever and purges nothing.
+func (store *AgentRunStore) Purge(ctx context.Context, retentionDays, limit int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("%w: purge limit must be positive", domain.ErrValidation)
+	}
+	if err := store.init(ctx); err != nil {
+		return 0, err
+	}
+	result, err := store.qs.Query(ctx, qPurgeAgentRuns, retentionDays, limit)
+	if err != nil {
+		return 0, fmt.Errorf("purge agent runs: %w", err)
+	}
+	return int64(len(result.Rows)), nil
 }

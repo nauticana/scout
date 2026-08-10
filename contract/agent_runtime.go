@@ -62,6 +62,12 @@ type AgentRunRecorder interface {
 	Record(ctx context.Context, tenantID int64, release domain.AgentReleaseReference, taskKind string) error
 }
 
+// AgentRunPurger drops agent run activity past a retention horizon. Deletes are
+// bounded so a scheduled caller can drain a backlog over several ticks.
+type AgentRunPurger interface {
+	Purge(ctx context.Context, retentionDays, limit int) (int64, error)
+}
+
 // AgentOperationalEventRecorder persists a tenant-scoped operational failure
 // that may occur before a specific agent exists.
 type AgentOperationalEventRecorder interface {
