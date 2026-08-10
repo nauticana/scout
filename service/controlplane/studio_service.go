@@ -348,7 +348,16 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	return s.Tester.Execute(ctx, actor, request, definition)
+	result, err := s.Tester.Execute(ctx, actor, request, definition)
+	if err != nil {
+		return domain.AgentTestResult{}, err
+	}
+	// The lifecycle audit is Studio's, not the product tester's.
+	if _, auditErr := s.qs.Query(ctx, qStudioAudit, actor.TenantID, request.AgentID, "TEST",
+		nullableString("language "+result.LanguageCode), actor.ActorID); auditErr != nil {
+		return domain.AgentTestResult{}, fmt.Errorf("record studio test audit: %w", auditErr)
+	}
+	return result, nil
 }
 
 // Publish freezes the saved draft and promotes it when the agent owns its alias.
