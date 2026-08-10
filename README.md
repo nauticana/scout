@@ -172,7 +172,34 @@ definition.DefinitionDigest, err = compiler.DefinitionDigest(definition)
 
 `controlplane.KeelPromptSourceRepository` implements `PromptSourceRepository` over `prompt_baseline`, `tenant_prompt_default`, and `agent_prompt_override`. The injected `PromptBaselineSelector` supplies ordered product keys; Scout selects the first matching baseline per section and never embeds product precedence.
 
-`runtime.PublishedAgentResolver` resolves an active alias to its immutable stable or sticky canary definition, enforces the operational kill switch, and validates the requested language. Provider construction remains downstream.
+`runtime.PublishedAgentResolver` resolves an active alias to its immutable stable or sticky canary definition, enforces the operational kill switch, and validates the requested language.
+
+## Agent runtime
+
+Between an immutable definition and a provider call sit two shared pieces.
+
+`runtime.PromptRenderer` implements `contract.PromptRenderer`: it turns a definition's `[]domain.CompiledPromptSection` plus a `domain.AgentTask` (task, context, input, output format, past performance) into the payload string a provider receives. Its layout is part of published behavior — an agent validated under one layout produces different output under another — so the renderer is frozen and pinned by a byte-for-byte test. Introduce a second renderer rather than editing it. `runtime.StyleHint` condenses the same sections for media prompts, which take no structured configuration.
+
+`service/provider` holds the concrete inference adapters behind `contract.ModelProvider` and `contract.MediaProvider`:
+
+| Adapter | Text | Image | Video |
+|---|---|---|---|
+| `provider.Anthropic` | Messages API | — | — |
+| `provider.OpenAI` | Chat Completions | Images API | — |
+| `provider.Google` | Gemini (Vertex ADC or Developer API) | Imagen | Veo |
+
+Credentials, endpoints, and sampling defaults are injected at construction; an adapter never reads configuration and never prices a call — it reports `domain.Usage` in tokens and leaves cost to the product. Adapters without a native streaming path satisfy `ModelProvider.Stream` by delivering the completion as one frame followed by `io.EOF`, so `modelgateway.Gateway` works uniformly without any adapter pretending to emit incremental tokens.
+
+```go
+renderer := runtime.PromptRenderer{}
+prompt := renderer.Render(definition.AgentID, compiled.Sections, domain.AgentTask{Task: task, InputData: input})
+
+adapter := &provider.Anthropic{APIKey: key, Temperature: 0.7}
+result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: "anthropic", Model: definition.Models.Text.ModelID},
+    domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: 8192})
+```
+
+`domain.DeployedAgent.Readiness()` derives `disabled` / `unpublished` / `missing_model` / `ready` from control-plane state alone. Products layer their own checks — model-catalog availability, provider credentials, quota — on top of a `Ready` result instead of re-deriving the base states.
 
 ## MCP extension contract
 
