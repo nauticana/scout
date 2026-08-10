@@ -1,5 +1,14 @@
 package domain
 
+// AgentReleaseReference identifies the immutable definition used to build an
+// executable agent. Products can persist it alongside their own run records
+// without retaining the complete definition.
+type AgentReleaseReference struct {
+	AgentID string
+	Version string
+	Digest  string
+}
+
 // AgentTask is one request executed against a published agent definition. The
 // compiled prompt sections supply the agent's standing configuration; these
 // fields supply what is specific to this invocation.

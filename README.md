@@ -180,6 +180,8 @@ Between an immutable definition and a provider call sit two shared pieces.
 
 `runtime.PromptRenderer` implements `contract.PromptRenderer`: it turns a definition's `[]domain.CompiledPromptSection` plus a `domain.AgentTask` (task, context, input, output format, past performance) into the payload string a provider receives. Its layout is part of published behavior — an agent validated under one layout produces different output under another — so the renderer is frozen and pinned by a byte-for-byte test. Introduce a second renderer rather than editing it. `runtime.StyleHint` condenses the same sections for media prompts, which take no structured configuration.
 
+`runtime.PublishedAgentRuntime` composes `PublishedAgentResolver`, `AgentProviderFactory`, and `PromptRenderer`. It selects the requested compiled language with an explicit fallback, binds text/image/video executors, and returns immutable release provenance. The live profile state enforced by `PublishedAgentResolver` is the only runtime kill switch; a historical definition's `Enabled` value is never re-applied. `runtime.ProviderAgent` is the reusable executable binding and can be embedded by products that add billing or quota concerns.
+
 `service/provider` holds the concrete inference adapters behind `contract.ModelProvider` and `contract.MediaProvider`:
 
 | Adapter | Text | Image | Video |
@@ -194,10 +196,12 @@ Credentials, endpoints, and sampling defaults are injected at construction; an a
 renderer := runtime.PromptRenderer{}
 prompt := renderer.Render(definition.AgentID, compiled.Sections, domain.AgentTask{Task: task, InputData: input})
 
-adapter := &provider.Anthropic{APIKey: key, Temperature: 0.7}
-result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: "anthropic", Model: definition.Models.Text.ModelID},
-    domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: 8192})
+adapter := &provider.Anthropic{APIKey: key, Temperature: provider.DefaultTemperature}
+result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: provider.AnthropicProviderID, Model: definition.Models.Text.ModelID},
+    domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: provider.DefaultMaxOutputTokens})
 ```
+
+`runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
 
 `domain.DeployedAgent.Readiness()` derives `disabled` / `unpublished` / `missing_model` / `ready` from control-plane state alone. Products layer their own checks — model-catalog availability, provider credentials, quota — on top of a `Ready` result instead of re-deriving the base states.
 
@@ -425,7 +429,7 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 | `catalog` | 7 | Currency, priority, lifecycle, and usage catalogs |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas |
 | `control_plane` | 28 | Studio drafts, prompts, lifecycle audit, agents, tools, compiled graphs, knowledge, models, pricing |
-| `runtime` | 7 | Conversations, turns, checkpoints, replay, budgets, usage |
+| `runtime` | 9 | Conversations, turns, checkpoints, replay, budgets, usage, agent activity and operations |
 | `release` | 8 | Platform artifacts, rings, compatibility results, audit |
 
 `schema/dependency.yml` orders Scout-owned groups. Keel's own dependency manifest orders its groups, while the generator input below selects the required Keel groups explicitly. Each Scout group has an `ab_meta.yml` that lists its tables in dependency order. Every table lives in its own `<table>.yml` file.
@@ -442,7 +446,7 @@ go tool schemagen -dialect pgsql -input "${keel_schema_dir}/core,${keel_schema_d
 go tool schemagen -dialect mysql -input "${keel_schema_dir}/core,${keel_schema_dir}/geo,${keel_schema_dir}/tenant_management,schema" -out build/scout_mysql.sql
 ```
 
-The combined schema currently contains 38 selected keel tables and 54 Scout tables. The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`, then adds Scout. Run both commands in CI. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
+The combined schema currently contains 38 selected keel tables and 56 Scout tables. The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`, then adds Scout. Run both commands in CI. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
 
 `schema/seed/control_plane.yml` seeds execution kinds, supported language codes, Studio authorization verbs, Agent Studio roles, page/table permissions, REST headers, and foreign-key lookup metadata. `schema/seed/tenancy.yml` seeds `capacity_class` with `shared` and `dedicated`. Each constant domain maps its consuming column through `constant_lookup`. The seed YAML is authoritative. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
 

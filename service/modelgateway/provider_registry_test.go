@@ -46,3 +46,34 @@ func TestProviderRegistryRejectsDuplicateAndMissingProviders(t *testing.T) {
 		t.Fatalf("missing error = %v", err)
 	}
 }
+
+func TestProviderRegistryBuildsTextAndMediaAdapters(t *testing.T) {
+	registry := NewProviderRegistry()
+	provider := modelProvider()
+	media := &mediaProvider{}
+	if err := registry.RegisterAdapters("provider", provider, media); err != nil {
+		t.Fatalf("RegisterAdapters: %v", err)
+	}
+	gotProvider, gotMedia, err := registry.Build(context.Background(), domain.ModelReference{ProviderID: "provider", ModelID: "model"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if gotProvider != provider || gotMedia != media {
+		t.Fatalf("adapters = (%T, %T)", gotProvider, gotMedia)
+	}
+	if _, _, err := registry.Build(context.Background(), domain.ModelReference{ProviderID: "provider"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("missing model error = %v", err)
+	}
+}
+
+type mediaProvider struct{}
+
+func (*mediaProvider) GenerateImage(context.Context, string, domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+	return nil, nil
+}
+
+func (*mediaProvider) GenerateVideo(context.Context, string, domain.VideoRequest) ([]domain.GeneratedMedia, error) {
+	return nil, nil
+}
+
+var _ contract.MediaProvider = (*mediaProvider)(nil)

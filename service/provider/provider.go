@@ -14,22 +14,34 @@ import (
 )
 
 const (
-	defaultMaxOutputTokens = 8192
-	defaultTemperature     = 0.7
+	// GoogleProviderID is the canonical model-provider id for Google's adapter.
+	GoogleProviderID = "google"
+	// OpenAIProviderID is the canonical model-provider id for OpenAI's adapter.
+	OpenAIProviderID = "openai"
+	// AnthropicProviderID is the canonical model-provider id for Anthropic's adapter.
+	AnthropicProviderID = "anthropic"
+
+	// DefaultMaxOutputTokens bounds provider calls whose request omits a limit.
+	DefaultMaxOutputTokens int64 = 8192
+	// DefaultTemperature is used when an adapter has no positive configured value.
+	DefaultTemperature = 0.7
 )
 
 func maxOutputTokens(request domain.ModelRequest) int64 {
 	if request.MaxOutputTokens > 0 {
 		return request.MaxOutputTokens
 	}
-	return defaultMaxOutputTokens
+	return DefaultMaxOutputTokens
 }
 
-func temperature(configured float64) float64 {
+func temperature(configured float64, explicitlyConfigured bool) float64 {
+	if explicitlyConfigured {
+		return configured
+	}
 	if configured > 0 {
 		return configured
 	}
-	return defaultTemperature
+	return DefaultTemperature
 }
 
 func mediaPrompt(prompt, styleHint string) string {

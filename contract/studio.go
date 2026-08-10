@@ -34,9 +34,8 @@ type AgentDraftValidator interface {
 	Validate(ctx context.Context, tenantID int64, draft domain.AgentDraft, phase domain.ValidationPhase) ([]domain.AgentFieldError, error)
 }
 
-// AgentActivityReporter supplies product-owned last-successful-run times per
-// agent id. Studio surfaces them on summaries; execution history stays with
-// the product that runs the agents.
+// AgentActivityReporter supplies additional last-successful-run times per
+// agent id. Studio merges them with its own test history.
 type AgentActivityReporter interface {
 	LastRun(ctx context.Context, tenantID int64) (map[string]time.Time, error)
 }

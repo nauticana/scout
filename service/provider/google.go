@@ -20,6 +20,9 @@ type Google struct {
 	UseGeminiAPI bool
 	APIKey       string
 	Temperature  float64
+	// TemperatureConfigured distinguishes an intentional zero from the
+	// adapter's zero-value default.
+	TemperatureConfigured bool
 	// VideoPollInterval paces the long-running video operation; zero uses one second.
 	VideoPollInterval time.Duration
 }
@@ -43,7 +46,7 @@ func (p *Google) Generate(ctx context.Context, selection domain.ModelSelection, 
 	}
 	prompt := string(request.Prompt)
 	resp, err := client.Models.GenerateContent(ctx, selection.Model, genai.Text(prompt), &genai.GenerateContentConfig{
-		Temperature:     genai.Ptr(float32(temperature(p.Temperature))),
+		Temperature:     genai.Ptr(float32(temperature(p.Temperature, p.TemperatureConfigured))),
 		MaxOutputTokens: int32(maxOutputTokens(request)),
 	})
 	if err != nil {

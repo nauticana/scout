@@ -425,6 +425,24 @@ erDiagram
     usage_category {
         varchar code PK
     }
+    agent_run {
+        bigint id PK
+        bigint tenant_id FK
+        varchar agent_id FK
+        varchar agent_version FK
+        varchar task_kind
+        timestamp completed_at
+    }
+    agent_ops_event {
+        bigint id PK
+        bigint tenant_id FK
+        varchar event
+        text detail
+        timestamp occurred_at
+    }
+    business_partner {
+        bigint id PK
+    }
 
     agent_tenant ||--o{ conversation : conversations
     agent_version ||--o{ conversation : agent_version_conversations
@@ -441,9 +459,11 @@ erDiagram
     budget_reservation }o--|| reservation_status : status_budget_reservations
     conversation_turn ||--o{ usage_event : usage_events
     usage_event }o--|| usage_category : category_usage_events
+    agent_version ||--o{ agent_run : agent_run_versions
+    business_partner ||--o{ agent_ops_event : tenant_agent_ops_events
 ```
 
-`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe.
+`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe.
 
 ## Platform release safety and audit
 
@@ -524,5 +544,5 @@ Agent canaries in `agent_deployment` remain independent from platform rings in `
 | Catalog | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category` |
 | Tenancy | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | Control plane | `agent_profile`, `agent_draft`, `agent_alias`, `prompt_section`, `prompt_baseline`, `tenant_prompt_default`, `agent_prompt_override`, `guardrail_config`, `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_version`, `agent_tool_binding`, `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition`, `agent_deployment`, `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `model_provider`, `model_definition`, `model_price`, `tenant_model_access` |
-| Runtime | `conversation`, `conversation_turn`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `budget_reservation`, `usage_event` |
+| Runtime | `conversation`, `conversation_turn`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event` |
 | Release | `platform_release`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `audit_event` |

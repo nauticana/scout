@@ -32,6 +32,18 @@ seeds:
       - [language_code, prompt_baseline, language_code]
       - [language_code, tenant_prompt_default, language_code]
       - [language_code, agent_prompt_override, language_code]
+  - table: model_provider
+    columns: [provider_id, display_name, endpoint_uri, credential_ref, is_active]
+    rows:
+      - [google, Google Vertex AI / Gemini, "https://generativelanguage.googleapis.com", google_api_key, true]
+      - [openai, OpenAI, "https://api.openai.com", openai_api_key, true]
+      - [anthropic, Anthropic, "https://api.anthropic.com", anthropic_api_key, true]
+  - table: application_config_flag
+    columns: [id, data_type, needs_restart, default_value, description]
+    rows:
+      - [agent_max_tokens, int, false, "8192", Max output tokens per agent model completion]
+      - [agent_temperature, float, false, "0.7", "Agent model sampling temperature; 0.0-2.0"]
+      - [agent_run_retention_days, int, true, "0", "Days to retain agent run activity; 0 retains it forever"]
   - table: authorization_object
     columns: [id, caption]
     rows:
@@ -65,6 +77,8 @@ seeds:
       - [agent_versions, S, "*"]
       - [agent_deployments, S, "*"]
       - [agent_studio_events, S, "*"]
+      - [agent_run_versions, S, "*"]
+      - [tenant_agent_ops_events, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
     rows:

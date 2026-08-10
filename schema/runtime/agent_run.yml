@@ -1,0 +1,34 @@
+table: agent_run
+comment: Successful execution attributed to an immutable agent release
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: task_kind
+    type: VARCHAR(80)
+  - name: completed_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agent_run_seq
+  column: id
+foreign_keys:
+  - name: agent_run_versions
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+indexes:
+  - name: agent_run_last_ix
+    columns: [tenant_id, agent_id, completed_at]
+  - name: agent_run_retention_ix
+    columns: [completed_at]
+checks:
+  - name: agent_run_task_kind_ck
+    expression: CHAR_LENGTH(TRIM(task_kind)) > 0

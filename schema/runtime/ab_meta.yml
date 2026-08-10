@@ -6,3 +6,5 @@ tables:
   - step_idempotency
   - budget_reservation
   - usage_event
+  - agent_run
+  - agent_ops_event

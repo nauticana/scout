@@ -15,8 +15,9 @@ import (
 // OpenAI invokes Chat Completions for text and the Images API for image
 // generation. Video generation is not wired.
 type OpenAI struct {
-	APIKey      string
-	Temperature float64
+	APIKey                string
+	Temperature           float64
+	TemperatureConfigured bool
 }
 
 var (
@@ -32,7 +33,7 @@ func (p *OpenAI) Generate(ctx context.Context, selection domain.ModelSelection, 
 	resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model:       selection.Model,
 		Messages:    []openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(request.Prompt))},
-		Temperature: openai.Float(temperature(p.Temperature)),
+		Temperature: openai.Float(temperature(p.Temperature, p.TemperatureConfigured)),
 		MaxTokens:   openai.Int(maxOutputTokens(request)),
 	})
 	if err != nil {

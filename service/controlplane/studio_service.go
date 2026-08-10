@@ -106,8 +106,8 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 	return summaries, nil
 }
 
-// lastActivity merges Studio test runs with the product's own execution
-// history; the newest of the two is what an operator means by "last run".
+// lastActivity merges Studio test runs with injected execution history; the
+// newest of the two is what an operator means by "last run".
 func (s *StudioService) lastActivity(ctx context.Context, tenantID int64) (map[string]time.Time, error) {
 	res, err := s.qs.Query(ctx, qStudioLastTest, tenantID)
 	if err != nil {
@@ -122,11 +122,11 @@ func (s *StudioService) lastActivity(ctx context.Context, tenantID int64) (map[s
 	if s.Activity == nil {
 		return lastRun, nil
 	}
-	product, err := s.Activity.LastRun(ctx, tenantID)
+	additional, err := s.Activity.LastRun(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("load agent activity: %w", err)
 	}
-	for agentID, at := range product {
+	for agentID, at := range additional {
 		if current, seen := lastRun[agentID]; !seen || at.After(current) {
 			lastRun[agentID] = at
 		}

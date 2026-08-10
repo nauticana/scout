@@ -1,0 +1,31 @@
+table: agent_ops_event
+comment: Tenant-scoped operational agent event that may precede agent provisioning
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: event
+    type: VARCHAR(80)
+  - name: detail
+    type: TEXT
+    nullable: true
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agent_ops_event_seq
+  column: id
+foreign_keys:
+  - name: tenant_agent_ops_events
+    columns: [tenant_id]
+    references:
+      table: business_partner
+      columns: [id]
+indexes:
+  - name: agent_ops_event_tenant_time_ix
+    columns: [tenant_id, occurred_at]
+checks:
+  - name: agent_ops_event_name_ck
+    expression: CHAR_LENGTH(TRIM(event)) > 0

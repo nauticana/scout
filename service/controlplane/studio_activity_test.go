@@ -26,9 +26,9 @@ func agentRow() []any {
 	return []any{"writer-a", "writer", "Writer", true, true, int64(4), int64(2), true, "3", nil, nil}
 }
 
-// The product's execution history and Studio's own test events are both "last
+// Recorded execution history and Studio's own test events are both "last
 // run"; the newer one wins.
-func TestListAgentsMergesProductActivityWithStudioTests(t *testing.T) {
+func TestListAgentsMergesRuntimeActivityWithStudioTests(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
 		qStudioListAgents: {agentRow()},
 		qStudioLastTest:   {{"writer-a", testedAt}},
@@ -47,7 +47,7 @@ func TestListAgentsMergesProductActivityWithStudioTests(t *testing.T) {
 	}
 }
 
-// Without a product reporter, a Studio test is still the last run.
+// Without an activity reporter, a Studio test is still the last run.
 func TestListAgentsFallsBackToStudioTests(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
 		qStudioListAgents: {agentRow()},

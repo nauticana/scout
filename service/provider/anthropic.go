@@ -14,8 +14,9 @@ import (
 // Anthropic invokes the Messages API. Text only: image and video are served by
 // providers that implement contract.MediaProvider.
 type Anthropic struct {
-	APIKey      string
-	Temperature float64
+	APIKey                string
+	Temperature           float64
+	TemperatureConfigured bool
 }
 
 var _ contract.ModelProvider = (*Anthropic)(nil)
@@ -28,7 +29,7 @@ func (p *Anthropic) Generate(ctx context.Context, selection domain.ModelSelectio
 	resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:       anthropic.Model(selection.Model),
 		MaxTokens:   maxOutputTokens(request),
-		Temperature: anthropic.Float(temperature(p.Temperature)),
+		Temperature: anthropic.Float(temperature(p.Temperature, p.TemperatureConfigured)),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(string(request.Prompt))),
 		},
