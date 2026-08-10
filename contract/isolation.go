@@ -38,7 +38,7 @@ type ExecutionPermit interface {
 	BeforeStep(ctx context.Context, step domain.ExecutionStep) error
 	// AfterStep accounts for usage and checks for repeated execution patterns.
 	AfterStep(ctx context.Context, result domain.StepResult) error
-	// Close releases reservations and records the terminal outcome.
+	// Close releases resources and records the total terminal usage.
 	Close(ctx context.Context, usage domain.Usage) error
 }
 

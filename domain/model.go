@@ -24,7 +24,7 @@ type ModelResult struct {
 	Usage        Usage
 }
 
-// ModelChunk is one ordered frame from a streaming model response.
+// ModelChunk is one ordered frame with incremental usage from a streaming response.
 type ModelChunk struct {
 	Sequence     int64
 	Payload      []byte

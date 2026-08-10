@@ -1,17 +1,112 @@
-comment: Execution graph constants used by Scout control-plane metadata
+comment: Scout control-plane constants, REST metadata, and Studio authorization
 order: 20
 seeds:
   - table: constant_header
     columns: [id, caption]
     rows:
       - [execution_step_kind, Execution Step Kind]
+      - [language_code, Language]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
       - [execution_step_kind, model, Model Inference]
       - [execution_step_kind, tool, Governed Tool Invocation]
       - [execution_step_kind, knowledge, Knowledge Retrieval]
+      - [language_code, en-US, English (United States)]
+      - [language_code, en-GB, English (United Kingdom)]
+      - [language_code, es-ES, Spanish (Spain)]
+      - [language_code, es-MX, Spanish (Mexico)]
+      - [language_code, fr-FR, French (France)]
+      - [language_code, de-DE, German (Germany)]
+      - [language_code, it-IT, Italian (Italy)]
+      - [language_code, pt-BR, Portuguese (Brazil)]
+      - [language_code, nl-NL, Dutch (Netherlands)]
+      - [language_code, ja-JP, Japanese (Japan)]
+      - [language_code, ko-KR, Korean (Korea)]
+      - [language_code, zh-CN, Chinese (Simplified)]
+      - [language_code, tr-TR, Turkish (Turkey)]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
       - [execution_step_kind, execution_step, step_kind_code]
+      - [language_code, prompt_baseline, language_code]
+      - [language_code, tenant_prompt_default, language_code]
+      - [language_code, agent_prompt_override, language_code]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [AGENT_STUDIO, Agent Studio]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [AGENT_STUDIO, VIEW, View agents and drafts]
+      - [AGENT_STUDIO, EDIT, Edit and reset drafts]
+      - [AGENT_STUDIO, TEST, Run draft tests]
+      - [AGENT_STUDIO, PUBLISH, Publish releases and set defaults]
+      - [AGENT_STUDIO, RESTORE, Restore published versions]
+  - table: authorization_role
+    columns: [id, caption]
+    rows:
+      - [AGENT_ADMIN, Agent Administrator]
+      - [AGENT_OPER, Agent Operator]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [260, false, setup, agent_studio, agent_studio, Agent Studio]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [agent_profiles, S, "*"]
+      - [agent_drafts, S, "*"]
+      - [agent_aliases, D, display_name]
+      - [prompt_baselines, D, caption]
+      - [tenant_prompt_defaults, S, "*"]
+      - [agent_prompt_overrides, S, "*"]
+      - [agent_versions, S, "*"]
+      - [agent_deployments, S, "*"]
+      - [agent_studio_events, S, "*"]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [agent_profile, agent_profile]
+      - [model_definition, model_definition]
+      - [prompt_section, prompt_section]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [AGENT_ADMIN, AGENT_STUDIO, VIEW, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, EDIT, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, TEST, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, PUBLISH, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, RESTORE, agent_studio]
+      - [AGENT_ADMIN, PAGE, ACCESS, agent_studio]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_profile]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_draft]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_alias]
+      - [AGENT_ADMIN, TABLE, SELECT, model_provider]
+      - [AGENT_ADMIN, TABLE, SELECT, model_definition]
+      - [AGENT_ADMIN, TABLE, SELECT, model_price]
+      - [AGENT_ADMIN, TABLE, SELECT, tenant_model_access]
+      - [AGENT_ADMIN, TABLE, SELECT, prompt_section]
+      - [AGENT_ADMIN, TABLE, SELECT, prompt_baseline]
+      - [AGENT_ADMIN, TABLE, SELECT, tenant_prompt_default]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_prompt_override]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_version]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_deployment]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_studio_event]
+      - [AGENT_OPER, AGENT_STUDIO, VIEW, agent_studio]
+      - [AGENT_OPER, PAGE, ACCESS, agent_studio]
+      - [AGENT_OPER, TABLE, SELECT, agent_profile]
+      - [AGENT_OPER, TABLE, SELECT, agent_draft]
+      - [AGENT_OPER, TABLE, SELECT, agent_alias]
+      - [AGENT_OPER, TABLE, SELECT, model_provider]
+      - [AGENT_OPER, TABLE, SELECT, model_definition]
+      - [AGENT_OPER, TABLE, SELECT, model_price]
+      - [AGENT_OPER, TABLE, SELECT, tenant_model_access]
+      - [AGENT_OPER, TABLE, SELECT, prompt_section]
+      - [AGENT_OPER, TABLE, SELECT, prompt_baseline]
+      - [AGENT_OPER, TABLE, SELECT, tenant_prompt_default]
+      - [AGENT_OPER, TABLE, SELECT, agent_prompt_override]
+      - [AGENT_OPER, TABLE, SELECT, agent_version]
+      - [AGENT_OPER, TABLE, SELECT, agent_deployment]
+      - [AGENT_OPER, TABLE, SELECT, agent_studio_event]

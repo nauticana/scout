@@ -19,6 +19,7 @@ tables:
   - execution_graph_entry
   - execution_transition
   - agent_deployment
+  - agent_studio_event
   - knowledge_base
   - knowledge_base_version
   - knowledge_document

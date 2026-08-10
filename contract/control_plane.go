@@ -16,6 +16,12 @@ type AgentVersionRepository interface {
 	List(ctx context.Context, tenantID int64, agentID string) ([]domain.AgentDefinition, error)
 }
 
+// AgentPublicationStore atomically persists an immutable definition and compiled graph.
+type AgentPublicationStore interface {
+	// Publish stores the definition and graph in one transaction.
+	Publish(ctx context.Context, tenantID int64, definition domain.AgentDefinition, graph domain.ExecutionGraph) error
+}
+
 // AgentCompiler converts an agent definition into an executable graph.
 type AgentCompiler interface {
 	// Compile validates a definition and produces an immutable execution graph.

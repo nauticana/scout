@@ -7,16 +7,19 @@ const (
 	StudioAgentsPath     = StudioBasePath + "agents"
 	StudioAgentPath      = StudioBasePath + "agent"
 	StudioDraftPath      = StudioBasePath + "draft"
+	StudioEnabledPath    = StudioBasePath + "enabled"
 	StudioTestPath       = StudioBasePath + "test"
 	StudioPublishPath    = StudioBasePath + "publish"
 	StudioRestorePath    = StudioBasePath + "restore"
 	StudioResetPath      = StudioBasePath + "reset"
 	StudioSetDefaultPath = StudioBasePath + "set-default"
 	StudioHistoryPath    = StudioBasePath + "history"
+	StudioAuditPath      = StudioBasePath + "audit"
+	StudioSectionsPath   = StudioBasePath + "release-sections"
 	StudioModelsPath     = StudioBasePath + "models"
 )
 
-// AgentSummary is the seo-v1 agent list item.
+// AgentSummary is the studio-v1 agent list item.
 type AgentSummary struct {
 	AgentType            string     `json:"agent_type"`
 	AgentName            string     `json:"agent_name"`
@@ -32,31 +35,31 @@ type AgentSummary struct {
 	PublishedAt          *time.Time `json:"published_at,omitempty"`
 }
 
-// AgentFieldError is one seo-v1 field validation failure.
+// AgentFieldError is one studio-v1 field validation failure.
 type AgentFieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
 }
 
-// ValidationProblem is the seo-v1 validation response detail.
+// ValidationProblem is the studio-v1 validation response detail.
 type ValidationProblem struct {
 	Message string            `json:"message"`
 	Fields  []AgentFieldError `json:"fields"`
 }
 
-// AgentModelSelection is the seo-v1 standard model selection.
+// AgentModelSelection is the studio-v1 standard model selection.
 type AgentModelSelection struct {
 	TextModel  string `json:"text_model"`
 	ImageModel string `json:"image_model"`
 	VideoModel string `json:"video_model"`
 }
 
-// AgentApprovalPolicy is the seo-v1 approval policy.
+// AgentApprovalPolicy is the studio-v1 approval policy.
 type AgentApprovalPolicy struct {
 	RequireApproval bool `json:"require_approval"`
 }
 
-// AgentPromptSection is the seo-v1 prompt inheritance view.
+// AgentPromptSection is the studio-v1 prompt inheritance view.
 type AgentPromptSection struct {
 	PromptHeaderID  int64   `json:"prompt_header_id"`
 	Caption         string  `json:"caption"`
@@ -72,20 +75,20 @@ type AgentPromptSection struct {
 	EffectiveOutput string  `json:"effective_output"`
 }
 
-// AgentLanguageDraft is the seo-v1 prompt draft for one language.
+// AgentLanguageDraft is the studio-v1 prompt draft for one language.
 type AgentLanguageDraft struct {
 	LanguageCode   string               `json:"language_code"`
 	PromptSections []AgentPromptSection `json:"prompt_sections"`
 }
 
-// AgentDrift is the seo-v1 active-release drift report.
+// AgentDrift is the studio-v1 active-release drift report.
 type AgentDrift struct {
 	ActiveVersion    int64    `json:"active_version"`
 	ChangedLanguages []string `json:"changed_languages"`
 	Causes           []string `json:"causes"`
 }
 
-// AgentDraft is the seo-v1 revision-checked editable representation.
+// AgentDraft is the studio-v1 revision-checked editable representation.
 type AgentDraft struct {
 	AgentType                    string               `json:"agent_type"`
 	AgentName                    string               `json:"agent_name"`
@@ -100,7 +103,7 @@ type AgentDraft struct {
 	ExpectedAgentRevision        int64                `json:"expected_agent_revision"`
 }
 
-// AgentTestRequest is the seo-v1 saved-draft test request.
+// AgentTestRequest is the studio-v1 saved-draft test request.
 type AgentTestRequest struct {
 	AgentName    string `json:"agent_name"`
 	LanguageCode string `json:"language_code"`
@@ -108,7 +111,7 @@ type AgentTestRequest struct {
 	InputData    string `json:"input_data"`
 }
 
-// AgentTestResult is the seo-v1 test result and usage view.
+// AgentTestResult is the studio-v1 test result and usage view.
 type AgentTestResult struct {
 	AgentName    string   `json:"agent_name"`
 	LanguageCode string   `json:"language_code"`
@@ -122,7 +125,7 @@ type AgentTestResult struct {
 	Sections     []string `json:"sections"`
 }
 
-// AgentPublishRequest is the seo-v1 optimistic publish request.
+// AgentPublishRequest is the studio-v1 optimistic publish request.
 type AgentPublishRequest struct {
 	AgentName                    string `json:"agent_name"`
 	ChangeSummary                string `json:"change_summary"`
@@ -130,13 +133,13 @@ type AgentPublishRequest struct {
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
 }
 
-// AgentRestoreRequest is the seo-v1 restore request.
+// AgentRestoreRequest is the studio-v1 restore request.
 type AgentRestoreRequest struct {
 	AgentName string `json:"agent_name"`
 	Version   int64  `json:"version"`
 }
 
-// AgentResetRequest is the seo-v1 prompt reset request.
+// AgentResetRequest is the studio-v1 prompt reset request.
 type AgentResetRequest struct {
 	AgentName                    string `json:"agent_name"`
 	Scope                        string `json:"scope"`
@@ -146,13 +149,26 @@ type AgentResetRequest struct {
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
 }
 
-// AgentSetDefaultRequest is the seo-v1 logical-kind alias update.
+// AgentSetDefaultRequest is the studio-v1 logical-kind alias update.
 type AgentSetDefaultRequest struct {
 	AgentName                    string `json:"agent_name"`
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
 }
 
-// AgentRelease is the seo-v1 immutable release history item.
+// AgentSetEnabledRequest is the studio-v1 kill-switch request.
+type AgentSetEnabledRequest struct {
+	AgentName             string `json:"agent_name"`
+	Enabled               bool   `json:"enabled"`
+	ExpectedAgentRevision int64  `json:"expected_agent_revision"`
+}
+
+// AgentEnabledState is the studio-v1 kill-switch result.
+type AgentEnabledState struct {
+	Enabled               bool  `json:"enabled"`
+	ExpectedAgentRevision int64 `json:"expected_agent_revision"`
+}
+
+// AgentRelease is the studio-v1 immutable release history item.
 type AgentRelease struct {
 	AgentName        string              `json:"agent_name"`
 	AgentType        string              `json:"agent_type"`
@@ -168,7 +184,26 @@ type AgentRelease struct {
 	Languages        []string            `json:"languages"`
 }
 
-// StudioModel is the seo-v1 model catalog item with product credit guidance.
+// AgentAuditEvent is one studio-v1 lifecycle event.
+type AgentAuditEvent struct {
+	Event     string    `json:"event"`
+	Detail    string    `json:"detail"`
+	UserID    int64     `json:"user_id"`
+	EventTime time.Time `json:"event_time"`
+}
+
+// AgentReleaseSection is one studio-v1 immutable prompt section.
+type AgentReleaseSection struct {
+	LanguageCode   string `json:"language_code"`
+	PromptHeaderID int64  `json:"prompt_header_id"`
+	Caption        string `json:"caption"`
+	Description    string `json:"description"`
+	Instruction    string `json:"instruction"`
+	Output         string `json:"output"`
+	Sequence       int64  `json:"sequence"`
+}
+
+// StudioModel is the studio-v1 model catalog item with display credit guidance.
 type StudioModel struct {
 	ID                 string  `json:"id"`
 	Provider           string  `json:"provider"`

@@ -29,4 +29,6 @@ var (
 	ErrValidation = errors.New("validation failed")
 	// ErrNotReady indicates that an agent has no executable published definition.
 	ErrNotReady = errors.New("not ready")
+	// ErrNoPrompts indicates that no prompt source exists for a requested language.
+	ErrNoPrompts = errors.New("no prompts")
 )

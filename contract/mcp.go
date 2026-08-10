@@ -65,3 +65,9 @@ type MCPPromptBackend interface {
 	MCPPromptCatalog
 	MCPPromptRenderer
 }
+
+// MCPFieldCatalog describes fields exposed by discovery tools or HTTP.
+type MCPFieldCatalog interface {
+	ListFields(ctx context.Context) ([]domain.FieldDescriptor, error)
+	DescribeField(ctx context.Context, name string) (*domain.FieldDescriptor, error)
+}

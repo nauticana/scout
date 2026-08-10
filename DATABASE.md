@@ -19,7 +19,7 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 
 All relational identifiers are lowercase. Tenant-owned relations carry `tenant_id` through their primary or foreign keys. Structured payload columns use canonical JSON stored as `TEXT` so keel can emit PostgreSQL or MySQL DDL from the same YAML.
 
-`execution_step.step_kind_code` and `tenant_runtime_policy.capacity_class_code` use keel constant domains through `constant_lookup`; neither domain is a foreign key or a Scout-owned table. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
+`execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
 
 ## REST relationship names
 
@@ -30,6 +30,7 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `business_partner` | `agent_tenants` | `agent_tenant[]` |
 | `agent_tenant` | `agent_profiles` | `agent_profile[]` |
 | `agent_profile` | `agent_versions` | `agent_version[]` |
+| `agent_profile` | `agent_studio_events` | `agent_studio_event[]` |
 | `agent_version` | `stable_agent_deployments` | `agent_deployment[]` |
 | `agent_version` | `canary_agent_deployments` | `agent_deployment[]` |
 | `execution_step` | `outgoing_execution_transitions` | `execution_transition[]` |
@@ -279,7 +280,7 @@ erDiagram
 
 `agent_alias.revision` guards both alias changes and tenant defaults for that logical kind, preserving one shared optimistic token. Agent overrides are guarded by `agent_draft.draft_revision`. Platform baseline selection is supplied by `PromptBaselineSelector`; baseline data remains product-owned.
 
-Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows.
+Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions and actor/time metadata; it is omitted from the ER layout to preserve the authoring flow.
 
 ## Knowledge
 

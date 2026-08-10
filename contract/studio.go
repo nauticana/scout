@@ -12,6 +12,11 @@ type PromptCompiler interface {
 	DefinitionDigest(definition domain.AgentDefinition) (string, error)
 }
 
+// PromptDraftAssembler combines resolved provenance with effective prompt content.
+type PromptDraftAssembler interface {
+	Assemble(resolved domain.ResolvedPrompts) (domain.AgentLanguageDraft, error)
+}
+
 // PromptSourceRepository resolves persisted prompt levels for compilation and editing.
 type PromptSourceRepository interface {
 	Resolve(ctx context.Context, tenantID int64, agentID, languageCode string) (domain.ResolvedPrompts, error)

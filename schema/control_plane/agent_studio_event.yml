@@ -1,0 +1,38 @@
+table: agent_studio_event
+comment: Queryable tenant agent lifecycle event
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: event
+    type: VARCHAR(40)
+  - name: detail
+    type: VARCHAR(400)
+    nullable: true
+  - name: actor_id
+    type: BIGINT
+    nullable: true
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agent_studio_event_seq
+  column: id
+foreign_keys:
+  - name: agent_studio_events
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: actor_agent_studio_events
+    columns: [actor_id]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: agent_studio_event_agent_time_ix
+    columns: [tenant_id, agent_id, occurred_at]

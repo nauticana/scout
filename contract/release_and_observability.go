@@ -12,6 +12,18 @@ type AgentContractTestRunner interface {
 	Run(ctx context.Context, platformVersion string, cases []domain.ContractTestCase) ([]domain.ContractTestResult, error)
 }
 
+// ContractTestExecutor runs one case against a proposed platform build.
+type ContractTestExecutor interface {
+	// Execute returns the governed runtime result for one compatibility case.
+	Execute(ctx context.Context, platformVersion string, testCase domain.ContractTestCase) (domain.TurnResult, error)
+}
+
+// ContractAssertionEvaluator evaluates one runtime result against encoded assertions.
+type ContractAssertionEvaluator interface {
+	// Evaluate returns every failed assertion for one compatibility case.
+	Evaluate(ctx context.Context, testCase domain.ContractTestCase, result domain.TurnResult) ([]string, error)
+}
+
 // TenantCorpusSampler selects representative tenant agents for compatibility tests.
 type TenantCorpusSampler interface {
 	// Sample returns a risk-stratified corpus across tenant agents and capabilities.

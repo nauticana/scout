@@ -40,7 +40,7 @@ type ToolTransport interface {
 // ToolRetryPolicy governs bounded retries for tool failures.
 type ToolRetryPolicy interface {
 	// NextDelay returns the next retry delay and whether another attempt is allowed.
-	NextDelay(ctx context.Context, call domain.ToolCall, result domain.ToolResult, attempt int) (time.Duration, bool)
+	NextDelay(ctx context.Context, call domain.ToolCall, result domain.ToolResult, callErr error, attempt int) (time.Duration, bool)
 }
 
 // ToolCircuitBreaker isolates failing tools by tenant.

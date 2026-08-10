@@ -1,8 +1,8 @@
 # Scout
 
-Scout is a shared Go contract and data-model foundation for building multi-tenant agent platforms. It defines provider-neutral domain types, application interfaces, and a portable keel schema. Downstream applications supply business services and deployable binaries.
+Scout is a shared Go foundation for building multi-tenant agent platforms. It defines provider-neutral domain types, application interfaces, reusable services, and a portable keel schema. Downstream applications supply product behavior, adapters, and deployable binaries.
 
-This repository intentionally contains no service, handler, worker, model-provider, queue, cache, or MCP implementation. The first implementation should happen in a consuming application after its product requirements and provider choices are known.
+Scout implements product-neutral behavior behind its public contracts, including reusable Studio HTTP handlers and MCP protocol adapters. It contains no deployable binary, product workflow, model provider, queue, cache, or frontend.
 
 Scout is licensed under the [Apache License 2.0](LICENSE).
 
@@ -10,12 +10,14 @@ Scout is licensed under the [Apache License 2.0](LICENSE).
 
 | Path | Purpose |
 |---|---|
-| `api/` | Versioned HTTP compatibility DTOs without handler logic |
+| `api/` | Versioned HTTP compatibility DTOs |
 | `domain/` | Provider-neutral values exchanged across platform boundaries |
 | `contract/` | Interfaces implemented or composed by downstream applications |
+| `service/` | Product-neutral implementations of Scout contracts |
+| `handler/` | HTTP-only Agent Studio compatibility adapter |
+| `mcp/` | MCP server, provider, envelope, resource, and conformance helpers |
 | `schema/` | Database-neutral table definitions compiled by keel |
 | `STUDIO_API.md` | Agent Studio HTTP compatibility reference |
-| `SEO_MIGRATION.md` | SEO-owned migration mapping and risk checklist |
 | `go.mod` | Module identity and the pinned keel schema compiler tool |
 
 Scout owns agent-platform vocabulary and invariants. [keel](https://github.com/nauticana/keel) owns horizontal infrastructure.
@@ -26,10 +28,11 @@ Scout owns agent-platform vocabulary and invariants. [keel](https://github.com/n
 | Product-specific behavior, prompt content, baseline selection, workflows, and approval rules | Downstream application |
 | Database repository, named query service, transactions, ID generation | keel |
 | HTTP server, authentication, authorization, envelopes, generic REST | keel |
-| Agent Studio handler-facing backend contract | Scout contracts |
+| Agent Studio lifecycle service, handler contract, and `studio-v1` adapter | Scout |
 | Worker lifecycle, polling, leases, health endpoints | keel |
-| MCP server, transports, protocol DTOs, envelopes, provider registration, auth middleware | keel |
-| MCP product definitions, caller context, and tool/resource/prompt operation contracts | Scout domain and contracts |
+| MCP server, transports, protocol DTO projection, envelopes, and provider registration | Scout |
+| MCP authentication, authorization, quota, client IP, secrets, and HTTP infrastructure | keel |
+| MCP product definitions, caller context, and tool/resource/prompt operations | Scout domain and contracts |
 | Flags, runtime configuration, secret providers, storage, cache | keel |
 | Provider adapters and composition factories | Downstream application |
 
@@ -82,8 +85,8 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 |---|---|---|
 | `contract/control_plane.go` | `AgentVersionRepository`, `AgentCompiler`, `AgentPublisher`, registries, traffic manager | Validate, compile, publish, and activate immutable definitions |
 | `contract/studio.go` | Prompt compiler, baseline selector, draft validator/tester, kind/model catalogs, published resolver | Inject product rules and governed test execution |
-| `contract/studio_http.go` | `AgentStudioHTTPBackend` | Implement the single service surface used by authenticated handlers |
-| `contract/mcp.go` | Server description, tool catalog/execution, resource catalog/read, prompt catalog/render | Expose product capabilities through a thin Keel MCP adapter |
+| `contract/studio_http.go` | `AgentStudioHTTPBackend` | Extend the shared service only where product behavior is required |
+| `contract/mcp.go` | Server description, tool/resource/prompt operations, field catalog | Expose product capabilities through Scout MCP adapters |
 | `contract/data_plane.go` | `ConversationIngress`, `ConversationRuntime`, dispatcher, scheduler, session, reply, step ports | Admit and execute turns with replay and streaming |
 | `contract/model_runtime.go` | Router, gateway, provider registry, stream, capacity | Govern provider selection and inference |
 | `contract/tool_gateway.go` | Authorization, credentials, egress, transport, retry, circuit breaker | Govern every external tool effect |
@@ -94,6 +97,23 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/health.go` | `HealthProbe` | Expose dependency readiness to composition code |
 
 The `domain/` package contains transport- and provider-neutral DTOs. Provider SDK types must not cross these interfaces.
+
+## Shared service implementations
+
+The `contract` package remains flat so consumers use one stable import path. Concrete implementations are grouped by responsibility:
+
+| Package | Implementations | Injected boundaries |
+|---|---|---|
+| `service/controlplane` | `StudioService`, `KeelPromptSourceRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
+| `service/isolation` | `ExecutionGovernor` and per-turn execution permits | Loop detection and cost circuit breaking |
+| `service/modelgateway` | `Gateway`, `ProviderRegistry`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
+| `service/release` | `ContractTestRunner` | Governed test execution and assertion evaluation |
+| `service/runtime` | `PublishedAgentResolver`, `DefinitionResolver`, `SessionCoordinator`, `StepExecutorRegistry` | Keel database, durable stores, non-authoritative caches, metrics, and step executors |
+| `service/toolgateway` | `GovernedGateway` and bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
+
+These services enforce ordering and failure semantics but do not provide no-op infrastructure. Cache failures fall back to durable storage and are reported through `RuntimeMetrics`; durable writes complete before cache invalidation; model capacity is released on every unary or streaming terminal path; and tool calls cannot bypass authorization, egress, circuit, credential, or result validation boundaries.
+
+Tests share focused fakes under `service/internal/fake`. Provider adapters, distributed queues, caches, secret stores, and product transports remain separate implementations behind injected contracts.
 
 ## Agent Studio contract
 
@@ -106,11 +126,42 @@ Studio separates mutable authoring state from immutable runtime state:
 5. Publication freezes compiled prompts and provenance into canonical `agent_version.definition` JSON.
 6. `agent_deployment` selects stable and optional canary versions for the aliased agent.
 
-`AgentStudioHTTPBackend` is the handler-facing interface; it contains no `http.ResponseWriter`, session, keel repository, or provider SDK type. A keel handler authenticates, authorizes, derives `domain.StudioActor`, calls one backend method, and maps errors.
+`controlplane.StudioService` implements `AgentStudioHTTPBackend`. It owns named SQL, prompt resolution, common validation, optimistic revisions, kill-switch updates, publication, restore, reset, history, release sections, and lifecycle audit. `handler.StudioHandler` authenticates through keel, derives `domain.StudioActor`, calls one backend method, and maps `studio-v1` DTOs and errors.
 
 Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, `AgentDraftTestExecutor`, `AgentKindCatalog`, and `StudioModelCatalog`. Scout owns the inheritance vocabulary and lifecycle contract but never hard-codes product agent kinds, prompt text, capability catalogs, or provider construction.
 
-See [STUDIO_API.md](STUDIO_API.md) for the initial HTTP compatibility profile. The SEO migration mapping and team-owned risks are recorded in [SEO_MIGRATION.md](SEO_MIGRATION.md).
+See [STUDIO_API.md](STUDIO_API.md) for the initial HTTP compatibility profile.
+
+### Shared prompt compiler
+
+`controlplane.PromptCompiler` and `controlplane.PromptDraftAssembler` merge resolved prompt rows, combine source provenance with effective Studio content, produce immutable language snapshots, and create versioned SHA-256 digests without database or provider dependencies.
+
+For each prompt section, the compiler applies these rules:
+
+1. The platform baseline is retained when present.
+2. The tenant default appends to the baseline.
+3. An agent override with `Overwrite` removes the tenant-default instruction but retains the baseline.
+4. An agent override without `Overwrite` appends after the other levels.
+5. The most specific non-empty output contract wins.
+6. Sections are ordered by display order and then prompt-section id.
+
+`DefinitionDigest` includes agent kind, model provider/model pairs, enabled and approval policy, canonical extension JSON, and sorted compiled-language digests. Identity, version, revision, publication, and release-note fields are excluded because they do not change runtime behavior. Stored language digests are verified before a definition digest is produced.
+
+```go
+compiler := &controlplane.PromptCompiler{}
+
+compiled, err := compiler.Compile(languageCode, resolved.Rows)
+if err != nil {
+    return err
+}
+
+definition.Languages = append(definition.Languages, compiled)
+definition.DefinitionDigest, err = compiler.DefinitionDigest(definition)
+```
+
+`controlplane.KeelPromptSourceRepository` implements `PromptSourceRepository` over `prompt_baseline`, `tenant_prompt_default`, and `agent_prompt_override`. The injected `PromptBaselineSelector` supplies ordered product keys; Scout selects the first matching baseline per section and never embeds product precedence.
+
+`runtime.PublishedAgentResolver` resolves an active alias to its immutable stable or sticky canary definition, enforces the operational kill switch, and validates the requested language. Provider construction remains downstream.
 
 ## MCP extension contract
 
@@ -120,11 +171,11 @@ Scout separates product MCP behavior from the MCP protocol implementation:
 - `contract.MCPToolBackend` combines caller-specific discovery and bounded execution shared with HTTP services and workers.
 - `contract.MCPResourceBackend` combines discovery and reads for browsable or URI-addressed product data.
 - `contract.MCPPromptBackend` combines discovery and rendering for client-guidance templates; rendering never executes tools.
-- `contract.MCPServerDescriber` supplies the product values mapped into keel's `mcp.ServerConfig`.
+- `contract.MCPServerDescriber` supplies product values mapped into Scout `mcp.ServerConfig`.
 
 The MCP adapter derives `MCPCaller` from authenticated Keel context. Tenant, actor, credential, scopes, client IP, session, transport, and trust state are never accepted as tool arguments. Remote calls fail closed without authentication; host trust is explicit and limited to a locally executed `stdio` composition. The adapter enforces `MCPToolPolicy` with Keel authorization, quota, secret, and audit infrastructure; standard annotations are client hints and never authorization rules. A long-running operation returns `MCPTaskReference` after durable dispatch and completes in a worker.
 
-Keel remains responsible for `mcp.BaseServer`, `mcp.ToolProvider`, `mcp.ResourceProvider`, transports, OAuth and API-key middleware, protocol errors, manifests, and envelope projection. `MCPToolResult.Meta` deliberately reuses keel's transport-neutral `model.EnvelopeMeta`. Scout does not define MCP HTTP DTOs in `api/`: protocol wire types belong to Keel and `mcp-go`, while `api/` remains reserved for Scout-owned HTTP compatibility profiles.
+Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure. Scout does not define MCP HTTP DTOs in `api/`; MCP wire values remain in `mcp-go` at the protocol boundary.
 
 ## Turn lifecycle
 
@@ -252,6 +303,8 @@ backend.Run(ctx)
 
 Keep `controller.go` as wiring only. If an operation is meaningful without `http.ResponseWriter`, it belongs in a service. Use keel's metadata-driven REST support for ordinary table CRUD; write a custom handler only for a business operation.
 
+For Agent Studio, construct `controlplane.StudioService`, then mount every route returned by `handler.StudioHandler.Routes()`. The handler owns no SQL or lifecycle rule. Products retaining a legacy display-credit scale set the handler's model and test-result mappers. Scout seeds the `AGENT_STUDIO` verbs and the `AGENT_ADMIN` and `AGENT_OPER` roles; the application assigns those roles to users.
+
 ### 5. Add workers
 
 Embed `worker.AbstractWorker` and implement either keel's `worker.QueueWorker` for a standard claim/process loop or `worker.JobWorker` for a custom periodic pass. Use `worker.LeasedQueueWorker` when stale workers must be unable to commit after lease expiry.
@@ -285,12 +338,12 @@ For runtime turns, preserve this order:
 
 ### 6. Add an MCP server
 
-Implement the applicable Scout MCP catalogs and operations on a product service. Keep transport decoding out of that service so HTTP, MCP, workers, and tests can call the same behavior. A thin `internal/mcp` adapter maps Scout definitions and results to keel's SDK-facing providers.
+Implement the applicable Scout MCP catalogs and operations on a product service. Keep transport decoding out of that service so HTTP, MCP, workers, and tests can call the same behavior. A thin product provider maps Scout definitions and results to Scout's SDK-facing MCP types.
 
-The composition root constructs `github.com/nauticana/keel/mcp.BaseServer` from `MCPServerDescriber`, wraps product operations as keel `mcp.ToolProvider` and `mcp.ResourceProvider` values, and registers them:
+The composition root constructs `github.com/nauticana/scout/mcp.BaseServer` from `MCPServerDescriber`, wraps product operations as Scout `mcp.ToolProvider` and `mcp.ResourceProvider` values, and registers them:
 
 ```go
-srv := keelmcp.NewServer(keelmcp.ServerConfig{
+srv := scoutmcp.NewServer(scoutmcp.ServerConfig{
     Name:         "example-agents",
     Version:      version,
     Instructions: instructions,
@@ -303,10 +356,10 @@ srv.RegisterResource(agentCatalogResource)
 The adapter performs only boundary work:
 
 1. Convert Keel request context into `domain.MCPCaller`; never read tenant identity from arguments.
-2. Map JSON schemas and annotations from `MCPToolDefinition` into the Keel provider definition.
+2. Map JSON schemas and annotations from `MCPToolDefinition` into the Scout provider definition.
 3. Enforce required scopes, quota, approval, audit, credential, and egress policy before delegation.
 4. Call one `MCPToolExecutor`, `MCPResourceReader`, or `MCPPromptRenderer` method.
-5. Project `MCPToolResult` through keel envelopes and attach evidence resource links or a durable task reference.
+5. Project `MCPToolResult` through Scout envelopes and attach evidence resource links or a durable task reference.
 6. Map typed domain errors to protocol errors at the adapter boundary.
 
 Tool annotations describe expected behavior to clients but do not grant access. Keep read and write scopes distinct, fail closed when caller context or required provenance is unavailable, and dispatch long-running work to a worker instead of holding an MCP request open.
@@ -317,7 +370,7 @@ Select transport in the binary:
 - Streamable HTTP or SSE requires authentication, quota middleware, trusted proxy configuration, and a public health endpoint.
 - OAuth-protected MCP routes should use keel's OAuth resource middleware.
 
-Run keel MCP manifest and tool-text conformance checks before publishing a server.
+Run `mcp/mcptest` manifest and tool-text conformance checks before publishing a server.
 
 ## Database schema
 
@@ -333,7 +386,7 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 |---|---:|---|
 | `catalog` | 7 | Currency, priority, lifecycle, and usage catalogs |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas |
-| `control_plane` | 27 | Studio drafts and prompts, agents, tools, compiled graphs, knowledge, models, pricing |
+| `control_plane` | 28 | Studio drafts, prompts, lifecycle audit, agents, tools, compiled graphs, knowledge, models, pricing |
 | `runtime` | 7 | Conversations, turns, checkpoints, replay, budgets, usage |
 | `release` | 8 | Platform artifacts, rings, compatibility results, audit |
 
@@ -351,9 +404,9 @@ go tool schemagen -dialect pgsql -input "${keel_schema_dir}/core,${keel_schema_d
 go tool schemagen -dialect mysql -input "${keel_schema_dir}/core,${keel_schema_dir}/geo,${keel_schema_dir}/tenant_management,schema" -out build/scout_mysql.sql
 ```
 
-The combined schema currently contains 38 selected keel tables and 53 Scout tables. The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`, then adds Scout. Run both commands in CI. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
+The combined schema currently contains 38 selected keel tables and 54 Scout tables. The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`, then adds Scout. Run both commands in CI. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
 
-`schema/seed/control_plane.yml` seeds keel's `execution_step_kind` constant domain with `model`, `tool`, and `knowledge`. `schema/seed/tenancy.yml` seeds `capacity_class` with `shared` and `dedicated`. Each file maps its consuming column through `constant_lookup`. The seed YAML is authoritative. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target. Other Scout catalogs remain unseeded in this contract-only version.
+`schema/seed/control_plane.yml` seeds execution kinds, supported language codes, Studio authorization verbs, Agent Studio roles, page/table permissions, REST headers, and foreign-key lookup metadata. `schema/seed/tenancy.yml` seeds `capacity_class` with `shared` and `dedicated`. Each constant domain maps its consuming column through `constant_lookup`. The seed YAML is authoritative. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
 
 ### Persistence rules
 
@@ -454,7 +507,7 @@ This order proves durable execution before expanding provider breadth.
 
 ## Contribution checklist
 
-- The change adds only shared agent-domain contracts, DTOs, schema, or documentation.
+- The change adds only shared agent-domain contracts, DTOs, reusable services, schema, or documentation.
 - No keel infrastructure primitive is duplicated.
 - Public interfaces use provider-neutral domain types.
 - Comments are one concise line per exported type or method.
@@ -464,7 +517,7 @@ This order proves durable execution before expanding provider breadth.
 - Schema generation succeeds for PostgreSQL and MySQL.
 - Handlers remain HTTP-only and workers delegate business logic to services.
 - New provider implementations stay downstream and include interface assertions.
-- `README.md` remains the single developer guide; API, database, and migration files remain references only.
+- `README.md` remains the single developer guide; API and database files remain references only.
 
 ## License
 

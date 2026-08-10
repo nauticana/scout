@@ -7,19 +7,20 @@ import (
 
 // AgentDefinition is an immutable version of a tenant agent.
 type AgentDefinition struct {
-	AgentID               string
-	AgentKind             string
-	Version               string
-	Enabled               bool
-	Models                AgentModelSelection
-	ApprovalPolicy        AgentApprovalPolicy
-	Languages             []CompiledPrompt
-	Extension             json.RawMessage
-	DefinitionDigest      string
-	DraftRevision         int64
-	PromptProfileRevision int64
-	ChangeSummary         string
-	PublishedBy           *int64
-	RestoredFromVersion   string
-	PublishedAt           time.Time
+	AgentID               string              `json:"agent_id"`
+	AgentKind             string              `json:"agent_kind"`
+	Version               string              `json:"version"`
+	Enabled               bool                `json:"enabled"`
+	Models                AgentModelSelection `json:"models"`
+	ApprovalPolicy        AgentApprovalPolicy `json:"approval_policy"`
+	Languages             []CompiledPrompt    `json:"languages"`
+	Sources               []ResolvedPrompts   `json:"sources"`
+	Extension             json.RawMessage     `json:"extension,omitempty"`
+	DefinitionDigest      string              `json:"definition_digest"`
+	DraftRevision         int64               `json:"draft_revision"`
+	PromptProfileRevision int64               `json:"prompt_profile_revision"`
+	ChangeSummary         string              `json:"change_summary,omitempty"`
+	PublishedBy           *int64              `json:"published_by,omitempty"`
+	RestoredFromVersion   string              `json:"restored_from_version,omitempty"`
+	PublishedAt           time.Time           `json:"published_at"`
 }

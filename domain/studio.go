@@ -42,20 +42,20 @@ type StudioActor struct {
 
 // ModelReference identifies one provider model without exposing an SDK type.
 type ModelReference struct {
-	ProviderID string
-	ModelID    string
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id"`
 }
 
 // AgentModelSelection assigns models to the standard Studio capabilities.
 type AgentModelSelection struct {
-	Text  *ModelReference
-	Image *ModelReference
-	Video *ModelReference
+	Text  *ModelReference `json:"text,omitempty"`
+	Image *ModelReference `json:"image,omitempty"`
+	Video *ModelReference `json:"video,omitempty"`
 }
 
 // AgentApprovalPolicy is structured policy enforced outside model prompts.
 type AgentApprovalPolicy struct {
-	RequireApproval bool
+	RequireApproval bool `json:"require_approval"`
 }
 
 // PromptValue is the instruction and optional output contract at one source level.
@@ -72,41 +72,41 @@ type PromptOverride struct {
 
 // PromptSourceRow is one resolved compiler input with its provenance.
 type PromptSourceRow struct {
-	PromptSectionID int64
-	Caption         string
-	Description     string
-	DisplayOrder    int64
-	SourceLevel     PromptSourceLevel
-	SourceKey       string
-	Overwrite       bool
-	Instruction     string
-	Output          string
+	PromptSectionID int64             `json:"prompt_section_id"`
+	Caption         string            `json:"caption"`
+	Description     string            `json:"description"`
+	DisplayOrder    int64             `json:"display_order"`
+	SourceLevel     PromptSourceLevel `json:"source_level"`
+	SourceKey       string            `json:"source_key"`
+	Overwrite       bool              `json:"overwrite"`
+	Instruction     string            `json:"instruction"`
+	Output          string            `json:"output,omitempty"`
 }
 
 // ResolvedPrompts contains ordered source candidates for one agent language.
 type ResolvedPrompts struct {
-	AgentID      string
-	AgentKind    string
-	BaselineKey  string
-	LanguageCode string
-	Rows         []PromptSourceRow
+	AgentID      string            `json:"agent_id"`
+	AgentKind    string            `json:"agent_kind"`
+	BaselineKey  string            `json:"baseline_key"`
+	LanguageCode string            `json:"language_code"`
+	Rows         []PromptSourceRow `json:"rows"`
 }
 
 // CompiledPromptSection is one frozen runtime prompt section.
 type CompiledPromptSection struct {
-	Sequence        int64
-	PromptSectionID int64
-	Caption         string
-	Description     string
-	Instruction     string
-	Output          string
+	Sequence        int64  `json:"sequence"`
+	PromptSectionID int64  `json:"prompt_section_id"`
+	Caption         string `json:"caption"`
+	Description     string `json:"description"`
+	Instruction     string `json:"instruction"`
+	Output          string `json:"output,omitempty"`
 }
 
 // CompiledPrompt is the immutable prompt snapshot for one language.
 type CompiledPrompt struct {
-	LanguageCode string
-	Sections     []CompiledPromptSection
-	Digest       string
+	LanguageCode string                  `json:"language_code"`
+	Sections     []CompiledPromptSection `json:"sections"`
+	Digest       string                  `json:"digest"`
 }
 
 // AgentPromptSection exposes prompt provenance and effective content to Studio.
@@ -223,6 +223,19 @@ type AgentSetDefaultRequest struct {
 	ExpectedAliasRevision int64
 }
 
+// AgentSetEnabledRequest changes only the operational switch.
+type AgentSetEnabledRequest struct {
+	AgentID               string
+	Enabled               bool
+	ExpectedDraftRevision int64
+}
+
+// AgentEnabledState is the revision returned by a kill-switch update.
+type AgentEnabledState struct {
+	Enabled       bool
+	DraftRevision int64
+}
+
 // AgentRelease is immutable publication metadata returned by Studio history.
 type AgentRelease struct {
 	AgentID               string
@@ -240,6 +253,20 @@ type AgentRelease struct {
 	RestoredFromVersion   string
 	Active                bool
 	Languages             []string
+}
+
+// AgentReleaseSection is one compiled section from an immutable release.
+type AgentReleaseSection struct {
+	LanguageCode string
+	CompiledPromptSection
+}
+
+// AgentStudioEvent is one queryable lifecycle audit entry.
+type AgentStudioEvent struct {
+	Event      string
+	Detail     string
+	ActorID    *int64
+	OccurredAt time.Time
 }
 
 // AgentAlias maps a tenant logical role to one named agent.
