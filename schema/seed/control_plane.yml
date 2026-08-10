@@ -5,6 +5,7 @@ seeds:
     columns: [id, caption]
     rows:
       - [execution_step_kind, Execution Step Kind]
+      - [model_capability, Model Capability]
       - [language_code, Language]
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -12,6 +13,9 @@ seeds:
       - [execution_step_kind, model, Model Inference]
       - [execution_step_kind, tool, Governed Tool Invocation]
       - [execution_step_kind, knowledge, Knowledge Retrieval]
+      - [model_capability, text, Text Generation]
+      - [model_capability, image, Image Generation]
+      - [model_capability, video, Video Generation]
       - [language_code, en-US, English (United States)]
       - [language_code, en-GB, English (United Kingdom)]
       - [language_code, es-ES, Spanish (Spain)]
@@ -29,6 +33,7 @@ seeds:
     columns: [constant_id, table_name, column_name]
     rows:
       - [execution_step_kind, execution_step, step_kind_code]
+      - [model_capability, model_capability, capability_code]
       - [language_code, prompt_baseline, language_code]
       - [language_code, tenant_prompt_default, language_code]
       - [language_code, agent_prompt_override, language_code]
@@ -79,11 +84,15 @@ seeds:
       - [agent_studio_events, S, "*"]
       - [agent_run_versions, S, "*"]
       - [tenant_agent_ops_events, S, "*"]
+      - [model_definitions, D, display_name]
+      - [model_capabilities, S, "*"]
+      - [model_prices, S, "*"]
   - table: rest_api_header
     columns: [id, master_table]
     rows:
       - [agent_profile, agent_profile]
       - [model_definition, model_definition]
+      - [model_capability, model_capability]
       - [prompt_section, prompt_section]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
@@ -99,6 +108,7 @@ seeds:
       - [AGENT_ADMIN, TABLE, SELECT, agent_alias]
       - [AGENT_ADMIN, TABLE, SELECT, model_provider]
       - [AGENT_ADMIN, TABLE, SELECT, model_definition]
+      - [AGENT_ADMIN, TABLE, SELECT, model_capability]
       - [AGENT_ADMIN, TABLE, SELECT, model_price]
       - [AGENT_ADMIN, TABLE, SELECT, tenant_model_access]
       - [AGENT_ADMIN, TABLE, SELECT, prompt_section]
@@ -115,6 +125,7 @@ seeds:
       - [AGENT_OPER, TABLE, SELECT, agent_alias]
       - [AGENT_OPER, TABLE, SELECT, model_provider]
       - [AGENT_OPER, TABLE, SELECT, model_definition]
+      - [AGENT_OPER, TABLE, SELECT, model_capability]
       - [AGENT_OPER, TABLE, SELECT, model_price]
       - [AGENT_OPER, TABLE, SELECT, tenant_model_access]
       - [AGENT_OPER, TABLE, SELECT, prompt_section]

@@ -132,6 +132,8 @@ Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, 
 
 `AgentDraftValidator` receives a `domain.ValidationPhase`: `ValidateDraft` for an ordinary save, `ValidateRelease` before a test or publish. Requirements that only executable state must satisfy — provider credentials, entitlements — belong to the release phase so authoring is never blocked by them.
 
+`controlplane.ModelCatalog` implements `StudioModelCatalog` over `model_definition`, `model_capability`, and `model_price`, so a product only implements that port when it needs tenant scoping or a display scale of its own — decorate the shared catalog rather than replacing it. Modality lives in `model_capability` (one row per modality; a model may serve several) and pricing in `model_price`, which covers tokens, images, and video seconds in currency minor units. Validation rejects a model that is unknown, withdrawn, or does not declare the modality its slot needs.
+
 `AgentActivityReporter` supplies product-owned last-successful-run times per agent id. `ListAgents` merges them with Scout's own Studio test events and reports the newer of the two. Products report only their own executions; Scout records the `TEST` lifecycle event around `AgentDraftTestExecutor.Execute` itself.
 
 ### Provisioning and deployment reads
@@ -440,7 +442,7 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 |---|---:|---|
 | `catalog` | 7 | Currency, priority, lifecycle, and usage catalogs |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas |
-| `control_plane` | 28 | Studio drafts, prompts, lifecycle audit, agents, tools, compiled graphs, knowledge, models, pricing |
+| `control_plane` | 29 | Studio drafts, prompts, lifecycle audit, agents, tools, compiled graphs, knowledge, models, pricing |
 | `runtime` | 9 | Conversations, turns, checkpoints, replay, budgets, usage, agent activity and operations |
 | `release` | 8 | Platform artifacts, rings, compatibility results, audit |
 

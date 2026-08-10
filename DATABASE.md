@@ -47,10 +47,11 @@ erDiagram
     model_provider ||--o{ model_definition : model_definitions
     model_definition ||--o{ tenant_model_access : model_tenant_accesses
     model_definition ||--o{ model_price : model_prices
+    model_definition ||--o{ model_capability : model_capabilities
     priority_class ||--o{ tenant_model_access : priority_tenant_accesses
-    tenant_quota }o--|| agent_tenant : tenant_quotas
     tenant_runtime_policy }o--|| agent_tenant : tenant_runtime_policies
     tenant_model_access }o--|| agent_tenant : tenant_model_accesses
+    agent_tenant ||--o{ tenant_quota : tenant_quotas
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -89,14 +90,24 @@ erDiagram
     model_definition {
         varchar provider_id PK,FK
         varchar model_id PK
+        varchar display_name
         bigint context_token_limit
         bigint output_token_limit
+    }
+    model_capability {
+        varchar provider_id PK,FK
+        varchar model_id PK,FK
+        varchar capability_code PK
     }
     model_price {
         varchar provider_id PK,FK
         varchar model_id PK,FK
         char currency_code PK,FK
         timestamp effective_at PK
+        bigint input_minor_units_per_million
+        bigint output_minor_units_per_million
+        bigint image_minor_units
+        bigint video_minor_units_per_second
     }
     tenant_model_access {
         bigint tenant_id PK,FK
@@ -543,6 +554,6 @@ Agent canaries in `agent_deployment` remain independent from platform rings in `
 |---|---|
 | Catalog | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category` |
 | Tenancy | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
-| Control plane | `agent_profile`, `agent_draft`, `agent_alias`, `prompt_section`, `prompt_baseline`, `tenant_prompt_default`, `agent_prompt_override`, `guardrail_config`, `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_version`, `agent_tool_binding`, `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition`, `agent_deployment`, `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `model_provider`, `model_definition`, `model_price`, `tenant_model_access` |
+| Control plane | `agent_profile`, `agent_draft`, `agent_alias`, `prompt_section`, `prompt_baseline`, `tenant_prompt_default`, `agent_prompt_override`, `guardrail_config`, `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_version`, `agent_tool_binding`, `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition`, `agent_deployment`, `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `model_provider`, `model_definition`, `model_capability`, `model_price`, `tenant_model_access` |
 | Runtime | `conversation`, `conversation_turn`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event` |
 | Release | `platform_release`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `audit_event` |

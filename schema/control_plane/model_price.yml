@@ -13,6 +13,12 @@ columns:
     type: BIGINT
   - name: output_minor_units_per_million
     type: BIGINT
+  - name: image_minor_units
+    type: BIGINT
+    default: "0"
+  - name: video_minor_units_per_second
+    type: BIGINT
+    default: "0"
 primary_key: [provider_id, model_id, currency_code, effective_at]
 foreign_keys:
   - name: model_prices
@@ -30,3 +36,7 @@ checks:
     expression: input_minor_units_per_million >= 0
   - name: model_price_output_ck
     expression: output_minor_units_per_million >= 0
+  - name: model_price_image_ck
+    expression: image_minor_units >= 0
+  - name: model_price_video_ck
+    expression: video_minor_units_per_second >= 0

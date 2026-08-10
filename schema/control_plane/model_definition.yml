@@ -5,6 +5,8 @@ columns:
     type: VARCHAR(80)
   - name: model_id
     type: VARCHAR(120)
+  - name: display_name
+    type: VARCHAR(200)
   - name: context_token_limit
     type: BIGINT
   - name: output_token_limit

@@ -1,6 +1,7 @@
 tables:
   - model_provider
   - model_definition
+  - model_capability
   - agent_profile
   - prompt_section
   - prompt_baseline

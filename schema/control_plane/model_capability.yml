@@ -1,0 +1,16 @@
+table: model_capability
+comment: One modality a model can serve; a model may serve several
+columns:
+  - name: provider_id
+    type: VARCHAR(80)
+  - name: model_id
+    type: VARCHAR(120)
+  - name: capability_code
+    type: VARCHAR(30)
+primary_key: [provider_id, model_id, capability_code]
+foreign_keys:
+  - name: model_capabilities
+    columns: [provider_id, model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
