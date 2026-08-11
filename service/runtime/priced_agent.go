@@ -28,10 +28,9 @@ func (agent *PricedAgent) GenerateText(ctx context.Context, task domain.AgentTas
 	return string(result.Output), result.Usage.InputTokens, result.Usage.OutputTokens, nil
 }
 
-func (agent *PricedAgent) Cost(ctx context.Context, usage domain.ModelUsage) (int64, error) {
+func (agent *PricedAgent) Cost(ctx context.Context, usage domain.ModelUsage) (int64, string, error) {
 	if agent == nil || agent.AgentExecutor == nil || agent.Pricer == nil {
-		return 0, fmt.Errorf("%w: agent executor and pricer are required", domain.ErrValidation)
+		return 0, "", fmt.Errorf("%w: agent executor and pricer are required", domain.ErrValidation)
 	}
-	cost, _, err := agent.Pricer.Cost(ctx, agent.ModelReference(), usage)
-	return cost, err
+	return agent.Pricer.Cost(ctx, agent.ModelReference(), usage)
 }

@@ -13,6 +13,9 @@ primary_key: [id]
 sequence:
   name: prompt_section_seq
   column: id
+  # Ids 1-100 are reserved for the platform sections seeded below; downstream
+  # products take generated ids from 101 up.
+  start_with: 101
 indexes:
   - name: prompt_section_caption_uq
     columns: [caption]

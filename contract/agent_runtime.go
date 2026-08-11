@@ -75,8 +75,9 @@ type PricedAgent interface {
 	// GenerateText runs the task and returns the output text with its token
 	// counts, for callers that do not need the full result.
 	GenerateText(ctx context.Context, task domain.AgentTask) (string, int64, int64, error)
-	// Cost prices usage on this agent's own model.
-	Cost(ctx context.Context, usage domain.ModelUsage) (int64, error)
+	// Cost prices usage on this agent's own model, returning minor units and
+	// the catalog currency they are denominated in.
+	Cost(ctx context.Context, usage domain.ModelUsage) (int64, string, error)
 }
 
 // AgentRunPurger drops agent run activity past the retention horizon Scout

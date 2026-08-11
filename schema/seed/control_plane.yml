@@ -37,6 +37,87 @@ seeds:
       - [language_code, prompt_baseline, language_code]
       - [language_code, tenant_prompt_default, language_code]
       - [language_code, agent_prompt_override, language_code]
+  # ISO 4217 currencies used for model pricing and tenant budgets. The exponent
+  # is the currency's own minor-unit precision, not an assumed 2.
+  - table: currency
+    columns: [code, exponent]
+    rows:
+      - [USD, 2]
+      - [EUR, 2]
+      - [GBP, 2]
+      - [CHF, 2]
+      - [CAD, 2]
+      - [AUD, 2]
+      - [TRY, 2]
+      - [CNY, 2]
+      - [INR, 2]
+      - [BRL, 2]
+      - [JPY, 0]
+      - [KRW, 0]
+      - [BHD, 3]
+      - [KWD, 3]
+  # Lifecycle and classification catalogs. These are FK targets, so the tables
+  # referencing them cannot accept a row until these exist.
+  - table: turn_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [queued, false, Accepted and waiting for an executor]
+      - [running, false, Executing]
+      - [streaming, false, Emitting a partial response]
+      - [completed, true, Finished successfully]
+      - [failed, true, Finished with an error]
+      - [cancelled, true, Abandoned before completion]
+  - table: idempotency_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [claimed, false, Execution right acquired by one worker]
+      - [committed, true, Result durably bound to the idempotency key]
+      - [abandoned, true, Released unfinished so another worker may replay]
+  - table: reservation_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [held, false, Budget reserved and not yet settled]
+      - [settled, true, Reservation consumed by actual usage]
+      - [released, true, Reservation returned unused]
+      - [expired, true, Reservation lapsed before settlement]
+  - table: rollout_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [pending, false, Planned but not started]
+      - [active, false, Serving a traffic share]
+      - [paused, false, Halted with traffic pinned]
+      - [completed, true, Fully rolled out]
+      - [rolled_back, true, Reverted to the previous version]
+  - table: priority_class
+    columns: [code, dispatch_rank, description]
+    rows:
+      - [interactive, 1, User is waiting on the response]
+      - [standard, 2, Default background work]
+      - [batch, 3, Bulk work that may wait behind other classes]
+  - table: usage_category
+    columns: [code, description]
+    rows:
+      - [model_input, Prompt tokens billed by a model]
+      - [model_output, Completion tokens billed by a model]
+      - [image, Generated image assets]
+      - [video, Generated video seconds]
+      - [tool, Governed tool invocation]
+      - [knowledge, Knowledge retrieval]
+  # Platform prompt sections every agent product shares. Ids are stable and
+  # referenced by prompt_baseline data, so never renumber them; product-specific
+  # sections take ids from 101 up.
+  - table: prompt_section
+    columns: [id, display_order, caption, description]
+    rows:
+      - [1, 1, task, Task]
+      - [2, 2, tone_of_voice, Tone of voice]
+      - [3, 3, brand_guidelines, Brand Guidelines]
+      - [4, 4, target_audience, Target Audience]
+      - [5, 5, language_style, Language Style]
+      - [6, 6, location, Location]
+      - [7, 7, sensitive_topics, Sensitive Topics]
+      - [8, 8, prohibited_content, Prohibited Content]
+      - [9, 9, escalation_policy, Escalation Policy]
   - table: model_provider
     columns: [provider_id, display_name, endpoint_uri, credential_ref, is_active]
     rows:

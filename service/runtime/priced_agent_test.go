@@ -52,9 +52,9 @@ func TestPricedAgentPricesItsOwnModel(t *testing.T) {
 	if err != nil || text != "post" || in != 1000 || out != 2000 {
 		t.Fatalf("GenerateText = %q %d %d err=%v", text, in, out, err)
 	}
-	cost, err := agent.Cost(context.Background(), domain.ModelUsage{InputTokens: in, OutputTokens: out})
-	if err != nil || cost != 220000 {
-		t.Fatalf("Cost = %d err = %v", cost, err)
+	cost, currency, err := agent.Cost(context.Background(), domain.ModelUsage{InputTokens: in, OutputTokens: out})
+	if err != nil || cost != 220000 || currency != "CRD" {
+		t.Fatalf("Cost = %d %s err = %v", cost, currency, err)
 	}
 	if pricer.ref != reference {
 		t.Fatalf("priced %+v, want the agent's own model", pricer.ref)
@@ -63,7 +63,7 @@ func TestPricedAgentPricesItsOwnModel(t *testing.T) {
 
 func TestPricedAgentRequiresPricer(t *testing.T) {
 	agent := &PricedAgent{AgentExecutor: &executorFake{}}
-	if _, err := agent.Cost(context.Background(), domain.ModelUsage{}); !errors.Is(err, domain.ErrValidation) {
+	if _, _, err := agent.Cost(context.Background(), domain.ModelUsage{}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("missing pricer error = %v", err)
 	}
 }

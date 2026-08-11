@@ -21,6 +21,8 @@ type PublishedAgentRuntime struct {
 	Renderer         contract.PromptRenderer
 	MaxOutputTokens  int64
 	FallbackLanguage string
+	// Pricer, when set, makes ResolvePriced available to callers that bill.
+	Pricer contract.ModelPricer
 }
 
 var _ contract.AgentRuntimeResolver = (*PublishedAgentRuntime)(nil)
@@ -150,4 +152,38 @@ func (agents *ResolvedAgents) Video() contract.AgentExecutor { return agents.vid
 func cloneCompiledPrompt(prompt domain.CompiledPrompt) domain.CompiledPrompt {
 	prompt.Sections = append([]domain.CompiledPromptSection(nil), prompt.Sections...)
 	return prompt
+}
+
+// PricedAgents is one alias resolved into executors that price their own usage.
+type PricedAgents struct {
+	Release domain.AgentReleaseReference
+	Text    contract.PricedAgent
+	Image   contract.PricedAgent
+	Video   contract.PricedAgent
+}
+
+// ResolvePriced resolves an alias and wraps every present modality in a
+// PricedAgent, so a billing caller does not repeat the decoration per modality.
+// Absent media modalities stay nil.
+func (runtime *PublishedAgentRuntime) ResolvePriced(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (PricedAgents, error) {
+	if runtime == nil || runtime.Pricer == nil {
+		return PricedAgents{}, fmt.Errorf("published agent runtime: pricer is required to resolve priced agents")
+	}
+	resolved, err := runtime.Resolve(ctx, tenantID, aliasID, languageCode, conversationID)
+	if err != nil {
+		return PricedAgents{}, err
+	}
+	return PricedAgents{
+		Release: resolved.Release(),
+		Text:    runtime.price(resolved.Text()),
+		Image:   runtime.price(resolved.Image()),
+		Video:   runtime.price(resolved.Video()),
+	}, nil
+}
+
+func (runtime *PublishedAgentRuntime) price(executor contract.AgentExecutor) contract.PricedAgent {
+	if executor == nil {
+		return nil
+	}
+	return &PricedAgent{AgentExecutor: executor, Pricer: runtime.Pricer}
 }

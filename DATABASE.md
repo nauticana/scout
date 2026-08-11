@@ -267,6 +267,7 @@ erDiagram
         bigint id PK
         varchar caption UK
         bigint display_order
+        varchar description
     }
     prompt_baseline {
         varchar baseline_key PK
@@ -557,3 +558,12 @@ Agent canaries in `agent_deployment` remain independent from platform rings in `
 | Control plane | `agent_profile`, `agent_draft`, `agent_alias`, `prompt_section`, `prompt_baseline`, `tenant_prompt_default`, `agent_prompt_override`, `guardrail_config`, `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_version`, `agent_tool_binding`, `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition`, `agent_deployment`, `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `model_provider`, `model_definition`, `model_capability`, `model_price`, `tenant_model_access` |
 | Runtime | `conversation`, `conversation_turn`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event` |
 | Release | `platform_release`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `audit_event` |
+
+Every catalog table above is a foreign-key target, so the tables referencing them
+cannot accept a row until they hold values — Scout seeds them all. `prompt_section`
+is seeded the same way: ids 1-9 are the platform sections (`task`, `tone_of_voice`,
+`brand_guidelines`, `target_audience`, `language_style`, `location`,
+`sensitive_topics`, `prohibited_content`, `escalation_policy`) and ids up to 100
+are reserved, so `prompt_section_seq` starts at 101. Those ids are referenced by
+`prompt_baseline` data across every downstream — never renumber them.
+

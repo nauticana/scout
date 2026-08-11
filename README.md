@@ -220,7 +220,13 @@ result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: provider.An
 
 `controlplane.ModelCatalog.Cost` prices a `domain.ModelUsage` — input and output tokens, generated images, whole video seconds — against `model_price`, returning integer minor units and the catalog currency. Token rates are per million and divide last, so rounding error stays below one minor unit; an unpriced model is an error rather than a free one. Never price usage in floating point: these are money amounts, and the currency exponent belongs to the currency, not the caller.
 
-`runtime.PricedAgent` decorates any `AgentExecutor` with a `ModelPricer` so a task surface can quote work before running it and bill exact usage afterwards, without resolving the catalog itself. Its `GenerateText` returns output text with token counts for callers that do not need the full `ModelResult`.
+`runtime.PricedAgent` decorates any `AgentExecutor` with a `ModelPricer` so a task surface can quote work before running it and bill exact usage afterwards, without resolving the catalog itself. Its `GenerateText` returns output text with token counts for callers that do not need the full `ModelResult`, and `Cost` returns minor units with the currency they are denominated in. `PublishedAgentRuntime.ResolvePriced` applies that decoration to all three modalities of a resolved alias at once.
+
+`runtime.For(db)` returns the `Registry` of long-lived services bound to one database — definitions, run store, ops events, deployed index, model catalog — each cached so its named-SQL QueryService compiles once. Hold the registry rather than re-caching services downstream.
+
+`runtime.BaseDraftTester` is a complete `AgentDraftTestExecutor`: quota gate, language selection, execution, pricing, and usage accounting. Products supply the metered resource name and an agent builder, not a subclass. A pricing failure aborts the test — billing at zero is never the safe default — while a ledger write failure is reported through `OnAccountingError` and survived, because an accounting fault must not discard work the owner already saw.
+
+`runtime.ReadinessResolver` narrows `DeployedAgent.Readiness()` with the two checks that live outside Agent Studio: whether the published model is still offered by the catalog, and whether its provider credential exists. Each is evaluated once per tenant and per provider rather than once per agent. A model the catalog does not list is unavailable, never silently ready.
 
 `domain.DeployedAgent.Readiness()` derives `disabled` / `unpublished` / `missing_model` / `ready` from control-plane state alone. Products layer their own checks — model-catalog availability, provider credentials, quota — on top of a `Ready` result instead of re-deriving the base states.
 
