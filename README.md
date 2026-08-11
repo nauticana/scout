@@ -10,7 +10,7 @@ Scout is licensed under the [Apache License 2.0](LICENSE).
 
 | Path | Purpose |
 |---|---|
-| `api/` | Versioned HTTP compatibility DTOs |
+| `api/` | Versioned wire DTOs for the `studio-v1` HTTP and `mcp-v1` envelope profiles |
 | `domain/` | Provider-neutral values exchanged across platform boundaries |
 | `contract/` | Interfaces implemented or composed by downstream applications |
 | `service/` | Product-neutral implementations of Scout contracts |
@@ -97,7 +97,7 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/release_and_observability.go` | Compatibility runs, rollout, audit, runtime metrics | Protect platform releases and record outcomes |
 | `contract/health.go` | `HealthProbe` | Expose dependency readiness to composition code |
 
-The `domain/` package contains transport- and provider-neutral DTOs. Provider SDK types must not cross these interfaces.
+The `domain/` package contains transport- and provider-neutral DTOs. Provider SDK types must not cross these interfaces. `domain/` holds values only: no functions and no methods. Behavior belongs to `service/`, `handler/`, or `mcp/`, where it can be injected and replaced.
 
 ## Shared service implementations
 
@@ -240,9 +240,34 @@ Scout separates product MCP behavior from the MCP protocol implementation:
 - `contract.MCPPromptBackend` combines discovery and rendering for client-guidance templates; rendering never executes tools.
 - `contract.MCPServerDescriber` supplies product values mapped into Scout `mcp.ServerConfig`.
 
-The MCP adapter derives `MCPCaller` from authenticated Keel context. Tenant, actor, credential, scopes, client IP, session, transport, and trust state are never accepted as tool arguments. Remote calls fail closed without authentication; host trust is explicit and limited to a locally executed `stdio` composition. The adapter enforces `MCPToolPolicy` with Keel authorization, quota, secret, and audit infrastructure; standard annotations are client hints and never authorization rules. A long-running operation returns `MCPTaskReference` after durable dispatch and completes in a worker.
+`mcp.BaseCallerResolver` derives `MCPCaller` from authenticated Keel context. Tenant, actor, credential, scopes, client IP, session, transport, and trust state are never accepted as tool arguments. Each `Serve*` method stamps its transport into the request context; an unstamped context is treated as remote, so remote calls fail closed without authentication. Host trust is opt-in through `BaseCallerResolver.TrustHost` and applies only to a locally executed `stdio` composition. `mcp.Authorize` enforces `MCPToolPolicy` scopes before the backend is reached, and the same check hides unusable tools from `tools/list`; standard annotations are client hints and never authorization rules. A long-running operation returns `MCPTaskReference` after durable dispatch and completes in a worker.
 
-Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure. Scout does not define MCP HTTP DTOs in `api/`; MCP wire values remain in `mcp-go` at the protocol boundary.
+Registering a backend binds an SDK-neutral contract to the protocol in one call:
+
+```go
+srv := scoutmcp.NewServerFor(productDescriber, scoutmcp.BaseCallerResolver{})
+if err := srv.RegisterToolBackend(ctx, productToolBackend); err != nil { ... }
+if err := srv.RegisterResourceBackend(ctx, productResourceBackend); err != nil { ... }
+```
+
+Catalogs are enumerated once at composition time with `mcp.HostCaller()`, so `ListTools` must return the full catalog for a host-trusted caller and the caller's visible subset for anyone else. A resource entry carrying `URITemplate` registers as a template; otherwise it registers as a fixed URI.
+
+Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, caller resolution, policy authorization, protocol projection, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure.
+
+Protocol frames and manifest entries belong to `mcp-go`; Scout defines only what a frame carries. That payload is the `mcp-v1` profile in `api/` — `Envelope`, `EnvelopeMeta`, `ProvenanceMeta`, `SourceAttrib`, `PaginationMeta`, and `FieldDescriptor` — projected from the tag-free `domain/` values by `mcp/wire.go`, exactly as `handler/` projects `studio-v1`.
+
+### Migrating an existing MCP server
+
+| Replaced | Use |
+|---|---|
+| `domain.Envelope` | `api.Envelope`, built by `Envelopes.Wrap` |
+| JSON tags on `domain.EnvelopeMeta`, `ProvenanceMeta`, `SourceAttrib`, `PaginationMeta` | The `api/` twins; pass domain values to `Envelopes.*` and let the adapter project |
+| JSON tags on `domain.FieldDescriptor` | `mcp.WireField` / `mcp.WireFields` before marshaling |
+| A per-product `ToolProvider` struct wrapping a definition and handler | `mcp.Tool(definition, handle)`, or `RegisterToolBackend` for a full catalog |
+| A per-product scope guard inside each tool handler | `MCPToolPolicy.RequiredScopes`, enforced by `mcp.Authorize` |
+| A per-product caller or client-IP lookup | `mcp.BaseCallerResolver` |
+
+A value marshaled straight from `domain/` now emits Go field names. Route it through the `api/` projection before it reaches a client.
 
 ## Turn lifecycle
 
@@ -405,29 +430,20 @@ For runtime turns, preserve this order:
 
 ### 6. Add an MCP server
 
-Implement the applicable Scout MCP catalogs and operations on a product service. Keep transport decoding out of that service so HTTP, MCP, workers, and tests can call the same behavior. A thin product provider maps Scout definitions and results to Scout's SDK-facing MCP types.
+Implement `contract.MCPToolBackend`, `MCPResourceBackend`, or `MCPPromptBackend` on a product service, plus `MCPServerDescriber` for the server identity. Keep transport decoding out of that service so HTTP, MCP, workers, and tests can call the same behavior. The product writes no protocol code: `domain.MCPToolDefinition` declares the tool, and `domain.MCPToolResult` returns the data, evidence, and any task reference.
 
-The composition root constructs `github.com/nauticana/scout/mcp.BaseServer` from `MCPServerDescriber`, wraps product operations as Scout `mcp.ToolProvider` and `mcp.ResourceProvider` values, and registers them:
+The composition root builds the server and hands it the backends:
 
 ```go
-srv := scoutmcp.NewServer(scoutmcp.ServerConfig{
-    Name:         "example-agents",
-    Version:      version,
-    Instructions: instructions,
-    Source:       "example",
-})
-srv.Register(searchTool, publishTool)
-srv.RegisterResource(agentCatalogResource)
+srv := scoutmcp.NewServerFor(catalogService, scoutmcp.BaseCallerResolver{})
+if err := srv.RegisterToolBackend(ctx, catalogService); err != nil {
+    return err
+}
 ```
 
-The adapter performs only boundary work:
+Scout then performs every boundary step: resolving `domain.MCPCaller` from Keel context, projecting schemas and annotations into the protocol manifest, authorizing declared scopes, calling one `MCPToolExecutor`, `MCPResourceReader`, or `MCPPromptRenderer` method, and projecting the result through the `mcp-v1` envelope with evidence resource links. Quota, approval, audit, credential, and egress policy remain the backend's own responsibility, declared on `MCPToolPolicy` and enforced with Keel infrastructure.
 
-1. Convert Keel request context into `domain.MCPCaller`; never read tenant identity from arguments.
-2. Map JSON schemas and annotations from `MCPToolDefinition` into the Scout provider definition.
-3. Enforce required scopes, quota, approval, audit, credential, and egress policy before delegation.
-4. Call one `MCPToolExecutor`, `MCPResourceReader`, or `MCPPromptRenderer` method.
-5. Project `MCPToolResult` through Scout envelopes and attach evidence resource links or a durable task reference.
-6. Map typed domain errors to protocol errors at the adapter boundary.
+A server that needs direct control over protocol values keeps using `srv.Register` and `srv.RegisterResource`; `mcp.Tool` and `mcp.Resource` bind a definition to its handler without a per-product provider type.
 
 Tool annotations describe expected behavior to clients but do not grant access. Keep read and write scopes distinct, fail closed when caller context or required provenance is unavailable, and dispatch long-running work to a worker instead of holding an MCP request open.
 

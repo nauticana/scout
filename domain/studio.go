@@ -311,21 +311,6 @@ type DeployedAgent struct {
 	Definition *AgentDefinition
 }
 
-// Readiness derives the operator-facing state of a deployed alias from control
-// plane state alone. Products layer their own checks — model availability,
-// provider credentials, quota — on top of a Ready result.
-func (agent DeployedAgent) Readiness() (AgentReadiness, string) {
-	switch {
-	case !agent.Active || !agent.Enabled:
-		return AgentDisabled, "agent is disabled"
-	case agent.Definition == nil:
-		return AgentUnpublished, "no published version is active"
-	case agent.Definition.Models.Text == nil:
-		return AgentMissingModel, "published definition has no text model"
-	}
-	return AgentReady, ""
-}
-
 // AgentAlias maps a tenant logical role to one named agent.
 type AgentAlias struct {
 	AliasID   string

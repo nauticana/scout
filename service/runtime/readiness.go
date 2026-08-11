@@ -52,8 +52,22 @@ func (resolver *ReadinessResolver) Resolve(ctx context.Context, tenantID int64, 
 	return states, nil
 }
 
+// controlPlaneReadiness derives the operator-facing state of a deployed alias
+// from control plane state alone, before any product check narrows it.
+func controlPlaneReadiness(agent domain.DeployedAgent) (domain.AgentReadiness, string) {
+	switch {
+	case !agent.Active || !agent.Enabled:
+		return domain.AgentDisabled, "agent is disabled"
+	case agent.Definition == nil:
+		return domain.AgentUnpublished, "no published version is active"
+	case agent.Definition.Models.Text == nil:
+		return domain.AgentMissingModel, "published definition has no text model"
+	}
+	return domain.AgentReady, ""
+}
+
 func (resolver *ReadinessResolver) narrow(ctx context.Context, agent domain.DeployedAgent, active map[domain.ModelReference]bool, missing map[string]bool) AgentState {
-	readiness, reason := agent.Readiness()
+	readiness, reason := controlPlaneReadiness(agent)
 	state := AgentState{Readiness: readiness, Reason: reason, Version: agent.Version}
 	if readiness != domain.AgentReady {
 		return state

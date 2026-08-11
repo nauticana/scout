@@ -95,58 +95,52 @@ type MCPToolResult struct {
 	Task     *MCPTaskReference
 }
 
-// Envelope wraps an MCP tool result with optional metadata.
-type Envelope struct {
-	Data any           `json:"data"`
-	Meta *EnvelopeMeta `json:"_meta,omitempty"`
-}
-
 // EnvelopeMeta carries source, provenance, and pagination metadata.
 type EnvelopeMeta struct {
-	GeneratedAt string          `json:"generated_at"`
-	Source      string          `json:"source,omitempty"`
-	Provenance  *ProvenanceMeta `json:"provenance,omitempty"`
-	Pagination  *PaginationMeta `json:"pagination,omitempty"`
+	GeneratedAt string
+	Source      string
+	Provenance  *ProvenanceMeta
+	Pagination  *PaginationMeta
 }
 
 // ProvenanceMeta describes data quality and attribution.
 type ProvenanceMeta struct {
-	VerificationLevel string         `json:"verification_level,omitempty"`
-	CompletenessScore float64        `json:"completeness_score,omitempty"`
-	UpdatedAt         string         `json:"updated_at,omitempty"`
-	VerifiedAt        string         `json:"verified_at,omitempty"`
-	Sources           []SourceAttrib `json:"sources,omitempty"`
-	Attribution       string         `json:"attribution,omitempty"`
+	VerificationLevel string
+	CompletenessScore float64
+	UpdatedAt         string
+	VerifiedAt        string
+	Sources           []SourceAttrib
+	Attribution       string
 }
 
 // SourceAttrib identifies one upstream data source.
 type SourceAttrib struct {
-	Source     string `json:"source"`
-	ExternalID string `json:"external_id,omitempty"`
-	ImportedAt string `json:"imported_at,omitempty"`
+	Source     string
+	ExternalID string
+	ImportedAt string
 }
 
 // PaginationMeta describes one offset-based result window.
 type PaginationMeta struct {
-	Limit      int  `json:"limit"`
-	Offset     int  `json:"offset"`
-	Total      int  `json:"total"`
-	HasMore    bool `json:"has_more"`
-	NextOffset int  `json:"next_offset,omitempty"`
+	Limit      int
+	Offset     int
+	Total      int
+	HasMore    bool
+	NextOffset int
 }
 
 // FieldDescriptor describes one discoverable domain field.
 type FieldDescriptor struct {
-	Name              string   `json:"name"`
-	Kind              string   `json:"kind"`
-	Category          string   `json:"category,omitempty"`
-	Label             string   `json:"label,omitempty"`
-	Description       string   `json:"description,omitempty"`
-	ValueType         string   `json:"value_type,omitempty"`
-	AllowedValues     []string `json:"allowed_values,omitempty"`
-	Example           string   `json:"example,omitempty"`
-	RelatedQuestionID string   `json:"related_question_id,omitempty"`
-	SourceOfTruth     string   `json:"source_of_truth,omitempty"`
+	Name              string
+	Kind              string
+	Category          string
+	Label             string
+	Description       string
+	ValueType         string
+	AllowedValues     []string
+	Example           string
+	RelatedQuestionID string
+	SourceOfTruth     string
 }
 
 // MCPResourceDefinition is an SDK-neutral MCP resource manifest entry.

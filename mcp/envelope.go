@@ -6,6 +6,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
 
@@ -25,16 +26,17 @@ func (e Envelopes) timestamp() string {
 }
 
 func (e Envelopes) Wrap(data any, meta *domain.EnvelopeMeta) *mcpgo.CallToolResult {
-	if meta == nil {
-		meta = &domain.EnvelopeMeta{}
+	wire := wireMeta(meta)
+	if wire == nil {
+		wire = &api.EnvelopeMeta{}
 	}
-	if meta.GeneratedAt == "" {
-		meta.GeneratedAt = e.timestamp()
+	if wire.GeneratedAt == "" {
+		wire.GeneratedAt = e.timestamp()
 	}
-	if meta.Source == "" {
-		meta.Source = e.Source
+	if wire.Source == "" {
+		wire.Source = e.Source
 	}
-	encoded, err := json.MarshalIndent(domain.Envelope{Data: data, Meta: meta}, "", "  ")
+	encoded, err := json.MarshalIndent(api.Envelope{Data: data, Meta: wire}, "", "  ")
 	if err != nil {
 		return mcpgo.NewToolResultError("failed to marshal envelope: " + err.Error())
 	}
@@ -42,8 +44,7 @@ func (e Envelopes) Wrap(data any, meta *domain.EnvelopeMeta) *mcpgo.CallToolResu
 }
 
 func (e Envelopes) WrapWithProvenance(data any, provenance *domain.ProvenanceMeta) *mcpgo.CallToolResult {
-	meta := &domain.EnvelopeMeta{Provenance: provenance}
-	return e.Wrap(data, meta)
+	return e.Wrap(data, &domain.EnvelopeMeta{Provenance: provenance})
 }
 
 func (e Envelopes) WrapWithPagination(data any, limit, offset, total int, hasMore bool) *mcpgo.CallToolResult {
@@ -52,6 +53,19 @@ func (e Envelopes) WrapWithPagination(data any, limit, offset, total int, hasMor
 		pagination.NextOffset = offset + limit
 	}
 	return e.Wrap(data, &domain.EnvelopeMeta{Pagination: pagination})
+}
+
+// Result projects a backend tool result: the envelope carries the data, and
+// evidence and durable task references become resource links.
+func (e Envelopes) Result(result domain.MCPToolResult) *mcpgo.CallToolResult {
+	wrapped := e.Wrap(result.Data, result.Meta)
+	for _, link := range result.Evidence {
+		wrapped.Content = append(wrapped.Content, mcpgo.NewResourceLink(link.URI, link.Name, link.Description, link.MIMEType))
+	}
+	if task := result.Task; task != nil && task.ResourceURI != "" {
+		wrapped.Content = append(wrapped.Content, mcpgo.NewResourceLink(task.ResourceURI, task.ID, "task status: "+task.Status, "application/json"))
+	}
+	return wrapped
 }
 
 func WrapError(err error) *mcpgo.CallToolResult {
