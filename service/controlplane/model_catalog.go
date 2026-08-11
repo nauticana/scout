@@ -14,6 +14,9 @@ import (
 )
 
 // Usage categories reported by ModelCatalog rates.
+// perMillion is the denominator behind the per-million token rate columns.
+const perMillion = 1_000_000
+
 const (
 	RateInputPerMillion  = "input_per_million"
 	RateOutputPerMillion = "output_per_million"
@@ -207,4 +210,41 @@ func (c *ModelCatalog) rates(ctx context.Context) (map[domain.ModelReference][]d
 		}
 	}
 	return rates, nil
+}
+
+// Cost prices one model's usage in the catalog currency, in integer minor
+// units. Token rates are per million, so the division happens last to keep the
+// rounding error below one minor unit. Media counts are billed per asset and
+// per whole second. An unpriced model is an error, never a free one.
+func (c *ModelCatalog) Cost(ctx context.Context, reference domain.ModelReference, usage domain.ModelUsage) (int64, string, error) {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 {
+		return 0, "", fmt.Errorf("%w: usage counts cannot be negative", domain.ErrValidation)
+	}
+	if err := c.init(ctx); err != nil {
+		return 0, "", err
+	}
+	rates, err := c.rates(ctx)
+	if err != nil {
+		return 0, "", err
+	}
+	priced, ok := rates[reference]
+	if !ok {
+		return 0, "", fmt.Errorf("%w: no price for model %s/%s", domain.ErrNotFound, reference.ProviderID, reference.ModelID)
+	}
+	var total int64
+	var currency string
+	for _, rate := range priced {
+		currency = rate.Currency
+		switch rate.UsageCategory {
+		case RateInputPerMillion:
+			total += rate.AmountMinor * usage.InputTokens / perMillion
+		case RateOutputPerMillion:
+			total += rate.AmountMinor * usage.OutputTokens / perMillion
+		case RateImage:
+			total += rate.AmountMinor * usage.Images
+		case RateVideoSecond:
+			total += rate.AmountMinor * usage.VideoSeconds
+		}
+	}
+	return total, currency, nil
 }

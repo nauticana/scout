@@ -62,10 +62,28 @@ type AgentRunRecorder interface {
 	Record(ctx context.Context, tenantID int64, release domain.AgentReleaseReference, taskKind string) error
 }
 
-// AgentRunPurger drops agent run activity past a retention horizon. Deletes are
-// bounded so a scheduled caller can drain a backlog over several ticks.
+// ModelPricer prices usage for one model reference, returning minor units in
+// the catalog currency. controlplane.ModelCatalog implements it.
+type ModelPricer interface {
+	Cost(ctx context.Context, reference domain.ModelReference, usage domain.ModelUsage) (int64, string, error)
+}
+
+// PricedAgent is an executor that prices its own usage, so callers can quote
+// and bill a task without resolving the model catalog themselves.
+type PricedAgent interface {
+	AgentExecutor
+	// GenerateText runs the task and returns the output text with its token
+	// counts, for callers that do not need the full result.
+	GenerateText(ctx context.Context, task domain.AgentTask) (string, int64, int64, error)
+	// Cost prices usage on this agent's own model.
+	Cost(ctx context.Context, usage domain.ModelUsage) (int64, error)
+}
+
+// AgentRunPurger drops agent run activity past the retention horizon Scout
+// owns. Deletes are bounded so a scheduled caller drains a backlog over
+// several ticks.
 type AgentRunPurger interface {
-	Purge(ctx context.Context, retentionDays, limit int) (int64, error)
+	Purge(ctx context.Context, limit int) (int64, error)
 }
 
 // AgentOperationalEventRecorder persists a tenant-scoped operational failure

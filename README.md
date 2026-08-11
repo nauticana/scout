@@ -86,6 +86,7 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/control_plane.go` | `AgentVersionRepository`, `AgentCompiler`, `AgentPublisher`, registries, traffic manager | Validate, compile, publish, and activate immutable definitions |
 | `contract/studio.go` | Prompt compiler, baseline selector, draft validator/tester, kind/model catalogs, published resolver | Inject product rules and governed test execution |
 | `contract/studio_http.go` | `AgentStudioHTTPBackend` | Extend the shared service only where product behavior is required |
+| `contract/agent_runtime.go` | `AgentExecutor`, `PricedAgent`, `ModelPricer`, provider factory, prompt renderer, run recorder/purger | Execute, price, and record one published agent's work |
 | `contract/mcp.go` | Server description, tool/resource/prompt operations, field catalog | Expose product capabilities through Scout MCP adapters |
 | `contract/data_plane.go` | `ConversationIngress`, `ConversationRuntime`, dispatcher, scheduler, session, reply, step ports | Admit and execute turns with replay and streaming |
 | `contract/model_runtime.go` | Router, gateway, provider registry, stream, capacity | Govern provider selection and inference |
@@ -215,7 +216,11 @@ result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: provider.An
     domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: provider.DefaultMaxOutputTokens})
 ```
 
-`runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. Its `Purge` drops activity past the `agent_run_retention_days` horizon in bounded batches, so a product's periodic worker can drain a backlog across ticks instead of one long delete; a non-positive retention keeps activity forever. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
+`runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. Its `Purge` reads the `agent_run_retention_days` flag Scout seeds and drops activity past that horizon in bounded batches, so a product's periodic worker can drain a backlog across ticks instead of one long delete; a non-positive retention keeps activity forever. Products do not mirror the flag. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
+
+`controlplane.ModelCatalog.Cost` prices a `domain.ModelUsage` — input and output tokens, generated images, whole video seconds — against `model_price`, returning integer minor units and the catalog currency. Token rates are per million and divide last, so rounding error stays below one minor unit; an unpriced model is an error rather than a free one. Never price usage in floating point: these are money amounts, and the currency exponent belongs to the currency, not the caller.
+
+`runtime.PricedAgent` decorates any `AgentExecutor` with a `ModelPricer` so a task surface can quote work before running it and bill exact usage afterwards, without resolving the catalog itself. Its `GenerateText` returns output text with token counts for callers that do not need the full `ModelResult`.
 
 `domain.DeployedAgent.Readiness()` derives `disabled` / `unpublished` / `missing_model` / `ready` from control-plane state alone. Products layer their own checks — model-catalog availability, provider credentials, quota — on top of a `Ready` result instead of re-deriving the base states.
 

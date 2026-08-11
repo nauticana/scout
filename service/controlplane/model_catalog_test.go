@@ -91,3 +91,42 @@ func TestValidateSkipsUnsetSlots(t *testing.T) {
 		t.Fatalf("fields = %+v err = %v", fields, err)
 	}
 }
+
+func TestCostPricesUsageInIntegerMinorUnits(t *testing.T) {
+	catalog := catalogFake(map[string][][]any{
+		qCatalogPrices: {
+			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0)},
+			{"google", "videogeneration@001", "CRD", int64(0), int64(0), int64(0), int64(1400000)},
+		},
+	})
+	opus := domain.ModelReference{ProviderID: "anthropic", ModelID: "claude-opus-5"}
+
+	cost, currency, err := catalog.Cost(context.Background(), opus,
+		domain.ModelUsage{InputTokens: 1000, OutputTokens: 2000})
+	if err != nil {
+		t.Fatalf("Cost: %v", err)
+	}
+	// 1k in at 20/MTok + 2k out at 100/MTok, in credit minor units.
+	if cost != 220000 || currency != "CRD" {
+		t.Fatalf("cost = %d %s, want 220000 CRD", cost, currency)
+	}
+
+	// Rounding stays below one minor unit rather than inflating via floats.
+	if cost, _, err = catalog.Cost(context.Background(), opus, domain.ModelUsage{InputTokens: 1}); err != nil || cost != 20 {
+		t.Fatalf("single-token cost = %d err = %v, want 20", cost, err)
+	}
+
+	if cost, _, err = catalog.Cost(context.Background(),
+		domain.ModelReference{ProviderID: "google", ModelID: "videogeneration@001"},
+		domain.ModelUsage{VideoSeconds: 8}); err != nil || cost != 11200000 {
+		t.Fatalf("video cost = %d err = %v", cost, err)
+	}
+
+	if _, _, err = catalog.Cost(context.Background(),
+		domain.ModelReference{ProviderID: "openai", ModelID: "ghost"}, domain.ModelUsage{}); err == nil {
+		t.Fatal("an unpriced model must fail loudly rather than bill at zero")
+	}
+	if _, _, err = catalog.Cost(context.Background(), opus, domain.ModelUsage{InputTokens: -1}); err == nil {
+		t.Fatal("negative usage must be rejected")
+	}
+}

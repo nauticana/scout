@@ -366,3 +366,12 @@ type StudioModel struct {
 	Active            bool
 	Rates             []ModelRate
 }
+
+// ModelUsage is the billable work one model performed: tokens for text, assets
+// for images, and whole seconds for video.
+type ModelUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+	Images       int64
+	VideoSeconds int64
+}
