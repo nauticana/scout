@@ -19,7 +19,9 @@ const DefaultTestTask = "Produce a short representative sample of your configure
 // quota gate, execution, pricing, and usage accounting. It is complete and
 // usable as is — a product supplies the metered resource name and the agent
 // builder rather than reimplementing the sequence. Scout records the Studio
-// TEST lifecycle event around Execute.
+// TEST lifecycle event around Execute. It satisfies a contract/studio.go port
+// but lives here because Registry already imports controlplane; the reverse
+// direction would cycle.
 type BaseDraftTester struct {
 	// Quota gates and records the spend; nil skips accounting entirely.
 	Quota keelport.QuotaService

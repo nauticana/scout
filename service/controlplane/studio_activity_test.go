@@ -8,7 +8,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/service/internal/fake"
+	"github.com/nauticana/scout/internal/fake"
 )
 
 var (

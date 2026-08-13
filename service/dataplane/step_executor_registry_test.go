@@ -1,4 +1,4 @@
-package runtime
+package dataplane
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/service/internal/fake"
+	"github.com/nauticana/scout/internal/fake"
 )
 
 func TestStepExecutorRegistryRegistersAndResolves(t *testing.T) {

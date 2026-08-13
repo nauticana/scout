@@ -13,12 +13,16 @@ Scout is licensed under the [Apache License 2.0](LICENSE).
 | `api/` | Versioned wire DTOs for the `studio-v1` HTTP and `mcp-v1` envelope profiles |
 | `domain/` | Provider-neutral values exchanged across platform boundaries |
 | `contract/` | Interfaces implemented or composed by downstream applications |
-| `service/` | Product-neutral implementations of Scout contracts |
+| `service/` | Product-neutral implementations of Scout contracts, injected by downstream composition |
 | `handler/` | HTTP-only Agent Studio compatibility adapter |
 | `mcp/` | MCP server, provider, envelope, resource, and conformance helpers |
+| `provider/` | Outbound model and media vendor adapters behind `contract.ModelProvider` |
 | `schema/` | Database-neutral table definitions compiled by keel |
+| `internal/` | Mechanisms with no downstream call site, including shared test fakes |
 | `STUDIO_API.md` | Agent Studio HTTP compatibility reference |
 | `go.mod` | Module identity and the pinned keel schema compiler tool |
+
+Placement follows two questions. A package sits at the repository root when it crosses a boundary — inbound (`handler/`, `mcp/`), outbound (`provider/`) — or when it is shared language (`domain/`, `contract/`, `api/`, `schema/`). A package sits under `service/` when a downstream constructs and injects it; if no downstream ever names the type, it belongs in `internal/` instead. Each `service/` package maps to one `contract/` file.
 
 Scout owns agent-platform vocabulary and invariants. [keel](https://github.com/nauticana/keel) owns horizontal infrastructure.
 
@@ -101,20 +105,21 @@ The `domain/` package contains transport- and provider-neutral DTOs. Provider SD
 
 ## Shared service implementations
 
-The `contract` package remains flat so consumers use one stable import path. Concrete implementations are grouped by responsibility:
+The `contract` package remains flat so consumers use one stable import path. Concrete implementations are grouped by responsibility, one package per contract file:
 
-| Package | Implementations | Injected boundaries |
-|---|---|---|
-| `service/controlplane` | `StudioService`, `KeelPromptSourceRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
-| `service/isolation` | `ExecutionGovernor` and per-turn execution permits | Loop detection and cost circuit breaking |
-| `service/modelgateway` | `Gateway`, `ProviderRegistry`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
-| `service/release` | `ContractTestRunner` | Governed test execution and assertion evaluation |
-| `service/runtime` | `PublishedAgentResolver`, `DefinitionResolver`, `SessionCoordinator`, `StepExecutorRegistry` | Keel database, durable stores, non-authoritative caches, metrics, and step executors |
-| `service/toolgateway` | `GovernedGateway` and bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
+| Package | Contract | Implementations | Injected boundaries |
+|---|---|---|---|
+| `service/controlplane` | `control_plane.go`, `studio*.go` | `StudioService`, `KeelPromptSourceRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
+| `service/dataplane` | `data_plane.go` | `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry` | Durable stores, non-authoritative caches, metrics, and step executors |
+| `service/isolation` | `isolation.go` | `ExecutionGovernor` and per-turn execution permits | Loop detection and cost circuit breaking |
+| `service/modelgateway` | `model_runtime.go` | `Gateway`, `ProviderRegistry`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
+| `service/release` | `release_and_observability.go` | `ContractTestRunner` | Governed test execution and assertion evaluation |
+| `service/runtime` | `agent_runtime.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
+| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway` and bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
 
 These services enforce ordering and failure semantics but do not provide no-op infrastructure. Cache failures fall back to durable storage and are reported through `RuntimeMetrics`; durable writes complete before cache invalidation; model capacity is released on every unary or streaming terminal path; and tool calls cannot bypass authorization, egress, circuit, credential, or result validation boundaries.
 
-Tests share focused fakes under `service/internal/fake`. Provider adapters, distributed queues, caches, secret stores, and product transports remain separate implementations behind injected contracts.
+Tests share focused fakes under `internal/fake`, reachable from every package in the module. Provider adapters, distributed queues, caches, secret stores, and product transports remain separate implementations behind injected contracts.
 
 ## Agent Studio contract
 
@@ -197,7 +202,7 @@ result, err := runtime.MultimodalGenerator{
 })
 ```
 
-`service/provider` holds the concrete inference adapters behind `contract.ModelProvider` and `contract.MediaProvider`:
+`provider/` holds the concrete inference adapters behind `contract.ModelProvider` and `contract.MediaProvider`. It sits at the repository root because it is an outbound boundary adapter, not an injectable service:
 
 | Adapter | Text | Image | Video |
 |---|---|---|---|

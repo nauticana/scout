@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/service/internal/fake"
+	"github.com/nauticana/scout/internal/fake"
 )
 
 func testDraftService(query *studioQueryFake, tester fake.DraftTester) *StudioService {
