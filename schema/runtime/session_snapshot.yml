@@ -23,7 +23,7 @@ foreign_keys:
   - name: session_snapshots
     columns: [tenant_id, conversation_id]
     references:
-      table: conversation
+      table: agent_conversation
       columns: [tenant_id, conversation_id]
   - name: checkpoint_session_snapshots
     columns: [tenant_id, conversation_id, latest_turn_no, latest_step_no]

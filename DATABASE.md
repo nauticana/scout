@@ -368,7 +368,7 @@ erDiagram
     execution_step {
         bigint id PK
     }
-    conversation {
+    agent_conversation {
         bigint tenant_id PK,FK
         varchar conversation_id PK
         varchar agent_id FK
@@ -459,12 +459,12 @@ erDiagram
         bigint id PK
     }
 
-    agent_tenant ||--o{ conversation : conversations
-    agent_version ||--o{ conversation : agent_version_conversations
-    conversation ||--|{ conversation_turn : conversation_turns
+    agent_tenant ||--o{ agent_conversation : conversations
+    agent_version ||--o{ agent_conversation : agent_version_conversations
+    agent_conversation ||--|{ conversation_turn : conversation_turns
     turn_status ||--o{ conversation_turn : status_conversation_turns
     conversation_turn ||--o{ step_checkpoint : step_checkpoints
-    conversation ||--o| session_snapshot : session_snapshots
+    agent_conversation ||--o| session_snapshot : session_snapshots
     step_checkpoint ||--o| session_snapshot : checkpoint_session_snapshots
     conversation_turn ||--o{ step_idempotency : step_idempotencies
     step_checkpoint }o--|| execution_step : execution_step_checkpoints
@@ -561,7 +561,7 @@ Agent canaries in `agent_deployment` remain independent from platform rings in `
 | Catalog | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category` |
 | Tenancy | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | Control plane | `agent_profile`, `agent_draft`, `agent_alias`, `prompt_section`, `prompt_baseline`, `tenant_prompt_default`, `agent_prompt_override`, `guardrail_config`, `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_version`, `agent_tool_binding`, `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition`, `agent_deployment`, `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `model_provider`, `model_definition`, `model_capability`, `model_price`, `tenant_model_access` |
-| Runtime | `conversation`, `conversation_turn`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event` |
+| Runtime | `agent_conversation`, `conversation_turn`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event` |
 | Release | `platform_release`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `audit_event` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them

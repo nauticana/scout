@@ -38,7 +38,7 @@ foreign_keys:
   - name: conversation_turns
     columns: [tenant_id, conversation_id]
     references:
-      table: conversation
+      table: agent_conversation
       columns: [tenant_id, conversation_id]
   - name: status_conversation_turns
     columns: [status_code]

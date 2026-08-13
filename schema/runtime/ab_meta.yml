@@ -1,5 +1,5 @@
 tables:
-  - conversation
+  - agent_conversation
   - conversation_turn
   - step_checkpoint
   - session_snapshot
