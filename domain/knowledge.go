@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // KnowledgeDocument identifies immutable source content for ingestion.
 type KnowledgeDocument struct {
 	TenantContext    TenantContext
@@ -11,15 +13,19 @@ type KnowledgeDocument struct {
 	MediaType        string
 }
 
-// KnowledgeQuery contains one tenant-scoped semantic retrieval request.
+// KnowledgeQuery is one retrieval request; the index applies Entitlements inside the search, never as a post-filter.
 type KnowledgeQuery struct {
-	TenantContext    TenantContext
-	RequestID        string
-	ConversationID   string
-	KnowledgeBaseID  string
-	KnowledgeVersion string
-	Query            []byte
-	TopK             int
+	TenantContext      TenantContext
+	RequestID          string
+	ConversationID     string
+	KnowledgeBaseID    string
+	KnowledgeVersion   string
+	Principal          string
+	Entitlements       []byte
+	EntitlementsDigest string
+	Query              []byte
+	TopK               int
+	Budget             time.Duration
 }
 
 // KnowledgeMatch contains one authorized chunk returned by retrieval.
@@ -33,9 +39,15 @@ type KnowledgeMatch struct {
 
 // KnowledgeResult contains ranked knowledge matches for a runtime step.
 type KnowledgeResult struct {
-	Matches []KnowledgeMatch
-	Usage   Usage
+	Matches      []KnowledgeMatch
+	Usage        Usage
+	Degradations []string
 }
+
+const (
+	KnowledgeDegradationPartialRetrieval = "partial_retrieval"
+	KnowledgeDegradationRerankerFailed   = "reranker_failed"
+)
 
 // Embedding contains a provider-neutral vector representation.
 type Embedding struct {

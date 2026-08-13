@@ -26,6 +26,12 @@ type EmbeddingGateway interface {
 	Embed(ctx context.Context, tenant domain.TenantContext, content []byte) (domain.Embedding, error)
 }
 
+// BatchEmbedder embeds several inputs of one tenant in a single provider call.
+type BatchEmbedder interface {
+	// EmbedBatch returns exactly one embedding per input, in input order.
+	EmbedBatch(ctx context.Context, tenant domain.TenantContext, contents [][]byte) ([]domain.Embedding, error)
+}
+
 // KnowledgeVectorIndex stores and searches tenant-partitioned embeddings.
 type KnowledgeVectorIndex interface {
 	// Index stores one document embedding under an immutable knowledge version.
@@ -38,4 +44,9 @@ type KnowledgeVectorIndex interface {
 type KnowledgeRetriever interface {
 	// Retrieve returns ranked tenant-scoped knowledge with bounded latency.
 	Retrieve(ctx context.Context, query domain.KnowledgeQuery) (domain.KnowledgeResult, error)
+}
+
+// KnowledgeReranker reorders already-authorized candidates.
+type KnowledgeReranker interface {
+	Rerank(ctx context.Context, query domain.KnowledgeQuery, matches []domain.KnowledgeMatch) ([]domain.KnowledgeMatch, error)
 }

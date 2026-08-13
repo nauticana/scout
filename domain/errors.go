@@ -1,6 +1,8 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+)
 
 var (
 	// ErrNotFound indicates that a requested domain object does not exist.
@@ -31,4 +33,22 @@ var (
 	ErrNotReady = errors.New("not ready")
 	// ErrNoPrompts indicates that no prompt source exists for a requested language.
 	ErrNoPrompts = errors.New("no prompts")
+	// ErrReplayExpired indicates a reply cursor fell outside the retained window.
+	ErrReplayExpired = errors.New("replay window expired")
+	// ErrTurnCanceled indicates a turn was canceled by request while running.
+	ErrTurnCanceled = errors.New("turn canceled")
+)
+
+// TurnStage identifies the turn-lifecycle boundary that produced an error.
+type TurnStage string
+
+const (
+	StageAdmission  TurnStage = "admission"
+	StageRetrieval  TurnStage = "retrieval"
+	StagePrompt     TurnStage = "prompt"
+	StageModel      TurnStage = "model"
+	StageGuardrail  TurnStage = "guardrail"
+	StageTool       TurnStage = "tool"
+	StagePublish    TurnStage = "publish"
+	StageCheckpoint TurnStage = "checkpoint"
 )

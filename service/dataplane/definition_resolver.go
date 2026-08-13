@@ -7,6 +7,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/singleflight"
 )
 
 // DefinitionResolver reads immutable graphs through a non-authoritative cache.
@@ -14,6 +15,8 @@ type DefinitionResolver struct {
 	Repository contract.ExecutionGraphRepository
 	Cache      contract.ExecutionGraphCache
 	Metrics    contract.RuntimeMetrics
+
+	flights singleflight.Group[graphKey, domain.ExecutionGraph]
 }
 
 // Resolve returns a matching cached graph or refreshes it from durable storage.
@@ -36,17 +39,20 @@ func (resolver *DefinitionResolver) Resolve(ctx context.Context, tenantID int64,
 			resolver.recordCacheError(ctx, tenantID, "invalidate", err)
 		}
 	}
-	graph, err = resolver.Repository.Get(ctx, tenantID, agentID, version)
-	if err != nil {
-		return domain.ExecutionGraph{}, fmt.Errorf("load execution graph %q version %q: %w", agentID, version, err)
-	}
-	if graph.AgentID != agentID || graph.Version != version {
-		return domain.ExecutionGraph{}, fmt.Errorf("%w: durable execution graph identity mismatch", domain.ErrConflict)
-	}
-	if err := resolver.Cache.Put(ctx, tenantID, graph); err != nil {
-		resolver.recordCacheError(ctx, tenantID, "put", err)
-	}
-	return graph, nil
+	// A publish makes every worker miss at once; one flight covers them all.
+	return resolver.flights.Do(ctx, graphKey{tenantID, agentID, version}, func(loadCtx context.Context) (domain.ExecutionGraph, error) {
+		graph, err := resolver.Repository.Get(loadCtx, tenantID, agentID, version)
+		if err != nil {
+			return domain.ExecutionGraph{}, fmt.Errorf("load execution graph %q version %q: %w", agentID, version, err)
+		}
+		if graph.AgentID != agentID || graph.Version != version {
+			return domain.ExecutionGraph{}, fmt.Errorf("%w: durable execution graph identity mismatch", domain.ErrConflict)
+		}
+		if err := resolver.Cache.Put(loadCtx, tenantID, graph); err != nil {
+			resolver.recordCacheError(loadCtx, tenantID, "put", err)
+		}
+		return graph, nil
+	})
 }
 
 func (resolver *DefinitionResolver) recordCacheError(ctx context.Context, tenantID int64, operation string, err error) {

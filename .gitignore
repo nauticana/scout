@@ -43,3 +43,4 @@ bin/
 
 # macOS Finder metadata
 .DS_Store
+build/

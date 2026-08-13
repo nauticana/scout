@@ -48,6 +48,11 @@ type RolloutHealthEvaluator interface {
 	Healthy(ctx context.Context, target domain.RolloutTarget) (bool, error)
 }
 
+// DetailedRolloutHealthEvaluator reports evidence and inconclusive telemetry.
+type DetailedRolloutHealthEvaluator interface {
+	Evaluate(ctx context.Context, target domain.RolloutTarget) (domain.RolloutHealth, error)
+}
+
 // AuditSink records durable tenant-scoped security and governance events.
 type AuditSink interface {
 	// Record durably writes a redacted tenant-scoped audit event.

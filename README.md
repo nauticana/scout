@@ -110,12 +110,13 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
 | `service/controlplane` | `control_plane.go`, `studio*.go` | `StudioService`, `KeelPromptSourceRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
-| `service/dataplane` | `data_plane.go` | `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry` | Durable stores, non-authoritative caches, metrics, and step executors |
-| `service/isolation` | `isolation.go` | `ExecutionGovernor` and per-turn execution permits | Loop detection and cost circuit breaking |
-| `service/modelgateway` | `model_runtime.go` | `Gateway`, `ProviderRegistry`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
-| `service/release` | `release_and_observability.go` | `ContractTestRunner` | Governed test execution and assertion evaluation |
+| `service/dataplane` | `data_plane.go` | `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `MemorySessionCache`, `MemoryGraphCache`, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller` | Durable stores, non-authoritative caches, metrics, guardrails, and step executors |
+| `service/isolation` | `isolation.go` | `ExecutionGovernor`, `TenantRateLimiter`, `FairSlotLimiter`, `SlotCapacityScheduler`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector`, `DistributedRateLimiter` | Keel database, budget policy, shared counters, loop detection, and cost circuit breaking |
+| `service/knowledge` | `knowledge.go` | `BatchingEmbedder`, `HybridRetriever` | Batch embedding providers, retrieval legs, and rerankers |
+| `service/modelgateway` | `model_runtime.go` | `Gateway`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
+| `service/release` | `release_and_observability.go` | `ContractTestRunner` with bounded ordered concurrency | Governed test execution and assertion evaluation |
 | `service/runtime` | `agent_runtime.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
-| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway` and bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
+| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway` and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
 
 These services enforce ordering and failure semantics but do not provide no-op infrastructure. Cache failures fall back to durable storage and are reported through `RuntimeMetrics`; durable writes complete before cache invalidation; model capacity is released on every unary or streaming terminal path; and tool calls cannot bypass authorization, egress, circuit, credential, or result validation boundaries.
 
@@ -532,6 +533,16 @@ Use a fixed partition pool rather than one physical queue per tenant. Determinis
 
 The queue supplies durability and backpressure. Fairness belongs in `FairTurnScheduler`, not in an assumption about broker behavior. Dedicated tenants may receive isolated partitions and worker pools without changing the contract.
 
+### Limits, retry advice, and stage attribution
+
+Limiters with a known retry time return `isolation.LimitError`, which preserves the domain sentinel and implements the optional `contract.RetryAfterError` capability. Hard budget denials do not invent a reset time. Streaming and retrieval use internal stage wrappers; durable fleet attribution belongs in structured observations rather than behavior in the value-only `domain/` package.
+
+`isolation.BudgetLedger` implements attempt-aware reserve-then-settle. A live attempt replays idempotently; a nonterminal turn may replace an expired attempt after fencing it. `Commit` records actual usage, including overruns, and `Expire` reclaims dead holds. Cost-breaker tracking capacity rejects in `Allow`; `Record` preserves completed work and counts records with an untracked scope. `isolation.DistributedRateLimiter` uses keel v1.2.49 `IncrementByWithTTL` and degrades to bounded local admission during store outages.
+
+### Streaming, cancellation, and reconnect
+
+`dataplane.StreamPump` guards every emitted payload, cancels generation after publication failure, and stops after the observed output budget. Non-publication failures get one bounded terminal-publish attempt. `dataplane.MemoryReplyHub` disconnects slow subscribers and supports retained replay through `SubscribeFrom`; a retained sequence retries only when its content matches, while divergent or trimmed retries fail. A publisher treats `ErrReplayExpired` from an older sequence retry as success-equivalent because the stream has advanced beyond verification. `MemoryTurnCanceller.Watch` lets cancellation stop a turn without ending its conversation.
+
 ### Checkpoint and replay
 
 Persist each completed step before beginning the next. A replacement worker loads the latest revision and uses `StepIdempotencyStore.Begin` to reuse a committed result or replay only unfinished work. External tools receive the same stable idempotency key when supported.
@@ -560,6 +571,8 @@ Agent rollout and platform rollout solve different problems:
 - `PlatformReleaseRolloutController` advances a platform artifact through tenant rings.
 
 Before advancing a platform ring, run a risk-stratified corpus through `AgentContractTestRunner` and evaluate latency, errors, cost, quality, and compatibility. Roll back platform code without changing tenant agent versions.
+
+The optional `DetailedRolloutHealthEvaluator.Evaluate` capability returns a three-state `domain.RolloutHealth`: `healthy` advances, `unhealthy` rolls back, and `inconclusive` — stale telemetry, insufficient samples — pauses promotion without declaring either. Loss of trustworthy metrics is never a promotion signal.
 
 ## Testing strategy
 

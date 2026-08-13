@@ -109,3 +109,40 @@ func TestSessionCoordinatorDoesNotInvalidateAfterStoreFailure(t *testing.T) {
 		t.Fatalf("error = %v, invalidated = %v", err, invalidated)
 	}
 }
+
+func TestSessionCoordinatorInvalidatesAfterWriteCancelsRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	coordinator := &SessionCoordinator{
+		Store: &fake.DurableSessionStore{CheckpointFunc: func(context.Context, int64, int64, domain.StepCheckpoint) error {
+			cancel()
+			return nil
+		}},
+		Cache: &fake.HotSessionCache{InvalidateFunc: func(cacheCtx context.Context, _ int64, _ string) error {
+			if err := cacheCtx.Err(); err != nil {
+				t.Fatalf("cache context = %v", err)
+			}
+			return nil
+		}},
+		Metrics: &fake.RuntimeMetrics{},
+	}
+	if err := coordinator.Checkpoint(ctx, 7, 2, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionCoordinatorSurfacesPostCommitInvalidationFailure(t *testing.T) {
+	cacheErr := errors.New("cache unavailable")
+	coordinator := &SessionCoordinator{
+		Store: &fake.DurableSessionStore{CheckpointFunc: func(context.Context, int64, int64, domain.StepCheckpoint) error {
+			return nil
+		}},
+		Cache: &fake.HotSessionCache{InvalidateFunc: func(context.Context, int64, string) error {
+			return cacheErr
+		}},
+		Metrics: &fake.RuntimeMetrics{},
+	}
+	err := coordinator.Checkpoint(context.Background(), 7, 2, domain.StepCheckpoint{ConversationID: "conversation"})
+	if !errors.Is(err, cacheErr) {
+		t.Fatalf("error = %v", err)
+	}
+}

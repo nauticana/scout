@@ -419,8 +419,11 @@ erDiagram
         bigint tenant_id PK,FK
         varchar reservation_id PK
         varchar request_id FK
+        bigint attempt_no
         varchar status_code FK
         char currency_code FK
+        bigint settled_tokens
+        timestamp expires_at
     }
     reservation_status {
         varchar code PK
@@ -476,6 +479,8 @@ erDiagram
 ```
 
 `step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe.
+
+Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry.
 
 ## Platform release safety and audit
 
@@ -566,4 +571,3 @@ is seeded the same way: ids 1-9 are the platform sections (`task`, `tone_of_voic
 `sensitive_topics`, `prohibited_content`, `escalation_policy`) and ids up to 100
 are reserved, so `prompt_section_seq` starts at 101. Those ids are referenced by
 `prompt_baseline` data across every downstream — never renumber them.
-

@@ -69,14 +69,25 @@ type SessionCoordinator interface {
 
 // TurnReplyPublisher sends ordered worker response frames to conversation ingress.
 type TurnReplyPublisher interface {
-	// Publish sends one reply frame using tenant and request routing keys.
+	// Publish is idempotent while a sequence is retained; an older ErrReplayExpired retry is success-equivalent.
 	Publish(ctx context.Context, reply domain.TurnReply) error
 }
 
 // TurnReplySubscriber creates a short-lived response stream before dispatch.
 type TurnReplySubscriber interface {
-	// Subscribe opens the response stream for one admitted request.
+	// Subscribe opens the live reply stream.
 	Subscribe(ctx context.Context, tenantID int64, requestID string) (TurnReplySubscription, error)
+}
+
+// ReplayTurnReplySubscriber can resume a reply stream from a retained sequence.
+type ReplayTurnReplySubscriber interface {
+	SubscribeFrom(ctx context.Context, tenantID int64, requestID string, fromSequence int64) (TurnReplySubscription, error)
+}
+
+// TurnCanceller stops a running turn without ending its conversation.
+type TurnCanceller interface {
+	// Cancel signals the worker executing the request to stop with a reason.
+	Cancel(ctx context.Context, tenantID int64, requestID, reason string) error
 }
 
 // TurnReplySubscription receives ordered response frames for one request.

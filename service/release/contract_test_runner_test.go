@@ -3,8 +3,11 @@ package release
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/fake"
@@ -71,5 +74,43 @@ func TestContractTestRunnerRejectsDuplicateCases(t *testing.T) {
 	_, err := runner.Run(context.Background(), "build-1", []domain.ContractTestCase{{TestCaseID: "same", AgentID: "agent", AgentVersion: "v1"}, {TestCaseID: "same", AgentID: "agent", AgentVersion: "v1"}})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestContractTestRunnerBoundedConcurrency(t *testing.T) {
+	var active, peak atomic.Int32
+	runner := &ContractTestRunner{
+		Concurrency: 3,
+		Executor: fake.ContractTestExecutorFunc(func(context.Context, string, domain.ContractTestCase) (domain.TurnResult, error) {
+			current := active.Add(1)
+			defer active.Add(-1)
+			for {
+				observed := peak.Load()
+				if current <= observed || peak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			return domain.TurnResult{}, nil
+		}),
+		Evaluator: fake.ContractAssertionEvaluatorFunc(func(context.Context, domain.ContractTestCase, domain.TurnResult) ([]string, error) {
+			return nil, nil
+		}),
+	}
+	cases := make([]domain.ContractTestCase, 9)
+	for i := range cases {
+		cases[i] = domain.ContractTestCase{TestCaseID: fmt.Sprintf("case-%d", i), AgentID: "agent", AgentVersion: "v1"}
+	}
+	results, err := runner.Run(context.Background(), "build-1", cases)
+	if err != nil || len(results) != 9 {
+		t.Fatalf("results = %d, %v", len(results), err)
+	}
+	for i, result := range results {
+		if result.TestCaseID != cases[i].TestCaseID {
+			t.Fatalf("order broken at %d: %+v", i, result)
+		}
+	}
+	if peak.Load() > 3 || peak.Load() < 2 {
+		t.Fatalf("peak concurrency = %d", peak.Load())
 	}
 }

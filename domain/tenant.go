@@ -9,6 +9,14 @@ type TenantContext struct {
 	DedicatedCapacity bool
 }
 
+// TurnAdmissionPolicy states what a new prompt does to a running turn.
+type TurnAdmissionPolicy string
+
+const (
+	AdmissionQueue            TurnAdmissionPolicy = "queue"
+	AdmissionCancelAndReplace TurnAdmissionPolicy = "cancel_replace"
+)
+
 // TenantRuntimePolicy defines hard limits for one tenant turn.
 type TenantRuntimePolicy struct {
 	PriorityClass     string
@@ -18,6 +26,7 @@ type TenantRuntimePolicy struct {
 	MaxCostMinorUnits int64
 	CostCurrency      string
 	TurnTimeout       time.Duration
+	MidTurnPolicy     TurnAdmissionPolicy
 }
 
 // Usage records model, tool, and cost consumption.
@@ -31,8 +40,20 @@ type Usage struct {
 
 // BudgetReservation represents tokens and cost reserved for an operation.
 type BudgetReservation struct {
+	TenantID              int64
 	ReservationID         string
+	RequestID             string
+	Attempt               int64
 	GrantedTokens         int64
 	GrantedCostMinorUnits int64
 	Currency              string
+	ExpiresAt             time.Time
+}
+
+// BudgetLimits is one tenant's rolling-window token and cost budget.
+type BudgetLimits struct {
+	WindowTokens         int64
+	WindowCostMinorUnits int64
+	Currency             string
+	Window               time.Duration
 }

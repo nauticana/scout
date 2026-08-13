@@ -7,6 +7,8 @@ columns:
     type: VARCHAR(120)
   - name: request_id
     type: VARCHAR(120)
+  - name: attempt_no
+    type: BIGINT
   - name: status_code
     type: VARCHAR(30)
   - name: granted_tokens
@@ -15,9 +17,17 @@ columns:
     type: BIGINT
   - name: currency_code
     type: CHAR(3)
+  - name: settled_tokens
+    type: BIGINT
+    nullable: true
+  - name: settled_cost_minor_units
+    type: BIGINT
+    nullable: true
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
   - name: settled_at
     type: TIMESTAMP
     nullable: true
@@ -41,10 +51,19 @@ foreign_keys:
 indexes:
   - name: budget_reservation_status_ix
     columns: [tenant_id, status_code, created_at]
+  - name: budget_reservation_expiry_ix
+    columns: [status_code, expires_at]
+  - name: budget_reservation_request_attempt_uq
+    columns: [tenant_id, request_id, attempt_no]
+    unique: true
 checks:
+  - name: budget_reservation_attempt_ck
+    expression: attempt_no > 0
   - name: budget_reservation_tokens_ck
     expression: granted_tokens > 0
   - name: budget_reservation_cost_ck
     expression: granted_cost_minor_units >= 0
+  - name: budget_reservation_settled_ck
+    expression: (status_code = 'held' AND settled_at IS NULL AND settled_tokens IS NULL AND settled_cost_minor_units IS NULL) OR (status_code = 'settled' AND settled_at IS NOT NULL AND settled_tokens >= 0 AND settled_cost_minor_units >= 0) OR (status_code IN ('released', 'expired') AND settled_at IS NOT NULL AND settled_tokens = 0 AND settled_cost_minor_units = 0)
   - name: budget_reservation_dates_ck
-    expression: settled_at IS NULL OR settled_at >= created_at
+    expression: expires_at > created_at AND (settled_at IS NULL OR settled_at >= created_at)

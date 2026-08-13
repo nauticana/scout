@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"time"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -16,9 +17,25 @@ type TenantRateLimiter interface {
 	AllowModelCall(ctx context.Context, request domain.ModelRequest) error
 }
 
+// SharedCounter atomically adds to a fixed-window counter in a shared store.
+type SharedCounter interface {
+	IncrementByWithTTL(ctx context.Context, key string, n int64, window time.Duration) (int64, error)
+}
+
+// RetryAfterError carries advisory retry timing for a rejected operation.
+type RetryAfterError interface {
+	error
+	RetryAfter() time.Duration
+}
+
+// TenantBudgetPolicy supplies each tenant's rolling-window budget.
+type TenantBudgetPolicy interface {
+	BudgetFor(ctx context.Context, tenantID int64) (domain.BudgetLimits, error)
+}
+
 // TenantBudgetManager reserves and settles tenant token and cost budgets.
 type TenantBudgetManager interface {
-	// Reserve atomically reserves tokens and cost before work begins.
+	// Reserve returns the live attempt or replaces an expired attempt for a nonterminal turn.
 	Reserve(ctx context.Context, tenantID int64, requestID string, tokens, costMinorUnits int64, currency string) (domain.BudgetReservation, error)
 	// Commit settles a reservation against actual usage.
 	Commit(ctx context.Context, reservation domain.BudgetReservation, usage domain.Usage) error
@@ -52,20 +69,20 @@ type LoopDetector interface {
 
 // CostCircuitBreaker stops work when configured cost thresholds are exceeded.
 type CostCircuitBreaker interface {
-	// Allow rejects work after tenant, agent, or fleet cost thresholds trip.
+	// Allow rejects work before execution when a cost or tracking limit is reached.
 	Allow(ctx context.Context, tenantID int64, agentID string, projectedCostMinorUnits int64) error
-	// Record adds actual usage to tenant, agent, and fleet cost windows.
+	// Record preserves actual usage after execution.
 	Record(ctx context.Context, tenantID int64, agentID string, usage domain.Usage) error
 }
 
 // ConcurrencyLimiter isolates tenant execution concurrency.
 type ConcurrencyLimiter interface {
-	// Acquire reserves one tenant-scoped execution slot.
+	// Acquire reserves one tenant execution slot, blocking fairly.
 	Acquire(ctx context.Context, tenant domain.TenantContext) (ConcurrencyLease, error)
 }
 
-// ConcurrencyLease represents one reserved tenant execution slot.
+// ConcurrencyLease represents reserved tenant execution capacity.
 type ConcurrencyLease interface {
-	// Release returns the execution slot to its tenant capacity pool.
+	// Release returns the capacity; it is idempotent.
 	Release() error
 }
