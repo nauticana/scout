@@ -17,7 +17,7 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 | Embedding vectors | Tenant-partitioned vector index |
 | Provider credentials | keel secret provider |
 
-All relational identifiers are lowercase. Tenant-owned relations carry `tenant_id` through their primary or foreign keys. Structured payload columns use canonical JSON stored as `TEXT` so keel can emit PostgreSQL or MySQL DDL from the same YAML.
+All relational identifiers are lowercase. Tenant-owned relations carry `tenant_id` through their primary or foreign keys. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
 
 `execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
 

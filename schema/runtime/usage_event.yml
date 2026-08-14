@@ -51,6 +51,9 @@ foreign_keys:
       table: currency
       columns: [code]
 indexes:
+  - name: usage_event_turn_category_uq
+    columns: [tenant_id, conversation_id, turn_no, category_code]
+    unique: true
   - name: usage_event_tenant_time_ix
     columns: [tenant_id, occurred_at]
 checks:

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -229,23 +231,18 @@ UPDATE conversation_turn_detail detail
    AND detail.turn_no = failed.turn_no
 RETURNING detail.turn_no`,
 
-	// Idempotent per (turn, category); a replayed finalization is a no-op.
 	qLedgerInsertUsageEvent: `
 INSERT INTO usage_event
        (id, tenant_id, conversation_id, turn_no, category_code, subject_ref,
         input_tokens, output_tokens, cost_minor_units, currency_code)
-SELECT nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?
- WHERE NOT EXISTS (SELECT 1 FROM usage_event
-                    WHERE tenant_id = ? AND conversation_id = ? AND turn_no = ? AND category_code = ?)
+VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, conversation_id, turn_no, category_code) DO NOTHING
 RETURNING id`,
 
-	// Job-keyed variants for workers that execute queued turns attached to an
-	// external job reference. Compose them inside the worker's own transaction
-	// by merging Queries() into its query map.
 	qLedgerSetJobStatus: `
 UPDATE conversation_turn runtime
    SET status_code = ?,
-       started_at = CASE WHEN ? = 'running' THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
+       started_at = CASE WHEN ? IN ('running', 'failed') THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
        completed_at = CASE WHEN ? = 'failed' THEN CURRENT_TIMESTAMP ELSE NULL END
   FROM conversation_turn_detail detail
  WHERE detail.tenant_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
@@ -273,6 +270,8 @@ UPDATE conversation_turn_detail detail
    AND EXISTS (SELECT 1 FROM budget_reservation current
                 WHERE current.tenant_id = detail.tenant_id
                   AND current.reservation_id = ?
+                  AND current.request_id = runtime.request_id
+                  AND current.attempt_no = ?
                   AND current.status_code = 'held'
                   AND current.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.conversation_id, detail.turn_no`,
@@ -401,7 +400,7 @@ func (l *TurnLedger) queries(ctx context.Context) port.QueryService {
 }
 
 func (l *TurnLedger) queryMap() map[string]string {
-	return common.MergeMaps(turnLedgerQueries, l.ExtraQueries)
+	return common.MergeMaps(l.ExtraQueries, turnLedgerQueries)
 }
 
 func (l *TurnLedger) inputURI(requestID string) string {
@@ -418,7 +417,7 @@ func (l *TurnLedger) NormalizeRequestID(ctx context.Context, requestID string) s
 	if requestID == "" {
 		return fmt.Sprintf("%s-%d", l.Namespace, l.queries(ctx).GenID())
 	}
-	return common.TruncateRunes(requestID, 64)
+	return common.TruncateRunes(requestID, 120)
 }
 
 // DigestStrings canonicalizes turn input for the idempotency conflict check.
@@ -437,30 +436,45 @@ func QuoteUsage(ctx context.Context, agent contract.PricedAgent, inputText strin
 	if inputTokens < 1000 {
 		inputTokens = 1000
 	}
-	modelUsage := domain.ModelUsage{InputTokens: inputTokens, OutputTokens: 2000}
-	cost, currency, err := agent.Cost(ctx, modelUsage)
-	if err != nil {
-		return domain.Usage{}, err
-	}
-	return domain.Usage{
-		InputTokens: inputTokens, OutputTokens: 2000,
-		CostMinorUnits: cost, Currency: currency,
-	}, nil
+	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: 2000})
 }
 
 // PriceUsage prices actual usage; work that ran never costs zero.
 func PriceUsage(ctx context.Context, agent contract.PricedAgent, inputTokens, outputTokens int64) (domain.Usage, error) {
-	cost, currency, err := agent.Cost(ctx, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: outputTokens})
-	if err != nil {
-		return domain.Usage{}, err
+	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: outputTokens})
+}
+
+// PriceModelUsage combines text and optional media pricing.
+func PriceModelUsage(ctx context.Context, text, image, video contract.PricedAgent, usage domain.ModelUsage) (domain.Usage, error) {
+	if text == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.InputTokens > math.MaxInt64-usage.OutputTokens {
+		return domain.Usage{}, fmt.Errorf("%w: priced agents and non-negative usage are required", domain.ErrValidation)
 	}
-	if cost < 1 {
-		cost = 1
+	parts := []struct {
+		agent contract.PricedAgent
+		usage domain.ModelUsage
+	}{{text, domain.ModelUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}}, {image, domain.ModelUsage{Images: usage.Images}}, {video, domain.ModelUsage{VideoSeconds: usage.VideoSeconds}}}
+	total, currency := int64(0), ""
+	for i, part := range parts {
+		if i > 0 && (i == 1 && usage.Images == 0 || i == 2 && usage.VideoSeconds == 0) {
+			continue
+		}
+		if part.agent == nil {
+			return domain.Usage{}, fmt.Errorf("%w: media pricing agent is required", domain.ErrValidation)
+		}
+		cost, unit, err := part.agent.Cost(ctx, part.usage)
+		if err != nil {
+			return domain.Usage{}, err
+		}
+		if cost < 0 || unit == "" || cost > math.MaxInt64-total || currency != "" && unit != currency {
+			return domain.Usage{}, fmt.Errorf("%w: invalid or mixed-currency model price", domain.ErrValidation)
+		}
+		total += cost
+		currency = unit
 	}
-	return domain.Usage{
-		InputTokens: inputTokens, OutputTokens: outputTokens,
-		CostMinorUnits: cost, Currency: currency,
-	}, nil
+	if total < 1 {
+		total = 1
+	}
+	return domain.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CostMinorUnits: total, Currency: currency}, nil
 }
 
 func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID string) (TurnState, bool, error) {
@@ -547,6 +561,12 @@ func storedTurnError(state TurnState) error {
 // Begin creates the workspace conversation and turn for a new request id,
 // serialized per (tenant, end user, release).
 func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requestID, taskKind, inputSummary, inputDigest, status string, release domain.AgentReleaseReference) (TurnState, bool, error) {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(taskKind) == "" ||
+		len([]rune(requestID)) > 120 || len([]rune(taskKind)) > 30 || len(inputDigest) != 64 ||
+		(status != "queued" && status != "running") || release.AgentID == "" || release.Version == "" || len(release.Digest) != 64 ||
+		len([]rune(endUserRef)) > 200 {
+		return TurnState{}, false, fmt.Errorf("%w: invalid turn identity, status, or release", domain.ErrValidation)
+	}
 	ctx = context.WithoutCancel(ctx)
 	tx, err := l.DB.BeginTx(ctx, l.queryMap())
 	if err != nil {
@@ -605,6 +625,9 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 	if !found {
 		return TurnState{}, false, fmt.Errorf("turn %q disappeared after creation", requestID)
 	}
+	if state.TaskKind != taskKind || state.InputDigest != inputDigest {
+		return TurnState{}, false, ErrTurnConflict
+	}
 	return state, created, nil
 }
 
@@ -659,7 +682,7 @@ func (l *TurnLedger) PrepareBudgeted(ctx context.Context, tenantID int64, endUse
 	}
 	state.ActiveReservation = reservation.ReservationID
 	state.ReservationAttempt = reservation.Attempt
-	execution := TurnExecution{Turn: state, Reservation: reservation, Model: modelReferenceOf(agent)}
+	execution := TurnExecution{Turn: state, Reservation: reservation, Model: agent.ModelReference()}
 	if state.ResultPayload != "" {
 		usage := domain.Usage{
 			InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
@@ -679,13 +702,6 @@ func (l *TurnLedger) PrepareBudgeted(ctx context.Context, tenantID int64, endUse
 	return execution, nil, false, nil
 }
 
-func modelReferenceOf(agent contract.PricedAgent) domain.ModelReference {
-	if carrier, ok := agent.(interface{ ModelReference() domain.ModelReference }); ok {
-		return carrier.ModelReference()
-	}
-	return domain.ModelReference{}
-}
-
 func (l *TurnLedger) activate(ctx context.Context, state TurnState, reservation domain.BudgetReservation) error {
 	result, err := l.queries(ctx).Query(context.WithoutCancel(ctx), qLedgerActivate,
 		reservation.ReservationID, state.TenantID, state.ConversationID, state.TurnNo,
@@ -701,6 +717,10 @@ func (l *TurnLedger) activate(ctx context.Context, state TurnState, reservation 
 
 // AttachJob links the turn to an external job inside the caller's transaction.
 func (l *TurnLedger) AttachJob(ctx context.Context, qs port.QueryService, state TurnState, resultKind string, jobRef int64) error {
+	if qs == nil || state.TenantID <= 0 || state.ConversationID == "" || state.TurnNo <= 0 ||
+		strings.TrimSpace(resultKind) == "" || len([]rune(resultKind)) > 30 || jobRef <= 0 {
+		return fmt.Errorf("%w: valid turn, result kind, job, and query service are required", domain.ErrValidation)
+	}
 	attached, err := qs.Query(ctx, qLedgerAttachJob, resultKind, jobRef,
 		state.TenantID, state.ConversationID, state.TurnNo)
 	if err != nil {
@@ -829,8 +849,7 @@ func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resu
 	if l.Activity != nil {
 		release := domain.AgentReleaseReference{AgentID: state.AgentID, Version: state.AgentVersion, Digest: state.ReleaseDigest}
 		if err := l.Activity.Record(context.WithoutCancel(ctx), state.TenantID, release, state.TaskKind); err != nil {
-			// Attribution must never fail the task it describes.
-			_ = err
+			log.Printf("record agent run %s for tenant %d: %v", state.TaskKind, state.TenantID, err)
 		}
 	}
 	l.Metrics.RecordTurn(ctx, state.TaskKind, "completed", execution.Model, state.AgentVersion, turnLatency(state), usage)
@@ -839,6 +858,9 @@ func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resu
 
 // Fail stages the failure, releases the reservation, and returns the cause.
 func (l *TurnLedger) Fail(ctx context.Context, execution TurnExecution, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%w: failure cause is required", domain.ErrValidation)
+	}
 	errText := common.TruncateRunes(common.RedactForStorage(cause.Error()), 400)
 	staged, err := l.queries(ctx).Query(context.WithoutCancel(ctx), qLedgerStageFailure,
 		errText, execution.Turn.TenantID, execution.Turn.ConversationID,
@@ -884,6 +906,9 @@ func (l *TurnLedger) finishFailed(ctx context.Context, state TurnState, reservat
 
 // FailUnreserved fails a turn that never acquired a reservation.
 func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%w: failure cause is required", domain.ErrValidation)
+	}
 	result, err := l.queries(ctx).Query(context.WithoutCancel(ctx), qLedgerFailUnreserved,
 		state.TenantID, state.ConversationID, state.TurnNo,
 		common.TruncateRunes(common.RedactForStorage(cause.Error()), 400))
@@ -901,8 +926,7 @@ func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause 
 func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) (bool, error) {
 	result, err := qs.Query(ctx, qLedgerInsertUsageEvent,
 		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
-		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
-		tenantID, conversationID, turnNo, l.UsageCategory)
+		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency)
 	if err != nil {
 		return false, fmt.Errorf("persist usage event: %w", err)
 	}
@@ -914,6 +938,9 @@ func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService,
 
 // SetJobTurnStatus moves a queued/running job turn to the given status.
 func SetJobTurnStatus(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, status string) (bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || status != "queued" && status != "running" && status != "failed" {
+		return false, fmt.Errorf("%w: invalid job status transition", domain.ErrValidation)
+	}
 	result, err := qs.Query(ctx, qLedgerSetJobStatus, status, status, status, tenantID, jobRef, taskKind)
 	if err != nil {
 		return false, err
@@ -923,9 +950,14 @@ func SetJobTurnStatus(ctx context.Context, qs port.QueryService, tenantID, jobRe
 
 // ActivateJobReservation claims the job turn, replacing an expired attempt.
 func ActivateJobReservation(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, priorReservationID string, reservation domain.BudgetReservation) (string, int64, bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || strings.TrimSpace(taskKind) == "" ||
+		reservation.TenantID != tenantID || strings.TrimSpace(reservation.ReservationID) == "" ||
+		strings.TrimSpace(reservation.RequestID) == "" || reservation.Attempt <= 0 {
+		return "", 0, false, fmt.Errorf("%w: valid job and matching reservation identity are required", domain.ErrValidation)
+	}
 	result, err := qs.Query(ctx, qLedgerActivateJob,
 		reservation.ReservationID, tenantID, jobRef, taskKind,
-		common.NullIfEmpty(priorReservationID), reservation.ReservationID)
+		common.NullIfEmpty(priorReservationID), reservation.ReservationID, reservation.Attempt)
 	if err != nil || len(result.Rows) == 0 {
 		return "", 0, false, err
 	}
@@ -934,6 +966,9 @@ func ActivateJobReservation(ctx context.Context, qs port.QueryService, tenantID,
 
 // StageJobUsage stages actual usage before settlement.
 func StageJobUsage(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID string, usage domain.Usage) (bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || reservationID == "" || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CostMinorUnits < 0 || usage.Currency == "" {
+		return false, fmt.Errorf("%w: invalid staged usage", domain.ErrValidation)
+	}
 	result, err := qs.Query(ctx, qLedgerStageJobUsage,
 		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
 		tenantID, jobRef, taskKind, reservationID)
@@ -945,6 +980,9 @@ func StageJobUsage(ctx context.Context, qs port.QueryService, tenantID, jobRef i
 
 // AttachJobArtifact links the produced artifact to the claimed job turn.
 func AttachJobArtifact(ctx context.Context, qs port.QueryService, tenantID, jobRef, artifactRef int64, taskKind, reservationID string) (bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || artifactRef <= 0 || taskKind == "" || reservationID == "" {
+		return false, fmt.Errorf("%w: invalid artifact link", domain.ErrValidation)
+	}
 	result, err := qs.Query(ctx, qLedgerAttachJobArtifact,
 		artifactRef, tenantID, jobRef, taskKind, reservationID)
 	if err != nil {
@@ -955,6 +993,9 @@ func AttachJobArtifact(ctx context.Context, qs port.QueryService, tenantID, jobR
 
 // CompleteJobTurn finalizes the job turn; fenced by the settled reservation.
 func CompleteJobTurn(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID, responseURI, responseDigest string) (bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || reservationID == "" || len(responseDigest) != 64 {
+		return false, fmt.Errorf("%w: invalid completed job", domain.ErrValidation)
+	}
 	result, err := qs.Query(ctx, qLedgerCompleteJobTurn,
 		responseURI, responseDigest, tenantID, jobRef, taskKind, reservationID)
 	if err != nil {

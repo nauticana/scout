@@ -4,8 +4,8 @@ comment: >-
   turns: the task kind, redacted input summary, typed result card (deliberate
   JSON denormalization — read-only history rendered verbatim), the budget
   reservation execution claim, and usage staged before settlement. job_ref and
-  artifact_ref are product-scoped references; downstreams add their own FK
-  constraints and uniqueness over them.
+  artifact_ref are product-scoped references with downstream FKs and
+  task-scoped uniqueness.
 columns:
   - name: tenant_id
     type: BIGINT
@@ -68,11 +68,11 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: conversation_turn_detail_job_uq
-    columns: [tenant_id, job_ref]
+    columns: [tenant_id, task_kind, job_ref]
     unique: true
     where: job_ref IS NOT NULL
   - name: conversation_turn_detail_artifact_uq
-    columns: [tenant_id, artifact_ref]
+    columns: [tenant_id, task_kind, artifact_ref]
     unique: true
     where: artifact_ref IS NOT NULL
 checks:
