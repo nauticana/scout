@@ -1,4 +1,4 @@
-package isolation
+package limiter
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestFairSlotLimiterGrantsAndReleases(t *testing.T) {
-	limiter := &FairSlotLimiter{Capacity: 2}
+	limiter := &FairSlotLimiter{Capacity: 2, MaxWaiters: 4096}
 	ctx := context.Background()
 	tenant := domain.TenantContext{TenantID: 1}
 
@@ -50,7 +50,7 @@ func TestFairSlotLimiterGrantsAndReleases(t *testing.T) {
 }
 
 func TestFairSlotLimiterRoundRobinAcrossTenants(t *testing.T) {
-	limiter := &FairSlotLimiter{Capacity: 1}
+	limiter := &FairSlotLimiter{Capacity: 1, MaxWaiters: 4096}
 	ctx := context.Background()
 	hold, err := limiter.Acquire(ctx, domain.TenantContext{TenantID: 1})
 	if err != nil {
@@ -84,7 +84,7 @@ func TestFairSlotLimiterRoundRobinAcrossTenants(t *testing.T) {
 }
 
 func TestFairSlotLimiterCancellationDoesNotLeak(t *testing.T) {
-	limiter := &FairSlotLimiter{Capacity: 1}
+	limiter := &FairSlotLimiter{Capacity: 1, MaxWaiters: 4096}
 	hold, err := limiter.Acquire(context.Background(), domain.TenantContext{TenantID: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestFairSlotLimiterCancellationDoesNotLeak(t *testing.T) {
 }
 
 func TestFairSlotLimiterValidation(t *testing.T) {
-	limiter := &FairSlotLimiter{Capacity: 2}
+	limiter := &FairSlotLimiter{Capacity: 2, MaxWaiters: 4096}
 	ctx := context.Background()
 	if _, err := limiter.Acquire(ctx, domain.TenantContext{}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("tenant = %v", err)
@@ -117,7 +117,7 @@ func TestFairSlotLimiterValidation(t *testing.T) {
 }
 
 func TestSlotCapacitySchedulerAdaptsLease(t *testing.T) {
-	scheduler := &SlotCapacityScheduler{Slots: &FairSlotLimiter{Capacity: 1}, Pool: "shared"}
+	scheduler := &SlotCapacityScheduler{Slots: &FairSlotLimiter{Capacity: 1, MaxWaiters: 4096}, Pool: "shared"}
 	request := domain.ModelRequest{TenantContext: domain.TenantContext{TenantID: 1}, RequestID: "r"}
 	lease, err := scheduler.Acquire(context.Background(), request, domain.ModelSelection{})
 	if err != nil {

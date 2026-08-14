@@ -11,7 +11,7 @@ import (
 )
 
 func TestMemoryLoopDetectorTripsAtThreshold(t *testing.T) {
-	detector := &MemoryLoopDetector{Threshold: 3}
+	detector := &MemoryLoopDetector{Threshold: 3, MaxConversations: 4096}
 	ctx := context.Background()
 	for i := range 2 {
 		if err := detector.Observe(ctx, 1, "c", "same-step"); err != nil {
@@ -32,7 +32,7 @@ func TestMemoryLoopDetectorTripsAtThreshold(t *testing.T) {
 
 func TestMemoryLoopDetectorResetAndWindow(t *testing.T) {
 	now := time.Unix(0, 0)
-	detector := &MemoryLoopDetector{Threshold: 2, Window: time.Minute, Now: func() time.Time { return now }}
+	detector := &MemoryLoopDetector{Threshold: 2, Window: time.Minute, MaxConversations: 4096, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	if err := detector.Observe(ctx, 1, "c", "f"); err != nil {
@@ -52,7 +52,7 @@ func TestMemoryLoopDetectorResetAndWindow(t *testing.T) {
 }
 
 func TestMemoryLoopDetectorValidation(t *testing.T) {
-	detector := &MemoryLoopDetector{Threshold: 1}
+	detector := &MemoryLoopDetector{Threshold: 1, MaxConversations: 4096}
 	if err := detector.Observe(context.Background(), 0, "", ""); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("validation = %v", err)
 	}
@@ -63,7 +63,7 @@ func TestMemoryLoopDetectorValidation(t *testing.T) {
 }
 
 func TestMemoryLoopDetectorConcurrentObservations(t *testing.T) {
-	detector := &MemoryLoopDetector{Threshold: 101}
+	detector := &MemoryLoopDetector{Threshold: 101, MaxConversations: 4096}
 	var wait sync.WaitGroup
 	for range 100 {
 		wait.Add(1)

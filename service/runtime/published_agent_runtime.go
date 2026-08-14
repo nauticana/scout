@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	keelcommon "github.com/nauticana/keel/common"
+
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
@@ -65,18 +67,18 @@ func (runtime *PublishedAgentRuntime) Resolve(ctx context.Context, tenantID int6
 		},
 		language: cloneCompiledPrompt(language),
 	}
-	resolved.text, err = runtime.bind(ctx, definition.AgentID, *definition.Models.Text, language.Sections, renderer, false)
+	resolved.text, err = runtime.bind(ctx, tenantID, conversationID, definition.AgentID, *definition.Models.Text, language.Sections, renderer, false)
 	if err != nil {
 		return nil, fmt.Errorf("bind text model: %w", err)
 	}
 	if definition.Models.Image != nil {
-		resolved.image, err = runtime.bind(ctx, definition.AgentID, *definition.Models.Image, language.Sections, renderer, true)
+		resolved.image, err = runtime.bind(ctx, tenantID, conversationID, definition.AgentID, *definition.Models.Image, language.Sections, renderer, true)
 		if err != nil {
 			return nil, fmt.Errorf("bind image model: %w", err)
 		}
 	}
 	if definition.Models.Video != nil {
-		resolved.video, err = runtime.bind(ctx, definition.AgentID, *definition.Models.Video, language.Sections, renderer, true)
+		resolved.video, err = runtime.bind(ctx, tenantID, conversationID, definition.AgentID, *definition.Models.Video, language.Sections, renderer, true)
 		if err != nil {
 			return nil, fmt.Errorf("bind video model: %w", err)
 		}
@@ -84,7 +86,7 @@ func (runtime *PublishedAgentRuntime) Resolve(ctx context.Context, tenantID int6
 	return resolved, nil
 }
 
-func (runtime *PublishedAgentRuntime) bind(ctx context.Context, agentID string, reference domain.ModelReference, sections []domain.CompiledPromptSection, renderer contract.PromptRenderer, requireMedia bool) (contract.AgentExecutor, error) {
+func (runtime *PublishedAgentRuntime) bind(ctx context.Context, tenantID int64, conversationID, agentID string, reference domain.ModelReference, sections []domain.CompiledPromptSection, renderer contract.PromptRenderer, requireMedia bool) (contract.AgentExecutor, error) {
 	provider, media, err := runtime.Providers.Build(ctx, reference)
 	if err != nil {
 		return nil, fmt.Errorf("provider %s model %s: %w", reference.ProviderID, reference.ModelID, err)
@@ -95,7 +97,8 @@ func (runtime *PublishedAgentRuntime) bind(ctx context.Context, agentID string, 
 	if requireMedia && media == nil {
 		return nil, fmt.Errorf("%w: provider %s has no media adapter", domain.ErrNotReady, reference.ProviderID)
 	}
-	return NewProviderAgent(agentID, reference, sections, runtime.MaxOutputTokens, renderer, provider, media)
+	return NewTenantProviderAgent(agentID, reference, sections, runtime.MaxOutputTokens, renderer, provider, media,
+		domain.TenantContext{TenantID: tenantID}, keelcommon.RequestIDFromContext(ctx), conversationID)
 }
 
 // SelectLanguage picks an exact compiled language and otherwise uses the

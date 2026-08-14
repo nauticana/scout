@@ -85,6 +85,10 @@ func TestProviderAgentRejectsUnsupportedExecution(t *testing.T) {
 	if _, err := NewProviderAgent("", domain.ModelReference{}, nil, 0, nil, nil, nil); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("invalid binding error = %v", err)
 	}
+	if _, err := NewTenantProviderAgent("writer", domain.ModelReference{ProviderID: "provider", ModelID: "model"}, nil, 100,
+		&rendererRecorder{}, provider, nil, domain.TenantContext{}, "", ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("missing tenant error = %v", err)
+	}
 }
 
 type rendererRecorder struct {

@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +13,6 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
-
-// FlagAgentRunRetentionDays is the application_config_flag Scout seeds to bound
-// agent run history.
-const FlagAgentRunRetentionDays = "agent_run_retention_days"
 
 const (
 	qRecordAgentRun = "scout_runtime_record_agent_run"
@@ -50,14 +45,9 @@ RETURNING id`,
 // completion per agent.
 type AgentRunStore struct {
 	DB keelport.DatabaseRepository
-	// RetentionDays overrides the agent_run_retention_days flag; zero reads it.
-	RetentionDays int
 
-	once          sync.Once
-	qs            keelport.QueryService
-	retentionOnce sync.Once
-	retention     int
-	retentionErr  error
+	once sync.Once
+	qs   keelport.QueryService
 }
 
 var _ contract.AgentRunRecorder = (*AgentRunStore)(nil)
@@ -128,15 +118,12 @@ func (store *AgentRunStore) LastRun(ctx context.Context, tenantID int64) (map[st
 	return lastRun, nil
 }
 
-// Purge deletes run activity past the agent_run_retention_days horizon, at most
-// limit rows per call. The flag needs a restart to take effect, so it is read
-// once. A non-positive retention keeps activity forever and purges nothing.
-func (store *AgentRunStore) Purge(ctx context.Context, limit int) (int64, error) {
-	retentionDays, err := store.retentionDays(ctx)
-	if err != nil {
-		return 0, err
+// Purge deletes run activity past the injected retention horizon.
+func (store *AgentRunStore) Purge(ctx context.Context, retentionDays, limit int) (int64, error) {
+	if retentionDays < 0 {
+		return 0, fmt.Errorf("%w: retention days cannot be negative", domain.ErrValidation)
 	}
-	if retentionDays <= 0 {
+	if retentionDays == 0 {
 		return 0, nil
 	}
 	if limit <= 0 {
@@ -150,36 +137,4 @@ func (store *AgentRunStore) Purge(ctx context.Context, limit int) (int64, error)
 		return 0, fmt.Errorf("purge agent runs: %w", err)
 	}
 	return int64(len(result.Rows)), nil
-}
-
-func (store *AgentRunStore) retentionDays(ctx context.Context) (int, error) {
-	if store.RetentionDays != 0 {
-		return store.RetentionDays, nil
-	}
-	if store.DB == nil {
-		return 0, fmt.Errorf("agent run store: database is required")
-	}
-	store.retentionOnce.Do(func() {
-		rows, err := (&common.BaseConfig{}).LoadValues(ctx, store.DB)
-		if err != nil {
-			store.retentionErr = fmt.Errorf("read %s: %w", FlagAgentRunRetentionDays, err)
-			return
-		}
-		row, ok := rows[FlagAgentRunRetentionDays]
-		if !ok {
-			store.retentionErr = fmt.Errorf("%w: %s is not seeded", domain.ErrValidation, FlagAgentRunRetentionDays)
-			return
-		}
-		value := strings.TrimSpace(row.Value)
-		if value == "" {
-			value = strings.TrimSpace(row.Default)
-		}
-		days, err := strconv.Atoi(value)
-		if err != nil {
-			store.retentionErr = fmt.Errorf("%w: %s is not an integer: %q", domain.ErrValidation, FlagAgentRunRetentionDays, value)
-			return
-		}
-		store.retention = days
-	})
-	return store.retention, store.retentionErr
 }

@@ -3,7 +3,9 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/fake"
@@ -71,5 +73,48 @@ func TestDefinitionResolverRejectsDurableIdentityMismatch(t *testing.T) {
 	_, err := resolver.Resolve(context.Background(), 7, "agent", "v1")
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDefinitionResolverCoalescesConcurrentMisses(t *testing.T) {
+	var loads atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	graph := domain.ExecutionGraph{AgentID: "a", Version: "1"}
+	cache, err := NewMemoryGraphCache(MemoryCacheConfig{Capacity: 8, TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	resolver := &DefinitionResolver{
+		Repository: &fake.ExecutionGraphRepository{GetFunc: func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
+			if loads.Add(1) == 1 {
+				close(started)
+			}
+			<-release
+			return graph, nil
+		}},
+		Cache:   cache,
+		Metrics: &fake.RuntimeMetrics{},
+	}
+
+	results := make(chan error, 4)
+	resolve := func() {
+		_, err := resolver.Resolve(context.Background(), 1, "a", "1")
+		results <- err
+	}
+	go resolve()
+	<-started
+	for range 3 {
+		go resolve()
+	}
+	close(release)
+	for range 4 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if loads.Load() != 1 {
+		t.Fatalf("repository loads = %d", loads.Load())
 	}
 }

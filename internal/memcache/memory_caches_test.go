@@ -1,17 +1,16 @@
-package dataplane
+package memcache
 
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
 )
 
 func TestMemorySessionCacheRoundTrip(t *testing.T) {
-	cache := &MemorySessionCache{Capacity: 8}
+	cache := &MemorySessionCache{Capacity: 8, TTL: time.Minute}
 	defer cache.Close()
 	ctx := context.Background()
 	snapshot := domain.SessionSnapshot{ConversationID: "c", Revision: 2}
@@ -39,7 +38,7 @@ func TestMemorySessionCacheRoundTrip(t *testing.T) {
 }
 
 func TestMemoryGraphCacheRoundTrip(t *testing.T) {
-	cache := &MemoryGraphCache{Capacity: 8}
+	cache := &MemoryGraphCache{Capacity: 8, TTL: time.Minute}
 	defer cache.Close()
 	ctx := context.Background()
 	graph := domain.ExecutionGraph{AgentID: "a", Version: "1", EntryStepID: "s"}
@@ -60,55 +59,17 @@ func TestMemoryGraphCacheRoundTrip(t *testing.T) {
 }
 
 func TestMemoryCachesAcceptSingleEntryCapacity(t *testing.T) {
-	sessions := &MemorySessionCache{Capacity: 1}
+	sessions := &MemorySessionCache{Capacity: 1, TTL: time.Minute}
 	defer sessions.Close()
 	if err := sessions.Put(context.Background(), 1, domain.SessionSnapshot{ConversationID: "c"}); err != nil {
 		t.Fatal(err)
 	}
-	graphs := &MemoryGraphCache{Capacity: 1}
+	graphs := &MemoryGraphCache{Capacity: 1, TTL: time.Minute}
 	defer graphs.Close()
 	if err := graphs.Put(context.Background(), 1, domain.ExecutionGraph{AgentID: "a", Version: "1"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := sessions.Get(context.Background(), 0, ""); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("validation = %v", err)
-	}
-}
-
-func TestDefinitionResolverCoalescesConcurrentMisses(t *testing.T) {
-	var loads atomic.Int32
-	started := make(chan struct{})
-	release := make(chan struct{})
-	graph := domain.ExecutionGraph{AgentID: "a", Version: "1"}
-	resolver := &DefinitionResolver{
-		Repository: &fake.ExecutionGraphRepository{GetFunc: func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
-			if loads.Add(1) == 1 {
-				close(started)
-			}
-			<-release
-			return graph, nil
-		}},
-		Cache:   &MemoryGraphCache{Capacity: 8},
-		Metrics: &fake.RuntimeMetrics{},
-	}
-
-	results := make(chan error, 4)
-	resolve := func() {
-		_, err := resolver.Resolve(context.Background(), 1, "a", "1")
-		results <- err
-	}
-	go resolve()
-	<-started
-	for range 3 {
-		go resolve()
-	}
-	close(release)
-	for range 4 {
-		if err := <-results; err != nil {
-			t.Fatal(err)
-		}
-	}
-	if loads.Load() != 1 {
-		t.Fatalf("repository loads = %d", loads.Load())
 	}
 }

@@ -1,4 +1,4 @@
-package isolation
+package limiter
 
 import (
 	"context"
@@ -24,7 +24,6 @@ func (l RateLimit) valid() bool {
 }
 
 const (
-	defaultMaxTenants   = 4096
 	tenantSweepCooldown = 100 * time.Millisecond
 )
 
@@ -51,9 +50,6 @@ func (limiter *TenantRateLimiter) init() {
 			now = time.Now
 		}
 		max := limiter.MaxTenants
-		if max <= 0 {
-			max = defaultMaxTenants
-		}
 		build := func(scope string, tenant, fleet RateLimit) *lane {
 			l := &lane{scope: scope, tenant: tenant, max: max, now: now}
 			if fleet.enabled() {
@@ -89,7 +85,7 @@ func (limiter *TenantRateLimiter) allow(ctx context.Context, pick func() *lane, 
 	if tenantID <= 0 {
 		return fmt.Errorf("%w: tenant is required", domain.ErrValidation)
 	}
-	if limiter.MaxTenants < 0 || !limiter.Turn.valid() || !limiter.Tool.valid() || !limiter.Model.valid() ||
+	if limiter.MaxTenants <= 0 || !limiter.Turn.valid() || !limiter.Tool.valid() || !limiter.Model.valid() ||
 		!limiter.FleetTurn.valid() || !limiter.FleetTool.valid() || !limiter.FleetModel.valid() {
 		return fmt.Errorf("tenant rate limiter: rates require positive rate and burst")
 	}

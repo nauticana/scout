@@ -31,6 +31,8 @@ type BaseDraftTester struct {
 	Operation string
 	// Build binds one model and prompt into an executor that prices itself.
 	Build func(ctx context.Context, reference domain.ModelReference, agentID string, sections []domain.CompiledPromptSection) (contract.PricedAgent, error)
+	// BuildTenant binds a tenant-scoped executor when model governance needs identity.
+	BuildTenant func(ctx context.Context, tenantID int64, reference domain.ModelReference, agentID string, sections []domain.CompiledPromptSection) (contract.PricedAgent, error)
 	// FallbackLanguage resolves a draft with no prompt in the requested language.
 	FallbackLanguage string
 	// MinimumCost floors the charge so work that ran is never free.
@@ -43,7 +45,7 @@ type BaseDraftTester struct {
 var _ contract.AgentDraftTestExecutor = (*BaseDraftTester)(nil)
 
 func (tester *BaseDraftTester) Execute(ctx context.Context, actor domain.StudioActor, request domain.AgentTestRequest, definition domain.AgentDefinition) (domain.AgentTestResult, error) {
-	if tester == nil || tester.Build == nil {
+	if tester == nil || tester.Build == nil && tester.BuildTenant == nil {
 		return domain.AgentTestResult{}, fmt.Errorf("draft tester: an agent builder is required")
 	}
 	if definition.Models.Text == nil {
@@ -61,7 +63,12 @@ func (tester *BaseDraftTester) Execute(ctx context.Context, actor domain.StudioA
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	agent, err := tester.Build(ctx, *definition.Models.Text, definition.AgentID, compiled.Sections)
+	var agent contract.PricedAgent
+	if tester.BuildTenant != nil {
+		agent, err = tester.BuildTenant(ctx, actor.TenantID, *definition.Models.Text, definition.AgentID, compiled.Sections)
+	} else {
+		agent, err = tester.Build(ctx, *definition.Models.Text, definition.AgentID, compiled.Sections)
+	}
 	if err != nil {
 		return domain.AgentTestResult{}, fmt.Errorf("%w: %v", domain.ErrNotReady, err)
 	}

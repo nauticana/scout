@@ -28,7 +28,7 @@ func (s baselineSelector) Select(context.Context, int64, string, string) (domain
 }
 
 func TestKeelPromptSourceRepositoryResolve(t *testing.T) {
-	repository := &KeelPromptSourceRepository{
+	repository := &PromptRepository{
 		Selector: baselineSelector{keys: []string{"tenant-plan", "global"}},
 		qs: promptSourceFake{rows: map[string][][]any{
 			qPromptAgent: {{"writer"}},
@@ -58,7 +58,7 @@ func TestKeelPromptSourceRepositoryResolve(t *testing.T) {
 }
 
 func TestKeelPromptSourceRepositoryLanguages(t *testing.T) {
-	repository := &KeelPromptSourceRepository{
+	repository := &PromptRepository{
 		Selector: baselineSelector{keys: []string{"global"}},
 		qs: promptSourceFake{rows: map[string][][]any{
 			qPromptAgent:           {{"writer"}},

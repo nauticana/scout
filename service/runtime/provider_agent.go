@@ -2,8 +2,12 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
+
+	keelcommon "github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -20,15 +24,32 @@ type ProviderAgent struct {
 	renderer        contract.PromptRenderer
 	provider        contract.ModelProvider
 	media           contract.MediaProvider
+	tenant          domain.TenantContext
+	requestID       string
+	conversationID  string
 }
 
 var _ contract.AgentExecutor = (*ProviderAgent)(nil)
 
 // NewProviderAgent validates and freezes one executable provider binding.
 func NewProviderAgent(agentID string, reference domain.ModelReference, sections []domain.CompiledPromptSection, maxOutputTokens int64, renderer contract.PromptRenderer, provider contract.ModelProvider, media contract.MediaProvider) (*ProviderAgent, error) {
+	return newProviderAgent(agentID, reference, sections, maxOutputTokens, renderer, provider, media, domain.TenantContext{}, "", "")
+}
+
+// NewTenantProviderAgent binds tenant-scoped invocation identity to an agent.
+func NewTenantProviderAgent(agentID string, reference domain.ModelReference, sections []domain.CompiledPromptSection, maxOutputTokens int64, renderer contract.PromptRenderer, provider contract.ModelProvider, media contract.MediaProvider, tenant domain.TenantContext, requestID, conversationID string) (*ProviderAgent, error) {
+	if tenant.TenantID <= 0 {
+		return nil, fmt.Errorf("%w: tenant is required", domain.ErrValidation)
+	}
+	return newProviderAgent(agentID, reference, sections, maxOutputTokens, renderer, provider, media, tenant, requestID, conversationID)
+}
+
+func newProviderAgent(agentID string, reference domain.ModelReference, sections []domain.CompiledPromptSection, maxOutputTokens int64, renderer contract.PromptRenderer, provider contract.ModelProvider, media contract.MediaProvider, tenant domain.TenantContext, requestID, conversationID string) (*ProviderAgent, error) {
 	agentID = strings.TrimSpace(agentID)
 	reference.ProviderID = strings.TrimSpace(reference.ProviderID)
 	reference.ModelID = strings.TrimSpace(reference.ModelID)
+	requestID = strings.TrimSpace(requestID)
+	conversationID = strings.TrimSpace(conversationID)
 	if agentID == "" || reference.ProviderID == "" || reference.ModelID == "" {
 		return nil, fmt.Errorf("%w: agent, provider, and model are required", domain.ErrValidation)
 	}
@@ -49,6 +70,9 @@ func NewProviderAgent(agentID string, reference domain.ModelReference, sections 
 		renderer:        renderer,
 		provider:        provider,
 		media:           media,
+		tenant:          tenant,
+		requestID:       requestID,
+		conversationID:  conversationID,
 	}, nil
 }
 
@@ -57,14 +81,35 @@ func (agent *ProviderAgent) Generate(ctx context.Context, task domain.AgentTask)
 	if agent == nil || agent.provider == nil || agent.renderer == nil {
 		return domain.ModelResult{}, fmt.Errorf("%w: text generation is not configured", domain.ErrNotReady)
 	}
+	requestID, err := agent.modelRequestID(ctx)
+	if err != nil {
+		return domain.ModelResult{}, err
+	}
 	prompt := agent.renderer.Render(agent.agentID, agent.sections, task)
 	return agent.provider.Generate(ctx, domain.ModelSelection{
 		Provider: agent.reference.ProviderID,
 		Model:    agent.reference.ModelID,
 	}, domain.ModelRequest{
+		TenantContext:   agent.tenant,
+		RequestID:       requestID,
+		ConversationID:  agent.conversationID,
 		Prompt:          []byte(prompt),
 		MaxOutputTokens: agent.maxOutputTokens,
 	})
+}
+
+func (agent *ProviderAgent) modelRequestID(ctx context.Context) (string, error) {
+	if requestID := strings.TrimSpace(keelcommon.RequestIDFromContext(ctx)); requestID != "" {
+		return requestID, nil
+	}
+	if agent.requestID != "" {
+		return agent.requestID, nil
+	}
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate model request id: %w", err)
+	}
+	return "agent-" + hex.EncodeToString(value), nil
 }
 
 // GenerateImage executes one image request, overriding any prompt already on
@@ -73,6 +118,13 @@ func (agent *ProviderAgent) GenerateImage(ctx context.Context, prompt string, re
 	if agent == nil || agent.media == nil {
 		return nil, fmt.Errorf("%w: image generation is not supported", domain.ErrNotReady)
 	}
+	requestID, err := agent.modelRequestID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	request.TenantContext = agent.tenant
+	request.RequestID = requestID
+	request.ConversationID = agent.conversationID
 	request.Prompt = prompt
 	return agent.media.GenerateImage(ctx, agent.reference.ModelID, request)
 }
@@ -83,6 +135,13 @@ func (agent *ProviderAgent) GenerateVideo(ctx context.Context, prompt string, re
 	if agent == nil || agent.media == nil {
 		return nil, fmt.Errorf("%w: video generation is not supported", domain.ErrNotReady)
 	}
+	requestID, err := agent.modelRequestID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	request.TenantContext = agent.tenant
+	request.RequestID = requestID
+	request.ConversationID = agent.conversationID
 	request.Prompt = prompt
 	return agent.media.GenerateVideo(ctx, agent.reference.ModelID, request)
 }

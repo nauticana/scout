@@ -17,11 +17,6 @@ type TenantRateLimiter interface {
 	AllowModelCall(ctx context.Context, request domain.ModelRequest) error
 }
 
-// SharedCounter atomically adds to a fixed-window counter in a shared store.
-type SharedCounter interface {
-	IncrementByWithTTL(ctx context.Context, key string, n int64, window time.Duration) (int64, error)
-}
-
 // RetryAfterError carries advisory retry timing for a rejected operation.
 type RetryAfterError interface {
 	error

@@ -373,6 +373,8 @@ type TurnExecution struct {
 type TurnLedger struct {
 	DB     port.DatabaseRepository
 	Budget contract.TenantBudgetManager
+	// Admission limits new tenant turns; nil disables admission limiting.
+	Admission contract.TenantRateLimiter
 	// Namespace scopes advisory lock keys and turn URIs, e.g. "workspace".
 	Namespace string
 	// Currency is the model-catalog denomination every quote must price in.
@@ -566,6 +568,11 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 		(status != "queued" && status != "running") || release.AgentID == "" || release.Version == "" || len(release.Digest) != 64 ||
 		len([]rune(endUserRef)) > 200 {
 		return TurnState{}, false, fmt.Errorf("%w: invalid turn identity, status, or release", domain.ErrValidation)
+	}
+	if l.Admission != nil {
+		if err := l.Admission.AllowTurn(ctx, domain.TenantContext{TenantID: tenantID}); err != nil {
+			return TurnState{}, false, fmt.Errorf("admit tenant turn: %w", err)
+		}
 	}
 	ctx = context.WithoutCancel(ctx)
 	tx, err := l.DB.BeginTx(ctx, l.queryMap())

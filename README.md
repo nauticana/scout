@@ -109,9 +109,9 @@ The `contract` package remains flat so consumers use one stable import path. Con
 
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
-| `service/controlplane` | `control_plane.go`, `studio*.go` | `StudioService`, `KeelPromptSourceRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
+| `service/controlplane` | `control_plane.go`, `studio*.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
 | `service/dataplane` | `data_plane.go` | `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `MemorySessionCache`, `MemoryGraphCache`, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller` | Durable stores, non-authoritative caches, metrics, guardrails, and step executors |
-| `service/isolation` | `isolation.go` | `ExecutionGovernor`, `TenantRateLimiter`, `FairSlotLimiter`, `SlotCapacityScheduler`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector`, `DistributedRateLimiter` | Keel database, budget policy, shared counters, loop detection, and cost circuit breaking |
+| `service/isolation` | `isolation.go` | `ExecutionGovernor`, rate-limiter factory, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector` | Keel database, admission policy, budget policy, loop detection, and cost circuit breaking |
 | `service/knowledge` | `knowledge.go` | `BatchingEmbedder`, `HybridRetriever` | Batch embedding providers, retrieval legs, and rerankers |
 | `service/modelgateway` | `model_runtime.go` | `Gateway`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
 | `service/release` | `release_and_observability.go` | `ContractTestRunner` with bounded ordered concurrency | Governed test execution and assertion evaluation |
@@ -119,6 +119,8 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | `service/toolgateway` | `tool_gateway.go` | `GovernedGateway` and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
 
 These services enforce ordering and failure semantics but do not provide no-op infrastructure. Cache failures fall back to durable storage and are reported through `RuntimeMetrics`; durable writes complete before cache invalidation; model capacity is released on every unary or streaming terminal path; and tool calls cannot bypass authorization, egress, circuit, credential, or result validation boundaries.
+
+`dataplane.NewMemorySessionCache` and `NewMemoryGraphCache` expose the bounded internal adapters through public contracts. The owning composition supplies explicit capacity and TTL values and closes the cache at shutdown.
 
 Tests share focused fakes under `internal/fake`, reachable from every package in the module. Provider adapters, distributed queues, caches, secret stores, and product transports remain separate implementations behind injected contracts.
 
@@ -222,7 +224,7 @@ result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: provider.An
     domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: provider.DefaultMaxOutputTokens})
 ```
 
-`runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. Its `Purge` reads the `agent_run_retention_days` flag Scout seeds and drops activity past that horizon in bounded batches, so a product's periodic worker can drain a backlog across ticks instead of one long delete; a non-positive retention keeps activity forever. Products do not mirror the flag. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
+`runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. Its `Purge` accepts the app-loaded `agent_run_retention_days` value and deletes in bounded batches, so a periodic worker can drain a backlog across ticks instead of one long delete; zero retains activity forever. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
 
 `controlplane.ModelCatalog.Cost` prices a `domain.ModelUsage` — input and output tokens, generated images, whole video seconds — against `model_price`, returning integer minor units and the catalog currency. Token rates are per million and divide last, so rounding error stays below one minor unit; an unpriced model is an error rather than a free one. Never price usage in floating point: these are money amounts, and the currency exponent belongs to the currency, not the caller.
 
@@ -537,7 +539,7 @@ The queue supplies durability and backpressure. Fairness belongs in `FairTurnSch
 
 Limiters with a known retry time return `isolation.LimitError`, which preserves the domain sentinel and implements the optional `contract.RetryAfterError` capability. Hard budget denials do not invent a reset time. Streaming and retrieval use internal stage wrappers; durable fleet attribution belongs in structured observations rather than behavior in the value-only `domain/` package.
 
-`isolation.BudgetLedger` implements attempt-aware reserve-then-settle. A live attempt replays idempotently; a nonterminal turn may replace an expired attempt after fencing it. `Commit` records actual usage, including overruns, and `Expire` reclaims dead holds. Cost-breaker tracking capacity rejects in `Allow`; `Record` preserves completed work and counts records with an untracked scope. `isolation.DistributedRateLimiter` uses keel v1.2.49 `IncrementByWithTTL` and degrades to bounded local admission during store outages.
+`isolation.BudgetLedger` implements attempt-aware reserve-then-settle. A live attempt replays idempotently; a nonterminal turn may replace an expired attempt after fencing it. `Commit` records actual usage, including overruns, and `Expire` reclaims dead holds. Cost-breaker tracking capacity rejects in `Allow`; `Record` preserves completed work and counts records with an untracked scope. `isolation.NewTenantRateLimiter` builds the shared process limiter used by turn, tool, and model gateways; `modelgateway.NewFairCapacityScheduler` builds the tenant-fair model capacity pool.
 
 ### Streaming, cancellation, and reconnect
 

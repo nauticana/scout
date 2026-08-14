@@ -19,7 +19,7 @@ type MemoryLoopDetector struct {
 	Threshold int
 	// Window bounds how long idle history is retained; zero keeps it until Reset.
 	Window time.Duration
-	// MaxConversations bounds tracked history; zero uses a default.
+	// MaxConversations bounds tracked history.
 	MaxConversations int
 	// MaxFingerprints bounds history inside one conversation; default 1024.
 	MaxFingerprints int
@@ -34,11 +34,7 @@ var _ contract.LoopDetector = (*MemoryLoopDetector)(nil)
 
 func (detector *MemoryLoopDetector) init() {
 	detector.once.Do(func() {
-		capacity := detector.MaxConversations
-		if capacity <= 0 {
-			capacity = defaultMaxTenants
-		}
-		detector.states = lru.New[string, map[string]int](capacity, detector.Now)
+		detector.states = lru.New[string, map[string]int](detector.MaxConversations, detector.Now)
 	})
 }
 
@@ -47,8 +43,8 @@ func (detector *MemoryLoopDetector) Observe(ctx context.Context, tenantID int64,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if detector.Threshold <= 0 {
-		return fmt.Errorf("memory loop detector: threshold must be positive")
+	if detector.Threshold <= 0 || detector.MaxConversations <= 0 {
+		return fmt.Errorf("memory loop detector: threshold and max conversations must be positive")
 	}
 	if tenantID <= 0 || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(fingerprint) == "" {
 		return fmt.Errorf("%w: tenant, conversation, and fingerprint are required", domain.ErrValidation)

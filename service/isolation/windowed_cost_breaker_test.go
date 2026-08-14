@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/limiter"
 )
 
 func TestWindowedCostBreakerTripsPerScope(t *testing.T) {
 	now := time.Unix(0, 0)
 	breaker := &WindowedCostBreaker{
 		TenantLimit: 100, AgentLimit: 60, FleetLimit: 150,
-		Currency: "USD", Window: time.Minute, Now: func() time.Time { return now },
+		Currency: "USD", Window: time.Minute, MaxEntries: 4096, Now: func() time.Time { return now },
 	}
 	ctx := context.Background()
 	usage := func(cost int64) domain.Usage {
@@ -23,7 +24,7 @@ func TestWindowedCostBreakerTripsPerScope(t *testing.T) {
 	if err := breaker.Record(ctx, 1, "writer", usage(50)); err != nil {
 		t.Fatal(err)
 	}
-	var limitErr *LimitError
+	var limitErr *limiter.LimitError
 	err := breaker.Allow(ctx, 1, "writer", 20)
 	if !errors.As(err, &limitErr) || !errors.Is(err, domain.ErrCircuitOpen) || limitErr.Scope != "cost.agent" {
 		t.Fatalf("agent trip = %v", err)
@@ -57,7 +58,7 @@ func TestWindowedCostBreakerValidation(t *testing.T) {
 	if err := breaker.Allow(context.Background(), 1, "a", 1); err == nil {
 		t.Fatal("missing window must error")
 	}
-	configured := &WindowedCostBreaker{Window: time.Minute}
+	configured := &WindowedCostBreaker{Window: time.Minute, MaxEntries: 4096}
 	if err := configured.Allow(context.Background(), 0, "a", -1); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("validation = %v", err)
 	}

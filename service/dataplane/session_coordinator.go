@@ -19,7 +19,7 @@ type SessionCoordinator struct {
 	// CacheTimeout bounds invalidation after a durable write; default 1s.
 	CacheTimeout time.Duration
 
-	flights singleflight.Group[sessionKey, domain.SessionSnapshot]
+	flights singleflight.Group[domain.SessionKey, domain.SessionSnapshot]
 }
 
 // Load returns a valid cached snapshot or refreshes it from durable storage.
@@ -41,7 +41,7 @@ func (coordinator *SessionCoordinator) Load(ctx context.Context, tenantID int64,
 		_ = coordinator.invalidate(ctx, tenantID, conversationID)
 	}
 	// Concurrent misses for one conversation coalesce into a single durable load.
-	return coordinator.flights.Do(ctx, sessionKey{tenantID, conversationID}, func(loadCtx context.Context) (domain.SessionSnapshot, error) {
+	return coordinator.flights.Do(ctx, domain.SessionKey{TenantID: tenantID, ConversationID: conversationID}, func(loadCtx context.Context) (domain.SessionSnapshot, error) {
 		snapshot, err := coordinator.Store.Load(loadCtx, tenantID, conversationID)
 		if err != nil {
 			return domain.SessionSnapshot{}, fmt.Errorf("load session %q: %w", conversationID, err)

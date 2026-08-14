@@ -1,4 +1,4 @@
-package isolation
+package limiter
 
 import (
 	"fmt"

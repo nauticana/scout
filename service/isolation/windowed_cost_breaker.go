@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/limiter"
 )
 
 // WindowedCostBreaker trips tenant, agent, and fleet scopes when cost inside a sliding window exceeds its limit.
@@ -19,7 +20,7 @@ type WindowedCostBreaker struct {
 	Window                              time.Duration
 	// Buckets sets window resolution; zero uses six.
 	Buckets int
-	// MaxEntries bounds tenant and agent windows; default 4096 each.
+	// MaxEntries bounds tenant and agent windows.
 	MaxEntries int
 	Now        func() time.Time
 
@@ -38,8 +39,8 @@ func (breaker *WindowedCostBreaker) init() error {
 	if breaker.Window <= 0 {
 		return fmt.Errorf("windowed cost breaker: window must be positive")
 	}
-	if breaker.TenantLimit < 0 || breaker.AgentLimit < 0 || breaker.FleetLimit < 0 || breaker.MaxEntries < 0 {
-		return fmt.Errorf("windowed cost breaker: limits cannot be negative")
+	if breaker.TenantLimit < 0 || breaker.AgentLimit < 0 || breaker.FleetLimit < 0 || breaker.MaxEntries <= 0 {
+		return fmt.Errorf("windowed cost breaker: limits cannot be negative and max entries must be positive")
 	}
 	if breaker.TenantLimit > 0 || breaker.AgentLimit > 0 || breaker.FleetLimit > 0 {
 		if len(breaker.Currency) != 3 {
@@ -80,16 +81,16 @@ func (breaker *WindowedCostBreaker) Allow(ctx context.Context, tenantID int64, a
 	defer breaker.mu.Unlock()
 	retry := breaker.Window
 	if breaker.FleetLimit > 0 && exceedsCost(breaker.fleet.total(now, slot), projectedCostMinorUnits, breaker.FleetLimit) {
-		return &LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.fleet", After: retry}
+		return &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.fleet", After: retry}
 	}
 	if breaker.TenantLimit > 0 {
 		if w := breaker.tenants[tenantID]; w != nil && exceedsCost(w.total(now, slot), projectedCostMinorUnits, breaker.TenantLimit) {
-			return &LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.tenant", After: retry}
+			return &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.tenant", After: retry}
 		}
 	}
 	if breaker.AgentLimit > 0 {
 		if w := breaker.agents[agentKey(tenantID, agentID)]; w != nil && exceedsCost(w.total(now, slot), projectedCostMinorUnits, breaker.AgentLimit) {
-			return &LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.agent", After: retry}
+			return &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.agent", After: retry}
 		}
 	}
 	if err := breaker.reserveTrackingLocked(now, slot, tenantID, agentID); err != nil {
@@ -190,10 +191,10 @@ func (breaker *WindowedCostBreaker) reserveTrackingLocked(now time.Time, slot ti
 		missingAgent = breaker.AgentLimit > 0 && breaker.agents[agentWindowKey] == nil
 	}
 	if missingTenant && len(breaker.tenants) >= breaker.maxEntries() {
-		return &LimitError{Err: domain.ErrRateLimited, Scope: "cost.tenant.capacity", After: breaker.Window}
+		return &limiter.LimitError{Err: domain.ErrRateLimited, Scope: "cost.tenant.capacity", After: breaker.Window}
 	}
 	if missingAgent && len(breaker.agents) >= breaker.maxEntries() {
-		return &LimitError{Err: domain.ErrRateLimited, Scope: "cost.agent.capacity", After: breaker.Window}
+		return &limiter.LimitError{Err: domain.ErrRateLimited, Scope: "cost.agent.capacity", After: breaker.Window}
 	}
 	if missingTenant {
 		breaker.tenants[tenantID] = newCostWindow(breaker.Buckets)
@@ -211,10 +212,7 @@ func (breaker *WindowedCostBreaker) reserveTrackingLocked(now time.Time, slot ti
 }
 
 func (breaker *WindowedCostBreaker) maxEntries() int {
-	if breaker.MaxEntries > 0 {
-		return breaker.MaxEntries
-	}
-	return defaultMaxTenants
+	return breaker.MaxEntries
 }
 
 // sweepLocked drops windows whose retained cost is zero, bounding both maps.
@@ -233,46 +231,6 @@ func (breaker *WindowedCostBreaker) sweepLocked(now time.Time, slot time.Duratio
 
 func agentKey(tenantID int64, agentID string) string {
 	return strconv.FormatInt(tenantID, 10) + "/" + agentID
-}
-
-// costWindow is a ring of per-slot sums validated by slot epoch.
-type costWindow struct {
-	sums           []int64
-	marks          []int64
-	protectedUntil time.Time
-}
-
-func (w *costWindow) protect(now time.Time, window time.Duration) {
-	until := now.Add(window)
-	if until.After(w.protectedUntil) {
-		w.protectedUntil = until
-	}
-}
-
-func newCostWindow(buckets int) *costWindow {
-	return &costWindow{sums: make([]int64, buckets), marks: make([]int64, buckets)}
-}
-
-func (w *costWindow) add(now time.Time, slot time.Duration, v int64) {
-	epoch := now.UnixNano() / int64(slot)
-	index := int(epoch % int64(len(w.sums)))
-	if w.marks[index] != epoch {
-		w.marks[index] = epoch
-		w.sums[index] = 0
-	}
-	w.sums[index] += v
-}
-
-func (w *costWindow) total(now time.Time, slot time.Duration) int64 {
-	epoch := now.UnixNano() / int64(slot)
-	oldest := epoch - int64(len(w.sums)) + 1
-	var total int64
-	for index, mark := range w.marks {
-		if mark >= oldest && mark <= epoch {
-			total += w.sums[index]
-		}
-	}
-	return total
 }
 
 func exceedsCost(current, projected, limit int64) bool {

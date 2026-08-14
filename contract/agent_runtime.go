@@ -84,7 +84,7 @@ type PricedAgent interface {
 // owns. Deletes are bounded so a scheduled caller drains a backlog over
 // several ticks.
 type AgentRunPurger interface {
-	Purge(ctx context.Context, limit int) (int64, error)
+	Purge(ctx context.Context, retentionDays, limit int) (int64, error)
 }
 
 // AgentOperationalEventRecorder persists a tenant-scoped operational failure

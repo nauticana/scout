@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keelport "github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -46,16 +46,16 @@ SELECT s.id, s.caption, s.description, s.display_order, o.overwrite, o.instructi
 	qPromptAgentLanguages:  `SELECT language_code FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ?`,
 }
 
-// KeelPromptSourceRepository resolves Scout prompt tables through Keel named SQL.
-type KeelPromptSourceRepository struct {
-	DB       keelport.DatabaseRepository
+// PromptRepository resolves Scout prompt tables through Keel named SQL.
+type PromptRepository struct {
+	DB       port.DatabaseRepository
 	Selector contract.PromptBaselineSelector
 
 	once sync.Once
-	qs   keelport.QueryService
+	qs   port.QueryService
 }
 
-func (r *KeelPromptSourceRepository) init(ctx context.Context) error {
+func (r *PromptRepository) init(ctx context.Context) error {
 	if r.Selector == nil {
 		return fmt.Errorf("prompt source repository: selector is required")
 	}
@@ -69,7 +69,7 @@ func (r *KeelPromptSourceRepository) init(ctx context.Context) error {
 	return nil
 }
 
-func (r *KeelPromptSourceRepository) agentKind(ctx context.Context, tenantID int64, agentID string) (string, error) {
+func (r *PromptRepository) agentKind(ctx context.Context, tenantID int64, agentID string) (string, error) {
 	if err := r.init(ctx); err != nil {
 		return "", err
 	}
@@ -84,7 +84,7 @@ func (r *KeelPromptSourceRepository) agentKind(ctx context.Context, tenantID int
 }
 
 // Resolve returns ordered baseline, tenant-default, and agent-override rows.
-func (r *KeelPromptSourceRepository) Resolve(ctx context.Context, tenantID int64, agentID, languageCode string) (domain.ResolvedPrompts, error) {
+func (r *PromptRepository) Resolve(ctx context.Context, tenantID int64, agentID, languageCode string) (domain.ResolvedPrompts, error) {
 	agentKind, err := r.agentKind(ctx, tenantID, agentID)
 	if err != nil {
 		return domain.ResolvedPrompts{}, err
@@ -107,7 +107,7 @@ func (r *KeelPromptSourceRepository) Resolve(ctx context.Context, tenantID int64
 	}, nil
 }
 
-func (r *KeelPromptSourceRepository) resolveRows(ctx context.Context, tenantID int64, agentID, agentKind, languageCode string, rank map[string]int) ([]domain.PromptSourceRow, string, error) {
+func (r *PromptRepository) resolveRows(ctx context.Context, tenantID int64, agentID, agentKind, languageCode string, rank map[string]int) ([]domain.PromptSourceRow, string, error) {
 	base, err := r.qs.Query(ctx, qPromptBaselines, agentKind, languageCode)
 	if err != nil {
 		return nil, "", fmt.Errorf("load prompt baselines: %w", err)
@@ -176,7 +176,7 @@ func sourceRow(row []any, level domain.PromptSourceLevel, key string, overwrite 
 }
 
 // Languages lists every language present in the selected inheritance chain.
-func (r *KeelPromptSourceRepository) Languages(ctx context.Context, tenantID int64, agentID string) ([]string, error) {
+func (r *PromptRepository) Languages(ctx context.Context, tenantID int64, agentID string) ([]string, error) {
 	agentKind, err := r.agentKind(ctx, tenantID, agentID)
 	if err != nil {
 		return nil, err
@@ -232,4 +232,4 @@ func baselineRank(keys []string) map[string]int {
 	return rank
 }
 
-var _ contract.PromptSourceRepository = (*KeelPromptSourceRepository)(nil)
+var _ contract.PromptSourceRepository = (*PromptRepository)(nil)

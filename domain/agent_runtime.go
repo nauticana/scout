@@ -22,14 +22,20 @@ type AgentTask struct {
 
 // ImageRequest bounds one image generation call.
 type ImageRequest struct {
-	Prompt      string
-	Count       int32
-	AspectRatio string
-	StyleHint   string
+	TenantContext  TenantContext
+	RequestID      string
+	ConversationID string
+	Prompt         string
+	Count          int32
+	AspectRatio    string
+	StyleHint      string
 }
 
 // VideoRequest bounds one video generation call.
 type VideoRequest struct {
+	TenantContext   TenantContext
+	RequestID       string
+	ConversationID  string
 	Prompt          string
 	Count           int32
 	DurationSeconds int32

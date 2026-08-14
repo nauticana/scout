@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	keelcommon "github.com/nauticana/keel/common"
+
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
@@ -39,7 +41,8 @@ func TestPublishedAgentRuntimeBindsDisabledReleaseThroughLiveResolver(t *testing
 		MaxOutputTokens: 512,
 	}
 
-	resolved, err := resolver.Resolve(context.Background(), 42, "writer", "de-DE", "conversation")
+	ctx := keelcommon.WithRequestID(context.Background(), "request-42")
+	resolved, err := resolver.Resolve(ctx, 42, "writer", "de-DE", "conversation")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -55,11 +58,14 @@ func TestPublishedAgentRuntimeBindsDisabledReleaseThroughLiveResolver(t *testing
 	if resolved.Text() == nil || resolved.Image() == nil || resolved.Video() == nil || len(providerFactory.references) != 3 {
 		t.Fatalf("resolved executors or references missing: %+v", providerFactory.references)
 	}
-	if _, err = resolved.Text().Generate(context.Background(), domain.AgentTask{Task: "Write"}); err != nil {
+	if _, err = resolved.Text().Generate(ctx, domain.AgentTask{Task: "Write"}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	if !strings.Contains(string(provider.request.Prompt), "Task: Write") {
 		t.Fatalf("default renderer prompt = %q", provider.request.Prompt)
+	}
+	if provider.request.TenantContext.TenantID != 42 || provider.request.RequestID != "request-42" || provider.request.ConversationID != "conversation" {
+		t.Fatalf("model invocation identity = %+v", provider.request)
 	}
 }
 

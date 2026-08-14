@@ -11,7 +11,7 @@ The study set is not scaffolding to copy. It is a catalogue of mechanisms that c
 | A1 | `isolation.TenantRateLimiter` — tenant × fleet buckets per lane, full-bucket-only sweep |
 | A2 | `isolation.LimitError` + optional `contract.RetryAfterError` capability |
 | A3 + E4 | attempt-aware `isolation.BudgetLedger` with expiry fencing, actual settlement, and bounded `Expire` |
-| A4 | `isolation.DistributedRateLimiter` over `contract.SharedCounter`; keel v1.2.49 supplies `cache.IncrementByWithTTL` |
+| A4 | Distributed admission remains open; the prior one-key counter primitive could not atomically enforce tenant and fleet scopes |
 | A5 | `isolation.FairSlotLimiter` (round-robin) + weighted `SlotCapacityScheduler`; the existing turn contract stays one-slot |
 | A6 | `modelgateway.AdaptiveCapacityScheduler` (latency-gradient AIMD) |
 | A7 | `isolation.WindowedCostBreaker` — pre-work capacity admission and non-failing completed records |
@@ -139,7 +139,7 @@ The reservation caller estimates prompt tokens plus `MaxOutputTokens` and prices
 
 ### A4. Distributed limiter with local fallback, over keel's existing cache
 
-**Gap.** Scout's recommended topology runs several `conversation-api` replicas. A purely local limiter enforces *R × limit*. There is no shared-counter contract in Scout at all.
+**Gap.** Scout's recommended topology runs several `conversation-api` replicas. A purely local limiter enforces *R × limit*, while the available one-key increment cannot atomically enforce both tenant and fleet scopes.
 
 **Proposal.** `service/isolation/distributed_rate_limiter.go`:
 
@@ -150,7 +150,7 @@ The reservation caller estimates prompt tokens plus `MaxOutputTokens` and prices
 
 The local limiter cannot be both an unconditional fast-path admission and a second full distributed limit without changing the effective policy. In healthy operation the shared counter remains authoritative; the local ceiling protects the process and bounds the chosen fail-open behavior.
 
-**keel note.** Keel v1.2.49 added `cache.CacheService.IncrementByWithTTL` to its memory and Redis/Valkey adapters. Scout still depends on the narrow `SharedCounter` subset, so the limiter does not inherit unrelated cache operations.
+**keel note.** A future backend contract needs one atomic operation covering every charged scope. The earlier `SharedCounter` subset was removed because composing independent increments could consume one scope while rejecting another.
 
 **Owner.** keel for the atomic-counter capability and backend implementations; Scout for limiter policy and composition.
 
@@ -358,7 +358,7 @@ Evolve the current interface through an optional stateful-output capability or t
 
 ### C1. Bounded local cache adapters for the reference data plane
 
-**Gap.** `SessionCoordinator` and `DefinitionResolver` both return an error when their cache is nil. A downstream cannot use those compositions until it has written `HotSessionCache` and `ExecutionGraphCache` adapters, even though invariant 6 makes both caches non-authoritative. The rest of Scout, including `PublishedAgentRuntime`, is not blocked by this gap.
+**Status.** `dataplane.NewMemorySessionCache` and `NewMemoryGraphCache` expose bounded, closable local adapters with explicit capacity and TTL. `SessionCoordinator` and `DefinitionResolver` accept those adapters through their existing contracts. Distributed adapters remain downstream choices.
 
 **Proposal.** Put a bounded TTL/LRU memory-cache primitive in keel, then add thin Scout adapters that serialize and identity-check `SessionSnapshot` and immutable `ExecutionGraph` values. Configure explicit maximum entries/bytes and TTL; expose `Close()` so the owning binary stops any sweeper deterministically. This gives local development and single-process deployments a safe default without duplicating generic cache mechanics in Scout.
 
@@ -370,7 +370,7 @@ Evolve the current interface through an optional stateful-output capability or t
 
 ### C2. Singleflight on every cache-miss path
 
-**Gap.** Today only `DefinitionResolver.Resolve` and `SessionCoordinator.Load` follow read-cache → miss → durable load → populate, with no coalescing. `PublishedAgentResolver` queries the database directly and `ReadinessResolver` performs one bulk catalog call; they are not current singleflight call sites. A publish/rollout can still make many workers miss the same new immutable graph simultaneously, and a hot session can stampede its store.
+**Status.** `DefinitionResolver.Resolve` and `SessionCoordinator.Load` coalesce concurrent misses by immutable graph key and tenant conversation key. `PublishedAgentResolver` and `ReadinessResolver` are not cache-miss call sites.
 
 **Proposal.** Reuse `golang.org/x/sync/singleflight` if its cancellation/lifetime semantics fit, or add a reusable load-coalescing primitive to keel; do not create a generic Scout-only package. Apply it to the two real cache-miss paths. Two details from `q42` are easy to get wrong: the shared load must not inherit only the first waiter's cancellation, and it still needs its own bounded timeout so a detached load cannot live forever; publish the result *before* waking waiters so they get a happens-before edge. Consider short negative caching only for immutable definitions that are definitively absent, not for sessions whose creation may be racing the read.
 

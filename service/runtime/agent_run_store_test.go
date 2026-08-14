@@ -77,9 +77,9 @@ func (*agentRunQueryFake) GenID() int64 { return 0 }
 
 func TestAgentRunStorePurgeIsBoundedAndOptional(t *testing.T) {
 	query := &agentRunQueryFake{rows: map[string][][]any{qPurgeAgentRuns: {{int64(1)}, {int64(2)}}}}
-	store := &AgentRunStore{qs: query, RetentionDays: 30}
+	store := &AgentRunStore{qs: query}
 
-	purged, err := store.Purge(context.Background(), 200)
+	purged, err := store.Purge(context.Background(), 30, 200)
 	if err != nil {
 		t.Fatalf("Purge: %v", err)
 	}
@@ -91,14 +91,16 @@ func TestAgentRunStorePurgeIsBoundedAndOptional(t *testing.T) {
 	}
 
 	query.args = map[string][]any{}
-	forever := &AgentRunStore{qs: query, RetentionDays: -1}
-	if purged, err = forever.Purge(context.Background(), 200); err != nil || purged != 0 {
-		t.Fatalf("non-positive retention must keep everything: purged=%d err=%v", purged, err)
+	if purged, err = store.Purge(context.Background(), 0, 200); err != nil || purged != 0 {
+		t.Fatalf("zero retention must keep everything: purged=%d err=%v", purged, err)
 	}
 	if _, ran := query.args[qPurgeAgentRuns]; ran {
-		t.Fatal("non-positive retention must not issue a delete")
+		t.Fatal("zero retention must not issue a delete")
 	}
-	if _, err = store.Purge(context.Background(), 0); !errors.Is(err, domain.ErrValidation) {
+	if _, err = store.Purge(context.Background(), -1, 200); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("negative retention error = %v", err)
+	}
+	if _, err = store.Purge(context.Background(), 30, 0); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("unbounded purge error = %v", err)
 	}
 }

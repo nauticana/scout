@@ -1,4 +1,4 @@
-package isolation
+package limiter
 
 import (
 	"context"
@@ -12,9 +12,10 @@ import (
 func TestTenantRateLimiterEnforcesTenantAndFleet(t *testing.T) {
 	now := time.Unix(0, 0)
 	limiter := &TenantRateLimiter{
-		Turn:      RateLimit{PerSecond: 1, Burst: 2},
-		FleetTurn: RateLimit{PerSecond: 1, Burst: 3},
-		Now:       func() time.Time { return now },
+		Turn:       RateLimit{PerSecond: 1, Burst: 2},
+		FleetTurn:  RateLimit{PerSecond: 1, Burst: 3},
+		MaxTenants: 4096,
+		Now:        func() time.Time { return now },
 	}
 	ctx := context.Background()
 	tenant := domain.TenantContext{TenantID: 1}
@@ -50,7 +51,7 @@ func TestTenantRateLimiterEnforcesTenantAndFleet(t *testing.T) {
 }
 
 func TestTenantRateLimiterLanesAreIndependent(t *testing.T) {
-	limiter := &TenantRateLimiter{Turn: RateLimit{PerSecond: 1, Burst: 1}}
+	limiter := &TenantRateLimiter{Turn: RateLimit{PerSecond: 1, Burst: 1}, MaxTenants: 4096}
 	ctx := context.Background()
 	tenant := domain.TenantContext{TenantID: 7}
 
@@ -94,7 +95,7 @@ func TestTenantRateLimiterCapAndSweep(t *testing.T) {
 }
 
 func TestTenantRateLimiterValidation(t *testing.T) {
-	limiter := &TenantRateLimiter{}
+	limiter := &TenantRateLimiter{MaxTenants: 4096}
 	if err := limiter.AllowTurn(context.Background(), domain.TenantContext{}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("validation = %v", err)
 	}
@@ -106,7 +107,7 @@ func TestTenantRateLimiterValidation(t *testing.T) {
 }
 
 func TestTenantRateLimiterRejectsPartialConfiguration(t *testing.T) {
-	limiter := &TenantRateLimiter{Turn: RateLimit{PerSecond: 1}}
+	limiter := &TenantRateLimiter{Turn: RateLimit{PerSecond: 1}, MaxTenants: 4096}
 	if err := limiter.AllowTurn(context.Background(), domain.TenantContext{TenantID: 1}); err == nil {
 		t.Fatal("partial rate configuration must fail")
 	}

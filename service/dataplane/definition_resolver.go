@@ -10,13 +10,27 @@ import (
 	"github.com/nauticana/scout/internal/singleflight"
 )
 
+type definitionKey struct {
+	tenantID int64
+	agentID  string
+	version  string
+}
+
 // DefinitionResolver reads immutable graphs through a non-authoritative cache.
 type DefinitionResolver struct {
 	Repository contract.ExecutionGraphRepository
 	Cache      contract.ExecutionGraphCache
 	Metrics    contract.RuntimeMetrics
 
-	flights singleflight.Group[graphKey, domain.ExecutionGraph]
+	flights singleflight.Group[definitionKey, domain.ExecutionGraph]
+}
+
+// NewDefinitionResolver builds an execution-graph resolver.
+func NewDefinitionResolver(repository contract.ExecutionGraphRepository, cache contract.ExecutionGraphCache, metrics contract.RuntimeMetrics) (*DefinitionResolver, error) {
+	if repository == nil || cache == nil || metrics == nil {
+		return nil, fmt.Errorf("definition resolver: repository, cache, and metrics are required")
+	}
+	return &DefinitionResolver{Repository: repository, Cache: cache, Metrics: metrics}, nil
 }
 
 // Resolve returns a matching cached graph or refreshes it from durable storage.
@@ -39,8 +53,7 @@ func (resolver *DefinitionResolver) Resolve(ctx context.Context, tenantID int64,
 			resolver.recordCacheError(ctx, tenantID, "invalidate", err)
 		}
 	}
-	// A publish makes every worker miss at once; one flight covers them all.
-	return resolver.flights.Do(ctx, graphKey{tenantID, agentID, version}, func(loadCtx context.Context) (domain.ExecutionGraph, error) {
+	return resolver.flights.Do(ctx, definitionKey{tenantID, agentID, version}, func(loadCtx context.Context) (domain.ExecutionGraph, error) {
 		graph, err := resolver.Repository.Get(loadCtx, tenantID, agentID, version)
 		if err != nil {
 			return domain.ExecutionGraph{}, fmt.Errorf("load execution graph %q version %q: %w", agentID, version, err)

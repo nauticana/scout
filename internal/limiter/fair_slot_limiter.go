@@ -1,4 +1,4 @@
-package isolation
+package limiter
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 // so no tenant monopolizes capacity and a large request cannot starve behind small ones.
 type FairSlotLimiter struct {
 	Capacity int
-	// MaxWaiters bounds queued acquisitions; default 4096.
+	// MaxWaiters bounds queued acquisitions.
 	MaxWaiters int
 
 	mu      sync.Mutex
@@ -45,8 +45,8 @@ func (limiter *FairSlotLimiter) acquire(ctx context.Context, tenant domain.Tenan
 	if limiter.Capacity <= 0 {
 		return nil, fmt.Errorf("fair slot limiter: capacity must be positive")
 	}
-	if limiter.MaxWaiters < 0 {
-		return nil, fmt.Errorf("fair slot limiter: max waiters cannot be negative")
+	if limiter.MaxWaiters <= 0 {
+		return nil, fmt.Errorf("fair slot limiter: max waiters must be positive")
 	}
 	if tenant.TenantID <= 0 || weight <= 0 {
 		return nil, fmt.Errorf("%w: tenant and positive weight are required", domain.ErrValidation)
@@ -63,11 +63,7 @@ func (limiter *FairSlotLimiter) acquire(ctx context.Context, tenant domain.Tenan
 	if limiter.tenants == nil {
 		limiter.tenants = make(map[int64]*slotQueue)
 	}
-	maxWaiters := limiter.MaxWaiters
-	if maxWaiters <= 0 {
-		maxWaiters = defaultMaxTenants
-	}
-	if limiter.waiting >= maxWaiters {
+	if limiter.waiting >= limiter.MaxWaiters {
 		limiter.mu.Unlock()
 		return nil, fmt.Errorf("%w: concurrency queue capacity reached", domain.ErrRateLimited)
 	}
