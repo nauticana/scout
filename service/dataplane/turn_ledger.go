@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	keelcommon "github.com/nauticana/keel/common"
-	keelport "github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -326,7 +326,7 @@ RETURNING runtime.turn_no`,
 // TurnLedgerQueries returns the ledger's named-SQL map, for workers that
 // compose job-keyed transitions inside their own transactions.
 func TurnLedgerQueries() map[string]string {
-	return keelcommon.MergeMaps(turnLedgerQueries)
+	return common.MergeMaps(turnLedgerQueries)
 }
 
 // TurnState is one governed turn joined with its reservation lease.
@@ -372,7 +372,7 @@ type TurnExecution struct {
 // reservation fencing, staged results, and exactly-once settlement with one
 // usage event per settled turn.
 type TurnLedger struct {
-	DB     keelport.DatabaseRepository
+	DB     port.DatabaseRepository
 	Budget contract.TenantBudgetManager
 	// Namespace scopes advisory lock keys and turn URIs, e.g. "workspace".
 	Namespace string
@@ -386,15 +386,22 @@ type TurnLedger struct {
 	Metrics BaseRecorder
 	// OnSettled runs inside the finalization transaction, after the
 	// usage-event insert, for consumer-side accounting mirrors.
-	OnSettled func(ctx context.Context, qs keelport.QueryService, turn TurnState, usage domain.Usage) error
+	OnSettled func(ctx context.Context, qs port.QueryService, turn TurnState, usage domain.Usage) error
+	// ExtraQueries joins the ledger's transaction query maps so OnSettled and
+	// persist callbacks can run consumer-named statements atomically.
+	ExtraQueries map[string]string
 
 	once sync.Once
-	qs   keelport.QueryService
+	qs   port.QueryService
 }
 
-func (l *TurnLedger) queries(ctx context.Context) keelport.QueryService {
-	l.once.Do(func() { l.qs = l.DB.GetQueryService(ctx, turnLedgerQueries) })
+func (l *TurnLedger) queries(ctx context.Context) port.QueryService {
+	l.once.Do(func() { l.qs = l.DB.GetQueryService(ctx, l.queryMap()) })
 	return l.qs
+}
+
+func (l *TurnLedger) queryMap() map[string]string {
+	return common.MergeMaps(turnLedgerQueries, l.ExtraQueries)
 }
 
 func (l *TurnLedger) inputURI(requestID string) string {
@@ -411,7 +418,7 @@ func (l *TurnLedger) NormalizeRequestID(ctx context.Context, requestID string) s
 	if requestID == "" {
 		return fmt.Sprintf("%s-%d", l.Namespace, l.queries(ctx).GenID())
 	}
-	return keelcommon.TruncateRunes(requestID, 64)
+	return common.TruncateRunes(requestID, 64)
 }
 
 // DigestStrings canonicalizes turn input for the idempotency conflict check.
@@ -469,19 +476,19 @@ func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID str
 		return TurnState{}, false, fmt.Errorf("decode turn: expected 26 columns, got %d", len(row))
 	}
 	state := TurnState{
-		TenantID: keelcommon.AsInt64(row[0]), ConversationID: keelcommon.AsString(row[1]),
-		TurnNo: keelcommon.AsInt64(row[2]), RequestID: keelcommon.AsString(row[3]),
-		Status: keelcommon.AsString(row[4]), InputDigest: keelcommon.AsString(row[5]),
-		ResponseDigest: keelcommon.AsString(row[6]), TaskKind: keelcommon.AsString(row[7]),
-		InputSummary: keelcommon.AsString(row[8]), ResultKind: keelcommon.AsString(row[9]),
-		ResultPayload: keelcommon.AsString(row[10]), ErrorText: keelcommon.AsString(row[11]),
+		TenantID: common.AsInt64(row[0]), ConversationID: common.AsString(row[1]),
+		TurnNo: common.AsInt64(row[2]), RequestID: common.AsString(row[3]),
+		Status: common.AsString(row[4]), InputDigest: common.AsString(row[5]),
+		ResponseDigest: common.AsString(row[6]), TaskKind: common.AsString(row[7]),
+		InputSummary: common.AsString(row[8]), ResultKind: common.AsString(row[9]),
+		ResultPayload: common.AsString(row[10]), ErrorText: common.AsString(row[11]),
 		JobRef: optionalInt64(row[12]), ArtifactRef: optionalInt64(row[13]),
-		ReleaseDigest: keelcommon.AsString(row[14]), ActiveReservation: keelcommon.AsString(row[15]),
+		ReleaseDigest: common.AsString(row[14]), ActiveReservation: common.AsString(row[15]),
 		InputTokens: optionalInt64(row[16]), OutputTokens: optionalInt64(row[17]),
-		CostMinorUnits: optionalInt64(row[18]), Currency: keelcommon.AsString(row[19]),
-		ReservationStatus: keelcommon.AsString(row[20]), ReservationAttempt: optionalInt64(row[21]),
-		ReservationExpired: keelcommon.AsBool(row[22]),
-		AgentID:            keelcommon.AsString(row[23]), AgentVersion: keelcommon.AsString(row[24]),
+		CostMinorUnits: optionalInt64(row[18]), Currency: common.AsString(row[19]),
+		ReservationStatus: common.AsString(row[20]), ReservationAttempt: optionalInt64(row[21]),
+		ReservationExpired: common.AsBool(row[22]),
+		AgentID:            common.AsString(row[23]), AgentVersion: common.AsString(row[24]),
 	}
 	if queuedAt, ok := row[25].(time.Time); ok {
 		state.QueuedAt = queuedAt
@@ -541,7 +548,7 @@ func storedTurnError(state TurnState) error {
 // serialized per (tenant, end user, release).
 func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requestID, taskKind, inputSummary, inputDigest, status string, release domain.AgentReleaseReference) (TurnState, bool, error) {
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, turnLedgerQueries)
+	tx, err := l.DB.BeginTx(ctx, l.queryMap())
 	if err != nil {
 		return TurnState{}, false, fmt.Errorf("begin turn: %w", err)
 	}
@@ -568,7 +575,7 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 	if len(conversation.Rows) == 0 {
 		return TurnState{}, false, errors.New("load conversation: row missing after insert")
 	}
-	conversationID := keelcommon.AsString(conversation.Rows[0][0])
+	conversationID := common.AsString(conversation.Rows[0][0])
 	if _, err = tx.Query(ctx, qLedgerLock, fmt.Sprintf("%d:%s", tenantID, conversationID)); err != nil {
 		return TurnState{}, false, fmt.Errorf("lock conversation: %w", err)
 	}
@@ -580,10 +587,10 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 	}
 	created := len(inserted.Rows) > 0
 	if created {
-		turnNo := keelcommon.AsInt64(inserted.Rows[0][0])
+		turnNo := common.AsInt64(inserted.Rows[0][0])
 		if _, err = tx.Query(ctx, qLedgerInsertDetail,
 			tenantID, conversationID, turnNo, taskKind,
-			keelcommon.TruncateRunes(keelcommon.RedactForStorage(inputSummary), 400), release.Digest); err != nil {
+			common.TruncateRunes(common.RedactForStorage(inputSummary), 400), release.Digest); err != nil {
 			return TurnState{}, false, fmt.Errorf("insert turn detail: %w", err)
 		}
 	}
@@ -682,7 +689,7 @@ func modelReferenceOf(agent contract.PricedAgent) domain.ModelReference {
 func (l *TurnLedger) activate(ctx context.Context, state TurnState, reservation domain.BudgetReservation) error {
 	result, err := l.queries(ctx).Query(context.WithoutCancel(ctx), qLedgerActivate,
 		reservation.ReservationID, state.TenantID, state.ConversationID, state.TurnNo,
-		keelcommon.NullIfEmpty(state.ActiveReservation), reservation.ReservationID, reservation.Attempt)
+		common.NullIfEmpty(state.ActiveReservation), reservation.ReservationID, reservation.Attempt)
 	if err != nil {
 		return fmt.Errorf("activate reservation: %w", err)
 	}
@@ -693,7 +700,7 @@ func (l *TurnLedger) activate(ctx context.Context, state TurnState, reservation 
 }
 
 // AttachJob links the turn to an external job inside the caller's transaction.
-func (l *TurnLedger) AttachJob(ctx context.Context, qs keelport.QueryService, state TurnState, resultKind string, jobRef int64) error {
+func (l *TurnLedger) AttachJob(ctx context.Context, qs port.QueryService, state TurnState, resultKind string, jobRef int64) error {
 	attached, err := qs.Query(ctx, qLedgerAttachJob, resultKind, jobRef,
 		state.TenantID, state.ConversationID, state.TurnNo)
 	if err != nil {
@@ -705,13 +712,13 @@ func (l *TurnLedger) AttachJob(ctx context.Context, qs keelport.QueryService, st
 	return nil
 }
 
-func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecution, resultKind string, payload any, usage domain.Usage, persist func(context.Context, keelport.QueryService) error) (TurnState, error) {
+func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecution, resultKind string, payload any, usage domain.Usage, persist func(context.Context, port.QueryService) error) (TurnState, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return TurnState{}, fmt.Errorf("marshal turn result: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, turnLedgerQueries)
+	tx, err := l.DB.BeginTx(ctx, l.queryMap())
 	if err != nil {
 		return TurnState{}, fmt.Errorf("begin result staging: %w", err)
 	}
@@ -754,7 +761,7 @@ func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecutio
 
 func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, reservation domain.BudgetReservation) error {
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, turnLedgerQueries)
+	tx, err := l.DB.BeginTx(ctx, l.queryMap())
 	if err != nil {
 		return fmt.Errorf("begin finalization: %w", err)
 	}
@@ -804,7 +811,7 @@ func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, rese
 }
 
 // Complete stages the result, settles the reservation, and finalizes the turn.
-func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resultKind string, payload any, usage domain.Usage, persist func(context.Context, keelport.QueryService) error) error {
+func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resultKind string, payload any, usage domain.Usage, persist func(context.Context, port.QueryService) error) error {
 	state, err := l.stageSuccessful(ctx, execution, resultKind, payload, usage, persist)
 	if err != nil {
 		return err
@@ -831,7 +838,7 @@ func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resu
 
 // Fail stages the failure, releases the reservation, and returns the cause.
 func (l *TurnLedger) Fail(ctx context.Context, execution TurnExecution, cause error) error {
-	errText := keelcommon.TruncateRunes(keelcommon.RedactForStorage(cause.Error()), 400)
+	errText := common.TruncateRunes(common.RedactForStorage(cause.Error()), 400)
 	staged, err := l.queries(ctx).Query(context.WithoutCancel(ctx), qLedgerStageFailure,
 		errText, execution.Turn.TenantID, execution.Turn.ConversationID,
 		execution.Turn.TurnNo, execution.Reservation.ReservationID)
@@ -878,7 +885,7 @@ func (l *TurnLedger) finishFailed(ctx context.Context, state TurnState, reservat
 func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause error) error {
 	result, err := l.queries(ctx).Query(context.WithoutCancel(ctx), qLedgerFailUnreserved,
 		state.TenantID, state.ConversationID, state.TurnNo,
-		keelcommon.TruncateRunes(keelcommon.RedactForStorage(cause.Error()), 400))
+		common.TruncateRunes(common.RedactForStorage(cause.Error()), 400))
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("fail unreserved turn: %w", err))
 	}
@@ -889,7 +896,7 @@ func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause 
 }
 
 // InsertUsageEvent writes the settled usage event, once per (turn, category).
-func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs keelport.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error {
+func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error {
 	_, err := qs.Query(ctx, qLedgerInsertUsageEvent,
 		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
 		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
@@ -904,7 +911,7 @@ func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs keelport.QueryServ
 // query map must include TurnLedgerQueries().
 
 // SetJobTurnStatus moves a queued/running job turn to the given status.
-func SetJobTurnStatus(ctx context.Context, qs keelport.QueryService, tenantID, jobRef int64, taskKind, status string) (bool, error) {
+func SetJobTurnStatus(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, status string) (bool, error) {
 	result, err := qs.Query(ctx, qLedgerSetJobStatus, status, status, status, tenantID, jobRef, taskKind)
 	if err != nil {
 		return false, err
@@ -913,18 +920,18 @@ func SetJobTurnStatus(ctx context.Context, qs keelport.QueryService, tenantID, j
 }
 
 // ActivateJobReservation claims the job turn, replacing an expired attempt.
-func ActivateJobReservation(ctx context.Context, qs keelport.QueryService, tenantID, jobRef int64, taskKind, priorReservationID string, reservation domain.BudgetReservation) (string, int64, bool, error) {
+func ActivateJobReservation(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, priorReservationID string, reservation domain.BudgetReservation) (string, int64, bool, error) {
 	result, err := qs.Query(ctx, qLedgerActivateJob,
 		reservation.ReservationID, tenantID, jobRef, taskKind,
-		keelcommon.NullIfEmpty(priorReservationID), reservation.ReservationID)
+		common.NullIfEmpty(priorReservationID), reservation.ReservationID)
 	if err != nil || len(result.Rows) == 0 {
 		return "", 0, false, err
 	}
-	return keelcommon.AsString(result.Rows[0][0]), keelcommon.AsInt64(result.Rows[0][1]), true, nil
+	return common.AsString(result.Rows[0][0]), common.AsInt64(result.Rows[0][1]), true, nil
 }
 
 // StageJobUsage stages actual usage before settlement.
-func StageJobUsage(ctx context.Context, qs keelport.QueryService, tenantID, jobRef int64, taskKind, reservationID string, usage domain.Usage) (bool, error) {
+func StageJobUsage(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID string, usage domain.Usage) (bool, error) {
 	result, err := qs.Query(ctx, qLedgerStageJobUsage,
 		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
 		tenantID, jobRef, taskKind, reservationID)
@@ -935,7 +942,7 @@ func StageJobUsage(ctx context.Context, qs keelport.QueryService, tenantID, jobR
 }
 
 // AttachJobArtifact links the produced artifact to the claimed job turn.
-func AttachJobArtifact(ctx context.Context, qs keelport.QueryService, tenantID, jobRef, artifactRef int64, taskKind, reservationID string) (bool, error) {
+func AttachJobArtifact(ctx context.Context, qs port.QueryService, tenantID, jobRef, artifactRef int64, taskKind, reservationID string) (bool, error) {
 	result, err := qs.Query(ctx, qLedgerAttachJobArtifact,
 		artifactRef, tenantID, jobRef, taskKind, reservationID)
 	if err != nil {
@@ -945,7 +952,7 @@ func AttachJobArtifact(ctx context.Context, qs keelport.QueryService, tenantID, 
 }
 
 // CompleteJobTurn finalizes the job turn; fenced by the settled reservation.
-func CompleteJobTurn(ctx context.Context, qs keelport.QueryService, tenantID, jobRef int64, taskKind, reservationID, responseURI, responseDigest string) (bool, error) {
+func CompleteJobTurn(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID, responseURI, responseDigest string) (bool, error) {
 	result, err := qs.Query(ctx, qLedgerCompleteJobTurn,
 		responseURI, responseDigest, tenantID, jobRef, taskKind, reservationID)
 	if err != nil {
@@ -962,7 +969,7 @@ func turnLatency(state TurnState) time.Duration {
 }
 
 func optionalInt64(value any) int64 {
-	if number, ok := keelcommon.AsInt64OK(value); ok {
+	if number, ok := common.AsInt64OK(value); ok {
 		return number
 	}
 	return 0
