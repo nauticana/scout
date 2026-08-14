@@ -795,10 +795,11 @@ func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, rese
 		CostMinorUnits: state.CostMinorUnits, Currency: state.Currency,
 	}
 	subject := state.AgentID + "@" + state.AgentVersion
-	if err = l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject, usage); err != nil {
+	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject, usage)
+	if err != nil {
 		return err
 	}
-	if l.OnSettled != nil {
+	if inserted && l.OnSettled != nil {
 		if err = l.OnSettled(ctx, tx, state, usage); err != nil {
 			return fmt.Errorf("settle hook: %w", err)
 		}
@@ -895,16 +896,17 @@ func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause 
 	return cause
 }
 
-// InsertUsageEvent writes the settled usage event, once per (turn, category).
-func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error {
-	_, err := qs.Query(ctx, qLedgerInsertUsageEvent,
+// InsertUsageEvent writes the settled usage event, once per (turn, category);
+// inserted=false means a replay already wrote it.
+func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) (bool, error) {
+	result, err := qs.Query(ctx, qLedgerInsertUsageEvent,
 		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
 		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
 		tenantID, conversationID, turnNo, l.UsageCategory)
 	if err != nil {
-		return fmt.Errorf("persist usage event: %w", err)
+		return false, fmt.Errorf("persist usage event: %w", err)
 	}
-	return nil
+	return len(result.Rows) > 0, nil
 }
 
 // Job-keyed transitions for workers executing queued turns; the caller's
