@@ -14,6 +14,12 @@ const (
 	AgentMissingModel AgentReadiness = "missing_model"
 	AgentUnpublished  AgentReadiness = "unpublished"
 	AgentError        AgentReadiness = "error"
+	// Product-gate states a consumer may layer over a Ready agent: the plan
+	// does not include the capability, a required integration is not
+	// connected, or the calling user lacks the grant.
+	AgentNotEntitled      AgentReadiness = "not_entitled"
+	AgentNeedsIntegration AgentReadiness = "needs_integration"
+	AgentForbidden        AgentReadiness = "forbidden"
 )
 
 // PromptSourceLevel identifies one level in the shared prompt inheritance chain.

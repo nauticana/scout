@@ -1,0 +1,87 @@
+table: conversation_turn_detail
+comment: >-
+  One-to-one extension of conversation_turn for governed request/response
+  turns: the task kind, redacted input summary, typed result card (deliberate
+  JSON denormalization — read-only history rendered verbatim), the budget
+  reservation execution claim, and usage staged before settlement. job_ref and
+  artifact_ref are product-scoped references; downstreams add their own FK
+  constraints and uniqueness over them.
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: BIGINT
+  - name: task_kind
+    type: VARCHAR(30)
+  - name: input_summary
+    type: VARCHAR(400)
+  - name: result_kind
+    type: VARCHAR(30)
+    nullable: true
+  - name: result_payload
+    type: JSONB
+    nullable: true
+  - name: error_text
+    type: VARCHAR(400)
+    nullable: true
+  - name: job_ref
+    type: BIGINT
+    nullable: true
+  - name: artifact_ref
+    type: BIGINT
+    nullable: true
+  - name: release_digest
+    type: CHAR(64)
+  - name: active_reservation_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: staged_input_tokens
+    type: BIGINT
+    nullable: true
+  - name: staged_output_tokens
+    type: BIGINT
+    nullable: true
+  - name: staged_cost_minor_units
+    type: BIGINT
+    nullable: true
+  - name: staged_currency_code
+    type: CHAR(3)
+    nullable: true
+primary_key: [tenant_id, conversation_id, turn_no]
+foreign_keys:
+  - name: conversation_turn_details
+    columns: [tenant_id, conversation_id, turn_no]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, conversation_id, turn_no]
+  - name: reservation_conversation_turn_details
+    columns: [tenant_id, active_reservation_id]
+    references:
+      table: budget_reservation
+      columns: [tenant_id, reservation_id]
+  - name: conversation_turn_details_currency
+    columns: [staged_currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: conversation_turn_detail_job_uq
+    columns: [tenant_id, job_ref]
+    unique: true
+    where: job_ref IS NOT NULL
+  - name: conversation_turn_detail_artifact_uq
+    columns: [tenant_id, artifact_ref]
+    unique: true
+    where: artifact_ref IS NOT NULL
+checks:
+  - name: conversation_turn_detail_digest_ck
+    expression: CHAR_LENGTH(release_digest) = 64
+  - name: conversation_turn_detail_usage_ck
+    expression: >-
+      (staged_input_tokens IS NULL AND staged_output_tokens IS NULL
+       AND staged_cost_minor_units IS NULL AND staged_currency_code IS NULL)
+      OR
+      (staged_input_tokens >= 0 AND staged_output_tokens >= 0
+       AND staged_cost_minor_units >= 0 AND staged_currency_code IS NOT NULL)

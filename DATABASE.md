@@ -357,6 +357,27 @@ Relational rows prove tenant and version ownership. Document and chunk content r
 
 ```mermaid
 erDiagram
+    business_partner ||--o{ agent_ops_event : tenant_agent_ops_events
+
+    agent_tenant ||--o{ agent_conversation : conversations
+    agent_version ||--o{ agent_conversation : agent_version_conversations
+    agent_conversation ||--|{ conversation_turn : conversation_turns
+    turn_status ||--o{ conversation_turn : status_conversation_turns
+    conversation_turn ||--o{ step_checkpoint : step_checkpoints
+    agent_conversation ||--o| session_snapshot : session_snapshots
+    step_checkpoint ||--o| session_snapshot : checkpoint_session_snapshots
+    conversation_turn ||--o{ step_idempotency : step_idempotencies
+    step_checkpoint }o--|| execution_step : execution_step_checkpoints
+    step_idempotency }o--|| execution_step : execution_step_idempotencies
+    step_idempotency }o--|| idempotency_status : status_step_idempotencies
+    conversation_turn ||--o{ budget_reservation : budget_reservations
+    budget_reservation }o--|| reservation_status : status_budget_reservations
+    budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
+    conversation_turn ||--o{ usage_event : usage_events
+    conversation_turn ||--o| conversation_turn_detail : conversation_turn_details
+    usage_event }o--|| usage_category : category_usage_events
+    agent_version ||--o{ agent_run : agent_run_versions
+
     agent_tenant {
         bigint partner_id PK,FK
     }
@@ -387,6 +408,18 @@ erDiagram
     turn_status {
         varchar code PK
         boolean is_terminal
+    }
+    conversation_turn_detail {
+        bigint tenant_id PK,FK
+        varchar conversation_id PK,FK
+        bigint turn_no PK,FK
+        varchar task_kind
+        varchar input_summary
+        jsonb result_payload
+        bigint job_ref
+        bigint artifact_ref
+        varchar active_reservation_id FK
+        bigint staged_cost_minor_units
     }
     step_checkpoint {
         bigint tenant_id PK,FK
@@ -458,24 +491,6 @@ erDiagram
     business_partner {
         bigint id PK
     }
-
-    agent_tenant ||--o{ agent_conversation : conversations
-    agent_version ||--o{ agent_conversation : agent_version_conversations
-    agent_conversation ||--|{ conversation_turn : conversation_turns
-    turn_status ||--o{ conversation_turn : status_conversation_turns
-    conversation_turn ||--o{ step_checkpoint : step_checkpoints
-    agent_conversation ||--o| session_snapshot : session_snapshots
-    step_checkpoint ||--o| session_snapshot : checkpoint_session_snapshots
-    conversation_turn ||--o{ step_idempotency : step_idempotencies
-    step_checkpoint }o--|| execution_step : execution_step_checkpoints
-    step_idempotency }o--|| execution_step : execution_step_idempotencies
-    step_idempotency }o--|| idempotency_status : status_step_idempotencies
-    conversation_turn ||--o{ budget_reservation : budget_reservations
-    budget_reservation }o--|| reservation_status : status_budget_reservations
-    conversation_turn ||--o{ usage_event : usage_events
-    usage_event }o--|| usage_category : category_usage_events
-    agent_version ||--o{ agent_run : agent_run_versions
-    business_partner ||--o{ agent_ops_event : tenant_agent_ops_events
 ```
 
 `step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe.

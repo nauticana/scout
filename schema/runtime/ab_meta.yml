@@ -5,6 +5,7 @@ tables:
   - session_snapshot
   - step_idempotency
   - budget_reservation
+  - conversation_turn_detail
   - usage_event
   - agent_run
   - agent_ops_event
