@@ -181,8 +181,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/mark3labs/mcp-go v0.46.0 h1:8KRibF4wcKejbLsHxCA/QBVUr5fQ9nwz/n8lGqmaALo=
 github.com/mark3labs/mcp-go v0.46.0/go.mod h1:JKTC7R2LLVagkEWK7Kwu7DbmA6iIvnNAod6yrHiQMag=
-github.com/nauticana/keel v1.2.50 h1:bpiQaajG2KPpQ8IVZiQ6yzpxNNncbz/N4wm2o44JVqM=
-github.com/nauticana/keel v1.2.50/go.mod h1:86AD5lhs6rpOrl3bKIcT9xdaigdL9n7+iZMv6UO+C4c=
+github.com/nauticana/keel v1.2.51 h1:CQQ2neUmy2cI0+EgXrWrE1s6GbEWEtt3ozwL+jclluk=
+github.com/nauticana/keel v1.2.51/go.mod h1:86AD5lhs6rpOrl3bKIcT9xdaigdL9n7+iZMv6UO+C4c=
 github.com/nyaruka/phonenumbers v1.7.2 h1:biMUpF5TWuHtYXVzuNE7pSCjlA9tkvd8Vaq8b1CYaaQ=
 github.com/nyaruka/phonenumbers v1.7.2/go.mod h1:fsKPJ70O9JetEA4ggnJadYTFWwtGPvu/lETTXNXq6Cs=
 github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1U0=

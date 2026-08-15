@@ -332,7 +332,7 @@ Use released module coordinates; never use a local `replace` or filesystem depen
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.2.46
+go get github.com/nauticana/keel@v1.2.51
 ```
 
 Import Scout contracts and keel infrastructure directly:
@@ -513,7 +513,29 @@ The combined schema currently contains 38 selected keel tables and 56 Scout tabl
 
 ## Configuration and providers
 
-Every deployable setting is a Go `flag` declared in the downstream `internal/common/variables.go`. Load application configuration through keel after the database is available. Do not read environment variables directly.
+Only bootstrap settings needed before the database is available are Go `flag`s declared in the downstream `internal/common/variables.go`. Runtime settings live in `application_config_flag` and `application_config_value`; do not read environment variables directly.
+
+`scout.ScoutConfig` implements keel's `config.ApplicationConfig` for the flags seeded by Scout. A downstream loader calls `config.LoadRows` once, applies fresh keel, Scout, and application config sections, then publishes all three only after every section succeeds:
+
+```go
+rows, err := config.LoadRows(ctx, db, *common.NodeId)
+if err != nil {
+    return err
+}
+kc, sc, ac := &config.KeelConfig{}, &scout.ScoutConfig{}, &AppConfig{}
+for _, section := range []config.ApplicationConfig{kc, sc, ac} {
+    if err := section.Apply(rows); err != nil {
+        return err
+    }
+}
+config.SetConfig(kc)
+scout.SetConfig(sc)
+setAppConfig(ac)
+```
+
+For a binary with no application-specific config section, use `scout.LoadConfig(ctx, db, nodeID)` directly.
+
+Use that same loader for startup, `config.ReloadFunc`, and every worker's `LoadConfig` hook so a failed reload leaves all previously published snapshots active.
 
 Secrets contain only secret material and come from keel's configured secret provider. Schema rows store secret references, never secret values or credentials embedded in URLs.
 
