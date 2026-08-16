@@ -1,0 +1,27 @@
+table: knowledge_base_alias
+comment: Atomically swapped active version pointer of a knowledge base
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: active_version
+    type: VARCHAR(80)
+  - name: previous_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: swapped_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, knowledge_base_id]
+foreign_keys:
+  - name: knowledge_base_aliases
+    columns: [tenant_id, knowledge_base_id]
+    references:
+      table: knowledge_base
+      columns: [tenant_id, knowledge_base_id]
+  - name: active_knowledge_base_aliases
+    columns: [tenant_id, knowledge_base_id, active_version]
+    references:
+      table: knowledge_base_version
+      columns: [tenant_id, knowledge_base_id, knowledge_version]

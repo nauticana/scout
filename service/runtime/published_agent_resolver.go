@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,14 +12,18 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/release"
 )
 
-const qPublishedAgent = "scout_runtime_published_agent"
+const (
+	qPublishedAgent        = "scout_runtime_published_agent"
+	qPublishedAgentVersion = "scout_runtime_published_agent_version"
+)
 
 var publishedAgentQueries = map[string]string{
 	qPublishedAgent: `
 SELECT p.is_active, dep.stable_version, dep.canary_version, dep.canary_percentage,
-       stable.definition, canary.definition
+       stable.definition, canary.definition, p.agent_id
   FROM agent_alias a
   JOIN agent_profile p
     ON p.tenant_id = a.tenant_id AND p.agent_kind = a.agent_kind AND p.agent_id = a.agent_id
@@ -31,11 +33,18 @@ SELECT p.is_active, dep.stable_version, dep.canary_version, dep.canary_percentag
   LEFT JOIN agent_version canary
     ON canary.tenant_id = dep.tenant_id AND canary.agent_id = dep.agent_id AND canary.agent_version = dep.canary_version
  WHERE a.tenant_id = ? AND a.alias_id = ?`,
+	qPublishedAgentVersion: `
+SELECT definition
+  FROM agent_version
+ WHERE tenant_id = ? AND agent_id = ? AND agent_version = ?`,
 }
 
 // PublishedAgentResolver resolves one active alias to an immutable definition.
+// Versions, when set, owns the version choice (pins, cohorts, canary); without
+// it the resolver applies the reference stable/canary hash directly.
 type PublishedAgentResolver struct {
-	DB keelport.DatabaseRepository
+	DB       keelport.DatabaseRepository
+	Versions contract.AgentVersionTrafficManager
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -67,12 +76,9 @@ func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID in
 		return domain.AgentDefinition{}, domain.ErrNotReady
 	}
 	row := result.Rows[0]
-	version := common.AsString(row[1])
-	encoded := row[4]
-	canaryVersion := common.AsString(row[2])
-	if canaryVersion != "" && row[5] != nil && canarySelected(tenantID, aliasID, conversationID, int(common.AsInt64(row[3]))) {
-		version = canaryVersion
-		encoded = row[5]
+	version, encoded, err := resolver.selectVersion(ctx, tenantID, aliasID, conversationID, row)
+	if err != nil {
+		return domain.AgentDefinition{}, err
 	}
 	var definition domain.AgentDefinition
 	if err := json.Unmarshal([]byte(common.AsString(encoded)), &definition); err != nil {
@@ -87,15 +93,38 @@ func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID in
 	return definition, nil
 }
 
-func canarySelected(tenantID int64, aliasID, conversationID string, percentage int) bool {
-	if percentage <= 0 || conversationID == "" {
-		return false
+// selectVersion delegates to the traffic manager when one is configured and
+// otherwise applies the reference stable/canary split; a version outside the
+// deployment is loaded on demand.
+func (resolver *PublishedAgentResolver) selectVersion(ctx context.Context, tenantID int64, aliasID, conversationID string, row []any) (string, any, error) {
+	stableVersion, canaryVersion := common.AsString(row[1]), common.AsString(row[2])
+	if resolver.Versions == nil {
+		if canaryVersion != "" && row[5] != nil && release.CanarySelected(tenantID, aliasID, conversationID, int(common.AsInt64(row[3]))) {
+			return canaryVersion, row[5], nil
+		}
+		return stableVersion, row[4], nil
 	}
-	if percentage >= 100 {
-		return true
+	version, err := resolver.Versions.ResolveVersion(ctx, tenantID, common.AsString(row[6]), conversationID)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve agent version: %w", err)
 	}
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s", tenantID, aliasID, conversationID)))
-	return int(binary.BigEndian.Uint64(digest[:8])%100) < percentage
+	switch version {
+	case stableVersion:
+		return version, row[4], nil
+	case canaryVersion:
+		if row[5] == nil {
+			return "", nil, fmt.Errorf("%w: canary version %s has no definition", domain.ErrNotReady, version)
+		}
+		return version, row[5], nil
+	}
+	pinned, err := resolver.qs.Query(ctx, qPublishedAgentVersion, tenantID, common.AsString(row[6]), version)
+	if err != nil {
+		return "", nil, fmt.Errorf("load agent version %s: %w", version, err)
+	}
+	if len(pinned.Rows) == 0 {
+		return "", nil, fmt.Errorf("%w: agent version %s", domain.ErrNotFound, version)
+	}
+	return version, pinned.Rows[0][0], nil
 }
 
 func definitionHasLanguage(definition domain.AgentDefinition, languageCode string) bool {

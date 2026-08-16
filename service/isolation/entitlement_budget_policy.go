@@ -64,10 +64,10 @@ type EntitlementBudgetPolicy struct {
 	// UsageCategory is the usage_event category settled through the budget
 	// ledger, subtracted from the entitlement ledger to avoid double counting.
 	UsageCategory string
+	Now           func() time.Time
 
 	once sync.Once
 	qs   keelport.QueryService
-	now  func() time.Time
 }
 
 var _ contract.TenantBudgetPolicy = (*EntitlementBudgetPolicy)(nil)
@@ -85,9 +85,9 @@ func (policy *EntitlementBudgetPolicy) init(ctx context.Context) error {
 	return nil
 }
 
-func (policy *EntitlementBudgetPolicy) clock() time.Time {
-	if policy.now != nil {
-		return policy.now().UTC()
+func (policy *EntitlementBudgetPolicy) now() time.Time {
+	if policy.Now != nil {
+		return policy.Now().UTC()
 	}
 	return time.Now().UTC()
 }
@@ -111,7 +111,7 @@ func (policy *EntitlementBudgetPolicy) BudgetFor(ctx context.Context, tenantID i
 	}
 	limit := keelcommon.AsInt64(plan.Rows[0][0])
 	period := keelcommon.AsString(plan.Rows[0][1])
-	now := policy.clock()
+	now := policy.now()
 	windowStart, window, err := entitlementWindow(period, now)
 	if err != nil {
 		return domain.BudgetLimits{}, err

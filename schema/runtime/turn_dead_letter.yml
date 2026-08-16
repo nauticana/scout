@@ -1,0 +1,48 @@
+table: turn_dead_letter
+comment: Turn delivery parked after retry exhaustion, kept for investigation or replay
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: queue_id
+    type: BIGINT
+  - name: reason
+    type: VARCHAR(500)
+  - name: attempts
+    type: INTEGER
+  - name: input_uri
+    type: TEXT
+  - name: input_digest
+    type: CHAR(64)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: turn_dead_letter_seq
+  column: id
+foreign_keys:
+  - name: dead_letter_turns
+    columns: [tenant_id, request_id]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, request_id]
+  - name: dead_letter_queue_entries
+    columns: [queue_id]
+    references:
+      table: turn_queue
+      columns: [id]
+indexes:
+  - name: turn_dead_letter_queue_uq
+    columns: [queue_id]
+    unique: true
+  - name: turn_dead_letter_tenant_ix
+    columns: [tenant_id, created_at]
+checks:
+  - name: turn_dead_letter_attempts_ck
+    expression: attempts >= 0
+  - name: turn_dead_letter_digest_ck
+    expression: CHAR_LENGTH(input_digest) = 64

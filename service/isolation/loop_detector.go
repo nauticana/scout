@@ -43,8 +43,8 @@ func (detector *MemoryLoopDetector) Observe(ctx context.Context, tenantID int64,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if detector.Threshold <= 0 || detector.MaxConversations <= 0 {
-		return fmt.Errorf("memory loop detector: threshold and max conversations must be positive")
+	if detector.Threshold <= 0 || detector.MaxConversations <= 0 || detector.MaxFingerprints < 0 || detector.Window < 0 {
+		return fmt.Errorf("memory loop detector: threshold and max conversations must be positive, window and max fingerprints cannot be negative")
 	}
 	if tenantID <= 0 || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(fingerprint) == "" {
 		return fmt.Errorf("%w: tenant, conversation, and fingerprint are required", domain.ErrValidation)

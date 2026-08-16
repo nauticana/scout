@@ -82,6 +82,27 @@ type AgentVersionTrafficManager interface {
 	Rollback(ctx context.Context, tenantID int64, agentID string) error
 }
 
+// AgentVersionResolutionExplainer is an optional AgentVersionTrafficManager
+// capability that reports which precedence rule selected the version so audit
+// and usage records can carry it.
+type AgentVersionResolutionExplainer interface {
+	// ExplainVersion resolves like ResolveVersion and names the winning rule.
+	ExplainVersion(ctx context.Context, tenantID int64, agentID, conversationID string) (domain.AgentVersionResolution, error)
+}
+
+// AgentDeploymentStore persists a tenant agent's stable and canary traffic policy.
+type AgentDeploymentStore interface {
+	// Get returns the deployment; ErrNotFound when the agent has none.
+	Get(ctx context.Context, tenantID int64, agentID string) (domain.AgentDeployment, error)
+	// SetCanary assigns a percentage of new conversations to version.
+	SetCanary(ctx context.Context, tenantID int64, agentID, version string, percentage int) error
+	// Promote makes version stable and clears the canary.
+	Promote(ctx context.Context, tenantID int64, agentID, version string) error
+	// RestorePrevious clears the canary or, without one, restores the version
+	// published before the current stable; it returns the version now stable.
+	RestorePrevious(ctx context.Context, tenantID int64, agentID string) (string, error)
+}
+
 // AgentPublisher coordinates publication of immutable agent versions.
 type AgentPublisher interface {
 	// Publish validates, compiles, persists, and makes a version eligible for traffic.

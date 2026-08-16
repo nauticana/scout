@@ -13,7 +13,7 @@ func newEntitlementPolicy(query *budgetQueryFake, now func() time.Time) *Entitle
 	return &EntitlementBudgetPolicy{
 		DB:       budgetDBFake{query: query},
 		Resource: "AI_CREDITS", Currency: "CRD", UsageCategory: "workspace",
-		now: now,
+		Now: now,
 	}
 }
 

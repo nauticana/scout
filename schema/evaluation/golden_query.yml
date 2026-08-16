@@ -1,0 +1,41 @@
+table: golden_query
+comment: Retrieval example with the principal and entitlements it must be answered for
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: query_id
+    type: VARCHAR(120)
+  - name: scope_code
+    type: VARCHAR(10)
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: query_text
+    type: TEXT
+  - name: principal
+    type: VARCHAR(200)
+  - name: entitlements
+    type: TEXT
+  - name: expected_document_ids
+    type: TEXT
+  - name: expect_abstention
+    type: BOOLEAN
+    default: FALSE
+primary_key: [tenant_id, golden_set_id, set_version, query_id]
+foreign_keys:
+  - name: golden_queries
+    columns: [tenant_id, golden_set_id, set_version]
+    references:
+      table: golden_set_version
+      columns: [tenant_id, golden_set_id, set_version]
+  - name: knowledge_base_golden_queries
+    columns: [tenant_id, knowledge_base_id]
+    references:
+      table: knowledge_base
+      columns: [tenant_id, knowledge_base_id]
+checks:
+  - name: golden_query_scope_ck
+    expression: scope_code IN ('dev', 'gate')

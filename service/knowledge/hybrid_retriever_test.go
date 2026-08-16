@@ -8,6 +8,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/fake"
 	"github.com/nauticana/scout/internal/stage"
 )
 
@@ -137,5 +138,56 @@ func TestHybridRetrieverRejectsUnknownRerankCandidate(t *testing.T) {
 	_, err := (&HybridRetriever{Legs: legs(leg), Reranker: reranker}).Retrieve(context.Background(), hybridQuery)
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("unknown candidate = %v", err)
+	}
+}
+
+func TestHybridRetrieverObservesRetrievalStage(t *testing.T) {
+	var observed []domain.Observation
+	observer := &fake.ObservationRecorder{RecordObservationFunc: func(_ context.Context, o domain.Observation) { observed = append(observed, o) }}
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	calls := 0
+	clock := func() time.Time {
+		calls++
+		return start.Add(time.Duration(calls-1) * 15 * time.Millisecond)
+	}
+	healthy := retrieverFunc(func(context.Context, domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
+		return domain.KnowledgeResult{Matches: matches("a"), Usage: domain.Usage{InputTokens: 4}}, nil
+	})
+	failing := retrieverFunc(func(context.Context, domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
+		return domain.KnowledgeResult{}, errors.New("index down")
+	})
+	query := hybridQuery
+	query.KnowledgeVersion = "kb-7"
+	query.TenantContext.Tier = "gold"
+
+	retriever := &HybridRetriever{Legs: legs(healthy, failing), Observer: observer, Now: clock}
+	if _, err := retriever.Retrieve(context.Background(), query); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("observed = %d", len(observed))
+	}
+	got := observed[0]
+	if got.Stage != domain.StageRetrieval || got.Component != HybridRetrieverComponent || got.Outcome != domain.OutcomeDegraded || got.ErrorClass != "" {
+		t.Fatalf("degraded observation = %+v", got)
+	}
+	if got.TenantID != 1 || got.TenantTier != "gold" || got.Versions.Knowledge != "kb-7" || got.Usage.InputTokens != 4 || got.Duration != 15*time.Millisecond {
+		t.Fatalf("attribution = %+v", got)
+	}
+
+	observed = nil
+	healthyOnly := &HybridRetriever{Legs: legs(healthy), Observer: observer, Now: clock}
+	healthyOnly.Retrieve(context.Background(), query)
+	if len(observed) != 1 || observed[0].Outcome != domain.OutcomeOK {
+		t.Fatalf("ok observation = %+v", observed)
+	}
+
+	observed = nil
+	allDown := &HybridRetriever{Legs: legs(failing), Observer: observer, Now: clock}
+	if _, err := allDown.Retrieve(context.Background(), query); err == nil {
+		t.Fatal("expected total failure")
+	}
+	if len(observed) != 1 || observed[0].Outcome != domain.OutcomeError || observed[0].ErrorClass != stage.ErrorClassInternal {
+		t.Fatalf("error observation = %+v", observed)
 	}
 }

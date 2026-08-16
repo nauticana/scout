@@ -1,0 +1,63 @@
+table: evaluation_run
+comment: One execution of an evaluation manifest
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: manifest_id
+    type: CHAR(64)
+  - name: scope_code
+    type: VARCHAR(10)
+  - name: status_code
+    type: VARCHAR(20)
+  - name: started_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: sample_count
+    type: INTEGER
+    default: 0
+  - name: input_tokens
+    type: BIGINT
+    default: 0
+  - name: output_tokens
+    type: BIGINT
+    default: 0
+  - name: cost_minor_units
+    type: BIGINT
+    default: 0
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+primary_key: [id]
+sequence:
+  name: evaluation_run_seq
+  column: id
+foreign_keys:
+  - name: evaluation_runs
+    columns: [manifest_id]
+    references:
+      table: evaluation_manifest
+      columns: [manifest_id]
+  - name: currency_evaluation_runs
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: evaluation_run_manifest_ix
+    columns: [tenant_id, manifest_id, started_at]
+checks:
+  - name: evaluation_run_scope_ck
+    expression: scope_code IN ('dev', 'gate')
+  - name: evaluation_run_status_ck
+    expression: status_code IN ('running', 'completed', 'stopped_early', 'failed')
+  - name: evaluation_run_dates_ck
+    expression: completed_at IS NULL OR completed_at >= started_at
+  - name: evaluation_run_usage_ck
+    expression: sample_count >= 0 AND input_tokens >= 0 AND output_tokens >= 0 AND cost_minor_units >= 0
+  - name: evaluation_run_currency_ck
+    expression: cost_minor_units = 0 OR currency_code IS NOT NULL

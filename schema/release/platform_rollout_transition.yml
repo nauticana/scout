@@ -1,0 +1,46 @@
+table: platform_rollout_transition
+comment: Audited stage change of a platform release
+columns:
+  - name: id
+    type: BIGINT
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: from_stage_code
+    type: VARCHAR(30)
+  - name: to_stage_code
+    type: VARCHAR(30)
+  - name: from_generation
+    type: BIGINT
+  - name: actor
+    type: VARCHAR(120)
+  - name: reason
+    type: TEXT
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: platform_rollout_transition_seq
+  column: id
+foreign_keys:
+  - name: platform_rollout_transitions
+    columns: [platform_version]
+    references:
+      table: platform_rollout_state
+      columns: [platform_version]
+  - name: from_stage_rollout_transitions
+    columns: [from_stage_code]
+    references:
+      table: rollout_stage
+      columns: [code]
+  - name: to_stage_rollout_transitions
+    columns: [to_stage_code]
+    references:
+      table: rollout_stage
+      columns: [code]
+indexes:
+  - name: platform_rollout_transition_release_ix
+    columns: [platform_version, occurred_at]
+checks:
+  - name: platform_rollout_transition_generation_ck
+    expression: from_generation > 0

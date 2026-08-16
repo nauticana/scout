@@ -1,0 +1,77 @@
+table: platform_rollout_state
+comment: Generation-fenced rollout position and lease of a platform release
+columns:
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: stage_code
+    type: VARCHAR(30)
+  - name: ring_code
+    type: VARCHAR(30)
+    nullable: true
+  - name: traffic_percentage
+    type: SMALLINT
+    default: "0"
+  - name: generation
+    type: BIGINT
+    default: "1"
+  - name: paused
+    type: BOOLEAN
+    default: "false"
+  - name: pause_reason
+    type: TEXT
+    nullable: true
+  - name: stage_started_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: min_samples
+    type: BIGINT
+    default: "0"
+  - name: min_duration_ms
+    type: BIGINT
+    default: "0"
+  - name: consecutive_breaches
+    type: SMALLINT
+    default: "0"
+  - name: consecutive_healthy
+    type: SMALLINT
+    default: "0"
+  - name: last_breach_at
+    type: TIMESTAMP
+    nullable: true
+  - name: lease_owner
+    type: VARCHAR(120)
+    nullable: true
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+primary_key: [platform_version]
+foreign_keys:
+  - name: platform_rollout_states
+    columns: [platform_version]
+    references:
+      table: platform_release
+      columns: [platform_version]
+  - name: stage_platform_rollout_states
+    columns: [stage_code]
+    references:
+      table: rollout_stage
+      columns: [code]
+  - name: ring_platform_rollout_states
+    columns: [ring_code]
+    references:
+      table: tenant_ring
+      columns: [ring_code]
+indexes:
+  - name: platform_rollout_state_stage_ix
+    columns: [stage_code, stage_started_at]
+checks:
+  - name: platform_rollout_state_percentage_ck
+    expression: traffic_percentage BETWEEN 0 AND 100
+  - name: platform_rollout_state_generation_ck
+    expression: generation > 0
+  - name: platform_rollout_state_minimums_ck
+    expression: min_samples >= 0 AND min_duration_ms >= 0
+  - name: platform_rollout_state_counters_ck
+    expression: consecutive_breaches >= 0 AND consecutive_healthy >= 0
+  - name: platform_rollout_state_lease_ck
+    expression: (lease_owner IS NULL) = (lease_until IS NULL)

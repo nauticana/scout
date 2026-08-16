@@ -1,0 +1,58 @@
+table: evaluation_sample
+comment: Production turn sampled for evaluation; payload is encrypted in object storage
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: sample_id
+    type: VARCHAR(80)
+  - name: request_id
+    type: VARCHAR(120)
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: reason
+    type: VARCHAR(80)
+  - name: risk_bp
+    type: INTEGER
+  - name: uncertainty_bp
+    type: INTEGER
+  - name: redacted
+    type: BOOLEAN
+  - name: payload_uri
+    type: TEXT
+  - name: payload_digest
+    type: CHAR(64)
+  - name: retention_class
+    type: VARCHAR(40)
+  - name: region_code
+    type: VARCHAR(40)
+  - name: sampled_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+primary_key: [tenant_id, sample_id]
+foreign_keys:
+  - name: evaluation_samples
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: agent_evaluation_samples
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+indexes:
+  - name: evaluation_sample_expiry_ix
+    columns: [expires_at]
+  - name: evaluation_sample_agent_ix
+    columns: [tenant_id, agent_id, agent_version, sampled_at]
+checks:
+  - name: evaluation_sample_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64
+  - name: evaluation_sample_bp_ck
+    expression: risk_bp BETWEEN 0 AND 10000 AND uncertainty_bp BETWEEN 0 AND 10000
+  - name: evaluation_sample_dates_ck
+    expression: expires_at > sampled_at

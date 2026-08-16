@@ -1,0 +1,52 @@
+table: knowledge_document_manifest
+comment: Active-version pointer and tombstone for one knowledge document
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: document_id
+    type: VARCHAR(120)
+  - name: active_version
+    type: VARCHAR(80)
+  - name: source_version
+    type: VARCHAR(120)
+  - name: content_digest
+    type: CHAR(64)
+  - name: chunker_version
+    type: VARCHAR(80)
+  - name: tombstoned
+    type: BOOLEAN
+    default: FALSE
+  - name: tombstoned_at
+    type: TIMESTAMP
+    nullable: true
+  - name: activated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: superseded_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: gc_pending
+    type: BOOLEAN
+    default: FALSE
+primary_key: [tenant_id, knowledge_base_id, document_id]
+foreign_keys:
+  - name: knowledge_document_manifests
+    columns: [tenant_id, knowledge_base_id]
+    references:
+      table: knowledge_base
+      columns: [tenant_id, knowledge_base_id]
+  - name: active_knowledge_document_manifests
+    columns: [tenant_id, knowledge_base_id, active_version, document_id]
+    references:
+      table: knowledge_document
+      columns: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+indexes:
+  - name: knowledge_document_manifest_gc_ix
+    columns: [tenant_id, knowledge_base_id, gc_pending]
+checks:
+  - name: knowledge_document_manifest_digest_ck
+    expression: CHAR_LENGTH(content_digest) = 64
+  - name: knowledge_document_manifest_tombstone_ck
+    expression: (tombstoned = FALSE AND tombstoned_at IS NULL) OR (tombstoned = TRUE AND tombstoned_at IS NOT NULL)

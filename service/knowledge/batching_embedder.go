@@ -22,9 +22,13 @@ type BatchingEmbedder struct {
 	MaxWait time.Duration
 	// Timeout bounds one provider batch call; default 30s.
 	Timeout time.Duration
+	// AfterFunc schedules the age flush; nil uses time.AfterFunc.
+	AfterFunc func(time.Duration, func()) *time.Timer
 
 	mu      sync.Mutex
 	pending map[int64]*embedBatch
+	timers  sync.WaitGroup
+	closed  bool
 }
 
 var _ contract.EmbeddingGateway = (*BatchingEmbedder)(nil)
@@ -47,8 +51,11 @@ type embedResult struct {
 	err       error
 }
 
-func (embedder *BatchingEmbedder) limits() (int, time.Duration, time.Duration) {
+func (embedder *BatchingEmbedder) limits() (int, time.Duration, time.Duration, error) {
 	maxBatch, maxWait, timeout := embedder.MaxBatch, embedder.MaxWait, embedder.Timeout
+	if maxBatch < 0 || maxWait < 0 || timeout < 0 {
+		return 0, 0, 0, fmt.Errorf("batching embedder: max batch, max wait, and timeout cannot be negative")
+	}
 	if maxBatch <= 0 {
 		maxBatch = 16
 	}
@@ -58,7 +65,14 @@ func (embedder *BatchingEmbedder) limits() (int, time.Duration, time.Duration) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return maxBatch, maxWait, timeout
+	return maxBatch, maxWait, timeout, nil
+}
+
+func (embedder *BatchingEmbedder) afterFunc(wait time.Duration, flush func()) *time.Timer {
+	if embedder.AfterFunc != nil {
+		return embedder.AfterFunc(wait, flush)
+	}
+	return time.AfterFunc(wait, flush)
 }
 
 // Embed queues one input and returns its own embedding from the shared batch.
@@ -72,10 +86,17 @@ func (embedder *BatchingEmbedder) Embed(ctx context.Context, tenant domain.Tenan
 	if err := ctx.Err(); err != nil {
 		return domain.Embedding{}, err
 	}
-	maxBatch, maxWait, _ := embedder.limits()
+	maxBatch, maxWait, _, err := embedder.limits()
+	if err != nil {
+		return domain.Embedding{}, err
+	}
 	item := &embedItem{content: append([]byte(nil), content...), result: make(chan embedResult, 1)}
 
 	embedder.mu.Lock()
+	if embedder.closed {
+		embedder.mu.Unlock()
+		return domain.Embedding{}, fmt.Errorf("%w: batching embedder is closed", domain.ErrConflict)
+	}
 	if embedder.pending == nil {
 		embedder.pending = make(map[int64]*embedBatch)
 	}
@@ -83,7 +104,11 @@ func (embedder *BatchingEmbedder) Embed(ctx context.Context, tenant domain.Tenan
 	if batch == nil {
 		batch = &embedBatch{tenant: tenant}
 		embedder.pending[tenant.TenantID] = batch
-		batch.timer = time.AfterFunc(maxWait, func() { embedder.flush(tenant.TenantID, batch) })
+		embedder.timers.Add(1)
+		batch.timer = embedder.afterFunc(maxWait, func() {
+			defer embedder.timers.Done()
+			embedder.flush(tenant.TenantID, batch)
+		})
 	}
 	batch.items = append(batch.items, item)
 	var live []*embedItem
@@ -119,9 +144,28 @@ func (embedder *BatchingEmbedder) flush(tenantID int64, batch *embedBatch) {
 	embedder.run(batch.tenant, live)
 }
 
+// Close fails queued items, waits for scheduled flushes, and rejects later calls; it is idempotent.
+func (embedder *BatchingEmbedder) Close() error {
+	embedder.mu.Lock()
+	embedder.closed = true
+	var abandoned []*embedItem
+	for tenantID, batch := range embedder.pending {
+		abandoned = append(abandoned, embedder.claimLocked(tenantID, batch)...)
+	}
+	embedder.mu.Unlock()
+	for _, item := range abandoned {
+		item.result <- embedResult{err: fmt.Errorf("%w: batching embedder is closed", domain.ErrConflict)}
+	}
+	embedder.timers.Wait()
+	return nil
+}
+
+// claimLocked marks the batch flushed and stops its timer; a timer that already fired finishes itself.
 func (embedder *BatchingEmbedder) claimLocked(tenantID int64, batch *embedBatch) []*embedItem {
 	batch.flushed = true
-	batch.timer.Stop()
+	if batch.timer.Stop() {
+		embedder.timers.Done()
+	}
 	if embedder.pending[tenantID] == batch {
 		delete(embedder.pending, tenantID)
 	}
@@ -138,7 +182,7 @@ func (embedder *BatchingEmbedder) run(tenant domain.TenantContext, live []*embed
 	if len(live) == 0 {
 		return
 	}
-	_, _, timeout := embedder.limits()
+	_, _, timeout, _ := embedder.limits()
 
 	contents := make([][]byte, len(live))
 	for i, item := range live {

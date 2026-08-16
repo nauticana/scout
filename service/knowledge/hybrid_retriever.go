@@ -25,14 +25,44 @@ type HybridRetriever struct {
 	Overfetch int
 	// MinRerankBudget skips reranking when less deadline remains; default 0.
 	MinRerankBudget time.Duration
+	// Observer receives one retrieval-stage observation per query; nil skips.
+	Observer contract.ObservationRecorder
+	Now      func() time.Time
 }
 
 var _ contract.KnowledgeRetriever = (*HybridRetriever)(nil)
+
+// HybridRetrieverComponent names the retriever in observations.
+const HybridRetrieverComponent = "hybrid_retriever"
 
 const rrfOffset = 60
 
 // Retrieve returns the fused, optionally reranked, top TopK matches.
 func (retriever *HybridRetriever) Retrieve(ctx context.Context, query domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
+	span := stage.Begin(retriever.clock()(), domain.StageRetrieval, HybridRetrieverComponent, domain.ComponentVersions{Knowledge: query.KnowledgeVersion})
+	span.Observation.TenantID = query.TenantContext.TenantID
+	span.Observation.TenantTier = query.TenantContext.Tier
+	span.Observation.PriorityClass = query.TenantContext.PriorityClass
+	span.Observation.Region = query.TenantContext.Region
+	result, err := retriever.retrieve(ctx, query)
+	if retriever.Observer != nil {
+		var outcome domain.ObservationOutcome
+		if err == nil && len(result.Degradations) > 0 {
+			outcome = domain.OutcomeDegraded
+		}
+		retriever.Observer.RecordObservation(ctx, span.End(retriever.clock()(), outcome, result.Usage, err))
+	}
+	return result, err
+}
+
+func (retriever *HybridRetriever) clock() func() time.Time {
+	if retriever.Now == nil {
+		return time.Now
+	}
+	return retriever.Now
+}
+
+func (retriever *HybridRetriever) retrieve(ctx context.Context, query domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
 	if len(retriever.Legs) == 0 {
 		return domain.KnowledgeResult{}, fmt.Errorf("hybrid retriever: at least one leg is required")
 	}
@@ -192,6 +222,7 @@ func authorizedRerank(original, reranked []domain.KnowledgeMatch) ([]domain.Know
 	return result, nil
 }
 
+// The budget deadline lives on ctx, so it is compared against wall time, not the injected observation clock.
 func rerankBudgetLeft(ctx context.Context, minimum time.Duration) bool {
 	deadline, ok := ctx.Deadline()
 	if !ok {

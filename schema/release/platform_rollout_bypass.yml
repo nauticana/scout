@@ -1,0 +1,45 @@
+table: platform_rollout_bypass
+comment: Approved, scoped waiver of one rollout stage evidence gate
+columns:
+  - name: id
+    type: BIGINT
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: stage_code
+    type: VARCHAR(30)
+  - name: scope
+    type: VARCHAR(80)
+  - name: reason
+    type: TEXT
+  - name: requested_by
+    type: VARCHAR(120)
+  - name: approved_by
+    type: VARCHAR(120)
+  - name: expires_at
+    type: TIMESTAMP
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: platform_rollout_bypass_seq
+  column: id
+foreign_keys:
+  - name: platform_rollout_bypasses
+    columns: [platform_version]
+    references:
+      table: platform_rollout_state
+      columns: [platform_version]
+  - name: stage_rollout_bypasses
+    columns: [stage_code]
+    references:
+      table: rollout_stage
+      columns: [code]
+indexes:
+  - name: platform_rollout_bypass_release_ix
+    columns: [platform_version, stage_code, expires_at]
+checks:
+  - name: platform_rollout_bypass_approver_ck
+    expression: approved_by <> requested_by
+  - name: platform_rollout_bypass_dates_ck
+    expression: expires_at > created_at

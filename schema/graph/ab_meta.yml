@@ -1,0 +1,5 @@
+tables:
+  - execution_graph
+  - execution_step
+  - execution_graph_entry
+  - execution_transition

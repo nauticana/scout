@@ -14,8 +14,12 @@ type Bucket struct {
 	last   time.Time
 }
 
-// New returns a full bucket refilling at ratePerSecond up to burst.
+// New returns a full bucket refilling at ratePerSecond up to burst; both must be positive
+// because callers validate their configured limits before constructing one.
 func New(ratePerSecond, burst float64, now time.Time) *Bucket {
+	if ratePerSecond <= 0 || burst <= 0 || math.IsNaN(ratePerSecond) || math.IsNaN(burst) {
+		panic("bucket: rate and burst must be positive")
+	}
 	return &Bucket{rate: ratePerSecond, burst: burst, tokens: burst, last: now}
 }
 

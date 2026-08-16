@@ -26,8 +26,13 @@ type StreamPump struct {
 	MaxOutputTokens int64
 	// FinalPublishTimeout bounds the terminal best-effort publish; default 1s.
 	FinalPublishTimeout time.Duration
-	Now                 func() time.Time
+	// Observer receives one model-stage observation per run with TTFT and TPOT; nil skips.
+	Observer contract.ObservationRecorder
+	Now      func() time.Time
 }
+
+// StreamPumpComponent names the pump in observations.
+const StreamPumpComponent = "stream_pump"
 
 // Run pumps the stream until completion, truncation, or failure, returning accumulated usage.
 func (pump *StreamPump) Run(ctx context.Context, turn domain.TurnRequest, route, agentVersion string, config domain.GuardrailConfig, stream contract.ModelStream) (domain.Usage, error) {
@@ -42,6 +47,49 @@ func (pump *StreamPump) Run(ctx context.Context, turn domain.TurnRequest, route,
 	}
 	defer stream.Close()
 
+	span := stage.Begin(pump.clock()(), domain.StageModel, StreamPumpComponent, domain.ComponentVersions{Agent: agentVersion})
+	span.Observation.TenantID = turn.TenantContext.TenantID
+	span.Observation.TenantTier = turn.TenantContext.Tier
+	span.Observation.PriorityClass = turn.TenantContext.PriorityClass
+	span.Observation.Region = turn.TenantContext.Region
+	timing := &streamTiming{}
+	usage, err := pump.run(ctx, turn, route, agentVersion, config, stream, timing)
+	if pump.Observer != nil {
+		var outcome domain.ObservationOutcome
+		if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+			outcome = domain.OutcomeCanceled
+		}
+		timing.apply(&span.Observation, usage.OutputTokens)
+		pump.Observer.RecordObservation(ctx, span.End(pump.clock()(), outcome, usage, err))
+	}
+	return usage, err
+}
+
+// streamTiming captures first and last approved frame times for TTFT and TPOT.
+type streamTiming struct {
+	first, last time.Time
+	frames      int
+}
+
+func (timing *streamTiming) published(now time.Time) {
+	if timing.frames == 0 {
+		timing.first = now
+	}
+	timing.last = now
+	timing.frames++
+}
+
+func (timing *streamTiming) apply(observation *domain.Observation, outputTokens int64) {
+	if timing.frames == 0 {
+		return
+	}
+	observation.TimeToFirst = timing.first.Sub(observation.StartedAt)
+	if outputTokens > 1 && timing.frames > 1 {
+		observation.TimePerOutput = timing.last.Sub(timing.first) / time.Duration(outputTokens-1)
+	}
+}
+
+func (pump *StreamPump) run(ctx context.Context, turn domain.TurnRequest, route, agentVersion string, config domain.GuardrailConfig, stream contract.ModelStream, timing *streamTiming) (domain.Usage, error) {
 	var usage domain.Usage
 	var sequence int64
 	for {
@@ -53,7 +101,7 @@ func (pump *StreamPump) Run(ctx context.Context, turn domain.TurnRequest, route,
 			return usage, pump.fail(ctx, turn, route, agentVersion, sequence, domain.StageModel, receiveErr)
 		}
 		if pump.MaxOutputTokens > 0 && usage.OutputTokens > pump.MaxOutputTokens {
-			err := pump.publish(ctx, turn, route, agentVersion, sequence, nil, true, ErrorCodeTruncated)
+			err := pump.publish(ctx, turn, route, agentVersion, sequence, nil, true, ErrorCodeTruncated, pump.clock()())
 			return usage, stage.At(domain.StagePublish, err)
 		}
 		done := errors.Is(receiveErr, io.EOF) || chunk.FinishReason != ""
@@ -62,16 +110,18 @@ func (pump *StreamPump) Run(ctx context.Context, turn domain.TurnRequest, route,
 			if err != nil {
 				return usage, pump.fail(ctx, turn, route, agentVersion, sequence, domain.StageGuardrail, err)
 			}
-			if err := pump.publish(ctx, turn, route, agentVersion, sequence, guarded.Payload, done, ""); err != nil {
+			emittedAt := pump.clock()()
+			if err := pump.publish(ctx, turn, route, agentVersion, sequence, guarded.Payload, done, "", emittedAt); err != nil {
 				return usage, stage.At(domain.StagePublish, err)
 			}
+			timing.published(emittedAt)
 			sequence++
 		}
 		if done {
 			return usage, nil
 		}
 		if pump.MaxOutputTokens > 0 && usage.OutputTokens >= pump.MaxOutputTokens {
-			err := pump.publish(ctx, turn, route, agentVersion, sequence, nil, true, ErrorCodeTruncated)
+			err := pump.publish(ctx, turn, route, agentVersion, sequence, nil, true, ErrorCodeTruncated, pump.clock()())
 			return usage, stage.At(domain.StagePublish, err)
 		}
 	}
@@ -85,15 +135,18 @@ func (pump *StreamPump) fail(ctx context.Context, turn domain.TurnRequest, route
 	}
 	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	publishErr := pump.publish(publishCtx, turn, route, agentVersion, sequence, nil, true, string(turnStage))
+	publishErr := pump.publish(publishCtx, turn, route, agentVersion, sequence, nil, true, string(turnStage), pump.clock()())
 	return errors.Join(stage.At(turnStage, cause), publishErr)
 }
 
-func (pump *StreamPump) publish(ctx context.Context, turn domain.TurnRequest, route, agentVersion string, sequence int64, payload []byte, final bool, errorCode string) error {
-	now := pump.Now
-	if now == nil {
-		now = time.Now
+func (pump *StreamPump) clock() func() time.Time {
+	if pump.Now == nil {
+		return time.Now
 	}
+	return pump.Now
+}
+
+func (pump *StreamPump) publish(ctx context.Context, turn domain.TurnRequest, route, agentVersion string, sequence int64, payload []byte, final bool, errorCode string, emittedAt time.Time) error {
 	return pump.Publisher.Publish(ctx, domain.TurnReply{
 		TenantID:       turn.TenantContext.TenantID,
 		RequestID:      turn.RequestID,
@@ -104,7 +157,7 @@ func (pump *StreamPump) publish(ctx context.Context, turn domain.TurnRequest, ro
 		Final:          final,
 		ErrorCode:      errorCode,
 		AgentVersion:   agentVersion,
-		EmittedAt:      now(),
+		EmittedAt:      emittedAt,
 	})
 }
 

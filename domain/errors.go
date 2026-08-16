@@ -17,6 +17,8 @@ var (
 	ErrRateLimited = errors.New("rate limited")
 	// ErrBudgetExceeded indicates that a token or cost budget was exceeded.
 	ErrBudgetExceeded = errors.New("budget exceeded")
+	// ErrBudgetSettled indicates that a request's reservation was already settled.
+	ErrBudgetSettled = errors.New("budget reservation already settled")
 	// ErrExecutionLimit indicates that a turn exceeded a configured execution limit.
 	ErrExecutionLimit = errors.New("execution limit exceeded")
 	// ErrLoopDetected indicates that repeated agent behavior was detected.
@@ -37,6 +39,14 @@ var (
 	ErrReplayExpired = errors.New("replay window expired")
 	// ErrTurnCanceled indicates a turn was canceled by request while running.
 	ErrTurnCanceled = errors.New("turn canceled")
+	// ErrDeadlineInfeasible indicates the remaining deadline cannot cover the minimum path.
+	ErrDeadlineInfeasible = errors.New("deadline infeasible")
+	// ErrNoRoute indicates no candidate route satisfies policy, capacity, and deadline.
+	ErrNoRoute = errors.New("no eligible route")
+	// ErrStaleEvidence indicates telemetry or a decision is too old to act on.
+	ErrStaleEvidence = errors.New("stale evidence")
+	// ErrDegraded indicates a dependency is serving with reduced guarantees.
+	ErrDegraded = errors.New("degraded mode")
 )
 
 // TurnStage identifies the turn-lifecycle boundary that produced an error.

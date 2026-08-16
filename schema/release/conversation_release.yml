@@ -1,0 +1,27 @@
+table: conversation_release
+comment: Platform release a conversation was created on; its agent version lives on agent_conversation
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: resolved_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, conversation_id]
+foreign_keys:
+  - name: conversation_releases
+    columns: [tenant_id, conversation_id]
+    references:
+      table: agent_conversation
+      columns: [tenant_id, conversation_id]
+  - name: platform_conversation_releases
+    columns: [platform_version]
+    references:
+      table: platform_release
+      columns: [platform_version]
+indexes:
+  - name: conversation_release_platform_ix
+    columns: [platform_version, resolved_at]

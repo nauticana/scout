@@ -9,8 +9,9 @@ import (
 
 // ConversationRuntime executes end-user turns in the data plane.
 type ConversationRuntime interface {
-	// HandleTurn executes one end-user turn against a pinned agent version.
-	HandleTurn(ctx context.Context, request domain.TurnRequest) (domain.TurnResult, error)
+	// HandleTurn executes one durably delivered turn against the conversation's pinned agent version
+	// and publishes its frames to the dispatch reply route; a nil error means the delivery may be acked.
+	HandleTurn(ctx context.Context, dispatch domain.TurnDispatch) (domain.TurnResult, error)
 }
 
 // ConversationIngress admits a turn and returns its asynchronous reply stream.
@@ -100,14 +101,15 @@ type TurnReplySubscription interface {
 	Close() error
 }
 
-// StepIdempotencyStore makes interrupted step execution safely replayable.
+// StepIdempotencyStore makes interrupted step execution safely replayable. The
+// step carries its compiled ExecutionStepID, which is the persisted identity.
 type StepIdempotencyStore interface {
-	// Begin acquires the right to execute a step or returns its prior result.
-	Begin(ctx context.Context, tenantID int64, requestID, stepID string) (domain.StepResult, bool, error)
+	// Begin claims the step or returns its committed result; an abandoned or lease-expired claim is replayable.
+	Begin(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep) (domain.StepResult, bool, error)
 	// Commit durably binds a step result to its idempotency key.
-	Commit(ctx context.Context, tenantID int64, requestID, stepID string, result domain.StepResult) error
+	Commit(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep, result domain.StepResult) error
 	// Abandon releases an unfinished step so another worker can replay it.
-	Abandon(ctx context.Context, tenantID int64, requestID, stepID string) error
+	Abandon(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep) error
 }
 
 // StepExecutor executes one node of an agent execution graph.
@@ -132,4 +134,35 @@ type DefinitionResolver interface {
 type DeadLetterQueue interface {
 	// Publish stores a terminally failed turn for investigation or replay.
 	Publish(ctx context.Context, message domain.QueueMessage, reason string) error
+}
+
+// TenantWeightPolicy supplies each tenant's fair-scheduling weight and its
+// concurrent-turn ceiling; a nil policy means weight 1 and no ceiling.
+type TenantWeightPolicy interface {
+	// SchedulingWeight returns the relative share (>= 1) and the maximum leased turns (0 = unlimited).
+	SchedulingWeight(ctx context.Context, tenantID int64) (weight int, maxConcurrent int, err error)
+}
+
+// TurnBudgetEstimator quotes the tokens and cost to reserve for a turn before it
+// runs; ingress and runtime quote the same request so the reservation replays.
+type TurnBudgetEstimator interface {
+	// Estimate returns the reservation-worthy usage priced in the tenant's budget currency.
+	Estimate(ctx context.Context, request domain.TurnRequest) (domain.Usage, error)
+}
+
+// TurnRecordStore owns the durable turn identity keyed by (tenant, request id):
+// ingress opens it before reserving budget, the runtime starts it, replays a
+// finished one, and fails it on terminal errors; success is completed through
+// DurableSessionStore.Complete.
+type TurnRecordStore interface {
+	// Open assigns the conversation's next turn number on first use and returns it; a reused id with different input is ErrConflict.
+	Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error)
+	// Find returns the turn number, its status code, and once terminal the stored payload: the response of a completed turn or the error code of a failed one; unknown ids are ErrNotFound.
+	Find(ctx context.Context, tenantID int64, requestID string) (turnNo int64, status string, payload []byte, err error)
+	// Start marks a queued turn running; it is a no-op once running or terminal.
+	Start(ctx context.Context, tenantID int64, requestID string) error
+	// Fail marks a live turn failed or cancelled with its error code once; a later Fail is a no-op.
+	Fail(ctx context.Context, tenantID int64, requestID, status, errorCode string) error
+	// RecordUsage writes the settled usage event for a turn once; a repeat is a no-op.
+	RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error
 }

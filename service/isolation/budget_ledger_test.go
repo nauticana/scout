@@ -108,6 +108,14 @@ func TestBudgetLedgerReserveIsIdempotentByRequest(t *testing.T) {
 	}
 }
 
+func TestBudgetLedgerReserveClassifiesSettledReplay(t *testing.T) {
+	existing := storedBudget("reservation", "req", "settled", 10, 2, 1, time.Now(), int64(8), int64(1), false)
+	query := &budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{false}}, qFindBudget: {existing}}}
+	if _, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD"); !errors.Is(err, domain.ErrBudgetSettled) {
+		t.Fatalf("settled replay = %v", err)
+	}
+}
+
 func TestBudgetLedgerRenewsExpiredReservation(t *testing.T) {
 	expires := time.Now().Add(-time.Minute)
 	existing := storedBudget("old", "req", "held", 10, 2, 1, expires, nil, nil, true)

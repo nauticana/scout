@@ -73,3 +73,27 @@ func TestMemoryCachesAcceptSingleEntryCapacity(t *testing.T) {
 		t.Fatalf("validation = %v", err)
 	}
 }
+
+func TestMemorySessionCacheKeepsNewerRevision(t *testing.T) {
+	cache := &MemorySessionCache{Capacity: 8, TTL: time.Minute}
+	defer cache.Close()
+	ctx := context.Background()
+	if err := cache.Put(ctx, 1, domain.SessionSnapshot{ConversationID: "c", Revision: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put(ctx, 1, domain.SessionSnapshot{ConversationID: "c", Revision: 6}); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, _ := cache.Get(ctx, 1, "c"); !found || got.Revision != 7 {
+		t.Fatalf("older put replaced newer: %+v, %v", got, found)
+	}
+	if err := cache.Put(ctx, 1, domain.SessionSnapshot{ConversationID: "c", Revision: 8}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := cache.Get(ctx, 1, "c"); got.Revision != 8 {
+		t.Fatalf("newer put ignored: %+v", got)
+	}
+	if err := cache.Put(ctx, 1, domain.SessionSnapshot{ConversationID: "c", Revision: -1}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("negative revision = %v", err)
+	}
+}

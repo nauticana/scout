@@ -1,0 +1,54 @@
+table: knowledge_chunk_vector
+comment: >-
+  pgvector reference index row for one knowledge chunk: the embedding, the
+  full-text vector, and the entitlement labels the search predicate applies
+  inside the query. VECTOR, TSVECTOR, and JSONB are PostgreSQL-only types that
+  keel's dialect mapper passes through unchanged (same precedent as JSONB in
+  conversation_turn_detail); the embedding column is untyped because the
+  dimension is per embedding model, so PgVectorIndex.EnsureIndexes creates the
+  dimension-specific HNSW index and CREATE EXTENSION vector is a deployment step.
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: knowledge_version
+    type: VARCHAR(80)
+  - name: document_id
+    type: VARCHAR(120)
+  - name: chunk_no
+    type: INTEGER
+  - name: chunk_id
+    type: CHAR(64)
+  - name: embedding
+    type: VECTOR
+  - name: dimensions
+    type: INTEGER
+  - name: content_tsv
+    type: TSVECTOR
+  - name: entitlements
+    type: JSONB
+    comment: canonical JSON array of entitlement labels; a chunk is visible when the principal holds any of them
+  - name: source_version
+    type: VARCHAR(120)
+  - name: start_offset
+    type: INTEGER
+  - name: end_offset
+    type: INTEGER
+  - name: tombstoned
+    type: BOOLEAN
+    default: FALSE
+primary_key: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+foreign_keys:
+  - name: knowledge_chunk_vectors
+    columns: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+    references:
+      table: knowledge_chunk
+      columns: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+checks:
+  - name: knowledge_chunk_vector_chunk_id_ck
+    expression: CHAR_LENGTH(chunk_id) = 64
+  - name: knowledge_chunk_vector_dimensions_ck
+    expression: dimensions > 0
+  - name: knowledge_chunk_vector_offsets_ck
+    expression: start_offset >= 0 AND end_offset >= start_offset

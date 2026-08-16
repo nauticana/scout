@@ -9,3 +9,5 @@ tables:
   - usage_event
   - agent_run
   - agent_ops_event
+  - turn_queue
+  - turn_dead_letter

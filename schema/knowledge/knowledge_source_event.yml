@@ -1,0 +1,40 @@
+table: knowledge_source_event
+comment: CDC/outbox record of an upstream knowledge source change
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: object_id
+    type: VARCHAR(120)
+  - name: source_version
+    type: VARCHAR(120)
+  - name: op_code
+    type: VARCHAR(20)
+  - name: entitlements
+    type: TEXT
+    nullable: true
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: acked_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: knowledge_source_event_seq
+  column: id
+foreign_keys:
+  - name: knowledge_source_events
+    columns: [tenant_id, knowledge_base_id]
+    references:
+      table: knowledge_base
+      columns: [tenant_id, knowledge_base_id]
+indexes:
+  - name: knowledge_source_event_pending_ix
+    columns: [tenant_id, knowledge_base_id, acked_at, occurred_at]
+checks:
+  - name: knowledge_source_event_op_ck
+    expression: op_code IN ('upsert', 'delete')

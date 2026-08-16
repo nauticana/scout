@@ -81,3 +81,14 @@ type ConcurrencyLease interface {
 	// Release returns the capacity; it is idempotent.
 	Release() error
 }
+
+// LatencyBudgetAllocator turns a request deadline into per-stage budgets,
+// reserving generation first and rejecting turns whose minimum path cannot fit.
+type LatencyBudgetAllocator interface {
+	Allocate(ctx context.Context, request domain.TurnRequest, policy domain.TenantRuntimePolicy) (domain.TurnBudget, error)
+}
+
+// StageLatencyModel predicts per-stage cost for one request; the allocator reserves generation from it first.
+type StageLatencyModel interface {
+	Estimate(ctx context.Context, request domain.TurnRequest, policy domain.TenantRuntimePolicy) (domain.StageLatencyEstimate, error)
+}

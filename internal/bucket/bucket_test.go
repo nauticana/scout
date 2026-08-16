@@ -33,3 +33,22 @@ func TestBucketRefillTakeWaitRefund(t *testing.T) {
 		t.Fatal("refill must clamp to burst")
 	}
 }
+
+func TestNewRejectsUnsafeLimits(t *testing.T) {
+	cases := map[string][2]float64{
+		"zero rate":      {0, 1},
+		"zero burst":     {1, 0},
+		"negative rate":  {-1, 1},
+		"negative burst": {1, -1},
+	}
+	for name, limits := range cases {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			New(limits[0], limits[1], time.Time{})
+		})
+	}
+}

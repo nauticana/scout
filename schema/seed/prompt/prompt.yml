@@ -1,0 +1,50 @@
+comment: Platform prompt sections and the supported language-code constant
+order: 15
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [language_code, Language]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [language_code, en-US, English (United States)]
+      - [language_code, en-GB, English (United Kingdom)]
+      - [language_code, es-ES, Spanish (Spain)]
+      - [language_code, es-MX, Spanish (Mexico)]
+      - [language_code, fr-FR, French (France)]
+      - [language_code, de-DE, German (Germany)]
+      - [language_code, it-IT, Italian (Italy)]
+      - [language_code, pt-BR, Portuguese (Brazil)]
+      - [language_code, nl-NL, Dutch (Netherlands)]
+      - [language_code, ja-JP, Japanese (Japan)]
+      - [language_code, ko-KR, Korean (Korea)]
+      - [language_code, zh-CN, Chinese (Simplified)]
+      - [language_code, tr-TR, Turkish (Turkey)]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [language_code, prompt_baseline, language_code]
+  # Platform prompt sections every agent product shares. Ids are stable and
+  # referenced by prompt_baseline data, so never renumber them; product-specific
+  # sections take ids from 101 up.
+  - table: prompt_section
+    columns: [id, display_order, caption, description]
+    rows:
+      - [1, 1, task, Task]
+      - [2, 2, tone_of_voice, Tone of voice]
+      - [3, 3, brand_guidelines, Brand Guidelines]
+      - [4, 4, target_audience, Target Audience]
+      - [5, 5, language_style, Language Style]
+      - [6, 6, location, Location]
+      - [7, 7, sensitive_topics, Sensitive Topics]
+      - [8, 8, prohibited_content, Prohibited Content]
+      - [9, 9, escalation_policy, Escalation Policy]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [prompt_section, prompt_section]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [prompt_baselines, D, caption]

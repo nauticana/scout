@@ -36,3 +36,17 @@ func TestMemoryCacheFactoriesRejectMissingBounds(t *testing.T) {
 		t.Fatal("invalid graph cache config must fail")
 	}
 }
+
+func TestMemoryCacheFactoriesBoundLocalTTLByRemoteTTL(t *testing.T) {
+	if _, err := NewMemorySessionCache(MemoryCacheConfig{Capacity: 8, TTL: 2 * time.Minute, RemoteTTL: time.Minute}); err == nil {
+		t.Fatal("local ttl above remote ttl must fail")
+	}
+	if _, err := NewMemorySessionCache(MemoryCacheConfig{Capacity: 8, TTL: time.Minute, RemoteTTL: -1}); err == nil {
+		t.Fatal("negative remote ttl must fail")
+	}
+	sessions, err := NewMemorySessionCache(MemoryCacheConfig{Capacity: 8, TTL: time.Minute, RemoteTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessions.Close()
+}

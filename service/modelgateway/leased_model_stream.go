@@ -16,6 +16,7 @@ type leasedModelStream struct {
 	mu         sync.Mutex
 	stream     contract.ModelStream
 	lease      contract.CapacityLease
+	call       *modelCall
 	releaseCtx context.Context
 	usage      domain.Usage
 	closed     bool
@@ -32,17 +33,29 @@ func (stream *leasedModelStream) Receive(ctx context.Context) (domain.ModelChunk
 	stream.mu.Unlock()
 	chunk, receiveErr := stream.stream.Receive(ctx)
 	usageErr := stream.addUsage(chunk.Usage)
+	if receiveErr == nil && stream.call != nil {
+		stream.call.frame(chunk)
+	}
 	if receiveErr != nil || usageErr != nil || chunk.FinishReason != "" {
-		finishErr := stream.finish(ctx)
+		finishErr := stream.finish(ctx, errors.Join(streamCause(receiveErr), usageErr))
 		return chunk, errors.Join(receiveErr, usageErr, finishErr)
 	}
 	return chunk, nil
 }
 
+// Close before the terminal frame is observed as a caller cancellation.
 func (stream *leasedModelStream) Close() error {
 	stream.receiveMu.Lock()
 	defer stream.receiveMu.Unlock()
-	return stream.finish(stream.releaseCtx)
+	return stream.finish(stream.releaseCtx, context.Canceled)
+}
+
+// streamCause reports the terminal error of a stream; a clean EOF is no error.
+func streamCause(err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func (stream *leasedModelStream) addUsage(usage domain.Usage) error {
@@ -64,7 +77,7 @@ func (stream *leasedModelStream) addUsage(usage domain.Usage) error {
 	return nil
 }
 
-func (stream *leasedModelStream) finish(ctx context.Context) error {
+func (stream *leasedModelStream) finish(ctx context.Context, cause error) error {
 	stream.mu.Lock()
 	if stream.closed {
 		stream.mu.Unlock()
@@ -73,7 +86,11 @@ func (stream *leasedModelStream) finish(ctx context.Context) error {
 	stream.closed = true
 	usage := stream.usage
 	stream.mu.Unlock()
-	return errors.Join(stream.stream.Close(), stream.lease.Release(context.WithoutCancel(ctx), usage))
+	err := errors.Join(stream.stream.Close(), stream.lease.Release(context.WithoutCancel(ctx), usage))
+	if stream.call != nil {
+		stream.call.finish(context.WithoutCancel(ctx), usage, cause)
+	}
+	return err
 }
 
 var _ contract.ModelStream = (*leasedModelStream)(nil)

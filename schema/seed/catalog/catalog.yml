@@ -1,0 +1,67 @@
+comment: Scout catalog reference rows; every table below is an FK target
+order: 10
+seeds:
+  - table: currency
+    columns: [code, exponent]
+    rows:
+      - [USD, 2]
+      - [EUR, 2]
+      - [GBP, 2]
+      - [CHF, 2]
+      - [CAD, 2]
+      - [AUD, 2]
+      - [TRY, 2]
+      - [CNY, 2]
+      - [INR, 2]
+      - [BRL, 2]
+      - [JPY, 0]
+      - [KRW, 0]
+      - [BHD, 3]
+      - [KWD, 3]
+  # Lifecycle and classification catalogs. These are FK targets, so the tables
+  # referencing them cannot accept a row until these exist.
+  - table: turn_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [queued, false, Accepted and waiting for an executor]
+      - [running, false, Executing]
+      - [streaming, false, Emitting a partial response]
+      - [completed, true, Finished successfully]
+      - [failed, true, Finished with an error]
+      - [cancelled, true, Abandoned before completion]
+  - table: idempotency_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [claimed, false, Execution right acquired by one worker]
+      - [committed, true, Result durably bound to the idempotency key]
+      - [abandoned, true, Released unfinished so another worker may replay]
+  - table: reservation_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [held, false, Budget reserved and not yet settled]
+      - [settled, true, Reservation consumed by actual usage]
+      - [released, true, Reservation returned unused]
+      - [expired, true, Reservation lapsed before settlement]
+  - table: rollout_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [pending, false, Planned but not started]
+      - [active, false, Serving a traffic share]
+      - [paused, false, Halted with traffic pinned]
+      - [completed, true, Fully rolled out]
+      - [rolled_back, true, Reverted to the previous version]
+  - table: priority_class
+    columns: [code, dispatch_rank, description]
+    rows:
+      - [interactive, 1, User is waiting on the response]
+      - [standard, 2, Default background work]
+      - [batch, 3, Bulk work that may wait behind other classes]
+  - table: usage_category
+    columns: [code, description]
+    rows:
+      - [model_input, Prompt tokens billed by a model]
+      - [model_output, Completion tokens billed by a model]
+      - [image, Generated image assets]
+      - [video, Generated video seconds]
+      - [tool, Governed tool invocation]
+      - [knowledge, Knowledge retrieval]

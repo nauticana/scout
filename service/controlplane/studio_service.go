@@ -38,9 +38,17 @@ type StudioService struct {
 	Kinds      contract.AgentKindCatalog
 	Catalog    contract.StudioModelCatalog
 	Activity   contract.AgentActivityReporter
+	Now        func() time.Time
 
 	once sync.Once
 	qs   keelport.QueryService
+}
+
+func (s *StudioService) now() time.Time {
+	if s.Now != nil {
+		return s.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (s *StudioService) init(ctx context.Context) error {
@@ -421,7 +429,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 		return domain.AgentRelease{}, err
 	}
 	definition.Version = version
-	definition.PublishedAt = time.Now().UTC()
+	definition.PublishedAt = s.now()
 	encoded, err := json.Marshal(definition)
 	if err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("marshal agent definition: %w", err)
@@ -495,7 +503,7 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	definition.RestoredFromVersion = request.Version
 	definition.ChangeSummary = "Restored from version " + request.Version
 	definition.PublishedBy = &actor.ActorID
-	definition.PublishedAt = time.Now().UTC()
+	definition.PublishedAt = s.now()
 	encoded, err := json.Marshal(definition)
 	if err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("marshal restored definition: %w", err)

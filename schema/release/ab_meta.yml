@@ -1,9 +1,17 @@
 tables:
+  - rollout_stage
   - platform_release
+  - release_bundle
   - tenant_ring
   - tenant_ring_member
   - contract_test_case
   - contract_test_run
   - contract_test_result
   - platform_rollout
+  - platform_rollout_state
+  - platform_rollout_transition
+  - platform_rollout_bypass
+  - agent_version_pin
+  - experiment_cohort
+  - conversation_release
   - audit_event

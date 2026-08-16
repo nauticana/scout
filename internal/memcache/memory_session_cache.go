@@ -4,17 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
 
-// MemorySessionCache is an in-process HotSessionCache; losing it costs latency, never correctness.
+// MemorySessionCache is an in-process HotSessionCache; losing it costs latency,
+// never correctness. Entries carry their durable Revision and a Put never
+// replaces a newer cached revision with an older one.
 type MemorySessionCache struct {
 	Capacity int
 	TTL      time.Duration
 	inner    memoryCache[domain.SessionKey, domain.SessionSnapshot]
+	puts     sync.Mutex
 }
 
 var _ contract.HotSessionCache = (*MemorySessionCache)(nil)
@@ -31,15 +35,22 @@ func (cache *MemorySessionCache) Get(ctx context.Context, tenantID int64, conver
 	return snapshot, ok, nil
 }
 
-// Put caches a durable session snapshot.
+// Put caches a durable session snapshot unless a newer revision is already cached.
 func (cache *MemorySessionCache) Put(ctx context.Context, tenantID int64, snapshot domain.SessionSnapshot) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if tenantID <= 0 || strings.TrimSpace(snapshot.ConversationID) == "" {
-		return fmt.Errorf("%w: tenant and conversation are required", domain.ErrValidation)
+	if tenantID <= 0 || strings.TrimSpace(snapshot.ConversationID) == "" || snapshot.Revision < 0 {
+		return fmt.Errorf("%w: tenant, conversation, and non-negative revision are required", domain.ErrValidation)
 	}
-	cache.inner.get(cache.Capacity, cache.TTL).Set(domain.SessionKey{TenantID: tenantID, ConversationID: snapshot.ConversationID}, snapshot, cache.TTL)
+	key := domain.SessionKey{TenantID: tenantID, ConversationID: snapshot.ConversationID}
+	inner := cache.inner.get(cache.Capacity, cache.TTL)
+	cache.puts.Lock()
+	defer cache.puts.Unlock()
+	if current, ok := inner.Get(key); ok && current.Revision > snapshot.Revision {
+		return nil
+	}
+	inner.Set(key, snapshot, cache.TTL)
 	return nil
 }
 

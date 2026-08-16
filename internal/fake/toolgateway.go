@@ -92,6 +92,39 @@ func (function ToolResultValidatorFunc) Validate(ctx context.Context, definition
 	return function(ctx, definition, result)
 }
 
+// FencedToolCircuitBreaker contains configurable fenced circuit callbacks.
+type FencedToolCircuitBreaker struct {
+	ToolCircuitBreaker
+	AdmitFunc  func(context.Context, domain.ToolCall, domain.ToolDefinition) (int64, error)
+	SettleFunc func(context.Context, domain.ToolCall, domain.ToolDefinition, int64, bool) error
+}
+
+// Admit invokes AdmitFunc.
+func (breaker *FencedToolCircuitBreaker) Admit(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) (int64, error) {
+	return breaker.AdmitFunc(ctx, call, definition)
+}
+
+// Settle invokes SettleFunc.
+func (breaker *FencedToolCircuitBreaker) Settle(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition, generation int64, success bool) error {
+	return breaker.SettleFunc(ctx, call, definition, generation, success)
+}
+
+// ToolFailureClassifierFunc adapts a function to contract.ToolFailureClassifier.
+type ToolFailureClassifierFunc func(context.Context, domain.ToolCall, domain.ToolResult, error) bool
+
+// CountsAsDependencyFailure invokes the configured function.
+func (function ToolFailureClassifierFunc) CountsAsDependencyFailure(ctx context.Context, call domain.ToolCall, result domain.ToolResult, err error) bool {
+	return function(ctx, call, result, err)
+}
+
+// ToolGuardrailConfigResolverFunc adapts a function to contract.ToolGuardrailConfigResolver.
+type ToolGuardrailConfigResolverFunc func(context.Context, domain.ToolCall) (domain.GuardrailConfig, error)
+
+// GuardrailConfig invokes the configured function.
+func (function ToolGuardrailConfigResolverFunc) GuardrailConfig(ctx context.Context, call domain.ToolCall) (domain.GuardrailConfig, error) {
+	return function(ctx, call)
+}
+
 var _ contract.ToolRegistry = (*ToolRegistry)(nil)
 var _ contract.ToolAuthorizer = ToolAuthorizerFunc(nil)
 var _ contract.ToolCredentialProvider = ToolCredentialProviderFunc(nil)
@@ -99,3 +132,6 @@ var _ contract.ToolEgressPolicy = ToolEgressPolicyFunc(nil)
 var _ contract.ToolTransport = ToolTransportFunc(nil)
 var _ contract.ToolCircuitBreaker = (*ToolCircuitBreaker)(nil)
 var _ contract.ToolResultValidator = ToolResultValidatorFunc(nil)
+var _ contract.FencedToolCircuitBreaker = (*FencedToolCircuitBreaker)(nil)
+var _ contract.ToolFailureClassifier = ToolFailureClassifierFunc(nil)
+var _ contract.ToolGuardrailConfigResolver = ToolGuardrailConfigResolverFunc(nil)

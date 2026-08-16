@@ -1,22 +1,71 @@
-# Scout tenancy requires keel tenant_management, which depends on core and geo.
+# Scout schema modules. A downstream selects only the modules its product needs:
+# pass their directories to schemagen -input, and the matching seed directories
+# to -seed. depends_on lists direct table-FK dependencies and fixes DDL order;
+# seed_depends_on names components whose tables receive this module's seed rows.
+# Scout tenancy additionally requires keel tenant_management, which depends on
+# keel core and geo.
 version: 1
 groups:
   - name: catalog
     path: catalog
+    seed: seed/catalog/catalog.yml
     depends_on: []
+    seed_depends_on: [core]
+
   - name: tenancy
     path: tenancy
-    seed: seed/tenancy.yml
+    seed: seed/tenancy/tenancy.yml
     depends_on: [catalog]
     seed_depends_on: [core]
-  - name: control_plane
-    path: control_plane
-    seed: seed/control_plane.yml
+
+  - name: prompt
+    path: prompt
+    seed: seed/prompt/prompt.yml
+    depends_on: []
+    seed_depends_on: [core]
+
+  - name: model
+    path: model
+    seed: seed/model/model.yml
     depends_on: [catalog, tenancy]
     seed_depends_on: [core]
+
+  - name: agent
+    path: agent
+    seed: seed/agent/agent.yml
+    depends_on: [tenancy, prompt, model]
+    seed_depends_on: [core]
+
+  - name: tool
+    path: tool
+    depends_on: [tenancy, agent]
+
+  - name: graph
+    path: graph
+    seed: seed/graph/graph.yml
+    depends_on: [agent]
+    seed_depends_on: [core]
+
+  - name: knowledge
+    path: knowledge
+    depends_on: [tenancy, agent]
+
+  - name: knowledge_vector
+    path: knowledge_vector
+    depends_on: [knowledge]
+
   - name: runtime
     path: runtime
-    depends_on: [catalog, tenancy, control_plane]
+    seed: seed/runtime/runtime.yml
+    depends_on: [catalog, tenancy, agent, graph]
+    seed_depends_on: [core]
+
   - name: release
     path: release
-    depends_on: [catalog, tenancy, control_plane]
+    seed: seed/release/release.yml
+    depends_on: [catalog, tenancy, agent, runtime]
+    seed_depends_on: [core]
+
+  - name: evaluation
+    path: evaluation
+    depends_on: [catalog, tenancy, agent, knowledge, release]

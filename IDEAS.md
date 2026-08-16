@@ -29,7 +29,36 @@ The study set is not scaffolding to copy. It is a catalogue of mechanisms that c
 | F2 | bounded ordered concurrency in `release.ContractTestRunner` |
 | — | extra gap closed: `isolation.MemoryLoopDetector` (`LoopDetector` had no impl) |
 
-Still open: B1 hedging (wire through A3 first), C3 tiered-cache discipline, C4 semantic cache, D3 sharded merge, E1 cardinality sketch, E2 structured observations, E3 latency budget allocator, E6 version pins, F3 ingest pipeline, G1 keel clock convention, and the durable queue/store ports (`ConversationIngress`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`).
+Still open after the 2026-08-16 pass: C4 semantic response cache (research until a leak-safety proof exists) and a HANA vector adapter (demand-driven). Everything else in this document now has a reference implementation; see [TODO.md](TODO.md) for the shipped inventory and `doc/` for the design references.
+
+## Implementation status (2026-08-16)
+
+| Idea | Shipped as |
+|---|---|
+| A4 | `isolation.DistributedTenantRateLimiter` — tenant × fleet fixed windows over keel cache, coalesced hot keys, bounded local fallback with a degraded flag. Needs an atomic multi-scope keel primitive to close the documented over-admission window |
+| A8 | `toolgateway.CircuitBreaker` — closed/open/half-open, one generation-fenced probe, LRU-bounded tenant × tool, shared destination health, injected failure classifier |
+| B0 + B0a | `dataplane.TurnIngress`, `QueueTurnDispatcher`, `QueueTurnScheduler`, `TableDeadLetterQueue`, `TurnRuntime`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `MemoryTurnQueue`, `dataplanetest` conformance suites; DTO/table identity resolved in `doc/persistence.md` |
+| B1 | `modelgateway.HedgingGateway` — one delayed attempt on a different route, idempotent requests only, per-tenant budget and kill switch, independently fenced per-attempt reservations |
+| B6 | `modelgateway.PolicyRouter` over `ModelCandidateCatalog` and `CapacitySnapshotSource`, with an auditable reason and routing generation; `ModelSelection` carries version, region, route, generation |
+| B7 | `guardrail.LayeredEnforcer` + `RuleSetCompiler` — baseline composed with pinned release policy, typed versioned envelope compiled per digest, stateful streaming sessions with bounded lookback |
+| C3 | Cache subordination in `SessionCoordinator`: durable write first, revision floor, overlapping-read invalidation, local TTL bounded by `RemoteTTL` |
+| D0 | `knowledge.PgVectorIndex` — entitlement predicates compiled into the WHERE clause, tombstone-aware, fail-closed on a missing or stale entitlements digest |
+| D3 | `knowledge.ShardedRetriever` — k-way merge with score-bound early stop |
+| E1 | `observability.LabelPolicy` + `BoundedRuntimeMetrics` + `TenantHeavyHitters` — allowlisted labels, exact tenant accounting only through `TenantLedger`, stable rank slots |
+| E2 | `domain.Observation` + `internal/stage` spans emitted from streaming and retrieval |
+| E3 | `isolation.LatencyBudgetAllocator` — generation reserved first, optional stages clamped, `ErrDeadlineInfeasible` at admission |
+| E6 | `release.PinnedTrafficManager` — compliance pin → tenant pin → cohort → deployment, with `agent_version_pin` and pin-aware garbage collection |
+| E7 | `service/evaluation` — content-addressed manifests, golden sets with hidden gate scope, heuristic and blinded judge evaluators, paired slice scoring with bootstrap CIs, signed expiring gate decisions, trajectory and retrieval scoring |
+| E5 (impl) | `evaluation.GateHealthEvaluator` — verified unexpired decision plus online metrics, inconclusive on anything doubtful |
+| F3 | `knowledge.IngestPipeline` — bounded stages, correlated per-document results, publish-after-index ordering with compensation |
+| G1 | `Now func() time.Time` on every time-dependent service; `doc/configuration.md` records the convention |
+| G2 | Lifecycle and leak tests for every goroutine-owning service, with idempotent `Close` |
+| G3 | Validated constructor config everywhere, each limit mapped to a documented flag in `doc/configuration.md` |
+| — | Beyond the study set: `release.RolloutController` state machine, `release_bundle`, session drain, rollback drills, and serving-signal export (`modelgateway.ServingSignalCollector`) |
+
+### R3 decision (2026-08-16)
+
+Keep the split between tenant agent-version rollout and platform-release rings, and add a signed `release_bundle` that pins the set of component versions a platform release certifies. Merging the two controls would make rollback ambiguous exactly when it matters, force a ring change on every tenant publish, and mint a composite identity per tenant-agent-platform triple. The bundle is a manifest, not a third traffic control: nothing routes on it, and it exists so "roll back to the previous release" names what it restores. A conversation persists both identities — `agent_conversation.agent_version` and `conversation_release.platform_version`.
 
 ## 1. Core finding
 

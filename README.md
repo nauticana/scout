@@ -17,9 +17,12 @@ Scout is licensed under the [Apache License 2.0](LICENSE).
 | `handler/` | HTTP-only Agent Studio compatibility adapter |
 | `mcp/` | MCP server, provider, envelope, resource, and conformance helpers |
 | `provider/` | Outbound model and media vendor adapters behind `contract.ModelProvider` |
-| `schema/` | Database-neutral table definitions compiled by keel |
+| `schema/` | Database-neutral table definitions compiled by keel, split into selectable modules |
 | `internal/` | Mechanisms with no downstream call site, including shared test fakes |
+| `doc/` | Database reference and one design reference per mechanism, linked from this guide |
 | `STUDIO_API.md` | Agent Studio HTTP compatibility reference |
+| `IDEAS.md` / `TODO.md` | Gap analysis against the design study set, and the task lists it produced |
+| `migration_guide.json` | Versioned upgrade history; this guide documents only the current state |
 | `go.mod` | Module identity and the pinned keel schema compiler tool |
 
 Placement follows two questions. A package sits at the repository root when it crosses a boundary — inbound (`handler/`, `mcp/`), outbound (`provider/`) — or when it is shared language (`domain/`, `contract/`, `api/`, `schema/`). A package sits under `service/` when a downstream constructs and injects it; if no downstream ever names the type, it belongs in `internal/` instead. Each `service/` package maps to one `contract/` file.
@@ -92,13 +95,15 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/studio_http.go` | `AgentStudioHTTPBackend` | Extend the shared service only where product behavior is required |
 | `contract/agent_runtime.go` | `AgentExecutor`, `PricedAgent`, `ModelPricer`, provider factory, prompt renderer, run recorder/purger | Execute, price, and record one published agent's work |
 | `contract/mcp.go` | Server description, tool/resource/prompt operations, field catalog | Expose product capabilities through Scout MCP adapters |
-| `contract/data_plane.go` | `ConversationIngress`, `ConversationRuntime`, dispatcher, scheduler, session, reply, step ports | Admit and execute turns with replay and streaming |
-| `contract/model_runtime.go` | Router, gateway, provider registry, stream, capacity | Govern provider selection and inference |
-| `contract/tool_gateway.go` | Authorization, credentials, egress, transport, retry, circuit breaker | Govern every external tool effect |
-| `contract/guardrail.go` | `GuardrailEnforcer` | Apply pinned policy at model and tool boundaries |
-| `contract/knowledge.go` | Ingestor, document store, embedding, vector index, retriever | Build and query immutable tenant knowledge versions |
-| `contract/isolation.go` | Rate, budget, execution, loop, cost, concurrency controls | Enforce tenant and fleet limits |
-| `contract/release_and_observability.go` | Compatibility runs, rollout, audit, runtime metrics | Protect platform releases and record outcomes |
+| `contract/data_plane.go` | `ConversationIngress`, `ConversationRuntime`, dispatcher, scheduler, weights, session, reply, step, record ports | Admit and execute turns with replay and streaming |
+| `contract/model_runtime.go` | Router, candidate catalog, capacity snapshots, gateway, provider registry, stream, serving signals | Govern provider selection and inference |
+| `contract/tool_gateway.go` | Authorization, credentials, egress, transport, retry, fenced circuit breaker | Govern every external tool effect |
+| `contract/guardrail.go` | `GuardrailEnforcer`, streaming sessions, classifiers, rule compiler, approval gate | Apply pinned policy at model and tool boundaries |
+| `contract/knowledge.go` | Ingestor, loader/decoder/chunker, embedding, vector index, retriever, manifest, alias, CDC | Build and query immutable tenant knowledge versions |
+| `contract/isolation.go` | Rate, budget, execution, loop, cost, concurrency, latency-budget controls | Enforce tenant and fleet limits |
+| `contract/release.go` | Compatibility runs, rollout state, leases, pins, bundles, drain, drills | Protect platform releases |
+| `contract/evaluation.go` | Manifests, golden sets, evaluators, gate decisions, sampling, calibration | Supply rubrics, truth, and business outcomes |
+| `contract/observability.go` | Audit sink, runtime metrics, observation recorder, label sink, tenant ledger | Export bounded fleet metrics and exact tenant accounting |
 | `contract/health.go` | `HealthProbe` | Expose dependency readiness to composition code |
 
 The `domain/` package contains transport- and provider-neutral DTOs. Provider SDK types must not cross these interfaces. `domain/` holds values only: no functions and no methods. Behavior belongs to `service/`, `handler/`, or `mcp/`, where it can be injected and replaced.
@@ -110,11 +115,14 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
 | `service/controlplane` | `control_plane.go`, `studio*.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
-| `service/dataplane` | `data_plane.go` | `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `MemorySessionCache`, `MemoryGraphCache`, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller` | Durable stores, non-authoritative caches, metrics, guardrails, and step executors |
-| `service/isolation` | `isolation.go` | `ExecutionGovernor`, rate-limiter factory, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector` | Keel database, admission policy, budget policy, loop detection, and cost circuit breaking |
-| `service/knowledge` | `knowledge.go` | `BatchingEmbedder`, `HybridRetriever` | Batch embedding providers, retrieval legs, and rerankers |
-| `service/modelgateway` | `model_runtime.go` | `Gateway`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, and lease-owning streams | Rate limiting, capacity scheduling, and model providers |
-| `service/release` | `release_and_observability.go` | `ContractTestRunner` with bounded ordered concurrency | Governed test execution and assertion evaluation |
+| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
+| `service/isolation` | `isolation.go` | `ExecutionGovernor`, rate-limiter factory, `DistributedTenantRateLimiter`, `LatencyBudgetAllocator`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector` | Keel database and cache, admission policy, budget policy, stage latency model, loop detection, and cost circuit breaking |
+| `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
+| `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
+| `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
+| `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
+| `service/evaluation` | `evaluation.go` | `Runner`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
+| `service/observability` | `observability.go` | `BoundedRuntimeMetrics`, `LabelPolicy`, `TenantHeavyHitters`, `AuditingObservationRecorder`, `KeelMetricSink` | Metric backends, tenant ledger, and audit sink |
 | `service/runtime` | `agent_runtime.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
 | `service/toolgateway` | `tool_gateway.go` | `GovernedGateway` and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
 
@@ -307,6 +315,8 @@ sequenceDiagram
 
 Subscribe before enqueueing so a fast worker cannot publish before the response route exists. Reply frames carry tenant, request, conversation, route, and sequence identity. The reply broker may retain frames briefly for reconnect, while the final result remains durable.
 
+The order of durability inside a turn is fixed: the step idempotency result, then the checkpoint, then guarded intermediate frames, then the terminal result and its settlement, and only then the final frame and the queue acknowledgement. Intermediate frames are deduplicated by sequence, so a replay republishes identical sequences rather than re-executing a step, and the final frame is never client-visible before the record that makes it replayable exists.
+
 ### Starting latency budget
 
 Treat these values as an initial measurement plan, not a universal guarantee.
@@ -465,39 +475,67 @@ Run `mcp/mcptest` manifest and tool-text conformance checks before publishing a 
 
 ## Database schema
 
-Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it.
+Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 27 Scout tables rather than all 82.
 
 The schema uses portable types supported by keel's PostgreSQL and MySQL dialects. Structured definitions are canonical JSON stored as `TEXT` and validated at service or compilation boundaries. Timestamps use `TIMESTAMP`; large data stays outside the relational database behind URI and digest columns.
 
-Every deployment installs keel `tenant_management` because `agent_tenant` is a child of keel's `business_partner`. Keel declares `tenant_management` as depending on both `core` and `geo`, so all three groups must be generated and installed in dependency order: `core`, `geo`, `tenant_management`, then Scout. Scout does not copy or fork those infrastructure tables. See [DATABASE.md](DATABASE.md) for the dependency boundary and Scout-only ER diagrams.
+Two tables are deliberately PostgreSQL-only and pass their native types through the dialect mapper: `conversation_turn_detail` uses `JSONB`, and `knowledge_chunk_vector` uses `VECTOR`, `TSVECTOR`, and `JSONB` because entitlement predicates and approximate nearest-neighbor search must run inside the query. Deployments that need MySQL run vector retrieval on a separate index behind `contract.KnowledgeVectorIndex`. The `vector` extension and per-width HNSW indexes are a deployment step: install the extension, then call `PgVectorIndex.EnsureIndexes` once per embedding dimension.
 
-### Schema groups
+Every deployment installs keel `tenant_management` because `agent_tenant` is a child of keel's `business_partner`. Keel declares `tenant_management` as depending on both `core` and `geo`, so all three groups must be generated and installed in dependency order: `core`, `geo`, `tenant_management`, then Scout. Scout does not copy or fork those infrastructure tables. See [doc/database.md](doc/database.md) for the dependency boundary and Scout-only ER diagrams.
 
-| Group | Tables | Purpose |
-|---|---:|---|
-| `catalog` | 7 | Currency, priority, lifecycle, and usage catalogs |
-| `tenancy` | 4 | Tenant identity, active policies, and quotas |
-| `control_plane` | 29 | Studio drafts, prompts, lifecycle audit, agents, tools, compiled graphs, knowledge, models, pricing |
-| `runtime` | 9 | Conversations, turns, checkpoints, replay, budgets, usage, agent activity and operations |
-| `release` | 8 | Platform artifacts, rings, compatibility results, audit |
+### Schema modules
 
-`schema/dependency.yml` orders Scout-owned groups. Keel's own dependency manifest orders its groups, while the generator input below selects the required Keel groups explicitly. Each Scout group has an `ab_meta.yml` that lists its tables in dependency order. Every table lives in its own `<table>.yml` file.
+Scout's schema is split into twelve modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
+
+| Module | Tables | Purpose | Depends on |
+|---|---:|---|---|
+| `catalog` | 7 | Currency, priority, lifecycle, and usage catalogs | — |
+| `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
+| `prompt` | 2 | Prompt sections and platform baselines | — |
+| `model` | 5 | Providers, model definitions, capabilities, pricing, tenant access | `catalog`, `tenancy` |
+| `agent` | 9 | Profiles, drafts, aliases, prompt overrides, guardrail config, published versions, deployments, Studio audit | `tenancy`, `prompt`, `model` |
+| `tool` | 4 | Tool profiles, immutable versions, egress rules, agent bindings | `tenancy`, `agent` |
+| `graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
+| `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
+| `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
+| `runtime` | 12 | Conversations, turns, checkpoints, replay, durable turn queue and dead letters, budgets, usage, activity | `catalog`, `tenancy`, `agent`, `graph` |
+| `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, audit | `catalog`, `tenancy`, `agent`, `runtime` |
+| `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
+
+`schema/dependency.yml` declares those modules, their dependencies, and their seed files; [doc/database.md](doc/database.md#module-dependency-graph) draws the graph. `agent` is the common core every other module reaches through; `catalog` and `tenancy` sit under it. Module boundaries follow the `contract/` and `service/` boundaries, so a downstream picks modules by the Scout packages it actually constructs.
 
 Surrogate-ID tables declare explicit sequence metadata and rely on keel's core `table_sequence_usage` registry. Clients never choose surrogate IDs.
 
 ### Generate dialect-specific DDL
 
-The Go tool declaration pins keel's compiler. Resolve the matching keel schema through its module coordinate and generate one ordered build artifact:
+The Go tool declaration pins keel's compiler. Pass the keel groups first, then the Scout modules the product needs, and pass the matching seed directories:
 
 ```bash
-keel_schema_dir="$(go list -m -f '{{.Dir}}' github.com/nauticana/keel)/schema"
-go tool schemagen -dialect pgsql -input "${keel_schema_dir}/core,${keel_schema_dir}/geo,${keel_schema_dir}/tenant_management,schema" -seed schema/seed -out build/scout_pgsql.sql
-go tool schemagen -dialect mysql -input "${keel_schema_dir}/core,${keel_schema_dir}/geo,${keel_schema_dir}/tenant_management,schema" -out build/scout_mysql.sql
+keel="$(go list -m -f '{{.Dir}}' github.com/nauticana/keel)/schema"
+keel_in="${keel}/core,${keel}/geo,${keel}/tenant_management"
+scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/tool,schema/graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation"
+scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/graph,schema/seed/runtime,schema/seed/release"
+
+go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_seed}" -out build/scout_pgsql.sql
+go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-The combined schema currently contains 38 selected keel tables and 56 Scout tables. The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`, then adds Scout. Run both commands in CI. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
+That full set is 38 selected keel tables and 82 Scout tables. Drop the modules the product does not use:
 
-`schema/seed/control_plane.yml` seeds execution kinds, supported language codes, Studio authorization verbs, Agent Studio roles, page/table permissions, REST headers, and foreign-key lookup metadata. `schema/seed/tenancy.yml` seeds `capacity_class` with `shared` and `dedicated`. Each constant domain maps its consuming column through `constant_lookup`. The seed YAML is authoritative. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
+| Downstream profile | Scout modules | Scout tables |
+|---|---|---:|
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent` | 27 |
+| … plus compiled execution graphs | `+ graph` | 31 |
+| … plus governed tools | `+ tool` | 35 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 40 |
+| … plus the durable turn runtime | `+ runtime` | 43 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 82 |
+
+Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
+
+The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`. Run both commands in CI for whichever profile you ship. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
+
+The seed YAML is authoritative: `catalog` seeds currencies and the lifecycle catalogs, `prompt` the platform prompt sections and language codes, `model` the stock providers and capability constants, `agent` the Studio authorization verbs, roles, menu entry, config flags and REST metadata, `graph` the execution-step kinds, `runtime` and `model` their foreign-key lookup rows, and `release` the ordered `rollout_stage` catalog. Each constant domain maps its consuming column through `constant_lookup`. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
 
 ### Persistence rules
 
@@ -539,6 +577,8 @@ Use that same loader for startup, `config.ReloadFunc`, and every worker's `LoadC
 
 Secrets contain only secret material and come from keel's configured secret provider. Schema rows store secret references, never secret values or credentials embedded in URLs.
 
+Every Scout limit is a validated constructor or struct field, never a package global or an environment read, and an unsafe zero or negative combination is rejected at construction rather than at the first request. [doc/configuration.md](doc/configuration.md) maps each one to the `flag` a downstream binary should declare. Every service that owns timers or goroutines exposes an idempotent `Close` the composing binary calls at shutdown, and every clock is an injected `Now func() time.Time` so a downstream test drives windows, TTLs, leases, and budgets deterministically.
+
 For each pluggable concern:
 
 1. Depend on a Scout or downstream interface.
@@ -549,6 +589,37 @@ For each pluggable concern:
 
 Typical provider concerns include model inference, embeddings, vector search, durable dispatch, reply delivery, hot session cache, object storage, and tool transport.
 
+## Model routing and inference
+
+`modelgateway.PolicyRouter` is the reference `ModelRouter`. It decides from immutable injected evidence only: a `ModelCandidateCatalog` of the routes a tenant may use, a `CapacitySnapshotSource` carrying health, drain state, predicted queue delay, and freshness, and the tenant's `RoutingPolicy`. Candidates are filtered by required capabilities, prompt and output size against the model's limits, `AllowedRegions`, and capacity — an unhealthy, draining, stale, or unknown route is ineligible — then ranked by quality class, session affinity, warmth, locality against `TenantContext.Region`, estimated minor-unit cost from `ModelPricer`, and predicted latency, with deadline-infeasible routes dropping out first. Degradation is never implicit: when no preferred route is feasible the router walks `RoutingPolicy.Fallbacks` in order and otherwise returns `domain.ErrNoRoute`. Every selection carries `ModelVersion`, `Region`, `RouteID`, a `RoutingGeneration` folded deterministically from the catalog and snapshot generations, and an auditable `Reason`; an `AuditSink` records the same with both raw generations.
+
+`modelgateway.ResilientGateway` decorates any `ModelGateway` with three independent streaming budgets — time to first token, idle-token gap, and total — each surfacing as a typed `StreamDeadlineError` attributed to `StageModel`. A bounded, jittered retry runs only *before* the first token; once a token has been delivered, an interrupted stream ends with `FinishReason` `interrupted` and a partial completion, never a restart or spliced output. `SnapshotCache` keeps the last good candidate set, routing policy, and quota policy under an HMAC signature and a TTL, so routing survives a control-plane outage and then fails closed with `domain.ErrStaleEvidence`. `HedgingGateway` adds one delayed second attempt on a different route for idempotent requests only, behind a per-tenant hedge budget and a kill switch; every started attempt holds its own fenced reservation and settles against provider-confirmed usage, because a cancelled loser is still billable.
+
+```go
+router, _ := modelgateway.NewPolicyRouter(catalog, snapshots, policies, 30*time.Second)
+router.Pricer, router.Audit = catalog, auditSink
+gateway, _ := modelgateway.NewGateway(rateLimiter, providers, capacity)
+gateway.Observer, gateway.Signals = metrics, collector
+resilient, _ := modelgateway.NewResilientGateway(gateway, modelgateway.StreamDeadlines{
+    FirstToken: 2 * time.Second, Idle: 5 * time.Second, Total: 90 * time.Second,
+}, 2, 50*time.Millisecond)
+```
+
+Scout is not a GPU scheduler. It closes the loop with the serving control plane instead: `ServingSignalCollector` aggregates queued prefill tokens, decode token-seconds, queue-wait percentiles, TTFT and TPOT percentiles, admission rejections, and capacity outcomes per route, and `Flush` hands them to a `ServingSignalExporter` an external autoscaler consumes. A draining route admits nothing new and its running streams end with an explicit partial completion at `DrainDeadline`. See [doc/serving_signals.md](doc/serving_signals.md).
+
+## Observability
+
+Streaming and retrieval measure themselves through `internal/stage`: a span opens at stage start and closes into a `domain.Observation` carrying stage, component versions, timing including TTFT and TPOT, usage, outcome, and an error class derived from the `domain/errors.go` sentinels with `errors.Is` — never from error text. A wrapped stage error re-attributes the observation to the stage that actually failed, so a publication failure during generation is reported against `publish`, not `model`. `StreamPump` and `HybridRetriever` take an optional `Observer contract.ObservationRecorder`; leaving it nil skips measurement entirely.
+
+`service/observability` is the safe default sink chain. `BoundedRuntimeMetrics` implements both `contract.RuntimeMetrics` and `contract.ObservationRecorder` and writes only names from its fixed catalog, always through `LabelPolicy`: `tenant_id`, `request_id`, `conversation_id`, prompt and document keys are refused, and label values are bounded in length and charset so free text cannot enter through a value. A sample that violates the policy is dropped and counted, never exported. Exact per-tenant accounting is the optional `contract.TenantLedger` — the only consumer allowed to key on tenant identity — and a ledger failure is counted without suppressing the fleet series. For operational top-N, `TenantHeavyHitters` decorates the recorder with a Count-Min sketch and a bounded top-K heap over a rolling window, exporting exactly K stable `tenant_rank` slots with identity resolved outside the metrics backend. See [doc/observability.md](doc/observability.md).
+
+```go
+metrics, err := observability.NewBoundedRuntimeMetrics(observability.BoundedRuntimeMetricsConfig{
+    Sink: sink, Release: "2026.08.1", Ledger: ledger,
+})
+pump := &dataplane.StreamPump{Guardrails: guardrails, Publisher: publisher, Observer: metrics}
+```
+
 ## Reliability and isolation
 
 ### Durable dispatch and fairness
@@ -557,11 +628,56 @@ Use a fixed partition pool rather than one physical queue per tenant. Determinis
 
 The queue supplies durability and backpressure. Fairness belongs in `FairTurnScheduler`, not in an assumption about broker behavior. Dedicated tenants may receive isolated partitions and worker pools without changing the contract.
 
+`dataplane.QueueTurnDispatcher` accepts an admitted turn into `turn_queue`: the tenant is shuffle-sharded over a fixed partition subset, the partition is keyed on tenant and conversation so a conversation's turns stay ordered, and the request ID deduplicates redeliveries — identical input is a no-op, different input is `domain.ErrConflict`. `dataplane.QueueTurnScheduler` leases from that queue: expired leases are reclaimed, tenants are ordered by leased work per `contract.TenantWeightPolicy` weight and capped by their concurrency ceiling, and every claim carries a lease token that fences `Extend`, `Ack`, and `Nack`. Retry exhaustion marks the row `dead` and publishes to `TableDeadLetterQueue` in one transaction, including when the exhausted entry is found through an expired lease rather than an explicit `Nack`.
+
+`dataplane.TurnIngress` admits a turn in the only safe order — rate limit, durable turn record, budget reservation, reply subscription, durable dispatch — and refunds the reservation, fails the record, and closes the subscription if dispatch fails. A client that disconnects only ends delivery: usage is metered from provider-confirmed results, never from frames delivered. `dataplane.TurnRuntime` executes one delivery: per step it claims or replays the idempotency result, executes, commits, guards, checkpoints, then publishes the frame; after the last step it settles the reservation, writes one usage event, persists the terminal result, and only then publishes the final frame. A crash after terminal persistence replays that frame at the same sequence and never re-executes. A failed or cancelled turn settles the work already performed rather than refunding it — only a hold with no usage behind it is released — so provider work is never given away because the turn ended badly.
+
+Reference adapters ship for in-process use (`dataplane.NewMemoryTurnQueue`, `MemoryReplyHub`), and vendor adapters prove themselves with the same conformance suites Scout runs: `dataplanetest.RunDispatcherSuite`, `RunSchedulerSuite`, `RunIdempotencySuite`, and `RunReplySuite`.
+
+```go
+// runtime-worker: a keel LeasedQueueWorker driving the scheduler and the runtime.
+func (w *RuntimeWorker) LeaseClaim() bool { return true }
+
+func (w *RuntimeWorker) QueueQueries() (pending, claim, reclaim, name string) {
+    return w.pending, w.claim, w.reclaim, "runtime"
+}
+
+func (w *RuntimeWorker) HandleJob(ctx context.Context, journal logger.ApplicationLogger,
+    db keelport.DatabaseRepository, quota keelport.QuotaService, qs keelport.QueryService, jobID int64, row []any) error {
+    lease, err := w.Scheduler.LeaseFromClaimRow(ctx, row)
+    if err != nil {
+        return err
+    }
+    if _, err = w.Runtime.HandleTurn(ctx, lease.Message.Dispatch); err != nil {
+        return w.Scheduler.Nack(ctx, lease.Message.MessageID, w.WorkerID, err.Error())
+    }
+    return w.Scheduler.Ack(ctx, lease.Message.MessageID, w.WorkerID)
+}
+```
+
+Build the query set with `dataplane.TurnQueueWorkerQueries(workerID, leaseDuration, batch, maxAttempts)`. Call `Scheduler.Claim` directly instead of the keel loop when weighted fairness, not just priority and age, must decide the order.
+
 ### Limits, retry advice, and stage attribution
 
 Limiters with a known retry time return `isolation.LimitError`, which preserves the domain sentinel and implements the optional `contract.RetryAfterError` capability. Hard budget denials do not invent a reset time. Streaming and retrieval use internal stage wrappers; durable fleet attribution belongs in structured observations rather than behavior in the value-only `domain/` package.
 
 `isolation.BudgetLedger` implements attempt-aware reserve-then-settle. A live attempt replays idempotently; a nonterminal turn may replace an expired attempt after fencing it. `Commit` records actual usage, including overruns, and `Expire` reclaims dead holds. Cost-breaker tracking capacity rejects in `Allow`; `Record` preserves completed work and counts records with an untracked scope. `isolation.NewTenantRateLimiter` builds the shared process limiter used by turn, tool, and model gateways; `modelgateway.NewFairCapacityScheduler` builds the tenant-fair model capacity pool.
+
+### Distributed admission and latency budgets
+
+`isolation.NewDistributedTenantRateLimiter` enforces tenant and fleet admission across every replica using fixed-window counters in a keel `cache.CacheService`. Each lane charges the tenant window first and the fleet window second, compensating the tenant counter when the fleet refuses, and coalesces concurrent callers on one hot key into a single increment so a busy tenant costs one round trip per batch rather than one per request. When the store errors or exceeds `StoreTimeout`, the limiter degrades to a local token bucket carrying `FallbackFraction` of each limit — worst-case fleet overshoot `replicas × fraction × limit` — reports the outage through `RuntimeMetrics`, and exposes `Degraded()`. One probe per `RecoveryProbe` restores shared admission, and a stale in-flight success can never clear a newer failure.
+
+`isolation.NewLatencyBudgetAllocator` turns the caller's deadline, or `TenantRuntimePolicy.TurnTimeout` when it is shorter, into a `domain.TurnBudget`. Generation is reserved first from an injected `contract.StageLatencyModel` — `StaticStageLatencyModel` ships the starting p95 table above — then prompt build and guardrail take their configured slices, and embedding, retrieval, and rerank receive what remains above their floors. A deadline that cannot cover admission, prompt build, minimum generation, and guardrail is rejected with `domain.ErrDeadlineInfeasible` before any work starts. `isolation.ApplyBudget` stamps the retrieval slice onto a `domain.KnowledgeQuery` so retrieval and reranking stop inside their share instead of eating generation time.
+
+```go
+budget, err := allocator.Allocate(ctx, request, policy)
+if errors.Is(err, domain.ErrDeadlineInfeasible) {
+    return reject(err) // never start a turn that cannot finish
+}
+query, err = isolation.ApplyBudget(query, budget)
+```
+
+Every limit in both services is a validated constructor input; [doc/configuration.md](doc/configuration.md) maps each one to the `flag` a downstream binary should declare.
 
 ### Streaming, cancellation, and reconnect
 
@@ -573,9 +689,40 @@ Persist each completed step before beginning the next. A replacement worker load
 
 Write the durable checkpoint before refreshing the hot cache. Reject optimistic revision conflicts and invalidate stale cache entries. Never acknowledge work from cache state alone.
 
+`dataplane.DurableSessionStore` is the authoritative store over `conversation_turn`, `step_checkpoint`, and `session_snapshot`. State bytes never enter a row: an injected `ObjectStateCodec` — `dataplane.ObjectStateStore` over keel object storage — dehydrates them to a content-addressed object and the row commits only URI and SHA-256 digest, which `Load` verifies before returning state. `Checkpoint` uploads first, then runs one transaction that inserts the checkpoint and compare-and-swaps `session_snapshot.revision` from the expected value to expected+1, where expected 0 creates it; a moved revision is `domain.ErrRevisionConflict` and the upload is discarded unless a durable row already references the same digest. The store never invents a missing fingerprint, currency, or digest — an incomplete checkpoint is `domain.ErrValidation`.
+
+`dataplane.StepIdempotencyStore` makes interrupted steps replayable over `step_idempotency` with a configured `ClaimLease`. `Begin` claims an unknown step, replays a committed result from object storage, rejects a live claim with `domain.ErrConflict`, and re-claims a lease-expired or abandoned row. A worker that crashes after `Commit` but before acknowledgement replays the stored result, never the side effect; duplicate delivery of the same result is a no-op.
+
+`SessionCoordinator` keeps the cache subordinate to durable state: the durable write completes first, cache entries carry `Revision`, a revision older than one this process wrote is never served, an in-flight read overlapping a write invalidates instead of repopulating, and `MemoryCacheConfig.RemoteTTL` bounds the local TTL so a local entry never outlives the shared one. [doc/persistence.md](doc/persistence.md) states the transaction boundaries, order of durability, and orphan cleanup in full.
+
+```go
+store := &dataplane.DurableSessionStore{
+    DB: db,
+    Objects: &dataplane.ObjectStateStore{
+        Storage: objects, Bucket: "scout-sessions", KeyPrefix: "state", MaxBytes: 8 << 20,
+    },
+}
+coordinator := &dataplane.SessionCoordinator{Store: store, Cache: sessions, Metrics: metrics}
+```
+
 ### Guardrails
 
 Apply input policy before model submission, tool policy before arguments leave the platform, tool-output policy before results re-enter the graph, and output policy before each reply frame is published. Policies that require wider context may buffer output at an explicit latency cost.
+
+`guardrail.LayeredEnforcer` composes a release-independent baseline with the tenant's pinned `GuardrailConfig`. Both layers run at every stage and their hits are unioned, so release rules may strengthen policy but can never disable a baseline rule. Rules are a typed, versioned envelope validated at publication by `RuleSetCompiler` and compiled once per `RulesDigest`; runtime recomputes the digest and fails closed on mismatch. Structural rules — sizes, small JSON schemas, tool and destination allowlists, phrases, bounded regex, untrusted-content fencing, irreversible-tool approval — are deterministic and shipped, while PII, toxicity, malware, prompt-injection, and jailbreak rules call injected `ClassifierProvider`s and fail closed when a provider is missing. Every hit produces a redacted `SafetyEvent` carrying rule ids, layer, action, severity, versions, and duration, never the inspected content.
+
+Streamed output uses the optional `StreamingGuardrail.OpenOutputSession` capability instead of per-chunk inspection: the session holds back one lookback window so a phrase or bounded regex spanning chunk boundaries is caught before either half is published, and after a violation it releases nothing further. `TerminalFrame` builds the payload-free policy-safe final reply. See [doc/guardrails.md](doc/guardrails.md).
+
+The tool path is unavoidable rather than optional: `GovernedGateway` runs `BeforeTool` after authorization and before credentials, egress, and transport, so blocked arguments never leave the platform, and `AfterTool` after output validation. `toolgateway.NewCircuitBreaker` is the default `ToolCircuitBreaker` — closed → open → half-open with one generation-fenced recovery probe, LRU-bounded tenant × tool state, and optional shared destination health — with an injected failure classifier so cancellation, tenant input errors, and authorization rejections never trip a dependency breaker.
+
+```go
+gateway, err := toolgateway.NewGovernedGateway(toolgateway.GovernedGatewayConfig{
+    Registry: registry, RateLimiter: limits, Authorizer: authz, Credentials: creds,
+    Egress: egress, Transport: transport, Validator: validator,
+    Guardrails: enforcer, GuardrailConfigs: configs,
+    RetryAttempts: 3, RetryBaseDelay: 50 * time.Millisecond, Timeout: 5 * time.Second,
+})
+```
 
 ### Tenant controls
 
@@ -585,18 +732,63 @@ Admission limits, token and cost reservations, weighted scheduling, concurrency 
 
 Knowledge is versioned independently because it requires ingestion, immutable document bindings, embeddings, tenant-filtered vector search, and source attribution. Revalidate relational document bindings after vector search before loading content.
 
+### Ingestion
+
+`knowledge.IngestPipeline` is a bounded synchronous batch executor behind `contract.BulkKnowledgeIngestor`: load and verify the SHA-256 source digest, decode, chunk deterministically, optionally redact, embed, then publish. Stages hand off through buffered channels with independent worker counts, so a slow index applies real backpressure instead of growing a queue, and every stage closes only after its writers exit. Results come back correlated in input order: a systemic failure — canceled context, provider outage, invalid configuration — cancels the batch and returns an error, while an isolated bad document records a terminal item result. Chunk content goes to object storage first, vectors next, and relational `knowledge_document` and `knowledge_chunk` rows last in one transaction; a failed transaction removes the vectors it just wrote. `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, and `PolicyRedactor` are the reference ports, and product-specific decoders stay downstream.
+
+Immutability is enforced by versioning services rather than in-place edits. `ManifestStore` builds a document's new version fully, switches the active pointer, and marks the old one for garbage collection; `Tombstone` hides a deleted document from retrieval long before its rows are reclaimed. `VersionAliaser.Swap` is a compare-and-set on the knowledge-base generation pointer, so a rechunk or re-embed lands as a side-by-side version that becomes visible atomically. `TableSourceChangeSource` is the CDC/outbox port producers write to inside their own transaction, `Reconciler` reports freshness lag and orphan chunks, and `GarbageCollector.Sweep` drains superseded and tombstoned versions in bounded batches. Scout ships no ingestion binary: compose these into a keel `worker.JobWorker` as shown in [doc/knowledge_ingestion.md](doc/knowledge_ingestion.md).
+
+### Retrieval
+
+`knowledge.PgVectorIndex` is the reference `KnowledgeVectorIndex` over `knowledge_chunk_vector`. It compiles the whole visibility scope into the query — tenant partition, immutable knowledge version, entitlement labels, and an existence check that the chunk's version is still the document manifest's active, untombstoned version — so a forbidden or superseded chunk is never a nearest neighbor the application has to discard afterwards. A document with no manifest row is invisible rather than unfiltered. Chunks carry a JSON array of grant labels, a `KnowledgeQuery` carries the labels its principal holds plus `EntitlementsDigest`, and the index fails closed with `domain.ErrForbidden` when either is missing, malformed, or stale. Deployment installs the `vector` extension and calls `EnsureIndexes(ctx, dimensions)` once per embedding width; `PgVectorRetriever` and `PgTextRetriever` are the cosine and `tsvector` legs a `HybridRetriever` fuses.
+
+`NewCachedRetriever` decorates any retriever with a bounded LRU keyed by tenant, knowledge base and version, TopK, entitlements digest, query digest, and the `RetrievalCacheKeyer` scope of embedding model version, index generation, and policy version; call `Invalidate` after an entitlement or index-generation change. `NewShardedRetriever` fans one query out to shard retrievers under a concurrency bound and k-way merges their sorted results with score-bound early termination.
+
+```go
+index := &knowledge.PgVectorIndex{DB: db, Embedder: embedder}
+hybrid := &knowledge.HybridRetriever{Legs: []contract.KnowledgeRetriever{
+    &knowledge.PgVectorRetriever{Index: index}, &knowledge.PgTextRetriever{Index: index},
+}}
+cached, err := knowledge.NewCachedRetriever(hybrid, keyer, knowledge.CachedRetrieverConfig{
+    Capacity: 10_000, TTL: 5 * time.Minute, LoadTimeout: 10 * time.Second,
+})
+```
+
 The model never calls a destination directly. A governed tool path resolves the registered immutable version, authorizes tenant and agent access, retrieves scoped credentials, validates egress, applies timeout/retry/circuit-breaker policy, validates output, and records a redacted audit event.
 
 ## Release safety
 
-Agent rollout and platform rollout solve different problems:
+Agent rollout and platform rollout solve different problems, and each keeps its own persisted identity per conversation:
 
-- `AgentVersionTrafficManager` routes one tenant's conversations between immutable agent versions.
-- `PlatformReleaseRolloutController` advances a platform artifact through tenant rings.
+- `AgentVersionTrafficManager` routes one tenant's conversations between immutable agent versions. `release.PinnedTrafficManager` is the reference implementation and resolves compliance pin → approved tenant pin → experiment cohort → deployment canary or stable. `runtime.PublishedAgentResolver` delegates to it; without one it applies the same stable/canary hash directly. An incompatible pinned request is rejected with `domain.ErrConflict` rather than drifting, and `PinAwareGarbageCollector` never drops a version that is deployed, pinned, in a cohort, or held by an open conversation.
+- `PlatformReleaseRolloutController` advances a platform artifact through `build → offline_replay → shadow → internal_canary → tenant_canary → regional_ramp → global_default → retired`, with `rolled_back` and `quarantined` reachable from any live stage. `release.RolloutController` takes a per-release lease, advances only on `RolloutHealthy` past the stage's minimum samples and duration, pauses on `RolloutInconclusive` or evaluator error, rolls back and quarantines immediately on a hard guardrail breach, requires consecutive breached windows plus cooldown for a soft one, and writes every transition under a monotonic generation CAS with an audit record.
 
 Before advancing a platform ring, run a risk-stratified corpus through `AgentContractTestRunner` and evaluate latency, errors, cost, quality, and compatibility. Roll back platform code without changing tenant agent versions.
 
 The optional `DetailedRolloutHealthEvaluator.Evaluate` capability returns a three-state `domain.RolloutHealth`: `healthy` advances, `unhealthy` rolls back, and `inconclusive` — stale telemetry, insufficient samples — pauses promotion without declaring either. Loss of trustworthy metrics is never a promotion signal.
+
+Each platform release also carries a signed `release_bundle`: the model, provider, tokenizer, runtime, decoding defaults, prompt, embedding and reranker with index generation, tools, safety policy, migration set, residency policy, provenance, compatibility constraints, and rollback target it certifies. Nothing routes on the bundle — it is the manifest that makes "roll back to the previous release" name what it restores. Put that identity in `domain.ComponentVersions.Release` on every observation, usage event, and audit record, beside `Agent`: a regression that cannot be attributed to a release cannot be rolled back with confidence.
+
+Rollback changes only new assignments. Live conversations keep the release they were created on until `SessionDrainPolicy.Window` elapses; a quarantined release migrates them at the next turn and, with `CancelOnCriticalSafety`, cancels the running turn through `TurnCanceller` with an explicit partial status. Tokens are never spliced across releases mid-stream. [doc/rollout.md](doc/rollout.md) covers the state machine, pin precedence, and drain semantics in full.
+
+## Quality evaluation and rollout gates
+
+`service/evaluation` produces the evidence a rollout gate needs. An `EvaluationManifest` is content-addressed over the candidate and baseline agent, model, prompt, knowledge, index, tool, guardrail, decoding settings, dataset revision, evaluator versions, and safety policy, so a decision can always be reproduced. `Runner` replays both arms on identical golden examples — preserving the baseline's retrieval when both pin the same index — scores them with heuristics and a blinded pairwise judge, routes low-confidence, disagreeing, or high-risk pairs to a `HumanReviewQueue`, and stops early once `PairedScorer` reports the primary effect decided. Golden sets are scoped: hidden gate examples are unreadable from the dev scope, so prompt authors cannot tune against them.
+
+`GateIssuer` signs an expiring `GateDecision` through a pluggable `GateSigner`, and `GateHealthEvaluator` implements `DetailedRolloutHealthEvaluator` over it: a missing, expired, or tampered decision, stale telemetry, or too few online samples all return `RolloutInconclusive`, never healthy. Evaluation runs in its own keel Worker, never on the serving path; production sampling is policy-bounded per tenant and payloads are sealed with keel crypto into object storage. Retrieval is evaluated separately by `RetrievalScorer` — recall@K, MRR, nDCG, citation precision, abstention quality, ingestion and tombstone lag — and any match outside the golden principal's entitlements is a critical failure. See [doc/evaluation.md](doc/evaluation.md).
+
+```go
+runner := &evaluation.Runner{
+    Executor:   caseExecutor,
+    Heuristics: []contract.HeuristicEvaluator{schemaHeuristic, citationHeuristic},
+    Judge:      &evaluation.GatewayJudge{Gateway: gateway, Selection: judgeRoute, PromptVersion: "judge-v3", Seed: seed},
+    Review:     reviewQueue,
+    Scorer:     &evaluation.PairedScorer{Seed: seed, Resamples: 1000, Policy: promotionPolicy},
+    Scope:      domain.GoldenScopeGate,
+    Concurrency: 4, EarlyStopBatch: 25,
+}
+summary, err := runner.Run(ctx, manifest, examples)
+```
 
 ## Testing strategy
 
@@ -610,6 +802,8 @@ The optional `DetailedRolloutHealthEvaluator.Evaluate` capability returns a thre
 | Schema | Parse and generate both PostgreSQL and MySQL DDL |
 | Runtime | Duplicate delivery, stale cache, provider timeout, partial stream, reconnect |
 | Scale | Queue fairness, tenant isolation, first-approved-response latency, cost ceilings |
+| Lifecycle | Blocks until cancellation, early worker failure, empty input, invalid worker count, idempotent `Close`, no leaked goroutines |
+| Conformance | Vendor queue, reply, and idempotency adapters pass the `dataplanetest` suites Scout's own references pass |
 
 Use fakes for Scout contracts and keel ports. Test service logic directly; an HTTP test should not be the only proof of a business rule.
 
@@ -621,7 +815,7 @@ Use fakes for Scout contracts and keel ports. Test service logic directly; an HT
 4. Implement tenant policy, graph persistence, and deployment resolution.
 5. Implement durable turn records, idempotency, and session coordination.
 6. Add a queue-backed runtime worker with one deterministic step kind.
-7. Add model routing and one provider adapter.
+7. Add model routing with `PolicyRouter` and one provider adapter.
 8. Add guarded reply streaming and reconnect behavior.
 9. Add tool governance and one transport adapter.
 10. Add knowledge ingestion and retrieval if the product needs it.
@@ -634,6 +828,8 @@ This order proves durable execution before expanding provider breadth.
 
 - The change adds only shared agent-domain contracts, DTOs, reusable services, schema, or documentation.
 - No keel infrastructure primitive is duplicated.
+- Time comes from an injected `Now func() time.Time`, and anything owning goroutines or timers has an idempotent `Close` and a documented owner for calling it.
+- Every new limit is a validated constructor input and appears in `doc/configuration.md`.
 - Public interfaces use provider-neutral domain types.
 - Comments are one concise line per exported type or method.
 - Tenant identity is present at every storage and provider boundary.
@@ -642,7 +838,7 @@ This order proves durable execution before expanding provider breadth.
 - Schema generation succeeds for PostgreSQL and MySQL.
 - Handlers remain HTTP-only and workers delegate business logic to services.
 - New provider implementations stay downstream and include interface assertions.
-- `README.md` remains the single developer guide; API and database files remain references only.
+- `README.md` remains the single developer guide; `STUDIO_API.md` and everything under `doc/` remain references only.
 
 ## License
 

@@ -1,0 +1,58 @@
+table: golden_example
+comment: Metadata of one evaluation example; payload lives in object storage
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: example_id
+    type: VARCHAR(120)
+  - name: scope_code
+    type: VARCHAR(10)
+  - name: provenance
+    type: VARCHAR(80)
+  - name: consent_class
+    type: VARCHAR(40)
+  - name: retention_class
+    type: VARCHAR(40)
+  - name: risk_tier
+    type: VARCHAR(20)
+  - name: domain_code
+    type: VARCHAR(80)
+    nullable: true
+  - name: language_code
+    type: VARCHAR(20)
+    nullable: true
+  - name: rubric_ref
+    type: VARCHAR(200)
+    nullable: true
+  - name: expected_behavior
+    type: TEXT
+    nullable: true
+  - name: payload_uri
+    type: TEXT
+  - name: payload_digest
+    type: CHAR(64)
+  - name: reviews
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, golden_set_id, set_version, example_id]
+foreign_keys:
+  - name: golden_examples
+    columns: [tenant_id, golden_set_id, set_version]
+    references:
+      table: golden_set_version
+      columns: [tenant_id, golden_set_id, set_version]
+indexes:
+  - name: golden_example_scope_ix
+    columns: [tenant_id, golden_set_id, set_version, scope_code]
+checks:
+  - name: golden_example_scope_ck
+    expression: scope_code IN ('dev', 'gate')
+  - name: golden_example_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64

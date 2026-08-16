@@ -1,0 +1,64 @@
+table: evaluation_result
+comment: Every score one arm earned on one example in a run
+columns:
+  - name: run_id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: example_id
+    type: VARCHAR(120)
+  - name: role_code
+    type: VARCHAR(10)
+  - name: scores
+    type: TEXT
+  - name: latency_ms
+    type: INTEGER
+  - name: input_tokens
+    type: BIGINT
+    default: 0
+  - name: output_tokens
+    type: BIGINT
+    default: 0
+  - name: cost_minor_units
+    type: BIGINT
+    default: 0
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+  - name: needs_human_review
+    type: BOOLEAN
+    default: FALSE
+  - name: reason
+    type: VARCHAR(400)
+    nullable: true
+primary_key: [run_id, example_id, role_code]
+foreign_keys:
+  - name: evaluation_results
+    columns: [run_id]
+    references:
+      table: evaluation_run
+      columns: [id]
+  - name: example_evaluation_results
+    columns: [tenant_id, golden_set_id, set_version, example_id]
+    references:
+      table: golden_example
+      columns: [tenant_id, golden_set_id, set_version, example_id]
+  - name: currency_evaluation_results
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: evaluation_result_example_ix
+    columns: [tenant_id, golden_set_id, set_version, example_id]
+checks:
+  - name: evaluation_result_role_ck
+    expression: role_code IN ('baseline', 'candidate')
+  - name: evaluation_result_usage_ck
+    expression: latency_ms >= 0 AND input_tokens >= 0 AND output_tokens >= 0 AND cost_minor_units >= 0
+  - name: evaluation_result_currency_ck
+    expression: cost_minor_units = 0 OR currency_code IS NOT NULL

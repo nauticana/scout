@@ -1,0 +1,17 @@
+comment: Execution step kinds compiled graphs may contain
+order: 30
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [execution_step_kind, Execution Step Kind]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [execution_step_kind, model, Model Inference]
+      - [execution_step_kind, tool, Governed Tool Invocation]
+      - [execution_step_kind, knowledge, Knowledge Retrieval]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [execution_step_kind, execution_step, step_kind_code]

@@ -1,0 +1,51 @@
+table: evaluation_manifest
+comment: Immutable content-addressed description of one paired evaluation
+columns:
+  - name: manifest_id
+    type: CHAR(64)
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: candidate_agent_version
+    type: VARCHAR(80)
+  - name: baseline_agent_version
+    type: VARCHAR(80)
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: golden_set_version
+    type: BIGINT
+  - name: dataset_revision
+    type: CHAR(64)
+  - name: safety_policy_version
+    type: VARCHAR(80)
+  - name: manifest_json
+    type: TEXT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [manifest_id]
+foreign_keys:
+  - name: candidate_evaluation_manifests
+    columns: [tenant_id, agent_id, candidate_agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+  - name: baseline_evaluation_manifests
+    columns: [tenant_id, agent_id, baseline_agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+  - name: evaluation_manifests
+    columns: [tenant_id, golden_set_id, golden_set_version]
+    references:
+      table: golden_set_version
+      columns: [tenant_id, golden_set_id, set_version]
+indexes:
+  - name: evaluation_manifest_agent_ix
+    columns: [tenant_id, agent_id, candidate_agent_version]
+checks:
+  - name: evaluation_manifest_id_ck
+    expression: CHAR_LENGTH(manifest_id) = 64
+  - name: evaluation_manifest_revision_ck
+    expression: CHAR_LENGTH(dataset_revision) = 64

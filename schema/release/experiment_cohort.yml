@@ -1,0 +1,28 @@
+table: experiment_cohort
+comment: Stable-hash share of a tenant agent's conversations assigned to a version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: experiment_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: percentage
+    type: SMALLINT
+  - name: salt
+    type: VARCHAR(80)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_id, experiment_id]
+foreign_keys:
+  - name: experiment_cohorts
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+checks:
+  - name: experiment_cohort_percentage_ck
+    expression: percentage BETWEEN 1 AND 100

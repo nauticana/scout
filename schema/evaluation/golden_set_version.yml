@@ -1,0 +1,30 @@
+table: golden_set_version
+comment: Frozen revision of a golden set with its dataset digest
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: dataset_revision
+    type: CHAR(64)
+  - name: example_count
+    type: INTEGER
+  - name: frozen_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, golden_set_id, set_version]
+foreign_keys:
+  - name: golden_set_versions
+    columns: [tenant_id, golden_set_id]
+    references:
+      table: golden_set
+      columns: [tenant_id, golden_set_id]
+checks:
+  - name: golden_set_version_no_ck
+    expression: set_version > 0
+  - name: golden_set_version_digest_ck
+    expression: CHAR_LENGTH(dataset_revision) = 64
+  - name: golden_set_version_count_ck
+    expression: example_count >= 0

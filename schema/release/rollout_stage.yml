@@ -1,0 +1,21 @@
+table: rollout_stage
+comment: Ordered platform release rollout stages
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: stage_order
+    type: SMALLINT
+  - name: is_live
+    type: BOOLEAN
+  - name: is_terminal
+    type: BOOLEAN
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]
+indexes:
+  - name: rollout_stage_order_uq
+    columns: [stage_order]
+    unique: true
+checks:
+  - name: rollout_stage_order_ck
+    expression: stage_order > 0

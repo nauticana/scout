@@ -1,0 +1,58 @@
+table: agent_version_pin
+comment: Bounded hold of a tenant agent on one immutable version
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: scope_code
+    type: VARCHAR(30)
+  - name: region
+    type: VARCHAR(30)
+    nullable: true
+  - name: reason
+    type: TEXT
+  - name: owner
+    type: VARCHAR(120)
+  - name: approved_by
+    type: VARCHAR(120)
+    nullable: true
+  - name: signature
+    type: TEXT
+    nullable: true
+  - name: compatible_policy_versions
+    type: TEXT
+    nullable: true
+  - name: compatible_index_versions
+    type: TEXT
+    nullable: true
+  - name: effective_at
+    type: TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: agent_version_pin_seq
+  column: id
+foreign_keys:
+  - name: agent_version_pins
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+indexes:
+  - name: agent_version_pin_agent_ix
+    columns: [tenant_id, agent_id, scope_code, effective_at]
+checks:
+  - name: agent_version_pin_scope_ck
+    expression: scope_code IN ('compliance', 'tenant')
+  - name: agent_version_pin_dates_ck
+    expression: expires_at IS NULL OR expires_at > effective_at

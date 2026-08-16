@@ -3,6 +3,7 @@ package toolgateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -134,5 +135,166 @@ func TestGovernedGatewayStopsBeforeCredentialsWhenEgressFails(t *testing.T) {
 	_, err := gateway.Invoke(context.Background(), validToolCall())
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func guardedGateway(t *testing.T, calls *[]string, enforcer *fake.GuardrailEnforcer, transport fake.ToolTransportFunc) *GovernedGateway {
+	t.Helper()
+	gateway := governedGateway(calls, transport)
+	gateway.Guardrails = enforcer
+	gateway.GuardrailConfigs = fake.ToolGuardrailConfigResolverFunc(func(context.Context, domain.ToolCall) (domain.GuardrailConfig, error) {
+		*calls = append(*calls, "guardrail_config")
+		return domain.GuardrailConfig{Version: "policy-1"}, nil
+	})
+	return gateway
+}
+
+func TestGovernedGatewayEnforcesGuardrailsAroundTheCall(t *testing.T) {
+	var calls []string
+	enforcer := &fake.GuardrailEnforcer{
+		BeforeToolFunc: func(_ context.Context, config domain.GuardrailConfig, call domain.ToolCall) (domain.ToolCall, error) {
+			calls = append(calls, "guardrail_before")
+			if config.Version != "policy-1" {
+				t.Fatalf("config = %+v", config)
+			}
+			call.Arguments = []byte("sanitized")
+			return call, nil
+		},
+		AfterToolFunc: func(_ context.Context, _ domain.GuardrailConfig, result domain.ToolResult) (domain.ToolResult, error) {
+			calls = append(calls, "guardrail_after")
+			result.Output = []byte("guarded")
+			return result, nil
+		},
+	}
+	gateway := guardedGateway(t, &calls, enforcer, fake.ToolTransportFunc(func(_ context.Context, call domain.ToolCall, _ domain.ToolDefinition, _ []byte, _ time.Duration) (domain.ToolResult, error) {
+		calls = append(calls, "transport")
+		if string(call.Arguments) != "sanitized" {
+			t.Fatalf("transport saw arguments %q", call.Arguments)
+		}
+		return domain.ToolResult{Output: []byte("raw")}, nil
+	}))
+	result, err := gateway.Invoke(context.Background(), validToolCall())
+	if err != nil || string(result.Output) != "guarded" {
+		t.Fatalf("result = %+v, error = %v", result, err)
+	}
+	want := []string{"rate", "registry", "authorize", "guardrail_config", "guardrail_before", "egress", "circuit_allow", "credential", "transport", "validate", "circuit_success", "guardrail_after"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestGovernedGatewayBlockedArgumentsNeverReachEgressOrTransport(t *testing.T) {
+	var calls []string
+	blocked := fmt.Errorf("%w: blocked by policy", domain.ErrForbidden)
+	enforcer := &fake.GuardrailEnforcer{BeforeToolFunc: func(context.Context, domain.GuardrailConfig, domain.ToolCall) (domain.ToolCall, error) {
+		return domain.ToolCall{}, blocked
+	}}
+	gateway := guardedGateway(t, &calls, enforcer, fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
+		t.Fatal("transport must not be called")
+		return domain.ToolResult{}, nil
+	}))
+	_, err := gateway.Invoke(context.Background(), validToolCall())
+	if !errors.Is(err, blocked) || !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("error = %v", err)
+	}
+	for _, call := range calls {
+		if call == "egress" || call == "credential" || call == "circuit_allow" {
+			t.Fatalf("calls reached %s: %v", call, calls)
+		}
+	}
+}
+
+func TestGovernedGatewayRequiresGuardrailConfigResolver(t *testing.T) {
+	var calls []string
+	gateway := governedGateway(&calls, fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
+		return domain.ToolResult{}, nil
+	}))
+	gateway.Guardrails = &fake.GuardrailEnforcer{}
+	if _, err := gateway.Invoke(context.Background(), validToolCall()); err == nil {
+		t.Fatal("expected a wiring error")
+	}
+}
+
+func TestGovernedGatewaySkipsBreakerForNonDependencyFailure(t *testing.T) {
+	var calls []string
+	rejected := fmt.Errorf("%w: bad arguments", domain.ErrValidation)
+	gateway := governedGateway(&calls, fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
+		return domain.ToolResult{}, rejected
+	}))
+	gateway.Retry = RetryPolicy{MaxAttempts: 1}
+	if _, err := gateway.Invoke(context.Background(), validToolCall()); !errors.Is(err, rejected) {
+		t.Fatalf("error = %v", err)
+	}
+	for _, call := range calls {
+		if call == "circuit_failure" {
+			t.Fatalf("tenant input error reached the breaker: %v", calls)
+		}
+	}
+}
+
+func TestGovernedGatewayUsesFencedBreakerWhenAvailable(t *testing.T) {
+	var calls []string
+	gateway := governedGateway(&calls, fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
+		return domain.ToolResult{Output: []byte("ok")}, nil
+	}))
+	var settled int64
+	gateway.Circuit = &fake.FencedToolCircuitBreaker{
+		AdmitFunc: func(context.Context, domain.ToolCall, domain.ToolDefinition) (int64, error) {
+			calls = append(calls, "admit")
+			return 42, nil
+		},
+		SettleFunc: func(_ context.Context, _ domain.ToolCall, _ domain.ToolDefinition, generation int64, success bool) error {
+			calls = append(calls, "settle")
+			settled = generation
+			if !success {
+				t.Fatal("expected a success settlement")
+			}
+			return nil
+		},
+	}
+	if _, err := gateway.Invoke(context.Background(), validToolCall()); err != nil || settled != 42 {
+		t.Fatalf("settled = %d, error = %v", settled, err)
+	}
+}
+
+func TestNewGovernedGatewayBuildsDefaults(t *testing.T) {
+	var calls []string
+	base := governedGateway(&calls, fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
+		return domain.ToolResult{Output: []byte("ok")}, nil
+	}))
+	config := GovernedGatewayConfig{
+		Registry: base.Registry, RateLimiter: base.RateLimiter, Authorizer: base.Authorizer,
+		Credentials: base.Credentials, Egress: base.Egress, Transport: base.Transport,
+		Validator: base.Validator, RetryAttempts: 2, RetryBaseDelay: time.Millisecond, Timeout: time.Second,
+	}
+	gateway, err := NewGovernedGateway(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gateway.Circuit.(*CircuitBreaker); !ok {
+		t.Fatalf("circuit = %T, want the default breaker", gateway.Circuit)
+	}
+	if _, err := gateway.Invoke(context.Background(), validToolCall()); err != nil {
+		t.Fatal(err)
+	}
+	invalid := config
+	invalid.Timeout = 0
+	if _, err := NewGovernedGateway(invalid); err == nil {
+		t.Fatal("expected a timeout validation error")
+	}
+	missing := config
+	missing.Validator = nil
+	if _, err := NewGovernedGateway(missing); err == nil {
+		t.Fatal("expected a dependency validation error")
+	}
+	noRetry := config
+	noRetry.RetryAttempts = 0
+	if _, err := NewGovernedGateway(noRetry); err == nil {
+		t.Fatal("expected a retry validation error")
+	}
+	guarded := config
+	guarded.Guardrails = &fake.GuardrailEnforcer{}
+	if _, err := NewGovernedGateway(guarded); err == nil {
+		t.Fatal("expected a guardrail resolver validation error")
 	}
 }

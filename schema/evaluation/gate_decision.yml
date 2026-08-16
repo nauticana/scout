@@ -1,0 +1,58 @@
+table: gate_decision
+comment: Signed expiring quality verdict consumed by rollout
+columns:
+  - name: decision_id
+    type: CHAR(64)
+  - name: tenant_id
+    type: BIGINT
+  - name: manifest_id
+    type: CHAR(64)
+  - name: platform_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: dataset_revision
+    type: CHAR(64)
+  - name: verdict_code
+    type: VARCHAR(20)
+  - name: confidence_bp
+    type: INTEGER
+  - name: decision_json
+    type: TEXT
+  - name: signature_hex
+    type: TEXT
+  - name: signer_key_id
+    type: VARCHAR(80)
+  - name: issued_at
+    type: TIMESTAMP
+  - name: expires_at
+    type: TIMESTAMP
+  - name: telemetry_fresh_at
+    type: TIMESTAMP
+primary_key: [decision_id]
+foreign_keys:
+  - name: gate_decisions
+    columns: [manifest_id]
+    references:
+      table: evaluation_manifest
+      columns: [manifest_id]
+  - name: platform_gate_decisions
+    columns: [platform_version]
+    references:
+      table: platform_release
+      columns: [platform_version]
+indexes:
+  - name: gate_decision_platform_ix
+    columns: [platform_version, issued_at]
+  - name: gate_decision_manifest_ix
+    columns: [tenant_id, manifest_id, issued_at]
+checks:
+  - name: gate_decision_id_ck
+    expression: CHAR_LENGTH(decision_id) = 64
+  - name: gate_decision_revision_ck
+    expression: CHAR_LENGTH(dataset_revision) = 64
+  - name: gate_decision_verdict_ck
+    expression: verdict_code IN ('healthy', 'unhealthy', 'inconclusive')
+  - name: gate_decision_confidence_ck
+    expression: confidence_bp BETWEEN 0 AND 10000
+  - name: gate_decision_dates_ck
+    expression: expires_at > issued_at

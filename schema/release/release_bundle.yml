@@ -1,0 +1,36 @@
+table: release_bundle
+comment: Signed component set certified by one platform release
+columns:
+  - name: platform_version
+    type: VARCHAR(80)
+  - name: bundle_digest
+    type: CHAR(64)
+  - name: signature
+    type: TEXT
+  - name: signer_key_id
+    type: VARCHAR(120)
+  - name: rollback_target
+    type: VARCHAR(80)
+    nullable: true
+  - name: content
+    type: TEXT
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [platform_version]
+foreign_keys:
+  - name: release_bundles
+    columns: [platform_version]
+    references:
+      table: platform_release
+      columns: [platform_version]
+  - name: rollback_target_release_bundles
+    columns: [rollback_target]
+    references:
+      table: platform_release
+      columns: [platform_version]
+checks:
+  - name: release_bundle_digest_ck
+    expression: CHAR_LENGTH(bundle_digest) = 64
+  - name: release_bundle_rollback_ck
+    expression: rollback_target IS NULL OR rollback_target <> platform_version

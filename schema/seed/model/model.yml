@@ -1,0 +1,34 @@
+comment: Model capability constant, stock providers, and model REST metadata
+order: 20
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [model_capability, Model Capability]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [model_capability, text, Text Generation]
+      - [model_capability, image, Image Generation]
+      - [model_capability, video, Video Generation]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [model_capability, model_capability, capability_code]
+  - table: model_provider
+    columns: [provider_id, display_name, endpoint_uri, credential_ref, is_active]
+    rows:
+      - [google, Google Vertex AI / Gemini, "https://generativelanguage.googleapis.com", google_api_key, true]
+      - [openai, OpenAI, "https://api.openai.com", openai_api_key, true]
+      - [anthropic, Anthropic, "https://api.anthropic.com", anthropic_api_key, true]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [model_definition, model_definition]
+      - [model_capability, model_capability]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [model_definitions, D, display_name]
+      - [model_capabilities, S, "*"]
+      - [model_prices, S, "*"]

@@ -58,3 +58,25 @@ type ToolResultValidator interface {
 	// Validate checks a tool response against its registered output contract.
 	Validate(ctx context.Context, definition domain.ToolDefinition, result domain.ToolResult) error
 }
+
+// FencedToolCircuitBreaker is the optional capability that ties every outcome to the generation
+// that admitted the call, so a stale outcome can never move newer breaker state, and that
+// tracks shared dependency health by destination when configured.
+type FencedToolCircuitBreaker interface {
+	ToolCircuitBreaker
+	// Admit is Allow with an admission generation token.
+	Admit(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) (generation int64, err error)
+	// Settle records the outcome of an admitted call; outcomes from older generations are ignored.
+	Settle(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition, generation int64, success bool) error
+}
+
+// ToolFailureClassifier decides whether one failed attempt reflects dependency health;
+// caller cancellation, tenant input errors, and authorization rejections must never trip a breaker.
+type ToolFailureClassifier interface {
+	CountsAsDependencyFailure(ctx context.Context, call domain.ToolCall, result domain.ToolResult, err error) bool
+}
+
+// ToolGuardrailConfigResolver returns the pinned guardrail policy governing one tool call.
+type ToolGuardrailConfigResolver interface {
+	GuardrailConfig(ctx context.Context, call domain.ToolCall) (domain.GuardrailConfig, error)
+}

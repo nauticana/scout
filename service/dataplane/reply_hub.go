@@ -32,6 +32,7 @@ type MemoryReplyHub struct {
 	mu        sync.Mutex
 	streams   map[streamKey]*replyStream
 	nextSweep time.Time
+	closed    bool
 }
 
 var _ contract.TurnReplyPublisher = (*MemoryReplyHub)(nil)
@@ -62,8 +63,11 @@ type replySubscription struct {
 	closed bool
 }
 
-func (hub *MemoryReplyHub) defaults() (int, int, time.Duration, time.Duration, int, func() time.Time) {
+func (hub *MemoryReplyHub) defaults() (int, int, time.Duration, time.Duration, int, func() time.Time, error) {
 	buffer, retained, linger, idle, streams, now := hub.SubscriberBuffer, hub.RetainedFrames, hub.Linger, hub.IdleTTL, hub.MaxStreams, hub.Now
+	if buffer < 0 || retained < 0 || linger < 0 || idle < 0 || streams < 0 {
+		return 0, 0, 0, 0, 0, nil, fmt.Errorf("memory reply hub: limits cannot be negative")
+	}
 	if buffer <= 0 {
 		buffer = 16
 	}
@@ -82,7 +86,21 @@ func (hub *MemoryReplyHub) defaults() (int, int, time.Duration, time.Duration, i
 	if now == nil {
 		now = time.Now
 	}
-	return buffer, retained, linger, idle, streams, now
+	return buffer, retained, linger, idle, streams, now, nil
+}
+
+// Close detaches every subscriber with io.EOF and rejects later calls; it is idempotent.
+func (hub *MemoryReplyHub) Close() error {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	hub.closed = true
+	for key, stream := range hub.streams {
+		for subscription := range stream.subscribers {
+			hub.dropLocked(stream, subscription, io.EOF)
+		}
+		delete(hub.streams, key)
+	}
+	return nil
 }
 
 // Publish retains and fans out a frame; matching retained duplicates are no-ops.
@@ -93,12 +111,18 @@ func (hub *MemoryReplyHub) Publish(ctx context.Context, reply domain.TurnReply) 
 	if reply.TenantID <= 0 || strings.TrimSpace(reply.RequestID) == "" || reply.Sequence < 0 {
 		return fmt.Errorf("%w: tenant, request, and sequence are required", domain.ErrValidation)
 	}
-	_, retained, _, _, maxStreams, nowFn := hub.defaults()
+	_, retained, _, _, maxStreams, nowFn, err := hub.defaults()
+	if err != nil {
+		return err
+	}
 	now := nowFn()
 	key := streamKey{reply.TenantID, reply.RequestID}
 
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	if hub.closed {
+		return fmt.Errorf("%w: reply hub is closed", domain.ErrConflict)
+	}
 	hub.sweepLocked(now)
 	stream := hub.streams[key]
 	if stream == nil {
@@ -174,12 +198,18 @@ func (hub *MemoryReplyHub) SubscribeFrom(ctx context.Context, tenantID int64, re
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || fromSequence < 0 {
 		return nil, fmt.Errorf("%w: tenant, request, and cursor are required", domain.ErrValidation)
 	}
-	buffer, _, _, _, maxStreams, nowFn := hub.defaults()
+	buffer, _, _, _, maxStreams, nowFn, err := hub.defaults()
+	if err != nil {
+		return nil, err
+	}
 	now := nowFn()
 	key := streamKey{tenantID, requestID}
 
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	if hub.closed {
+		return nil, fmt.Errorf("%w: reply hub is closed", domain.ErrConflict)
+	}
 	hub.sweepLocked(now)
 	stream := hub.streams[key]
 	if stream == nil {
@@ -241,7 +271,7 @@ func (hub *MemoryReplyHub) sweepLocked(now time.Time) {
 		return
 	}
 	hub.nextSweep = now.Add(time.Second)
-	_, _, linger, idle, _, _ := hub.defaults()
+	_, _, linger, idle, _, _, _ := hub.defaults()
 	for key, stream := range hub.streams {
 		expired := (!stream.finalAt.IsZero() && now.Sub(stream.finalAt) > linger) ||
 			(stream.finalAt.IsZero() && now.Sub(stream.activeAt) > idle)

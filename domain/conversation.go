@@ -40,12 +40,16 @@ type TurnReply struct {
 	EmittedAt      time.Time
 }
 
-// SessionSnapshot contains the latest durable conversation state.
+// SessionSnapshot contains the latest durable conversation state. State is
+// hydrated from StateRef by the durable store, which verifies the digest first.
 type SessionSnapshot struct {
 	ConversationID      string
 	AgentVersion        string
+	LatestTurnNo        int64
+	LatestStepNo        int
 	LastCompletedStepID string
 	State               []byte
+	StateRef            ObjectRef
 	Revision            int64
 }
 

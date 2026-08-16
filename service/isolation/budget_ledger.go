@@ -126,10 +126,10 @@ func (ledger *BudgetLedger) init(ctx context.Context) error {
 }
 
 func (ledger *BudgetLedger) ttl() time.Duration {
-	if ledger.ReservationTTL > 0 {
-		return ledger.ReservationTTL
+	if ledger.ReservationTTL == 0 {
+		return 15 * time.Minute
 	}
-	return 15 * time.Minute
+	return ledger.ReservationTTL
 }
 
 // Reserve atomically holds tokens and cost against the tenant's window budget.
@@ -201,6 +201,9 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, tenantID int64, request
 			}
 			committed = true
 			return reservation, nil
+		}
+		if row.status == "settled" {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation", domain.ErrBudgetSettled, requestID)
 		}
 		if row.status != "expired" && !(row.status == "held" && row.expired) {
 			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation is terminal", domain.ErrConflict, requestID)

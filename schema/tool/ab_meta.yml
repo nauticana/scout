@@ -1,0 +1,5 @@
+tables:
+  - tool_profile
+  - tool_version
+  - tool_egress_rule
+  - agent_tool_binding

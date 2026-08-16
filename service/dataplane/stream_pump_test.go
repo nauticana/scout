@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/fake"
@@ -169,5 +170,83 @@ func TestStreamPumpGuardrailFailurePublishesNoPayload(t *testing.T) {
 		if len(published.Payload) != 0 {
 			t.Fatalf("raw payload escaped: %+v", published)
 		}
+	}
+}
+
+// stepClock returns start + n*step on the nth call so TTFT and TPOT are exact.
+func stepClock(start time.Time, step time.Duration) func() time.Time {
+	calls := 0
+	return func() time.Time {
+		now := start.Add(time.Duration(calls) * step)
+		calls++
+		return now
+	}
+}
+
+func TestStreamPumpObservesTTFTAndTPOT(t *testing.T) {
+	var observed []domain.Observation
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	turn := pumpTurn
+	turn.TenantContext.Tier = "gold"
+	turn.TenantContext.PriorityClass = "interactive"
+	turn.TenantContext.Region = "eu"
+	pump := &StreamPump{
+		Guardrails: &fake.GuardrailEnforcer{},
+		Publisher:  &publishRecorder{},
+		Observer:   &fake.ObservationRecorder{RecordObservationFunc: func(_ context.Context, o domain.Observation) { observed = append(observed, o) }},
+		Now:        stepClock(start, 10*time.Millisecond),
+	}
+	// Clock calls: Begin(0ms), frame1(10ms), frame2(20ms), frame3(30ms), End(40ms).
+	_, err := pump.Run(context.Background(), turn, "route", "v3", domain.GuardrailConfig{}, chunkStream(
+		domain.ModelChunk{Payload: []byte("a"), Usage: domain.Usage{OutputTokens: 2}},
+		domain.ModelChunk{Payload: []byte("b"), Usage: domain.Usage{OutputTokens: 2}},
+		domain.ModelChunk{Payload: []byte("c"), FinishReason: "stop", Usage: domain.Usage{OutputTokens: 1}},
+	))
+	if err != nil || len(observed) != 1 {
+		t.Fatalf("observed=%d err=%v", len(observed), err)
+	}
+	got := observed[0]
+	if got.Stage != domain.StageModel || got.Component != StreamPumpComponent || got.Outcome != domain.OutcomeOK || got.ErrorClass != "" {
+		t.Fatalf("observation = %+v", got)
+	}
+	if got.TenantID != 1 || got.TenantTier != "gold" || got.PriorityClass != "interactive" || got.Region != "eu" || got.Versions.Agent != "v3" {
+		t.Fatalf("attribution = %+v", got)
+	}
+	// TTFT = 10ms; TPOT = (30ms-10ms)/(5-1) = 5ms; duration = 40ms.
+	if got.TimeToFirst != 10*time.Millisecond || got.TimePerOutput != 5*time.Millisecond || got.Duration != 40*time.Millisecond || got.Usage.OutputTokens != 5 {
+		t.Fatalf("timing = ttft %s tpot %s duration %s usage %+v", got.TimeToFirst, got.TimePerOutput, got.Duration, got.Usage)
+	}
+}
+
+func TestStreamPumpObservesCanceledAndFailedStages(t *testing.T) {
+	var observed []domain.Observation
+	observer := &fake.ObservationRecorder{RecordObservationFunc: func(_ context.Context, o domain.Observation) { observed = append(observed, o) }}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &fake.ModelStream{
+		ReceiveFunc: func(ctx context.Context) (domain.ModelChunk, error) {
+			cancel()
+			return domain.ModelChunk{}, ctx.Err()
+		},
+		CloseFunc: func() error { return nil },
+	}
+	pump := &StreamPump{Guardrails: &fake.GuardrailEnforcer{}, Publisher: &publishRecorder{}, Observer: observer}
+	if _, err := pump.Run(ctx, pumpTurn, "route", "v1", domain.GuardrailConfig{}, stream); err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if len(observed) != 1 || observed[0].Outcome != domain.OutcomeCanceled || observed[0].ErrorClass != "canceled" || observed[0].TimeToFirst != 0 {
+		t.Fatalf("canceled observation = %+v", observed)
+	}
+
+	observed = nil
+	pump = &StreamPump{
+		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(context.Context, domain.GuardrailConfig, domain.ModelChunk) (domain.ModelChunk, error) {
+			return domain.ModelChunk{}, domain.ErrForbidden
+		}},
+		Publisher: &publishRecorder{},
+		Observer:  observer,
+	}
+	pump.Run(context.Background(), pumpTurn, "route", "v1", domain.GuardrailConfig{}, chunkStream(domain.ModelChunk{Payload: []byte("a")}))
+	if len(observed) != 1 || observed[0].Stage != domain.StageGuardrail || observed[0].Outcome != domain.OutcomeError || observed[0].ErrorClass != "forbidden" {
+		t.Fatalf("guardrail observation = %+v", observed)
 	}
 }

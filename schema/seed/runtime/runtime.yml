@@ -1,0 +1,8 @@
+comment: REST lookup metadata for runtime activity relations
+order: 40
+seeds:
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [agent_run_versions, S, "*"]
+      - [tenant_agent_ops_events, S, "*"]

@@ -1,0 +1,58 @@
+table: human_review_item
+comment: Paired example routed to a human reviewer
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: run_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: example_id
+    type: VARCHAR(120)
+  - name: risk_tier
+    type: VARCHAR(20)
+  - name: reason
+    type: VARCHAR(400)
+  - name: status_code
+    type: VARCHAR(20)
+    default: pending
+  - name: enqueued_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: resolved_at
+    type: TIMESTAMP
+    nullable: true
+  - name: reviewer
+    type: VARCHAR(120)
+    nullable: true
+  - name: verdict
+    type: VARCHAR(40)
+    nullable: true
+  - name: notes
+    type: TEXT
+    nullable: true
+primary_key: [id]
+sequence:
+  name: human_review_item_seq
+  column: id
+foreign_keys:
+  - name: human_review_items
+    columns: [run_id]
+    references:
+      table: evaluation_run
+      columns: [id]
+  - name: example_human_review_items
+    columns: [tenant_id, golden_set_id, set_version, example_id]
+    references:
+      table: golden_example
+      columns: [tenant_id, golden_set_id, set_version, example_id]
+indexes:
+  - name: human_review_item_status_ix
+    columns: [tenant_id, status_code, enqueued_at]
+checks:
+  - name: human_review_item_status_ck
+    expression: (status_code = 'pending' AND resolved_at IS NULL) OR (status_code = 'resolved' AND resolved_at IS NOT NULL AND reviewer IS NOT NULL AND verdict IS NOT NULL)

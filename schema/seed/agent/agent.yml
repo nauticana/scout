@@ -1,0 +1,107 @@
+comment: Agent Studio config flags, authorization, menu, and REST metadata
+order: 25
+seeds:
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [language_code, tenant_prompt_default, language_code]
+      - [language_code, agent_prompt_override, language_code]
+  - table: application_config_flag
+    columns: [id, data_type, needs_restart, default_value, description]
+    rows:
+      - [agent_max_tokens, int, false, "8192", Max output tokens per agent model completion]
+      - [agent_temperature, float, false, "0.7", "Agent model sampling temperature; 0.0-2.0"]
+      - [agent_run_retention_days, int, false, "0", "Days to retain agent run activity; 0 retains it forever"]
+      - [agent_turn_rate, float, false, "2", Per-tenant admitted turns per second]
+      - [agent_turn_burst, int, false, "10", Per-tenant turn burst]
+      - [agent_tool_rate, float, false, "10", Per-tenant tool calls per second]
+      - [agent_tool_burst, int, false, "20", Per-tenant tool-call burst]
+      - [agent_model_rate, float, false, "2", Per-tenant model calls per second]
+      - [agent_model_burst, int, false, "5", Per-tenant model-call burst]
+      - [agent_fleet_turn_rate, float, false, "100", Process-wide admitted turns per second]
+      - [agent_fleet_turn_burst, int, false, "200", Process-wide turn burst]
+      - [agent_fleet_tool_rate, float, false, "500", Process-wide tool calls per second]
+      - [agent_fleet_tool_burst, int, false, "1000", Process-wide tool-call burst]
+      - [agent_fleet_model_rate, float, false, "100", Process-wide model calls per second]
+      - [agent_fleet_model_burst, int, false, "200", Process-wide model-call burst]
+      - [agent_max_tenants, int, false, "4096", Maximum in-memory tenant limiter entries]
+      - [agent_model_capacity_pool, string, false, shared, Shared model capacity pool name]
+      - [agent_model_capacity, int, false, "32", Concurrent model capacity slots]
+      - [agent_model_max_waiters, int, false, "4096", Maximum queued model requests]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [AGENT_STUDIO, Agent Studio]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [AGENT_STUDIO, VIEW, View agents and drafts]
+      - [AGENT_STUDIO, EDIT, Edit and reset drafts]
+      - [AGENT_STUDIO, TEST, Run draft tests]
+      - [AGENT_STUDIO, PUBLISH, Publish releases and set defaults]
+      - [AGENT_STUDIO, RESTORE, Restore published versions]
+  - table: authorization_role
+    columns: [id, caption]
+    rows:
+      - [AGENT_ADMIN, Agent Administrator]
+      - [AGENT_OPER, Agent Operator]
+  - table: application_menu_item
+    columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
+    rows:
+      - [260, false, setup, agent_studio, agent_studio, Agent Studio]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [agent_profiles, S, "*"]
+      - [agent_drafts, S, "*"]
+      - [agent_aliases, D, display_name]
+      - [tenant_prompt_defaults, S, "*"]
+      - [agent_prompt_overrides, S, "*"]
+      - [agent_versions, S, "*"]
+      - [agent_deployments, S, "*"]
+      - [agent_studio_events, S, "*"]
+  - table: rest_api_header
+    columns: [id, master_table]
+    rows:
+      - [agent_profile, agent_profile]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [AGENT_ADMIN, AGENT_STUDIO, VIEW, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, EDIT, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, TEST, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, PUBLISH, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, RESTORE, agent_studio]
+      - [AGENT_ADMIN, PAGE, ACCESS, agent_studio]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_profile]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_draft]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_alias]
+      - [AGENT_ADMIN, TABLE, SELECT, model_provider]
+      - [AGENT_ADMIN, TABLE, SELECT, model_definition]
+      - [AGENT_ADMIN, TABLE, SELECT, model_capability]
+      - [AGENT_ADMIN, TABLE, SELECT, model_price]
+      - [AGENT_ADMIN, TABLE, SELECT, tenant_model_access]
+      - [AGENT_ADMIN, TABLE, SELECT, prompt_section]
+      - [AGENT_ADMIN, TABLE, SELECT, prompt_baseline]
+      - [AGENT_ADMIN, TABLE, SELECT, tenant_prompt_default]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_prompt_override]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_version]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_deployment]
+      - [AGENT_ADMIN, TABLE, SELECT, agent_studio_event]
+      - [AGENT_OPER, AGENT_STUDIO, VIEW, agent_studio]
+      - [AGENT_OPER, PAGE, ACCESS, agent_studio]
+      - [AGENT_OPER, TABLE, SELECT, agent_profile]
+      - [AGENT_OPER, TABLE, SELECT, agent_draft]
+      - [AGENT_OPER, TABLE, SELECT, agent_alias]
+      - [AGENT_OPER, TABLE, SELECT, model_provider]
+      - [AGENT_OPER, TABLE, SELECT, model_definition]
+      - [AGENT_OPER, TABLE, SELECT, model_capability]
+      - [AGENT_OPER, TABLE, SELECT, model_price]
+      - [AGENT_OPER, TABLE, SELECT, tenant_model_access]
+      - [AGENT_OPER, TABLE, SELECT, prompt_section]
+      - [AGENT_OPER, TABLE, SELECT, prompt_baseline]
+      - [AGENT_OPER, TABLE, SELECT, tenant_prompt_default]
+      - [AGENT_OPER, TABLE, SELECT, agent_prompt_override]
+      - [AGENT_OPER, TABLE, SELECT, agent_version]
+      - [AGENT_OPER, TABLE, SELECT, agent_deployment]
+      - [AGENT_OPER, TABLE, SELECT, agent_studio_event]

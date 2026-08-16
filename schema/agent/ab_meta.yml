@@ -1,0 +1,10 @@
+tables:
+  - agent_profile
+  - guardrail_config
+  - agent_draft
+  - agent_alias
+  - agent_studio_event
+  - agent_prompt_override
+  - tenant_prompt_default
+  - agent_version
+  - agent_deployment

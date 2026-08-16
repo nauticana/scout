@@ -39,8 +39,8 @@ func (breaker *WindowedCostBreaker) init() error {
 	if breaker.Window <= 0 {
 		return fmt.Errorf("windowed cost breaker: window must be positive")
 	}
-	if breaker.TenantLimit < 0 || breaker.AgentLimit < 0 || breaker.FleetLimit < 0 || breaker.MaxEntries <= 0 {
-		return fmt.Errorf("windowed cost breaker: limits cannot be negative and max entries must be positive")
+	if breaker.TenantLimit < 0 || breaker.AgentLimit < 0 || breaker.FleetLimit < 0 || breaker.MaxEntries <= 0 || breaker.Buckets < 0 {
+		return fmt.Errorf("windowed cost breaker: limits and buckets cannot be negative and max entries must be positive")
 	}
 	if breaker.TenantLimit > 0 || breaker.AgentLimit > 0 || breaker.FleetLimit > 0 {
 		if len(breaker.Currency) != 3 {

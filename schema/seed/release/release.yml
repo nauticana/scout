@@ -1,0 +1,16 @@
+comment: Platform release rollout stage catalog
+order: 50
+seeds:
+  - table: rollout_stage
+    columns: [code, stage_order, is_live, is_terminal, description]
+    rows:
+      - [build, 1, false, false, Artifact built and bundle signed]
+      - [offline_replay, 2, false, false, Replayed against recorded traffic and contract corpus]
+      - [shadow, 3, true, false, Mirrored sampled traffic with no user-visible output]
+      - [internal_canary, 4, true, false, Serving internal tenants]
+      - [tenant_canary, 5, true, false, Serving the canary tenant ring]
+      - [regional_ramp, 6, true, false, Ramping across regional rings]
+      - [global_default, 7, true, false, Default release for every ring]
+      - [retired, 8, false, true, Superseded by a later default]
+      - [rolled_back, 9, false, true, Withdrawn from new assignments while sessions drain]
+      - [quarantined, 10, false, true, Unfit for any assignment until cleared]

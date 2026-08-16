@@ -7,6 +7,10 @@ type TenantContext struct {
 	TenantID          int64
 	PriorityClass     string
 	DedicatedCapacity bool
+	// Tier is the bounded commercial class used as a metric label; never the tenant id.
+	Tier string
+	// Region is the tenant's home residency region.
+	Region string
 }
 
 // TurnAdmissionPolicy states what a new prompt does to a running turn.
@@ -56,4 +60,29 @@ type BudgetLimits struct {
 	WindowCostMinorUnits int64
 	Currency             string
 	Window               time.Duration
+}
+
+// TurnBudget allocates a request deadline across stages; generation is
+// reserved first and optional stages receive what remains.
+type TurnBudget struct {
+	Deadline    time.Time
+	Total       time.Duration
+	Generation  time.Duration
+	Embedding   time.Duration
+	Retrieval   time.Duration
+	Rerank      time.Duration
+	PromptBuild time.Duration
+	Guardrail   time.Duration
+}
+
+// StageLatencyEstimate is the predicted cost of each budgeted stage for one request.
+type StageLatencyEstimate struct {
+	Admission     time.Duration
+	Embedding     time.Duration
+	Retrieval     time.Duration
+	Rerank        time.Duration
+	PromptBuild   time.Duration
+	Guardrail     time.Duration
+	MinGeneration time.Duration
+	Generation    time.Duration
 }

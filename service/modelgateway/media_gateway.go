@@ -16,6 +16,9 @@ type MediaGateway struct {
 	Provider    contract.MediaProvider
 	Capacity    contract.CapacityScheduler
 	ProviderID  string
+	// Region and RouteID name the media route for capacity scheduling and signals.
+	Region  string
+	RouteID string
 }
 
 // NewMediaGateway builds a governed media provider.
@@ -64,7 +67,8 @@ func (gateway *MediaGateway) acquire(ctx context.Context, model string, request 
 	if err := gateway.RateLimiter.AllowModelCall(ctx, request); err != nil {
 		return nil, err
 	}
-	lease, err := gateway.Capacity.Acquire(ctx, request, domain.ModelSelection{Provider: gateway.ProviderID, Model: model})
+	lease, err := gateway.Capacity.Acquire(ctx, request, domain.ModelSelection{
+		Provider: gateway.ProviderID, Model: model, Region: gateway.Region, RouteID: gateway.RouteID})
 	if err != nil {
 		return nil, err
 	}

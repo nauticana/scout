@@ -1,0 +1,9 @@
+tables:
+  - knowledge_base
+  - knowledge_base_version
+  - knowledge_document
+  - knowledge_chunk
+  - agent_knowledge_binding
+  - knowledge_document_manifest
+  - knowledge_base_alias
+  - knowledge_source_event

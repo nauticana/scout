@@ -1,0 +1,88 @@
+table: turn_queue
+comment: >-
+  Durable turn delivery for the fair scheduler: one row per admitted request,
+  shuffle-sharded into a fixed partition pool, leased with a fencing token.
+  Status is a CHECK rather than a catalog table because the runtime group has
+  no seed and the four states are a fixed queue protocol, not tenant data.
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: partition_no
+    type: SMALLINT
+  - name: priority_rank
+    type: SMALLINT
+    default: "0"
+  - name: reply_route
+    type: VARCHAR(400)
+  - name: input_uri
+    type: TEXT
+  - name: input_digest
+    type: CHAR(64)
+  - name: attempt
+    type: INTEGER
+    default: "0"
+  - name: status_code
+    type: VARCHAR(10)
+    default: "'queued'"
+  - name: lease_token
+    type: BIGINT
+    nullable: true
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+  - name: available_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: enqueued_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: worker_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: last_error
+    type: VARCHAR(500)
+    nullable: true
+primary_key: [id]
+sequence:
+  name: turn_queue_seq
+  column: id
+foreign_keys:
+  - name: turn_queue_entries
+    columns: [tenant_id, conversation_id]
+    references:
+      table: agent_conversation
+      columns: [tenant_id, conversation_id]
+  - name: turn_queue_turns
+    columns: [tenant_id, request_id]
+    references:
+      table: conversation_turn
+      columns: [tenant_id, request_id]
+indexes:
+  - name: turn_queue_request_uq
+    columns: [tenant_id, request_id]
+    unique: true
+  - name: turn_queue_ready_ix
+    columns: [status_code, partition_no, available_at]
+  - name: turn_queue_conversation_ix
+    columns: [tenant_id, conversation_id, status_code, enqueued_at]
+  - name: turn_queue_lease_ix
+    columns: [status_code, lease_until]
+checks:
+  - name: turn_queue_status_ck
+    expression: status_code IN ('queued', 'leased', 'acked', 'dead')
+  - name: turn_queue_partition_ck
+    expression: partition_no >= 0
+  - name: turn_queue_attempt_ck
+    expression: attempt >= 0
+  - name: turn_queue_digest_ck
+    expression: CHAR_LENGTH(input_digest) = 64
+  - name: turn_queue_lease_ck
+    expression: (status_code = 'leased') = (lease_token IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL)

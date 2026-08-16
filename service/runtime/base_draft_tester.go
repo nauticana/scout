@@ -40,6 +40,7 @@ type BaseDraftTester struct {
 	// OnAccountingError observes a ledger failure. The result still stands: an
 	// accounting failure must not discard work the owner already saw.
 	OnAccountingError func(ctx context.Context, tenantID, cost int64, err error)
+	Now               func() time.Time
 }
 
 var _ contract.AgentDraftTestExecutor = (*BaseDraftTester)(nil)
@@ -77,12 +78,16 @@ func (tester *BaseDraftTester) Execute(ctx context.Context, actor domain.StudioA
 	if task == "" {
 		task = DefaultTestTask
 	}
-	started := time.Now()
+	now := tester.Now
+	if now == nil {
+		now = time.Now
+	}
+	started := now()
 	output, inputTokens, outputTokens, err := agent.GenerateText(ctx, domain.AgentTask{Task: task, InputData: request.InputData})
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	latency := time.Since(started).Milliseconds()
+	latency := now().Sub(started).Milliseconds()
 
 	cost, currency, err := tester.settle(ctx, actor.TenantID, agent, inputTokens, outputTokens)
 	if err != nil {

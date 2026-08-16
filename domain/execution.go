@@ -9,24 +9,30 @@ type ExecutionGraph struct {
 	Steps       []ExecutionStep
 }
 
-// ExecutionStep describes one node in an agent execution graph.
+// ExecutionStep describes one node in an agent execution graph. ExecutionStepID
+// is the compiled surrogate identity persistence keys on; StepID is the logical
+// name authors and transitions use.
 type ExecutionStep struct {
-	StepID        string
-	Kind          string
-	Configuration []byte
-	NextStepIDs   []string
+	ExecutionStepID int64
+	StepID          string
+	Kind            string
+	Configuration   []byte
+	NextStepIDs     []string
 }
 
-// StepCheckpoint contains durable state after a completed step.
+// StepCheckpoint contains durable state after a completed step. State is the
+// hydrated payload; StateRef is filled by the durable store once dehydrated.
 type StepCheckpoint struct {
-	CheckpointID   string
-	ConversationID string
-	TurnNo         int64
-	StepNo         int
-	RequestID      string
-	StepID         string
-	State          []byte
-	Usage          Usage
+	ConversationID  string
+	TurnNo          int64
+	StepNo          int
+	ExecutionStepID int64
+	StepID          string
+	IdempotencyKey  string
+	Fingerprint     string
+	State           []byte
+	StateRef        ObjectRef
+	Usage           Usage
 }
 
 // StepInput contains the step and state required for execution.
