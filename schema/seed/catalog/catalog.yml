@@ -95,7 +95,7 @@ seeds:
   - table: audit_decision_outcome
     columns: [code, is_denial, description]
     rows:
-      - [allow, false, Permitted, with any obligations recorded]
+      - [allow, false, Permitted and any obligations recorded]
       - [deny, true, Refused by policy or authorization]
       - [pending, false, Suspended awaiting a human decision]
   - table: approval_status
