@@ -1,0 +1,3 @@
+tables:
+  - approval_request
+  - approval_decision

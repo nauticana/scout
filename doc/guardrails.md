@@ -25,7 +25,7 @@ ranges, maxItems, maxProperties), `tool_allowlist`, `destination_allowlist`, `ex
 fails closed with `domain.ErrDegraded` — never silently skipped.
 
 Every rule hit produces a `domain.SafetyEvent` through `contract.SafetyEventSink` and, optionally,
-`contract.AuditSink`: rule ids, layer, action, severity, policy and release version, duration. No
+`contract.AuditSink`: rule ids, layer, action, severity, policy and release version, acting principal, duration. No
 inspected content, no matched substring, ever leaves the enforcer.
 
 ## Stages

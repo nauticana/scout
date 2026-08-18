@@ -87,12 +87,12 @@ func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 	if err := store.Fail(context.Background(), 7, "request-1", "completed", "x"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}
-	usage := domain.Usage{InputTokens: 3, OutputTokens: 5, CostMinorUnits: 2, Currency: "USD"}
-	if err := store.RecordUsage(context.Background(), 7, "conversation-1", 4, "agent@v1", usage); err != nil {
+	usage := domain.Usage{InputTokens: 3, OutputTokens: 5, ToolCalls: 1, CostMinorUnits: 2, Currency: "USD"}
+	if err := store.RecordUsage(context.Background(), 7, "conversation-1", 4, "agent@v1", domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "agent"}, ScopeID: "unit"}, usage); err != nil {
 		t.Fatal(err)
 	}
 	usageArgs := query.firstArgs(qLedgerInsertUsageEvent)
-	want := []any{int64(7), "conversation-1", int64(4), "model_output", "agent@v1", int64(3), int64(5), int64(2), "USD"}
+	want := []any{int64(7), "conversation-1", int64(4), "model_output", "agent@v1", "agent", "agent", "unit", int64(3), int64(5), 1, int64(2), "USD"}
 	if len(usageArgs) != len(want) {
 		t.Fatalf("usage args = %v", usageArgs)
 	}

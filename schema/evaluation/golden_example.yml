@@ -17,7 +17,7 @@ columns:
     type: VARCHAR(40)
   - name: retention_class
     type: VARCHAR(40)
-  - name: risk_tier
+  - name: approval_risk_tier
     type: VARCHAR(20)
   - name: domain_code
     type: VARCHAR(80)

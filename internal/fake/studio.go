@@ -25,8 +25,8 @@ type BaselineSelector struct {
 	SelectFunc func(context.Context, int64, string, string) (domain.PromptBaselineSelection, error)
 }
 
-func (f BaselineSelector) Select(ctx context.Context, tenantID int64, agentID, agentKind string) (domain.PromptBaselineSelection, error) {
-	return f.SelectFunc(ctx, tenantID, agentID, agentKind)
+func (f BaselineSelector) Select(ctx context.Context, tenantID int64, agentID, agentTypeID string) (domain.PromptBaselineSelection, error) {
+	return f.SelectFunc(ctx, tenantID, agentID, agentTypeID)
 }
 
 type DraftValidator struct {
@@ -54,15 +54,15 @@ func (f DraftTester) Execute(ctx context.Context, actor domain.StudioActor, requ
 }
 
 type KindCatalog struct {
-	GetFunc  func(context.Context, string) (domain.AgentKindDescriptor, error)
-	ListFunc func(context.Context) ([]domain.AgentKindDescriptor, error)
+	GetFunc  func(context.Context, string) (domain.AgentTypeDescriptor, error)
+	ListFunc func(context.Context) ([]domain.AgentTypeDescriptor, error)
 }
 
-func (f KindCatalog) Get(ctx context.Context, kind string) (domain.AgentKindDescriptor, error) {
+func (f KindCatalog) Get(ctx context.Context, kind string) (domain.AgentTypeDescriptor, error) {
 	return f.GetFunc(ctx, kind)
 }
 
-func (f KindCatalog) List(ctx context.Context) ([]domain.AgentKindDescriptor, error) {
+func (f KindCatalog) List(ctx context.Context) ([]domain.AgentTypeDescriptor, error) {
 	return f.ListFunc(ctx)
 }
 
@@ -85,6 +85,6 @@ var (
 	_ contract.AgentDraftValidator    = DraftValidator{}
 	_ contract.AgentActivityReporter  = ActivityReporter{}
 	_ contract.AgentDraftTestExecutor = DraftTester{}
-	_ contract.AgentKindCatalog       = KindCatalog{}
+	_ contract.AgentTypeCatalog       = KindCatalog{}
 	_ contract.StudioModelCatalog     = ModelCatalog{}
 )

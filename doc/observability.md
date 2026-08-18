@@ -25,7 +25,8 @@ degradations (partial legs, reranker failure) even though the query itself succe
 ## The label rule
 
 Adapters receive tenant identity in `RuntimeMetrics` and `domain.Observation` because exact accounting needs
-it. That identity must not become a time-series label. `LabelPolicy.Sanitize` enforces the rule: keys must be
+it. `Observation.Principal` and `Observation.ScopeID` are the same kind of dimension: exact accounting for
+the tenant ledger, never a fleet label. None of them may become a time-series label. `LabelPolicy.Sanitize` enforces the rule: keys must be
 allowlisted (`tenant_tier`, `priority_class`, `model`, `provider`, `region`, `stage`, `component`, `release`,
 `outcome`, `error_class`, `verdict`, `tenant_rank`, `currency`), `tenant_id`/`request_id`/`conversation_id`
 and prompt/response/document keys are refused outright, and values are bounded to 64 bytes of

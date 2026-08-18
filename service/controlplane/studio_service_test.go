@@ -92,7 +92,7 @@ func TestStudioSetEnabledIsTargeted(t *testing.T) {
 			t.Fatalf("queries = %v, want %v", query.queries, want)
 		}
 	}
-	if query.args[qStudioSetProfileActive][0] != false {
+	if query.args[qStudioSetProfileActive][0] != string(domain.AgentStateSuspended) {
 		t.Fatalf("profile update did not receive the kill-switch state: %v", query.args[qStudioSetProfileActive])
 	}
 }
@@ -114,7 +114,7 @@ func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 		qStudioNextVersion: {{int64(1)}},
 	}, args: map[string][]any{}}
 	sources := studioSourcesFake{resolved: domain.ResolvedPrompts{
-		AgentID: "writer-a", AgentKind: "writer", BaselineKey: "global", LanguageCode: "en-US",
+		AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
 		Rows: []domain.PromptSourceRow{{
 			PromptSectionID: 1, Caption: "task", DisplayOrder: 1,
 			SourceLevel: domain.PromptSourceBaseline, SourceKey: "global", Instruction: "write",

@@ -29,7 +29,16 @@ type GovernedGateway struct {
 	// Classifier decides which failures reach the breaker; nil counts every failure except
 	// cancellation and typed tenant, authorization, and rate-limit errors.
 	Classifier contract.ToolFailureClassifier
-	Timeout    time.Duration
+	// Policy is optional; when set it runs before guardrails and its obligations
+	// are applied before egress. An obligation with no enforcer fails the call.
+	Policy      contract.PolicyDecisionPoint
+	Obligations []contract.ObligationEnforcer
+	// Audit is optional; when set every credential resolution records which
+	// authority it exercised, never the secret.
+	Audit contract.AuditSink
+	// CredentialPurpose labels why the credential is requested; it selects the binding.
+	CredentialPurpose string
+	Timeout           time.Duration
 }
 
 // Invoke executes one tool call through the complete governance chain.
@@ -50,6 +59,9 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 	if err := gateway.Authorizer.Authorize(ctx, call, definition); err != nil {
 		return domain.ToolResult{}, err
 	}
+	if err := gateway.decide(ctx, call, definition); err != nil {
+		return domain.ToolResult{}, err
+	}
 	// Guardrails run before egress and credentials so blocked arguments never leave the platform.
 	guardrails, err := gateway.guardrailConfig(ctx, call)
 	if err != nil {
@@ -67,8 +79,11 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 	if err != nil {
 		return domain.ToolResult{}, err
 	}
-	credential, err := gateway.Credentials.Credential(ctx, call.TenantContext.TenantID, call.ToolID)
+	credential, authority, err := gateway.Credentials.Credential(ctx, call.Principal, call.ToolID, "invoke", gateway.CredentialPurpose)
 	if err != nil {
+		return domain.ToolResult{}, err
+	}
+	if err := gateway.recordCredential(ctx, call, definition, authority); err != nil {
 		return domain.ToolResult{}, err
 	}
 
@@ -84,7 +99,11 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 				return result, err
 			}
 			if gateway.Guardrails != nil {
-				guarded, err := gateway.Guardrails.AfterTool(ctx, guardrails, result)
+				subject := domain.GuardrailSubject{
+					TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+					RequestID: call.RequestID, ConversationID: call.ConversationID, ReleaseVersion: call.Principal.Release,
+				}
+				guarded, err := gateway.Guardrails.AfterTool(ctx, guardrails, subject, result)
 				if err != nil {
 					return domain.ToolResult{}, stage.At(domain.StageGuardrail, err)
 				}
@@ -126,7 +145,66 @@ func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	if call.TenantContext.TenantID <= 0 || strings.TrimSpace(call.RequestID) == "" || strings.TrimSpace(call.ToolID) == "" || strings.TrimSpace(call.ToolVersion) == "" {
 		return fmt.Errorf("%w: tenant, request, tool, and version are required", domain.ErrValidation)
 	}
+	if call.Principal.Kind == "" || strings.TrimSpace(call.Principal.ID) == "" {
+		return fmt.Errorf("%w: tool calls require a resolved principal", domain.ErrPrincipalUnknown)
+	}
+	if call.Principal.TenantID != call.TenantContext.TenantID {
+		return fmt.Errorf("%w: principal tenant %d does not own the call", domain.ErrForbidden, call.Principal.TenantID)
+	}
 	return nil
+}
+
+// decide asks the policy decision point and applies every obligation it
+// attached. An unrecognized obligation is a hard failure: silently ignoring one
+// would turn a conditional allow into an unconditional one.
+func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) error {
+	if gateway.Policy == nil {
+		return nil
+	}
+	subject := domain.DecisionSubject{
+		Principal: call.Principal, Action: "tool:invoke", Resource: definition.ToolID,
+		ResourceKind: domain.ResourceTool, RequestID: call.RequestID, ConversationID: call.ConversationID,
+	}
+	decision, err := gateway.Policy.Decide(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if decision.Outcome != domain.DecisionAllow {
+		return fmt.Errorf("%w: %s", domain.ErrForbidden, decision.Reason)
+	}
+	for _, obligation := range decision.Obligations {
+		enforcer := gateway.enforcerFor(obligation.Kind)
+		if enforcer == nil {
+			return fmt.Errorf("%w: no enforcer for obligation %q", domain.ErrDegraded, obligation.Kind)
+		}
+		if err := enforcer.Enforce(ctx, subject, obligation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (gateway *GovernedGateway) enforcerFor(kind domain.ObligationKind) contract.ObligationEnforcer {
+	for _, enforcer := range gateway.Obligations {
+		if enforcer.Kind() == kind {
+			return enforcer
+		}
+	}
+	return nil
+}
+
+// recordCredential writes which authority the call exercised. The secret itself
+// is never passed here and never recorded.
+func (gateway *GovernedGateway) recordCredential(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition, authority domain.AuthorityRef) error {
+	if gateway.Audit == nil {
+		return nil
+	}
+	return gateway.Audit.Record(ctx, domain.DecisionRecord{
+		TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+		Authority: authority, ScopeID: call.Principal.ScopeID, Category: domain.DecisionCategoryCredential,
+		Action: "resolve", Resource: definition.ToolID, ReleaseVersion: call.Principal.Release,
+		Outcome: domain.DecisionAllow, RequestID: call.RequestID, ConversationID: call.ConversationID,
+	})
 }
 
 func (gateway *GovernedGateway) guardrailConfig(ctx context.Context, call domain.ToolCall) (domain.GuardrailConfig, error) {
@@ -166,7 +244,11 @@ func (gateway *GovernedGateway) classifier() contract.ToolFailureClassifier {
 }
 
 // validationProbe satisfies the per-call checks so a composition can be validated at construction time.
-var validationProbe = domain.ToolCall{TenantContext: domain.TenantContext{TenantID: 1}, RequestID: "probe", ToolID: "probe", ToolVersion: "probe"}
+var validationProbe = domain.ToolCall{
+	TenantContext: domain.TenantContext{TenantID: 1},
+	Principal:     domain.Principal{Kind: domain.PrincipalAgent, ID: "probe", TenantID: 1},
+	RequestID:     "probe", ToolID: "probe", ToolVersion: "probe",
+}
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {

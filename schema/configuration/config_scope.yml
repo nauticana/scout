@@ -1,0 +1,40 @@
+table: config_scope
+comment: One node of a tenant's configuration hierarchy; scope_kind_code is opaque to Scout
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: scope_id
+    type: VARCHAR(80)
+  - name: parent_scope_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: scope_kind_code
+    type: VARCHAR(30)
+  - name: display_name
+    type: VARCHAR(200)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, scope_id]
+foreign_keys:
+  - name: config_scopes
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: child_config_scopes
+    columns: [tenant_id, parent_scope_id]
+    references:
+      table: config_scope
+      columns: [tenant_id, scope_id]
+  - name: kind_config_scopes
+    columns: [scope_kind_code]
+    references:
+      table: config_scope_kind
+      columns: [code]
+indexes:
+  - name: config_scope_parent_ix
+    columns: [tenant_id, parent_scope_id]
+checks:
+  - name: config_scope_parent_ck
+    expression: parent_scope_id IS NULL OR parent_scope_id <> scope_id

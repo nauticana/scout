@@ -17,11 +17,11 @@ const qDeployedAgents = "scout_runtime_deployed_agents"
 
 var deployedAgentQueries = map[string]string{
 	qDeployedAgents: `
-SELECT a.alias_id, a.agent_kind, a.agent_id, p.is_active, d.enabled,
+SELECT a.alias_id, a.agent_type_id, a.agent_id, p.state_code = 'active', d.enabled,
        dep.stable_version, v.definition
   FROM agent_alias a
   JOIN agent_profile p
-    ON p.tenant_id = a.tenant_id AND p.agent_kind = a.agent_kind AND p.agent_id = a.agent_id
+    ON p.tenant_id = a.tenant_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
   JOIN agent_draft d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
   LEFT JOIN agent_deployment dep ON dep.tenant_id = p.tenant_id AND dep.agent_id = p.agent_id
   LEFT JOIN agent_version v
@@ -57,7 +57,7 @@ func (index *DeployedAgentIndex) List(ctx context.Context, tenantID int64) (map[
 	deployed := make(map[string]domain.DeployedAgent, len(res.Rows))
 	for _, row := range res.Rows {
 		agent := domain.DeployedAgent{
-			AliasID: common.AsString(row[0]), AgentKind: common.AsString(row[1]),
+			AliasID: common.AsString(row[0]), AgentTypeID: common.AsString(row[1]),
 			AgentID: common.AsString(row[2]), Active: common.AsBool(row[3]),
 			Enabled: common.AsBool(row[4]), Version: common.AsString(row[5]),
 		}

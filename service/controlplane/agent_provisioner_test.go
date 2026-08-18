@@ -15,7 +15,7 @@ func provisionerFake() (*studioQueryFake, *AgentProvisioner) {
 
 func textSeed(agentID, kind string) domain.AgentSeed {
 	return domain.AgentSeed{
-		AgentID: agentID, AgentKind: kind, AliasID: kind, DisplayName: agentID, Enabled: true,
+		AgentID: agentID, AgentTypeID: kind, AliasID: kind, DisplayName: agentID, Enabled: true,
 		Models: domain.AgentModelSelection{Text: &domain.ModelReference{ProviderID: "p", ModelID: "m"}},
 	}
 }
@@ -28,7 +28,7 @@ func TestProvisionSeedsTenantProfileDraftAndAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	want := []string{qProvisionTenant, qProvisionProfile, qProvisionDraft, qProvisionAlias}
+	want := []string{qProvisionTenant, qProvisionType, qProvisionProfile, qProvisionDraft, qProvisionAlias}
 	if len(qs.queries) != len(want) {
 		t.Fatalf("queries = %v, want %v", qs.queries, want)
 	}
@@ -60,7 +60,7 @@ func TestProvisionWithoutAliasSkipsAlias(t *testing.T) {
 func TestProvisionRejectsIncompleteSeeds(t *testing.T) {
 	cases := map[string]func(*domain.AgentSeed){
 		"missing agent id":     func(s *domain.AgentSeed) { s.AgentID = "" },
-		"missing kind":         func(s *domain.AgentSeed) { s.AgentKind = "" },
+		"missing kind":         func(s *domain.AgentSeed) { s.AgentTypeID = "" },
 		"missing display name": func(s *domain.AgentSeed) { s.DisplayName = "" },
 		"missing text model":   func(s *domain.AgentSeed) { s.Models.Text = nil },
 	}

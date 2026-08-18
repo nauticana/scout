@@ -35,6 +35,13 @@ type Chunker interface {
 	Chunk(ctx context.Context, document domain.KnowledgeDocument, decoded domain.DecodedDocument) ([]domain.KnowledgeChunk, error)
 }
 
+// EntitlementResolver derives a principal's retrieval entitlements instead of
+// trusting a caller's assertion. The resolved set is frozen into the effective
+// release, so retrieval never takes labels from the request path.
+type EntitlementResolver interface {
+	Entitlements(ctx context.Context, principal domain.Principal) ([]byte, string, error)
+}
+
 // ChunkRedactor applies the column-level policy version and returns the derivative chunk that is embedded.
 type ChunkRedactor interface {
 	Redact(ctx context.Context, chunk domain.KnowledgeChunk) (domain.KnowledgeChunk, error)

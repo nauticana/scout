@@ -1,0 +1,61 @@
+table: config_scope_binding
+comment: One versioned resource attached to a scope; sealed is set by the parent so a child cannot override it
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: scope_id
+    type: VARCHAR(80)
+  - name: resource_kind_code
+    type: VARCHAR(30)
+  - name: resource_id
+    type: VARCHAR(80)
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: resource_version
+    type: VARCHAR(80)
+  - name: merge_mode_code
+    type: VARCHAR(30)
+  - name: sealed
+    type: BOOLEAN
+    default: FALSE
+  - name: resource_value
+    type: TEXT
+  - name: resource_value_digest
+    type: CHAR(64)
+  - name: bound_by
+    type: BIGINT
+    nullable: true
+primary_key: [tenant_id, scope_id, resource_kind_code, resource_id, begda]
+foreign_keys:
+  - name: config_scope_bindings
+    columns: [tenant_id, scope_id]
+    references:
+      table: config_scope
+      columns: [tenant_id, scope_id]
+  - name: kind_scoped_bindings
+    columns: [resource_kind_code]
+    references:
+      table: config_resource_kind
+      columns: [code]
+  - name: merge_scoped_bindings
+    columns: [merge_mode_code]
+    references:
+      table: config_merge_mode
+      columns: [code]
+  - name: bound_scoped_bindings
+    columns: [bound_by]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: config_scope_binding_kind_ix
+    columns: [tenant_id, resource_kind_code, resource_id]
+checks:
+  - name: config_scope_binding_window_ck
+    expression: endda IS NULL OR endda > begda
+  - name: config_scope_binding_digest_ck
+    expression: CHAR_LENGTH(resource_value_digest) = 64

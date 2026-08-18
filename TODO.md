@@ -303,7 +303,7 @@ The order followed IDEAS.md §H with X1–X3 as standing prerequisites: **G4 →
 
 ## Schema modules
 
-The schema is twelve selectable modules (`catalog`, `tenancy`, `prompt`, `model`, `agent`, `tool`, `graph`, `knowledge`, `knowledge_vector`, `runtime`, `release`, `evaluation`) so a downstream creates only the tables its product uses: 27 Scout tables for Agent Studio alone, 82 for the full platform. The generated DDL and seed output for the full set are byte-identical to the previous five-group layout.
+The schema is fifteen selectable modules (`catalog`, `tenancy`, `prompt`, `model`, `agent`, `agent_authorization`, `configuration`, `approval`, `tool`, `execution_graph`, `knowledge`, `knowledge_vector`, `runtime`, `release`, `evaluation`) so a downstream creates only the tables its product uses: 40 Scout tables for Agent Studio alone, 104 for the full platform. `agent_authorization`, `configuration`, and `approval` arrived with the Digital Work Force waves; see [TODO_DWF.md](TODO_DWF.md).
 
 ## Remaining
 

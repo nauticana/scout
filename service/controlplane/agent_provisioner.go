@@ -13,6 +13,7 @@ import (
 
 const (
 	qProvisionTenant  = "scout_provision_tenant"
+	qProvisionType    = "scout_provision_agent_type"
 	qProvisionProfile = "scout_provision_profile"
 	qProvisionDraft   = "scout_provision_draft"
 	qProvisionAlias   = "scout_provision_alias"
@@ -24,8 +25,12 @@ var provisionQueries = map[string]string{
 INSERT INTO agent_tenant (partner_id, tenant_key, home_region)
 VALUES (?, ?, ?)
 ON CONFLICT (partner_id) DO NOTHING`,
+	qProvisionType: `
+INSERT INTO agent_type (tenant_id, agent_type_id, display_name)
+VALUES (?, ?, ?)
+ON CONFLICT (tenant_id, agent_type_id) DO NOTHING`,
 	qProvisionProfile: `
-INSERT INTO agent_profile (tenant_id, agent_id, agent_kind, display_name, is_active)
+INSERT INTO agent_profile (tenant_id, agent_id, agent_type_id, display_name, state_code)
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, agent_id) DO NOTHING`,
 	qProvisionDraft: `
@@ -35,7 +40,7 @@ INSERT INTO agent_draft (tenant_id, agent_id, enabled, require_approval,
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, agent_id) DO NOTHING`,
 	qProvisionAlias: `
-INSERT INTO agent_alias (tenant_id, alias_id, agent_kind, agent_id)
+INSERT INTO agent_alias (tenant_id, alias_id, agent_type_id, agent_id)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (tenant_id, alias_id) DO NOTHING`,
 }
@@ -74,7 +79,10 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 		return fmt.Errorf("register agent tenant: %w", err)
 	}
 	for _, seed := range seeds {
-		if _, err = tx.Query(ctx, qProvisionProfile, tenantID, seed.AgentID, seed.AgentKind, seed.DisplayName, true); err != nil {
+		if _, err = tx.Query(ctx, qProvisionType, tenantID, seed.AgentTypeID, seed.DisplayName); err != nil {
+			return fmt.Errorf("seed agent type %q: %w", seed.AgentTypeID, err)
+		}
+		if _, err = tx.Query(ctx, qProvisionProfile, tenantID, seed.AgentID, seed.AgentTypeID, seed.DisplayName, string(domain.AgentStateActive)); err != nil {
 			return fmt.Errorf("seed agent profile %q: %w", seed.AgentID, err)
 		}
 		if _, err = tx.Query(ctx, qProvisionDraft, tenantID, seed.AgentID, seed.Enabled, seed.RequireApproval,
@@ -86,7 +94,7 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 		if seed.AliasID == "" {
 			continue
 		}
-		if _, err = tx.Query(ctx, qProvisionAlias, tenantID, seed.AliasID, seed.AgentKind, seed.AgentID); err != nil {
+		if _, err = tx.Query(ctx, qProvisionAlias, tenantID, seed.AliasID, seed.AgentTypeID, seed.AgentID); err != nil {
 			return fmt.Errorf("seed agent alias %q: %w", seed.AliasID, err)
 		}
 	}
@@ -101,7 +109,7 @@ func validateSeed(seed domain.AgentSeed) error {
 	switch {
 	case strings.TrimSpace(seed.AgentID) == "":
 		return fmt.Errorf("%w: agent id is required", domain.ErrValidation)
-	case strings.TrimSpace(seed.AgentKind) == "":
+	case strings.TrimSpace(seed.AgentTypeID) == "":
 		return fmt.Errorf("%w: agent kind is required for %q", domain.ErrValidation, seed.AgentID)
 	case strings.TrimSpace(seed.DisplayName) == "":
 		return fmt.Errorf("%w: display name is required for %q", domain.ErrValidation, seed.AgentID)

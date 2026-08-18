@@ -22,6 +22,7 @@ Scout is licensed under the [Apache License 2.0](LICENSE).
 | `doc/` | Database reference and one design reference per mechanism, linked from this guide |
 | `STUDIO_API.md` | Agent Studio HTTP compatibility reference |
 | `IDEAS.md` / `TODO.md` | Gap analysis against the design study set, and the task lists it produced |
+| `IDEAS.DWF.md` / `TODO_DWF.md` | Digital Work Force gap analysis: the shared building blocks an enterprise agent-organization control plane needs, and their work plan |
 | `migration_guide.json` | Versioned upgrade history; this guide documents only the current state |
 | `go.mod` | Module identity and the pinned keel schema compiler tool |
 
@@ -80,9 +81,16 @@ A small installation may combine API roles, but background work remains in worke
 7. Queue delivery is at least once; stable idempotency keys make step effects replay-safe.
 8. Raw model or tool output never reaches a client before guardrail approval.
 9. Model and tool credentials come from keel secret providers and never from agent definitions.
-10. Cost is stored as `int64` minor units with an explicit currency and currency exponent.
-11. Large inputs, outputs, state, and audit payloads live in object storage; relational rows store a URI and digest.
-12. Provider selection occurs in composition factories controlled by `flag` values.
+10. Every governed operation carries a resolved `domain.Principal`; the zero value is never authorized.
+11. Inherited configuration may only narrow: a child scope that broadens what it inherits fails publication.
+12. Policy fails closed: no match, no policy, or an evaluator error is a deny, and an obligation with no enforcer fails the call.
+13. Work needing a human suspends and resumes; it never fails for lack of an approver, and never proceeds without one.
+14. Credentials resolve per principal just in time; two agents on one tool version never share an identity.
+15. An instance is never born broader than its type, and a running instance is never auto-upgraded.
+16. Delegation only narrows: depth, budget, and scope shrink each hop, and a target already in the chain is refused.
+17. Cost is stored as `int64` minor units with an explicit currency and currency exponent, attributed to a principal and scope.
+18. Large inputs, outputs, state, and audit payloads live in object storage; relational rows store a URI and digest.
+19. Provider selection occurs in composition factories controlled by `flag` values.
 
 ## Interface map
 
@@ -104,6 +112,12 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/release.go` | Compatibility runs, rollout state, leases, pins, bundles, drain, drills | Protect platform releases |
 | `contract/evaluation.go` | Manifests, golden sets, evaluators, gate decisions, sampling, calibration | Supply rubrics, truth, and business outcomes |
 | `contract/observability.go` | Audit sink, runtime metrics, observation recorder, label sink, tenant ledger | Export bounded fleet metrics and exact tenant accounting |
+| `contract/principal.go` | `PrincipalResolver`, `PrincipalAuthorizer`, `DelegationVerifier`, external principal source | Resolve the acting subject and evaluate it against keel authorization objects |
+| `contract/scope.go` | `ScopeRepository`, `ResourceMerger`, `NarrowingChecker`, `EffectiveConfigCompiler`, `PrincipalLimits`, release repository | Bind versioned configuration to a scope and freeze its compiled result |
+| `contract/policy.go` | `PolicyDecisionPoint`, `PolicyResolver`, `ObligationEnforcer` | Decide whether a governed action is allowed, and enforce what rides along |
+| `contract/approval.go` | `ApprovalStore`, `ApprovalInbox`, `EscalationPolicy`, `Notifier` | Park work a human owes, route it, and resume on the verdict |
+| `contract/agent_type.go` | `AgentTypeRepository`, `AgentTypeService`, `AgentLifecycle`, `AgentVersionQuarantine`, capability packages | Publish templates, instantiate agents from them, and own their state |
+| `contract/delegation.go` | `DelegationGrantRepository`, `DelegationAuthorizer`, `AgentInvoker`, `WorkItemStore` | Bound who may hand work to whom, and address work to a principal |
 | `contract/health.go` | `HealthProbe` | Expose dependency readiness to composition code |
 
 The `domain/` package contains transport- and provider-neutral DTOs. Provider SDK types must not cross these interfaces. `domain/` holds values only: no functions and no methods. Behavior belongs to `service/`, `handler/`, or `mcp/`, where it can be injected and replaced.
@@ -114,17 +128,21 @@ The `contract` package remains flat so consumers use one stable import path. Con
 
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
-| `service/controlplane` | `control_plane.go`, `studio*.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
-| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
-| `service/isolation` | `isolation.go` | `ExecutionGovernor`, rate-limiter factory, `DistributedTenantRateLimiter`, `LatencyBudgetAllocator`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector` | Keel database and cache, admission policy, budget policy, stage latency model, loop detection, and cost circuit breaking |
-| `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
+| `service/controlplane` | `control_plane.go`, `studio*.go`, `agent_type.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner`, `AgentTypeStore` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
+| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `AgentStepExecutor`, `TableWorkItemStore`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
+| `service/isolation` | `isolation.go` | `ExecutionGovernor`, rate-limiter factory, `DistributedTenantRateLimiter`, `LatencyBudgetAllocator`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector`, `ReleaseLimits` | Keel database and cache, admission policy, budget policy, stage latency model, loop detection, and cost circuit breaking |
+| `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever`, `ReleaseEntitlements` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
 | `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
 | `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
 | `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
 | `service/evaluation` | `evaluation.go` | `Runner`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
-| `service/observability` | `observability.go` | `BoundedRuntimeMetrics`, `LabelPolicy`, `TenantHeavyHitters`, `AuditingObservationRecorder`, `KeelMetricSink` | Metric backends, tenant ledger, and audit sink |
+| `service/observability` | `observability.go` | `BoundedRuntimeMetrics`, `LabelPolicy`, `TenantHeavyHitters`, `AuditingObservationRecorder`, `TableAuditSink`, `KeelMetricSink` | Metric backends, tenant ledger, and audit sink |
 | `service/runtime` | `agent_runtime.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
-| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway` and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
+| `service/policy` | `policy.go` | `SetEvaluator`, `ReleaseResolver` | Optional external evaluators behind the decision point |
+| `service/approval` | `approval.go` | `TableStore`, `Gate`, `Resumer`, `BackupEscalation`, `Sweeper` | Keel database, notification transport, turn dispatch |
+| `service/principal` | `principal.go`, `delegation.go` | `RoleAuthorizer`, `TableResolver`, `ChainVerifier`, `TableGrants`, `GrantAuthorizer` | Keel database, external identity planes |
+| `service/scope` | `scope.go` | `Compiler`, `MergerRegistry`, `LatticeChecker`, `TableScopeRepository`, `TableEffectiveReleaseStore`, `Explainer` | Keel database and product-registered resource mergers |
+| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway`, `BindingAuthorizer`, `BoundCredentialProvider`, `TableCredentialBindings`, and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
 
 These services enforce ordering and failure semantics but do not provide no-op infrastructure. Cache failures fall back to durable storage and are reported through `RuntimeMetrics`; durable writes complete before cache invalidation; model capacity is released on every unary or streaming terminal path; and tool calls cannot bypass authorization, egress, circuit, credential, or result validation boundaries.
 
@@ -145,7 +163,7 @@ Studio separates mutable authoring state from immutable runtime state:
 
 `controlplane.StudioService` implements `AgentStudioHTTPBackend`. It owns named SQL, prompt resolution, common validation, optimistic revisions, kill-switch updates, publication, restore, reset, history, release sections, and lifecycle audit. `handler.StudioHandler` authenticates through keel, derives `domain.StudioActor`, calls one backend method, and maps `studio-v1` DTOs and errors.
 
-Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, `AgentDraftTestExecutor`, `AgentKindCatalog`, and `StudioModelCatalog`, and may implement `AgentActivityReporter`. Scout owns the inheritance vocabulary and lifecycle contract but never hard-codes product agent kinds, prompt text, capability catalogs, or provider construction.
+Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, `AgentDraftTestExecutor`, `AgentTypeCatalog`, and `StudioModelCatalog`, and may implement `AgentActivityReporter`. Scout owns the inheritance vocabulary and lifecycle contract but never hard-codes product agent types, prompt text, capability catalogs, or provider construction.
 
 `AgentDraftValidator` receives a `domain.ValidationPhase`: `ValidateDraft` for an ordinary save, `ValidateRelease` before a test or publish. Requirements that only executable state must satisfy — provider credentials, entitlements — belong to the release phase so authoring is never blocked by them.
 
@@ -475,7 +493,7 @@ Run `mcp/mcptest` manifest and tool-text conformance checks before publishing a 
 
 ## Database schema
 
-Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 27 Scout tables rather than all 82.
+Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 40 Scout tables rather than all 104.
 
 The schema uses portable types supported by keel's PostgreSQL and MySQL dialects. Structured definitions are canonical JSON stored as `TEXT` and validated at service or compilation boundaries. Timestamps use `TIMESTAMP`; large data stays outside the relational database behind URI and digest columns.
 
@@ -485,22 +503,25 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 
 ### Schema modules
 
-Scout's schema is split into twelve modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
+Scout's schema is fifteen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
 
 | Module | Tables | Purpose | Depends on |
 |---|---:|---|---|
-| `catalog` | 7 | Currency, priority, lifecycle, and usage catalogs | — |
+| `catalog` | 15 | Currency, priority, lifecycle, usage, scope, resource-kind, merge-mode, decision, approval, risk, output-class, and agent-state catalogs | — |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
 | `prompt` | 2 | Prompt sections and platform baselines | — |
 | `model` | 5 | Providers, model definitions, capabilities, pricing, tenant access | `catalog`, `tenancy` |
-| `agent` | 9 | Profiles, drafts, aliases, prompt overrides, guardrail config, published versions, deployments, Studio audit | `tenancy`, `prompt`, `model` |
-| `tool` | 4 | Tool profiles, immutable versions, egress rules, agent bindings | `tenancy`, `agent` |
-| `graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
+| `agent` | 14 | Types and type versions, capability packages, profiles, drafts, aliases, prompt overrides, guardrail config, published versions, deployments, version quarantine, Studio audit | `tenancy`, `prompt`, `model` |
+| `tool` | 5 | Tool profiles, immutable versions, egress rules, agent bindings, principal credential bindings | `tenancy`, `agent`, `agent_authorization` |
+| `execution_graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
 | `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
-| `runtime` | 12 | Conversations, turns, checkpoints, replay, durable turn queue and dead letters, budgets, usage, activity | `catalog`, `tenancy`, `agent`, `graph` |
-| `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, audit | `catalog`, `tenancy`, `agent`, `runtime` |
+| `runtime` | 13 | Conversations, turns, checkpoints, replay, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
+| `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
+| `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
+| `configuration` | 3 | Configuration hierarchy, scoped bindings, compiled effective releases | `catalog`, `tenancy`, `agent` |
+| `approval` | 2 | Durable approval requests and their verdicts | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization` |
 
 `schema/dependency.yml` declares those modules, their dependencies, and their seed files; [doc/database.md](doc/database.md#module-dependency-graph) draws the graph. `agent` is the common core every other module reaches through; `catalog` and `tenancy` sit under it. Module boundaries follow the `contract/` and `service/` boundaries, so a downstream picks modules by the Scout packages it actually constructs.
 
@@ -513,29 +534,31 @@ The Go tool declaration pins keel's compiler. Pass the keel groups first, then t
 ```bash
 keel="$(go list -m -f '{{.Dir}}' github.com/nauticana/keel)/schema"
 keel_in="${keel}/core,${keel}/geo,${keel}/tenant_management"
-scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/tool,schema/graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation"
-scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/graph,schema/seed/runtime,schema/seed/release"
+scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation"
+scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/execution_graph,schema/seed/runtime,schema/seed/release"
 
 go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_seed}" -out build/scout_pgsql.sql
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 38 selected keel tables and 82 Scout tables. Drop the modules the product does not use:
+That full set is 38 selected keel tables and 104 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent` | 27 |
-| … plus compiled execution graphs | `+ graph` | 31 |
-| … plus governed tools | `+ tool` | 35 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 40 |
-| … plus the durable turn runtime | `+ runtime` | 43 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 82 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent` | 40 |
+| … plus agent principals, delegation, and scoped configuration | `+ agent_authorization`, `configuration` | 45 |
+| … plus compiled execution graphs | `+ execution_graph` | 49 |
+| … plus governed tools and credential bindings | `+ tool` | 54 |
+| … plus durable human approvals | `+ approval` | 56 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 65 |
+| … plus the durable turn runtime | `+ runtime` | 78 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 104 |
 
-Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
+Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
 The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`. Run both commands in CI for whichever profile you ship. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
 
-The seed YAML is authoritative: `catalog` seeds currencies and the lifecycle catalogs, `prompt` the platform prompt sections and language codes, `model` the stock providers and capability constants, `agent` the Studio authorization verbs, roles, menu entry, config flags and REST metadata, `graph` the execution-step kinds, `runtime` and `model` their foreign-key lookup rows, and `release` the ordered `rollout_stage` catalog. Each constant domain maps its consuming column through `constant_lookup`. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
+The seed YAML is authoritative: `catalog` seeds currencies and the lifecycle catalogs, `prompt` the platform prompt sections and language codes, `model` the stock providers and capability constants, `agent` the Studio authorization verbs, roles, menu entry, config flags and REST metadata, `execution_graph` the execution-step kinds, `runtime` and `model` their foreign-key lookup rows, and `release` the ordered `rollout_stage` catalog. Each constant domain maps its consuming column through `constant_lookup`. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
 
 ### Persistence rules
 
@@ -755,6 +778,36 @@ cached, err := knowledge.NewCachedRetriever(hybrid, keyer, knowledge.CachedRetri
 ```
 
 The model never calls a destination directly. A governed tool path resolves the registered immutable version, authorizes tenant and agent access, retrieves scoped credentials, validates egress, applies timeout/retry/circuit-breaker policy, validates output, and records a redacted audit event.
+
+## Principals and scoped configuration
+
+Every governed operation names its acting subject. `domain.Principal` carries kind, id, tenant, scope, the release it is pinned to, its entitlements digest, and an authority chain, and it travels from `TurnRequest` through `StepInput`, `ToolCall`, and `KnowledgeQuery`. `GovernedGateway` rejects a zero principal and a principal whose tenant does not own the call, and `toolgateway.BindingAuthorizer` enforces the calling principal's `agent_tool_binding` at invoke time — tenant ownership of a tool grants nothing on its own.
+
+Agents and humans resolve through **one** authorization model. Keel's authorization objects, actions, roles, and `low_limit`/`high_limit` bounds are subject-agnostic, so Scout adds only the subject side: `agent_permission` mirrors keel's `user_permission`, and `principal.RoleAuthorizer` runs the same grant query against whichever assignment table the principal kind selects. Agents are deliberately not rows in `user_account`, which is a store of interactive credentials no machine identity should inherit.
+
+`service/scope` compiles configuration instead of resolving it per request. `configuration` is a per-tenant tree whose kinds Scout never interprets, `config_scope_binding` attaches one effective-dated, versioned value per resource kind, and `Compiler` folds the chain widest scope first into an `effective_agent_release` that `AgentPublisher` freezes. Two rules make the result safe: a `sealed` binding — set by its own scope, not by the child — cannot be overridden at all, and `LatticeChecker` compares each **merged** result against what it inherited, so a `replace` that grants more and an `append` that widens a set fail the same subset comparison. Every effective value keeps the provenance of the binding that won and of each binding it superseded. See [doc/authority.md](doc/authority.md).
+
+## Governed decisions, approvals, and credentials
+
+`service/policy` is the decision point. `SetEvaluator` reads the policy statements frozen into the principal's effective release and fails closed three ways: deny beats allow regardless of order, no match is a deny, and an evaluator failure is a deny with an auditable reason. Patterns match exactly or with one trailing `*`, and the `policy` narrowing rule lets a child drop an allow or add a deny but never add an allow.
+
+An allow may carry obligations — `require_approval`, `redact`, `cap_spend`, `record_evidence`, `notify`. `GovernedGateway` applies them before egress, and an obligation with no registered enforcer fails the call: silently skipping one would turn a conditional allow into an unconditional one. The operating modes from an agent's configuration are enforced here, never in prompt text.
+
+`service/approval` makes human review durable. `Gate` opens an `approval_request` and returns pending; `TurnRuntime` then **suspends** the turn instead of failing it, holding the budget reservation and acking the delivery. `ProposalDigest` binds a verdict to the exact call, and the resolve statement matches on it, so approving a changed action updates nothing. `Resumer` records the verdict, returns the turn to `queued`, and re-dispatches it — all three, because resolving without re-dispatching would park the turn forever. `Sweeper` with `BackupEscalation` routes overdue work to a backup and expires it when none is configured; a backup needs its own grant.
+
+`ToolCredentialProvider` is keyed on the principal, not the tenant. `tool_credential_binding` maps `(tenant, principal, tool, purpose)` to a reference into keel's secret or OAuth-connection store — never secret material — and `BoundCredentialProvider` resolves it just in time, after policy, guardrails, egress, and admission. Two agents on one tool version therefore resolve different identities, and the returned `AuthorityRef` records whose authority was exercised while the secret is recorded nowhere.
+
+`domain.DecisionRecord` replaces the opaque audit event: principal, authority, scope, action, resource, release, policy, outcome, obligations, reason, and a reference to redacted evidence. `observability.TableAuditSink` is both sides — `Record` writes, `Decisions` reads exactly one tenant, or with `TenantID` zero only the platform-wide records that name no tenant. Reading across tenants is not expressible. Evidence is not telemetry and never derives from it. `usage_event` carries the principal and scope that spent it, so cost is reportable per agent and per organizational unit. See [doc/governance.md](doc/governance.md).
+
+## Agent types, lifecycle, and delegation
+
+`agent_type` and `agent_type_version` make the template a first-class, publishable resource: `agent_profile.agent_type_id` is now a real foreign key where `agent_kind` was a bare string referencing nothing. `agent_capability_package` is a named bundle of resource values a type version requires, and `controlplane.AgentTypeStore.Instantiate` expands it into scope bindings — narrowing-checked, so an instance can never be born broader than its type. `Conformance` reports instances pinned to an older type version and never upgrades one: the pinned version is the contract that already-approved work was allowed under.
+
+`agent_profile.is_active` is now `state_code` over the `agent_state` catalog with a reason, actor, and timestamp. `Transition` refuses an illegal move, compare-and-swaps on the current state so a concurrent change cannot be lost, and emits a decision record. `agent_version_quarantine` withdraws one version from all traffic while leaving the deployment pointers a team will want back after the incident untouched.
+
+`delegation_grant` bounds who may hand work to whom: action scope, depth, budget, approval, validity. `GrantAuthorizer` verifies the grantor **still holds** what it is passing on, evaluated through the same authorization objects both principal kinds use, so a revoked role stops flowing through an older grant. `principal.Narrow` shrinks every bound at each hop — depth decrements, budget takes the tighter value, scope and currency may not change, and a required approval is sticky.
+
+`dataplane.AgentStepExecutor` is the `agent` graph step: authorize, narrow, refuse cycles, record a `agent_work_item`, then hand off to an injected `contract.AgentInvoker`, so an in-process runtime and an A2A client compose identically while Scout keeps the authority. `knowledge.ReleaseEntitlements` derives retrieval labels from the frozen release instead of trusting the request path, and `scope.Explainer` answers "why is this the value?" and diffs two releases from the provenance kept at publication. See [doc/organization.md](doc/organization.md).
 
 ## Release safety
 

@@ -1,0 +1,13 @@
+table: approval_risk_tier
+comment: Ordered attention classes for approval requests
+columns:
+  - name: code
+    type: VARCHAR(20)
+  - name: severity_rank
+    type: SMALLINT
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]
+checks:
+  - name: risk_tier_rank_ck
+    expression: severity_rank >= 0

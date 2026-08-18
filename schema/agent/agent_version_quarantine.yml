@@ -1,0 +1,28 @@
+table: agent_version_quarantine
+comment: One agent version withdrawn from all traffic; it overrides every pin and deployment pointer
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: reason
+    type: VARCHAR(400)
+  - name: actor_kind
+    type: VARCHAR(20)
+  - name: actor_id
+    type: VARCHAR(120)
+  - name: quarantined_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: lifted_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [tenant_id, agent_id, agent_version]
+foreign_keys:
+  - name: agent_version_quarantines
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]

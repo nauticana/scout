@@ -1,0 +1,93 @@
+table: delegation_grant
+comment: Typed bound on who may assign or approve work for whom; conveys a subset of the grantor's own authority
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: grant_id
+    type: VARCHAR(80)
+  - name: grantor_kind
+    type: VARCHAR(20)
+  - name: grantor_user_id
+    type: BIGINT
+    nullable: true
+  - name: grantor_agent_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: grantee_kind
+    type: VARCHAR(20)
+  - name: grantee_agent_id
+    type: VARCHAR(80)
+  - name: action_scope
+    type: VARCHAR(200)
+  - name: max_depth
+    type: SMALLINT
+    default: "0"
+  - name: budget_minor_units
+    type: BIGINT
+    nullable: true
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+  - name: approval_required
+    type: BOOLEAN
+    default: FALSE
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: granted_by
+    type: BIGINT
+    nullable: true
+  - name: revoked_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [tenant_id, grant_id]
+foreign_keys:
+  - name: delegation_grants
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: granted_delegation_grants
+    columns: [grantor_user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: grantor_delegation_grants
+    columns: [tenant_id, grantor_agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: grantee_delegation_grants
+    columns: [tenant_id, grantee_agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: authorized_delegation_grants
+    columns: [granted_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: currency_delegation_grants
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: delegation_grant_grantee_ix
+    columns: [tenant_id, grantee_kind, grantee_agent_id]
+checks:
+  - name: delegation_grant_grantor_ck
+    expression: (grantor_user_id IS NULL) <> (grantor_agent_id IS NULL)
+  - name: delegation_grant_grantor_kind_ck
+    expression: (grantor_kind = 'human' AND grantor_user_id IS NOT NULL) OR (grantor_kind = 'agent' AND grantor_agent_id IS NOT NULL)
+  - name: delegation_grant_grantee_kind_ck
+    expression: grantee_kind = 'agent'
+  - name: delegation_grant_depth_ck
+    expression: max_depth >= 0
+  - name: delegation_grant_window_ck
+    expression: endda IS NULL OR endda > begda
+  - name: delegation_grant_budget_ck
+    expression: budget_minor_units IS NULL OR (budget_minor_units >= 0 AND currency_code IS NOT NULL)

@@ -1,0 +1,8 @@
+table: agent_output_class
+comment: What an actionable agent output is, so a reviewer never sees an action as a proposal
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

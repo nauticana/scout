@@ -61,9 +61,23 @@ func (recorder *AuditingObservationRecorder) RecordObservation(ctx context.Conte
 		recorder.onError(fmt.Errorf("auditing observation recorder: %w", err))
 		return
 	}
-	event := domain.AuditEvent{TenantID: observation.TenantID, Category: AuditCategoryObservation, Payload: payload, OccurredAt: recorder.now()}
-	if err := recorder.audit.Record(ctx, event); err != nil {
+	record := domain.DecisionRecord{
+		TenantID: observation.TenantID, Principal: observation.Principal, ScopeID: observation.ScopeID,
+		Category: AuditCategoryObservation, Action: string(observation.Stage), Resource: observation.Component,
+		Outcome: observationOutcome(observation.Outcome), Reason: observation.ErrorClass,
+		Payload: payload, OccurredAt: recorder.now(),
+	}
+	if err := recorder.audit.Record(ctx, record); err != nil {
 		recorder.onError(fmt.Errorf("auditing observation recorder: %w", err))
+	}
+}
+
+func observationOutcome(outcome domain.ObservationOutcome) domain.DecisionOutcome {
+	switch outcome {
+	case domain.OutcomeError, domain.OutcomeRejected:
+		return domain.DecisionDeny
+	default:
+		return domain.DecisionAllow
 	}
 }
 

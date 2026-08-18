@@ -14,11 +14,13 @@ import (
 )
 
 const (
-	qRecordLock  = "scout_turn_record_lock"
-	qRecordFind  = "scout_turn_record_find"
-	qRecordOpen  = "scout_turn_record_open"
-	qRecordStart = "scout_turn_record_start"
-	qRecordFail  = "scout_turn_record_fail"
+	qRecordLock    = "scout_turn_record_lock"
+	qRecordFind    = "scout_turn_record_find"
+	qRecordOpen    = "scout_turn_record_open"
+	qRecordStart   = "scout_turn_record_start"
+	qRecordFail    = "scout_turn_record_fail"
+	qRecordSuspend = "scout_turn_record_suspend"
+	qRecordResume  = "scout_turn_record_resume"
 )
 
 var turnRecordQueries = map[string]string{
@@ -44,11 +46,25 @@ UPDATE conversation_turn
  WHERE tenant_id = ? AND request_id = ? AND status_code = 'queued'
 RETURNING turn_no`,
 
+	// Suspend and Resume move only between live states, so a terminal turn is
+	// never revived and a settled reservation is never re-held.
+	qRecordSuspend: `
+UPDATE conversation_turn
+   SET status_code = 'suspended'
+ WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming')
+RETURNING turn_no`,
+
+	qRecordResume: `
+UPDATE conversation_turn
+   SET status_code = 'queued'
+ WHERE tenant_id = ? AND request_id = ? AND status_code IN ('suspended', 'queued')
+RETURNING turn_no`,
+
 	qRecordFail: `
 UPDATE conversation_turn
    SET status_code = ?, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming')
+ WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
 RETURNING turn_no`,
 }
 
@@ -195,8 +211,12 @@ func (store *TableTurnRecordStore) Start(ctx context.Context, tenantID int64, re
 	if err := store.validate(); err != nil {
 		return err
 	}
-	if _, err := store.queries(ctx).Query(context.WithoutCancel(ctx), qRecordStart, tenantID, requestID); err != nil {
+	started, err := store.queries(ctx).Query(context.WithoutCancel(ctx), qRecordStart, tenantID, requestID)
+	if err != nil {
 		return fmt.Errorf("start turn: %w", err)
+	}
+	if len(started.Rows) == 0 {
+		return fmt.Errorf("%w: turn %q is not queued", domain.ErrConflict, requestID)
 	}
 	return nil
 }
@@ -215,15 +235,59 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, req
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	if _, err = store.queries(ctx).Query(ctx, qRecordFail, status, ref.URI, ref.Digest, tenantID, requestID); err != nil {
+	failed, err := store.queries(ctx).Query(ctx, qRecordFail, status, ref.URI, ref.Digest, tenantID, requestID)
+	if err != nil {
 		return fmt.Errorf("fail turn: %w", err)
+	}
+	if len(failed.Rows) == 0 {
+		return fmt.Errorf("%w: turn %q is not live", domain.ErrConflict, requestID)
+	}
+	return nil
+}
+
+// Suspend parks a live turn awaiting a human decision. The budget reservation is
+// deliberately left held: settling it here would let the turn resume with no
+// budget, and releasing it would let a tenant park work to dodge its ceiling.
+func (store *TableTurnRecordStore) Suspend(ctx context.Context, tenantID int64, requestID, reason string) error {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: tenant, request, and a suspension reason are required", domain.ErrValidation)
+	}
+	if err := store.validate(); err != nil {
+		return err
+	}
+	suspended, err := store.queries(ctx).Query(context.WithoutCancel(ctx), qRecordSuspend, tenantID, requestID)
+	if err != nil {
+		return fmt.Errorf("suspend turn: %w", err)
+	}
+	if len(suspended.Rows) == 0 {
+		return fmt.Errorf("%w: turn %q is not live", domain.ErrConflict, requestID)
+	}
+	return nil
+}
+
+// Resume returns a suspended turn to the queue so a worker replays it from its
+// last checkpoint; committed steps are not re-executed.
+func (store *TableTurnRecordStore) Resume(ctx context.Context, tenantID int64, requestID string) error {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
+	}
+	if err := store.validate(); err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
+	resumed, err := store.queries(ctx).Query(ctx, qRecordResume, tenantID, requestID)
+	if err != nil {
+		return fmt.Errorf("resume turn: %w", err)
+	}
+	if len(resumed.Rows) == 0 {
+		return fmt.Errorf("%w: turn %q is not suspended", domain.ErrConflict, requestID)
 	}
 	return nil
 }
 
 // RecordUsage writes the settled usage event through the ledger's insert, which
 // is unique per (turn, category).
-func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error {
+func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
 	if tenantID <= 0 || strings.TrimSpace(conversationID) == "" || turnNo <= 0 || len(usage.Currency) != 3 ||
 		usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: turn identity and non-negative priced usage are required", domain.ErrValidation)
@@ -232,7 +296,7 @@ func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, tenantID int
 		return err
 	}
 	ledger := TurnLedger{UsageCategory: store.UsageCategory}
-	_, err := ledger.InsertUsageEvent(context.WithoutCancel(ctx), store.queries(ctx), tenantID, conversationID, turnNo, subjectRef, usage)
+	_, err := ledger.InsertUsageEvent(context.WithoutCancel(ctx), store.queries(ctx), tenantID, conversationID, turnNo, subjectRef, attribution, usage)
 	return err
 }
 

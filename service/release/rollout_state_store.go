@@ -62,10 +62,10 @@ SELECT ` + rolloutStateColumns + `
  ORDER BY s.stage_started_at, s.platform_version`,
 	qRolloutRecordBypass: `
 INSERT INTO platform_rollout_bypass
-       (platform_version, stage_code, scope, reason, requested_by, approved_by, expires_at, created_at)
+       (platform_version, stage_code, bypass_scope, reason, requested_by, approved_by, expires_at, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	qRolloutBypasses: `
-SELECT id, stage_code, scope, reason, requested_by, approved_by, expires_at, created_at
+SELECT id, stage_code, bypass_scope, reason, requested_by, approved_by, expires_at, created_at
   FROM platform_rollout_bypass
  WHERE platform_version = ?
  ORDER BY created_at, id`,

@@ -7,7 +7,7 @@ columns:
     type: VARCHAR(80)
   - name: stage_code
     type: VARCHAR(30)
-  - name: scope
+  - name: bypass_scope
     type: VARCHAR(80)
   - name: reason
     type: TEXT

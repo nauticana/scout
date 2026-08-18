@@ -38,11 +38,11 @@ groups:
 
   - name: tool
     path: tool
-    depends_on: [tenancy, agent]
+    depends_on: [tenancy, agent, agent_authorization]
 
-  - name: graph
-    path: graph
-    seed: seed/graph/graph.yml
+  - name: execution_graph
+    path: execution_graph
+    seed: seed/execution_graph/execution_graph.yml
     depends_on: [agent]
     seed_depends_on: [core]
 
@@ -57,15 +57,27 @@ groups:
   - name: runtime
     path: runtime
     seed: seed/runtime/runtime.yml
-    depends_on: [catalog, tenancy, agent, graph]
+    depends_on: [catalog, tenancy, agent, execution_graph, agent_authorization, configuration]
     seed_depends_on: [core]
 
   - name: release
     path: release
     seed: seed/release/release.yml
-    depends_on: [catalog, tenancy, agent, runtime]
+    depends_on: [catalog, tenancy, agent, runtime, configuration]
     seed_depends_on: [core]
 
   - name: evaluation
     path: evaluation
     depends_on: [catalog, tenancy, agent, knowledge, release]
+
+  - name: configuration
+    path: configuration
+    depends_on: [catalog, tenancy, agent]
+
+  - name: agent_authorization
+    path: agent_authorization
+    depends_on: [catalog, agent]
+
+  - name: approval
+    path: approval
+    depends_on: [catalog, tenancy, agent, configuration, agent_authorization]

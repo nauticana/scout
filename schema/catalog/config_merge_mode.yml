@@ -1,0 +1,8 @@
+table: config_merge_mode
+comment: How a child binding combines with the value it inherits
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

@@ -1,17 +1,29 @@
 table: agent_profile
-comment: Tenant-owned agent identity and operational status
+comment: Tenant-owned agent identity, its type, and its audited operational state
 columns:
   - name: tenant_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
-  - name: agent_kind
+  - name: agent_type_id
     type: VARCHAR(80)
+  - name: agent_type_version
+    type: VARCHAR(80)
+    nullable: true
   - name: display_name
     type: VARCHAR(200)
-  - name: is_active
-    type: BOOLEAN
-    default: TRUE
+  - name: state_code
+    type: VARCHAR(30)
+    default: active
+  - name: state_reason
+    type: VARCHAR(400)
+    nullable: true
+  - name: state_changed_by
+    type: VARCHAR(120)
+    nullable: true
+  - name: state_changed_at
+    type: TIMESTAMP
+    nullable: true
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -22,7 +34,22 @@ foreign_keys:
     references:
       table: agent_tenant
       columns: [partner_id]
+  - name: typed_agent_profiles
+    columns: [tenant_id, agent_type_id]
+    references:
+      table: agent_type
+      columns: [tenant_id, agent_type_id]
+  - name: versioned_agent_profiles
+    columns: [tenant_id, agent_type_id, agent_type_version]
+    references:
+      table: agent_type_version
+      columns: [tenant_id, agent_type_id, type_version]
+  - name: state_agent_profiles
+    columns: [state_code]
+    references:
+      table: agent_state
+      columns: [code]
 indexes:
-  - name: agent_profile_kind_id_uq
-    columns: [tenant_id, agent_kind, agent_id]
+  - name: agent_profile_type_id_uq
+    columns: [tenant_id, agent_type_id, agent_id]
     unique: true

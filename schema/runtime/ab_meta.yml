@@ -11,3 +11,4 @@ tables:
   - agent_ops_event
   - turn_queue
   - turn_dead_letter
+  - agent_work_item

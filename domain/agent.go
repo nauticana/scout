@@ -8,7 +8,7 @@ import (
 // AgentDefinition is an immutable version of a tenant agent.
 type AgentDefinition struct {
 	AgentID               string              `json:"agent_id"`
-	AgentKind             string              `json:"agent_kind"`
+	AgentTypeID           string              `json:"agent_type_id"`
 	Version               string              `json:"version"`
 	Enabled               bool                `json:"enabled"`
 	Models                AgentModelSelection `json:"models"`

@@ -1,0 +1,22 @@
+table: agent_type
+comment: Reusable, publishable behaviour template one or more agents are instantiated from
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_type_id
+    type: VARCHAR(80)
+  - name: display_name
+    type: VARCHAR(200)
+  - name: description
+    type: VARCHAR(500)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_type_id]
+foreign_keys:
+  - name: agent_types
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]

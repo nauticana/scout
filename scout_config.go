@@ -28,6 +28,11 @@ const (
 	agent_model_capacity_pool = "agent_model_capacity_pool"
 	agent_model_capacity      = "agent_model_capacity"
 	agent_model_max_waiters   = "agent_model_max_waiters"
+	agent_max_scope_depth     = "agent_max_scope_depth"
+	agent_max_delegation_hops = "agent_max_delegation_hops"
+	agent_approval_deadline   = "agent_approval_deadline"
+	agent_credential_ttl      = "agent_credential_ttl"
+	agent_audit_page_size     = "agent_audit_page_size"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -83,6 +88,11 @@ type ScoutConfig struct {
 	AgentModelCapacityPool string  // agent_model_capacity_pool  shared                        Shared model capacity pool name
 	AgentModelCapacity     int     // agent_model_capacity       32                            Concurrent model capacity slots
 	AgentModelMaxWaiters   int     // agent_model_max_waiters    4096                          Maximum queued model requests
+	AgentMaxScopeDepth     int     // agent_max_scope_depth      8                             Maximum scope-chain depth a release may compile over
+	AgentMaxDelegationHops int     // agent_max_delegation_hops  4                             Maximum delegation hops in an authority chain
+	AgentApprovalDeadline  int     // agent_approval_deadline    3600                          Seconds a reviewer has before escalation; 0 leaves a request open
+	AgentCredentialTTL     int     // agent_credential_ttl       300                           Default lifetime in seconds of a just-in-time tool credential
+	AgentAuditPageSize     int     // agent_audit_page_size      100                           Decision records returned per audit query page
 }
 
 // Apply parses Scout's section of the shared application configuration.
@@ -106,5 +116,10 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentModelCapacityPool = c.String(rows, agent_model_capacity_pool)
 	c.AgentModelCapacity = c.Int(rows, agent_model_capacity)
 	c.AgentModelMaxWaiters = c.Int(rows, agent_model_max_waiters)
+	c.AgentMaxScopeDepth = c.Int(rows, agent_max_scope_depth)
+	c.AgentMaxDelegationHops = c.Int(rows, agent_max_delegation_hops)
+	c.AgentApprovalDeadline = c.Int(rows, agent_approval_deadline)
+	c.AgentCredentialTTL = c.Int(rows, agent_credential_ttl)
+	c.AgentAuditPageSize = c.Int(rows, agent_audit_page_size)
 	return c.ParseErr()
 }

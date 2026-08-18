@@ -47,6 +47,19 @@ var (
 	ErrStaleEvidence = errors.New("stale evidence")
 	// ErrDegraded indicates a dependency is serving with reduced guarantees.
 	ErrDegraded = errors.New("degraded mode")
+	// ErrPrincipalUnknown indicates a transport identity resolved to no principal.
+	ErrPrincipalUnknown = errors.New("principal unknown")
+	// ErrAuthorityExceeded indicates a binding or delegation broadens what it inherits.
+	ErrAuthorityExceeded = errors.New("authority exceeded")
+	// ErrDelegationDepth indicates a delegation chain is longer than its grant allows.
+	ErrDelegationDepth = errors.New("delegation depth exceeded")
+	// ErrGrantExpired indicates a delegation grant is outside its validity window.
+	ErrGrantExpired = errors.New("delegation grant expired")
+	// ErrSealed indicates a narrower scope tried to override a sealed binding.
+	ErrSealed = errors.New("binding sealed")
+	// ErrApprovalPending indicates work is parked awaiting a human decision. It is
+	// control flow, not a denial: the turn suspends and resumes on the verdict.
+	ErrApprovalPending = errors.New("approval pending")
 )
 
 // TurnStage identifies the turn-lifecycle boundary that produced an error.

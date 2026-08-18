@@ -1,0 +1,28 @@
+table: agent_capability_package
+comment: Reusable named bundle of scoped resource values a type version requires
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: package_id
+    type: VARCHAR(80)
+  - name: package_version
+    type: VARCHAR(80)
+  - name: display_name
+    type: VARCHAR(200)
+  - name: payload
+    type: TEXT
+  - name: payload_digest
+    type: CHAR(64)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, package_id, package_version]
+foreign_keys:
+  - name: agent_capability_packages
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+checks:
+  - name: capability_package_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64

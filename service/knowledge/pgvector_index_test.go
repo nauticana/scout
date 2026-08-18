@@ -76,7 +76,7 @@ func entitledQuery(labels ...string) domain.KnowledgeQuery {
 		TenantContext:      domain.TenantContext{TenantID: 7},
 		KnowledgeBaseID:    "kb",
 		KnowledgeVersion:   "v1",
-		Principal:          "user:a",
+		Principal:          domain.Principal{Kind: domain.PrincipalAgent, ID: "a", TenantID: 7},
 		Entitlements:       raw,
 		EntitlementsDigest: EntitlementsDigest(raw),
 		Query:              []byte("quarterly revenue"),

@@ -8,9 +8,11 @@ type ToolDefinition struct {
 	Contract []byte
 }
 
-// ToolCall contains one governed tenant tool invocation.
+// ToolCall contains one governed tenant tool invocation. Principal is the agent
+// making the call; the gateway rejects a zero principal.
 type ToolCall struct {
 	TenantContext  TenantContext
+	Principal      Principal
 	RequestID      string
 	ConversationID string
 	ToolID         string

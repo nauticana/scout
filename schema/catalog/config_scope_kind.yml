@@ -1,0 +1,13 @@
+table: config_scope_kind
+comment: Configuration scope levels; Scout owns the tenant root and products name the levels below it
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: depth_rank
+    type: SMALLINT
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]
+checks:
+  - name: scope_kind_depth_ck
+    expression: depth_rank >= 0

@@ -99,7 +99,7 @@ func TestCachedRetrieverHitsMissesAndCopies(t *testing.T) {
 	}
 	// Same entitlements under a different principal share the entry; one label more does not.
 	same := entitledQuery("user:a")
-	same.Principal = "delegate"
+	same.Principal.ID = "delegate"
 	if _, err := cached.Retrieve(context.Background(), same); err != nil || inner.calls.Load() != 4 {
 		t.Fatalf("principal hit: calls = %d, %v", inner.calls.Load(), err)
 	}

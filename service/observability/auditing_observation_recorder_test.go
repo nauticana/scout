@@ -29,12 +29,12 @@ func TestNewAuditingObservationRecorderValidates(t *testing.T) {
 
 func TestAuditingObservationRecorderAuditsOnlyRejectedAndFailed(t *testing.T) {
 	var forwarded []domain.Observation
-	var events []domain.AuditEvent
+	var events []domain.DecisionRecord
 	var failures []error
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	recorder, err := NewAuditingObservationRecorder(
 		&fake.ObservationRecorder{RecordObservationFunc: func(_ context.Context, o domain.Observation) { forwarded = append(forwarded, o) }},
-		&fake.AuditSink{RecordFunc: func(_ context.Context, e domain.AuditEvent) error { events = append(events, e); return nil }},
+		&fake.AuditSink{RecordFunc: func(_ context.Context, e domain.DecisionRecord) error { events = append(events, e); return nil }},
 		func(err error) { failures = append(failures, err) },
 		func() time.Time { return now },
 	)
@@ -74,7 +74,7 @@ func TestAuditingObservationRecorderSurfacesAuditFailure(t *testing.T) {
 	sinkErr := errors.New("audit down")
 	recorder, _ := NewAuditingObservationRecorder(
 		&fake.ObservationRecorder{},
-		&fake.AuditSink{RecordFunc: func(context.Context, domain.AuditEvent) error { return sinkErr }},
+		&fake.AuditSink{RecordFunc: func(context.Context, domain.DecisionRecord) error { return sinkErr }},
 		func(err error) { failures = append(failures, err) },
 		nil,
 	)

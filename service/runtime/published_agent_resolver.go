@@ -22,11 +22,11 @@ const (
 
 var publishedAgentQueries = map[string]string{
 	qPublishedAgent: `
-SELECT p.is_active, dep.stable_version, dep.canary_version, dep.canary_percentage,
+SELECT p.state_code = 'active', dep.stable_version, dep.canary_version, dep.canary_percentage,
        stable.definition, canary.definition, p.agent_id
   FROM agent_alias a
   JOIN agent_profile p
-    ON p.tenant_id = a.tenant_id AND p.agent_kind = a.agent_kind AND p.agent_id = a.agent_id
+    ON p.tenant_id = a.tenant_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
   JOIN agent_deployment dep ON dep.tenant_id = p.tenant_id AND dep.agent_id = p.agent_id
   JOIN agent_version stable
     ON stable.tenant_id = dep.tenant_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version

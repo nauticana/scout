@@ -28,10 +28,16 @@ seeds:
       - [agent_model_capacity_pool, string, false, shared, Shared model capacity pool name]
       - [agent_model_capacity, int, false, "32", Concurrent model capacity slots]
       - [agent_model_max_waiters, int, false, "4096", Maximum queued model requests]
+      - [agent_max_scope_depth, int, false, "8", Maximum scope-chain depth a release may compile over]
+      - [agent_max_delegation_hops, int, false, "4", Maximum delegation hops in an authority chain]
+      - [agent_approval_deadline, int, false, "3600", Seconds a reviewer has before escalation; 0 leaves a request open]
+      - [agent_credential_ttl, int, false, "300", Default lifetime in seconds of a just-in-time tool credential]
+      - [agent_audit_page_size, int, false, "100", Decision records returned per audit query page]
   - table: authorization_object
     columns: [id, caption]
     rows:
       - [AGENT_STUDIO, Agent Studio]
+      - [AGENT_APPROVAL, Agent approval decisions]
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
@@ -40,6 +46,7 @@ seeds:
       - [AGENT_STUDIO, TEST, Run draft tests]
       - [AGENT_STUDIO, PUBLISH, Publish releases and set defaults]
       - [AGENT_STUDIO, RESTORE, Restore published versions]
+      - [AGENT_APPROVAL, DECIDE, Decide assigned approval requests]
   - table: authorization_role
     columns: [id, caption]
     rows:
@@ -72,6 +79,7 @@ seeds:
       - [AGENT_ADMIN, AGENT_STUDIO, TEST, agent_studio]
       - [AGENT_ADMIN, AGENT_STUDIO, PUBLISH, agent_studio]
       - [AGENT_ADMIN, AGENT_STUDIO, RESTORE, agent_studio]
+      - [AGENT_ADMIN, AGENT_APPROVAL, DECIDE, "*"]
       - [AGENT_ADMIN, PAGE, ACCESS, agent_studio]
       - [AGENT_ADMIN, TABLE, SELECT, agent_profile]
       - [AGENT_ADMIN, TABLE, SELECT, agent_draft]

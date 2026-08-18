@@ -17,7 +17,7 @@ import (
 )
 
 // AuditCategoryModelRoute labels the audit event written for every routing decision.
-const AuditCategoryModelRoute = "model.route"
+const AuditCategoryModelRoute = domain.DecisionCategoryModelRoute
 
 // Bounded rejection labels reported in the routing audit payload.
 const (
@@ -385,7 +385,17 @@ func (router *PolicyRouter) audit(ctx context.Context, request domain.ModelReque
 	if err != nil {
 		return fmt.Errorf("encode routing audit: %w", err)
 	}
-	if err := router.Audit.Record(ctx, domain.AuditEvent{TenantID: request.TenantContext.TenantID, Category: AuditCategoryModelRoute, Payload: encoded, OccurredAt: inputs.now}); err != nil {
+	outcome := domain.DecisionAllow
+	if cause != nil {
+		outcome = domain.DecisionDeny
+	}
+	record := domain.DecisionRecord{
+		TenantID: request.TenantContext.TenantID, Principal: request.Principal,
+		Category: AuditCategoryModelRoute, Action: "route", Resource: selection.Model,
+		ScopeID: request.TenantContext.ScopeID, Outcome: outcome, Reason: selection.Reason,
+		RequestID: request.RequestID, Payload: encoded, OccurredAt: inputs.now,
+	}
+	if err := router.Audit.Record(ctx, record); err != nil {
 		return fmt.Errorf("record routing audit: %w", err)
 	}
 	return nil

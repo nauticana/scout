@@ -1,4 +1,8 @@
 tables:
+  - agent_type
+  - agent_type_version
+  - agent_capability_package
+  - agent_type_capability
   - agent_profile
   - guardrail_config
   - agent_draft
@@ -8,3 +12,4 @@ tables:
   - tenant_prompt_default
   - agent_version
   - agent_deployment
+  - agent_version_quarantine

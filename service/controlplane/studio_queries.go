@@ -38,27 +38,27 @@ const (
 
 var studioQueries = map[string]string{
 	qStudioListAgents: `
-SELECT p.agent_id, p.agent_kind, p.display_name, p.is_active, d.enabled,
+SELECT p.agent_id, p.agent_type_id, p.display_name, p.state_code = 'active', d.enabled,
        d.draft_revision, COALESCE(a.revision, 0), COALESCE(a.agent_id = p.agent_id, FALSE),
        dep.stable_version, v.published_at, v.definition
   FROM agent_profile p
   JOIN agent_draft d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
-  LEFT JOIN agent_alias a ON a.tenant_id = p.tenant_id AND a.agent_kind = p.agent_kind
+  LEFT JOIN agent_alias a ON a.tenant_id = p.tenant_id AND a.agent_type_id = p.agent_type_id
   LEFT JOIN agent_deployment dep ON dep.tenant_id = p.tenant_id AND dep.agent_id = p.agent_id
   LEFT JOIN agent_version v ON v.tenant_id = dep.tenant_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
  WHERE p.tenant_id = ?
- ORDER BY p.agent_kind, p.display_name, p.agent_id`,
+ ORDER BY p.agent_type_id, p.display_name, p.agent_id`,
 	qStudioGetDraft: `
-SELECT p.agent_kind, p.display_name, p.is_active, d.enabled, d.require_approval,
+SELECT p.agent_type_id, p.display_name, p.state_code = 'active', d.enabled, d.require_approval,
        d.text_model_provider, d.text_model_id, d.image_model_provider, d.image_model_id,
        d.video_model_provider, d.video_model_id, d.extension, d.draft_revision,
        COALESCE(a.revision, 0), COALESCE(a.agent_id = p.agent_id, FALSE)
   FROM agent_profile p
   JOIN agent_draft d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
-  LEFT JOIN agent_alias a ON a.tenant_id = p.tenant_id AND a.agent_kind = p.agent_kind
+  LEFT JOIN agent_alias a ON a.tenant_id = p.tenant_id AND a.agent_type_id = p.agent_type_id
  WHERE p.tenant_id = ? AND p.agent_id = ?`,
-	qStudioUpdateProfile:    `UPDATE agent_profile SET display_name = ?, is_active = ? WHERE tenant_id = ? AND agent_id = ?`,
-	qStudioSetProfileActive: `UPDATE agent_profile SET is_active = ? WHERE tenant_id = ? AND agent_id = ?`,
+	qStudioUpdateProfile:    `UPDATE agent_profile SET display_name = ?, state_code = ? WHERE tenant_id = ? AND agent_id = ?`,
+	qStudioSetProfileActive: `UPDATE agent_profile SET state_code = ?, state_reason = ?, state_changed_by = ?, state_changed_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND agent_id = ?`,
 	qStudioUpdateDraft: `
 UPDATE agent_draft
    SET enabled = ?, require_approval = ?, text_model_provider = ?, text_model_id = ?,
@@ -76,23 +76,23 @@ UPDATE agent_draft
 INSERT INTO agent_prompt_override
        (tenant_id, agent_id, prompt_section_id, language_code, overwrite, instruction, output)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-	qStudioLockAlias: `SELECT agent_id, revision FROM agent_alias WHERE tenant_id = ? AND agent_kind = ? FOR UPDATE`,
+	qStudioLockAlias: `SELECT agent_id, revision FROM agent_alias WHERE tenant_id = ? AND agent_type_id = ? FOR UPDATE`,
 	qStudioListDefaults: `
 SELECT prompt_section_id, language_code, instruction, output
-  FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ?`,
+  FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
 	qStudioBumpAlias: `
 UPDATE agent_alias SET revision = revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_kind = ? AND revision = ? RETURNING revision`,
-	qStudioDeleteDefaults: `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ?`,
+ WHERE tenant_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
+	qStudioDeleteDefaults: `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
 	qStudioInsertDefault: `
 INSERT INTO tenant_prompt_default
-       (tenant_id, agent_kind, prompt_section_id, language_code, instruction, output)
+       (tenant_id, agent_type_id, prompt_section_id, language_code, instruction, output)
 VALUES (?, ?, ?, ?, ?, ?)`,
 	qStudioAudit: `
 INSERT INTO agent_studio_event (id, tenant_id, agent_id, event, detail, actor_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?)`,
 	qStudioLockDraft: `
-SELECT d.draft_revision, p.agent_kind
+SELECT d.draft_revision, p.agent_type_id
   FROM agent_draft d
   JOIN agent_profile p ON p.tenant_id = d.tenant_id AND p.agent_id = d.agent_id
  WHERE d.tenant_id = ? AND d.agent_id = ? FOR UPDATE OF d`,
@@ -128,7 +128,7 @@ SELECT event, detail, actor_id, occurred_at
 	qStudioSetAlias: `
 UPDATE agent_alias
    SET agent_id = ?, revision = revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_kind = ? AND revision = ? RETURNING revision`,
+ WHERE tenant_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
 	qStudioBumpDraft: `
 UPDATE agent_draft SET draft_revision = draft_revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
  WHERE tenant_id = ? AND agent_id = ? AND draft_revision = ? RETURNING draft_revision`,
@@ -136,10 +136,10 @@ UPDATE agent_draft SET draft_revision = draft_revision + 1, modified_by = ?, mod
 	qStudioResetOverrideSec: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ? AND prompt_section_id = ?`,
 	qStudioResetOverrideLng: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ? AND language_code = ?`,
 	qStudioResetOverrideOne: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ? AND prompt_section_id = ? AND language_code = ?`,
-	qStudioResetDefaults:    `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ?`,
-	qStudioResetDefaultSec:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ? AND prompt_section_id = ?`,
-	qStudioResetDefaultLng:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ? AND language_code = ?`,
-	qStudioResetDefaultOne:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ? AND prompt_section_id = ? AND language_code = ?`,
+	qStudioResetDefaults:    `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
+	qStudioResetDefaultSec:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ? AND prompt_section_id = ?`,
+	qStudioResetDefaultLng:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ? AND language_code = ?`,
+	qStudioResetDefaultOne:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ? AND prompt_section_id = ? AND language_code = ?`,
 	qStudioLastTest: `
 SELECT agent_id, MAX(occurred_at) FROM agent_studio_event
  WHERE tenant_id = ? AND event = 'TEST' GROUP BY agent_id`,

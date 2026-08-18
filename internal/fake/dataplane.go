@@ -103,7 +103,9 @@ type TurnRecordStore struct {
 	FindFunc        func(context.Context, int64, string) (int64, string, []byte, error)
 	StartFunc       func(context.Context, int64, string) error
 	FailFunc        func(context.Context, int64, string, string, string) error
-	RecordUsageFunc func(context.Context, int64, string, int64, string, domain.Usage) error
+	SuspendFunc     func(context.Context, int64, string, string) error
+	ResumeFunc      func(context.Context, int64, string) error
+	RecordUsageFunc func(context.Context, int64, string, int64, string, domain.UsageAttribution, domain.Usage) error
 }
 
 // Open invokes OpenFunc when configured; the default assigns turn 1.
@@ -139,11 +141,27 @@ func (store *TurnRecordStore) Fail(ctx context.Context, tenantID int64, requestI
 }
 
 // RecordUsage invokes RecordUsageFunc when configured.
-func (store *TurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error {
+// Suspend parks the turn awaiting a decision.
+func (store *TurnRecordStore) Suspend(ctx context.Context, tenantID int64, requestID, reason string) error {
+	if store.SuspendFunc != nil {
+		return store.SuspendFunc(ctx, tenantID, requestID, reason)
+	}
+	return nil
+}
+
+// Resume returns a suspended turn to the queue.
+func (store *TurnRecordStore) Resume(ctx context.Context, tenantID int64, requestID string) error {
+	if store.ResumeFunc != nil {
+		return store.ResumeFunc(ctx, tenantID, requestID)
+	}
+	return nil
+}
+
+func (store *TurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
 	if store.RecordUsageFunc == nil {
 		return nil
 	}
-	return store.RecordUsageFunc(ctx, tenantID, conversationID, turnNo, subjectRef, usage)
+	return store.RecordUsageFunc(ctx, tenantID, conversationID, turnNo, subjectRef, attribution, usage)
 }
 
 // StepIdempotencyStore contains configurable replay-safety callbacks.

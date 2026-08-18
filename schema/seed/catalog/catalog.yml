@@ -26,6 +26,7 @@ seeds:
       - [queued, false, Accepted and waiting for an executor]
       - [running, false, Executing]
       - [streaming, false, Emitting a partial response]
+      - [suspended, false, Parked awaiting a human decision]
       - [completed, true, Finished successfully]
       - [failed, true, Finished with an error]
       - [cancelled, true, Abandoned before completion]
@@ -65,3 +66,67 @@ seeds:
       - [video, Generated video seconds]
       - [tool, Governed tool invocation]
       - [knowledge, Knowledge retrieval]
+  # Configuration scope and binding catalogs. Scout owns the tenant root scope
+  # kind; a product seeds the levels below it. narrowing_rule names the
+  # comparator service/scope applies when a child overrides a parent binding.
+  - table: config_scope_kind
+    columns: [code, depth_rank, description]
+    rows:
+      - [tenant, 0, Tenant root scope every other scope descends from]
+  - table: config_resource_kind
+    columns: [code, narrowing_rule, description]
+    rows:
+      - [prompt_section, text, Prompt instruction and output for one section]
+      - [policy, policy, Authorization policy statements]
+      - [tool, subset, Tools an agent may invoke]
+      - [knowledge, subset, Knowledge bases an agent may retrieve from]
+      - [model, subset, Models an agent may route to]
+      - [entitlement, subset, Retrieval entitlement labels]
+      - [budget, at_most, Token and cost ceilings]
+      - [autonomy, ordered, Operating mode an agent may act under]
+  - table: config_merge_mode
+    columns: [code, description]
+    rows:
+      - [replace, Child value replaces the inherited value]
+      - [append, Child value is appended to the inherited value]
+      - [intersect, Effective value is the intersection with the inherited value]
+  # Governance catalogs. audit_decision_outcome classifies every audit_event; the
+  # approval catalogs order and label the work a human owes.
+  - table: audit_decision_outcome
+    columns: [code, is_denial, description]
+    rows:
+      - [allow, false, Permitted, with any obligations recorded]
+      - [deny, true, Refused by policy or authorization]
+      - [pending, false, Suspended awaiting a human decision]
+  - table: approval_status
+    columns: [code, is_terminal, description]
+    rows:
+      - [pending, false, Waiting for a verdict]
+      - [approved, true, Approved as proposed]
+      - [rejected, true, Refused]
+      - [edited, true, Original proposal replaced; the changed action requires a new approval]
+      - [expired, true, Deadline passed with no verdict]
+      - [escalated, false, Reassigned to a backup approver]
+      - [withdrawn, true, Retracted before a verdict]
+  - table: agent_state
+    columns: [code, admits_work, is_terminal, description]
+    rows:
+      - [draft, false, false, Authored but never published]
+      - [active, true, false, Serving traffic]
+      - [suspended, false, false, Stopped immediately; new work is refused]
+      - [draining, false, false, Finishing in-flight work only]
+      - [retired, false, true, Permanently withdrawn]
+  - table: approval_risk_tier
+    columns: [code, severity_rank, description]
+    rows:
+      - [low, 1, Reversible and bounded]
+      - [medium, 2, Reversible with effort]
+      - [high, 3, Irreversible or externally visible]
+      - [critical, 4, Irreversible with material consequence]
+  - table: agent_output_class
+    columns: [code, description]
+    rows:
+      - [advice, Research or recommendation only]
+      - [draft, Prepared artifact a human edits and submits]
+      - [approval_request, Action awaiting an explicit decision]
+      - [completed_action, Action already performed]

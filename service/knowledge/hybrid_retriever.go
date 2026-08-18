@@ -41,6 +41,8 @@ const rrfOffset = 60
 func (retriever *HybridRetriever) Retrieve(ctx context.Context, query domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
 	span := stage.Begin(retriever.clock()(), domain.StageRetrieval, HybridRetrieverComponent, domain.ComponentVersions{Knowledge: query.KnowledgeVersion})
 	span.Observation.TenantID = query.TenantContext.TenantID
+	span.Observation.Principal = domain.PrincipalRef{Kind: query.Principal.Kind, ID: query.Principal.ID}
+	span.Observation.ScopeID = query.Principal.ScopeID
 	span.Observation.TenantTier = query.TenantContext.Tier
 	span.Observation.PriorityClass = query.TenantContext.PriorityClass
 	span.Observation.Region = query.TenantContext.Region

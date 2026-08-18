@@ -1,0 +1,10 @@
+table: config_resource_kind
+comment: Kinds of configuration a scope may bind, each with one registered merger and narrowing comparator
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: narrowing_rule
+    type: VARCHAR(30)
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

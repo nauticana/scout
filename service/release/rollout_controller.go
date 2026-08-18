@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -555,12 +556,32 @@ func (controller *RolloutController) transition(ctx context.Context, from, next 
 	return controller.audit(ctx, record)
 }
 
+// platformPrincipal attributes an operation the platform itself performed.
+var platformPrincipal = domain.PrincipalRef{Kind: domain.PrincipalService, ID: "platform"}
+
+// operatorPrincipal attributes an operation to the human who requested it.
+func operatorPrincipal(actor string) domain.PrincipalRef {
+	actor = strings.TrimSpace(actor)
+	if actor == "" || actor == actorController {
+		return platformPrincipal
+	}
+	if _, err := strconv.ParseInt(actor, 10, 64); err == nil {
+		return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: actor}
+	}
+	return domain.PrincipalRef{Kind: domain.PrincipalService, ID: actor}
+}
+
 func (controller *RolloutController) audit(ctx context.Context, record domain.RolloutTransition) error {
 	payload, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode rollout audit: %w", err)
 	}
-	if err := controller.Audit.Record(ctx, domain.AuditEvent{Category: "rollout." + string(record.To), Payload: payload, OccurredAt: record.OccurredAt}); err != nil {
+	decision := domain.DecisionRecord{
+		TenantID: 0, Principal: operatorPrincipal(record.Actor), Category: "rollout." + string(record.To), Action: string(record.To),
+		Resource: record.PlatformVersion, Outcome: domain.DecisionAllow, Reason: record.Reason,
+		Payload: payload, OccurredAt: record.OccurredAt,
+	}
+	if err := controller.Audit.Record(ctx, decision); err != nil {
 		return fmt.Errorf("audit rollout %s: %w", record.PlatformVersion, err)
 	}
 	return nil

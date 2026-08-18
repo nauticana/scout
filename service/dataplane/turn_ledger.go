@@ -234,8 +234,9 @@ RETURNING detail.turn_no`,
 	qLedgerInsertUsageEvent: `
 INSERT INTO usage_event
        (id, tenant_id, conversation_id, turn_no, category_code, subject_ref,
-        input_tokens, output_tokens, cost_minor_units, currency_code)
-VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        principal_kind, principal_id, scope_id,
+        input_tokens, output_tokens, tool_calls, cost_minor_units, currency_code)
+VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, conversation_id, turn_no, category_code) DO NOTHING
 RETURNING id`,
 
@@ -822,7 +823,8 @@ func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, rese
 		CostMinorUnits: state.CostMinorUnits, Currency: state.Currency,
 	}
 	subject := state.AgentID + "@" + state.AgentVersion
-	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject, usage)
+	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject,
+		domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
 	if err != nil {
 		return err
 	}
@@ -930,14 +932,23 @@ func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause 
 
 // InsertUsageEvent writes the settled usage event, once per (turn, category);
 // inserted=false means a replay already wrote it.
-func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) (bool, error) {
+func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) (bool, error) {
 	result, err := qs.Query(ctx, qLedgerInsertUsageEvent,
 		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
-		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency)
+		nullableUsageField(string(attribution.Principal.Kind)), nullableUsageField(attribution.Principal.ID),
+		nullableUsageField(attribution.ScopeID),
+		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.CostMinorUnits, usage.Currency)
 	if err != nil {
 		return false, fmt.Errorf("persist usage event: %w", err)
 	}
 	return len(result.Rows) > 0, nil
+}
+
+func nullableUsageField(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
 }
 
 // Job-keyed transitions for workers executing queued turns; the caller's

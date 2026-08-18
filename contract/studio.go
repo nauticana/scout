@@ -26,7 +26,7 @@ type PromptSourceRepository interface {
 
 // PromptBaselineSelector returns product-specific baseline keys in precedence order.
 type PromptBaselineSelector interface {
-	Select(ctx context.Context, tenantID int64, agentID, agentKind string) (domain.PromptBaselineSelection, error)
+	Select(ctx context.Context, tenantID int64, agentID, agentTypeID string) (domain.PromptBaselineSelection, error)
 }
 
 // AgentDraftValidator contributes product-specific validation without owning persistence.
@@ -45,10 +45,10 @@ type AgentDraftTestExecutor interface {
 	Execute(ctx context.Context, actor domain.StudioActor, request domain.AgentTestRequest, definition domain.AgentDefinition) (domain.AgentTestResult, error)
 }
 
-// AgentKindCatalog supplies product-owned labels and purposes for open agent kinds.
-type AgentKindCatalog interface {
-	Get(ctx context.Context, agentKind string) (domain.AgentKindDescriptor, error)
-	List(ctx context.Context) ([]domain.AgentKindDescriptor, error)
+// AgentTypeCatalog supplies product-owned labels and purposes for open agent kinds.
+type AgentTypeCatalog interface {
+	Get(ctx context.Context, agentTypeID string) (domain.AgentTypeDescriptor, error)
+	List(ctx context.Context) ([]domain.AgentTypeDescriptor, error)
 }
 
 // StudioModelCatalog lists tenant-selectable models without provider SDK types.

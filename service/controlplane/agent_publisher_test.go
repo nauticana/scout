@@ -103,3 +103,51 @@ func TestAgentPublisherSurfacesStoreFailure(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestPublishFreezesTheEffectiveRelease(t *testing.T) {
+	var stored domain.EffectiveRelease
+	publisher := &AgentPublisher{
+		Compiler: fake.AgentCompilerFunc(func(_ context.Context, definition domain.AgentDefinition) (domain.ExecutionGraph, error) {
+			return domain.ExecutionGraph{AgentID: definition.AgentID, Version: definition.Version, EntryStepID: "start", Digest: strings.Repeat("a", 64)}, nil
+		}),
+		Store: fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error { return nil }),
+		Effective: fake.EffectiveConfigCompilerFunc(func(_ context.Context, request domain.CompileRequest) (domain.EffectiveRelease, error) {
+			return domain.EffectiveRelease{TenantID: request.TenantID, AgentID: request.AgentID, AgentVersion: request.AgentVersion}, nil
+		}),
+		Releases: effectiveReleaseSink(func(release domain.EffectiveRelease) error { stored = release; return nil }),
+	}
+	definition := domain.AgentDefinition{AgentID: "a", Version: "3", DefinitionDigest: strings.Repeat("b", 64)}
+	if err := publisher.Publish(context.Background(), 7, definition); err != nil {
+		t.Fatal(err)
+	}
+	if stored.AgentID != "a" || stored.AgentVersion != "3" {
+		t.Fatalf("stored = %+v, want the published version frozen", stored)
+	}
+}
+
+func TestPublishFailsWhenAScopeBindingBroadens(t *testing.T) {
+	publisher := &AgentPublisher{
+		Compiler: fake.AgentCompilerFunc(func(_ context.Context, definition domain.AgentDefinition) (domain.ExecutionGraph, error) {
+			return domain.ExecutionGraph{AgentID: definition.AgentID, Version: definition.Version, EntryStepID: "start", Digest: strings.Repeat("a", 64)}, nil
+		}),
+		Store: fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error { return nil }),
+		Effective: fake.EffectiveConfigCompilerFunc(func(context.Context, domain.CompileRequest) (domain.EffectiveRelease, error) {
+			return domain.EffectiveRelease{}, domain.ErrAuthorityExceeded
+		}),
+		Releases: effectiveReleaseSink(func(domain.EffectiveRelease) error { return nil }),
+	}
+	err := publisher.Publish(context.Background(), 7, domain.AgentDefinition{AgentID: "a", Version: "3", DefinitionDigest: strings.Repeat("b", 64)})
+	if !errors.Is(err, domain.ErrAuthorityExceeded) {
+		t.Fatalf("error = %v, want publication to fail on a broadening binding", err)
+	}
+}
+
+type effectiveReleaseSink func(domain.EffectiveRelease) error
+
+func (sink effectiveReleaseSink) Put(_ context.Context, release domain.EffectiveRelease) error {
+	return sink(release)
+}
+
+func (effectiveReleaseSink) Get(context.Context, int64, string, string) (domain.EffectiveRelease, error) {
+	return domain.EffectiveRelease{}, domain.ErrNotFound
+}

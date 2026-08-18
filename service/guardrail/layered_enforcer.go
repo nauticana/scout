@@ -22,13 +22,15 @@ const (
 	// RedactionMask replaces every redacted span.
 	RedactionMask = "[REDACTED]"
 	// AuditCategory labels guardrail audit events.
-	AuditCategory = "guardrail"
+	AuditCategory = domain.DecisionCategoryGuardrail
 	// ErrorCodePolicyViolation is the terminal reply error code for a blocked stream.
 	ErrorCodePolicyViolation = string(domain.StageGuardrail)
 )
 
-// ErrApprovalPending marks an irreversible tool call that waits for an approval decision.
-var ErrApprovalPending = fmt.Errorf("%w: tool approval pending", domain.ErrForbidden)
+// ErrApprovalPending marks an irreversible tool call waiting on a decision. It
+// wraps domain.ErrApprovalPending, not ErrForbidden: the turn suspends rather
+// than failing, and resumes when the verdict arrives.
+var ErrApprovalPending = fmt.Errorf("%w: tool approval pending", domain.ErrApprovalPending)
 
 // ViolationError is the typed outcome of a blocking rule; it unwraps to domain.ErrForbidden and carries no content.
 type ViolationError struct {
@@ -111,7 +113,7 @@ func NewLayeredEnforcer(config EnforcerConfig) (*LayeredEnforcer, error) {
 
 // BeforeModel applies input-stage rules to the prompt.
 func (enforcer *LayeredEnforcer) BeforeModel(ctx context.Context, config domain.GuardrailConfig, request domain.ModelRequest) (domain.ModelRequest, error) {
-	subject := domain.GuardrailSubject{TenantID: request.TenantContext.TenantID, RequestID: request.RequestID, ConversationID: request.ConversationID}
+	subject := domain.GuardrailSubject{TenantID: request.TenantContext.TenantID, Principal: request.Principal, RequestID: request.RequestID, ConversationID: request.ConversationID}
 	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageInput, subject: subject, content: request.Prompt, sizeBytes: len(request.Prompt)})
 	if err != nil {
 		return domain.ModelRequest{}, err
@@ -121,8 +123,8 @@ func (enforcer *LayeredEnforcer) BeforeModel(ctx context.Context, config domain.
 }
 
 // AfterModelChunk applies output-stage rules to one chunk in isolation; prefer OpenOutputSession for cross-chunk state.
-func (enforcer *LayeredEnforcer) AfterModelChunk(ctx context.Context, config domain.GuardrailConfig, chunk domain.ModelChunk) (domain.ModelChunk, error) {
-	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageOutput, content: chunk.Payload, sizeBytes: len(chunk.Payload)})
+func (enforcer *LayeredEnforcer) AfterModelChunk(ctx context.Context, config domain.GuardrailConfig, subject domain.GuardrailSubject, chunk domain.ModelChunk) (domain.ModelChunk, error) {
+	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageOutput, subject: subject, content: chunk.Payload, sizeBytes: len(chunk.Payload)})
 	if err != nil {
 		return domain.ModelChunk{}, err
 	}
@@ -132,7 +134,7 @@ func (enforcer *LayeredEnforcer) AfterModelChunk(ctx context.Context, config dom
 
 // BeforeTool applies tool-input rules to the call and its arguments; blocked arguments never leave.
 func (enforcer *LayeredEnforcer) BeforeTool(ctx context.Context, config domain.GuardrailConfig, call domain.ToolCall) (domain.ToolCall, error) {
-	subject := domain.GuardrailSubject{TenantID: call.TenantContext.TenantID, RequestID: call.RequestID, ConversationID: call.ConversationID}
+	subject := domain.GuardrailSubject{TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID}, RequestID: call.RequestID, ConversationID: call.ConversationID, ReleaseVersion: call.Principal.Release}
 	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageToolInput, subject: subject, content: call.Arguments, sizeBytes: len(call.Arguments), call: &call})
 	if err != nil {
 		return domain.ToolCall{}, err
@@ -142,8 +144,8 @@ func (enforcer *LayeredEnforcer) BeforeTool(ctx context.Context, config domain.G
 }
 
 // AfterTool applies tool-output rules and marks the output untrusted before it re-enters the graph.
-func (enforcer *LayeredEnforcer) AfterTool(ctx context.Context, config domain.GuardrailConfig, result domain.ToolResult) (domain.ToolResult, error) {
-	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageToolOutput, content: result.Output, sizeBytes: len(result.Output)})
+func (enforcer *LayeredEnforcer) AfterTool(ctx context.Context, config domain.GuardrailConfig, subject domain.GuardrailSubject, result domain.ToolResult) (domain.ToolResult, error) {
+	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageToolOutput, subject: subject, content: result.Output, sizeBytes: len(result.Output)})
 	if err != nil {
 		return domain.ToolResult{}, err
 	}
@@ -406,7 +408,21 @@ func (enforcer *LayeredEnforcer) record(ctx context.Context, config domain.Guard
 	if err != nil {
 		return err
 	}
-	if err := enforcer.audit.Record(ctx, domain.AuditEvent{TenantID: event.TenantID, Category: AuditCategory, Payload: payload, OccurredAt: event.OccurredAt}); err != nil {
+	outcome := domain.DecisionAllow
+	if event.Action == domain.GuardrailActionBlock {
+		outcome = domain.DecisionDeny
+	}
+	if result.pending {
+		outcome = domain.DecisionPending
+	}
+	record := domain.DecisionRecord{
+		TenantID: event.TenantID, Principal: in.subject.Principal, Category: AuditCategory,
+		Action: string(event.Stage), Resource: string(event.Action), ReleaseVersion: event.ReleaseVersion,
+		PolicyVersion: event.PolicyVersion, Outcome: outcome, Reason: strings.Join(event.RuleIDs, ","),
+		RequestID: in.subject.RequestID, ConversationID: in.subject.ConversationID,
+		Payload: payload, OccurredAt: event.OccurredAt,
+	}
+	if err := enforcer.audit.Record(ctx, record); err != nil {
 		return fmt.Errorf("guardrail audit: %w", err)
 	}
 	return nil

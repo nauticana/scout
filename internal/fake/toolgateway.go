@@ -39,11 +39,11 @@ func (function ToolAuthorizerFunc) Authorize(ctx context.Context, call domain.To
 }
 
 // ToolCredentialProviderFunc adapts a function to contract.ToolCredentialProvider.
-type ToolCredentialProviderFunc func(context.Context, int64, string) ([]byte, error)
+type ToolCredentialProviderFunc func(context.Context, domain.Principal, string, string, string) ([]byte, domain.AuthorityRef, error)
 
 // Credential invokes the configured function.
-func (function ToolCredentialProviderFunc) Credential(ctx context.Context, tenantID int64, toolID string) ([]byte, error) {
-	return function(ctx, tenantID, toolID)
+func (function ToolCredentialProviderFunc) Credential(ctx context.Context, principal domain.Principal, toolID, action, purpose string) ([]byte, domain.AuthorityRef, error) {
+	return function(ctx, principal, toolID, action, purpose)
 }
 
 // ToolEgressPolicyFunc adapts a function to contract.ToolEgressPolicy.
@@ -135,3 +135,30 @@ var _ contract.ToolResultValidator = ToolResultValidatorFunc(nil)
 var _ contract.FencedToolCircuitBreaker = (*FencedToolCircuitBreaker)(nil)
 var _ contract.ToolFailureClassifier = ToolFailureClassifierFunc(nil)
 var _ contract.ToolGuardrailConfigResolver = ToolGuardrailConfigResolverFunc(nil)
+
+// CredentialBindings contains configurable credential-binding reads.
+type CredentialBindings struct {
+	BindingFunc func(context.Context, domain.Principal, string, string) (domain.CredentialBinding, error)
+	RevokedFunc func(context.Context, int64, time.Time) ([]domain.CredentialBinding, error)
+}
+
+// Binding invokes BindingFunc when configured; the default fails closed.
+func (b *CredentialBindings) Binding(ctx context.Context, principal domain.Principal, toolID, purpose string) (domain.CredentialBinding, error) {
+	if b.BindingFunc != nil {
+		return b.BindingFunc(ctx, principal, toolID, purpose)
+	}
+	return domain.CredentialBinding{}, domain.ErrForbidden
+}
+
+// Revoked invokes RevokedFunc when configured.
+func (b *CredentialBindings) Revoked(ctx context.Context, tenantID int64, since time.Time) ([]domain.CredentialBinding, error) {
+	if b.RevokedFunc != nil {
+		return b.RevokedFunc(ctx, tenantID, since)
+	}
+	return nil, nil
+}
+
+var (
+	_ contract.CredentialBindingRepository = (*CredentialBindings)(nil)
+	_ contract.CredentialRevoker           = (*CredentialBindings)(nil)
+)

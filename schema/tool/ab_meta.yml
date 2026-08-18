@@ -3,3 +3,4 @@ tables:
   - tool_version
   - tool_egress_rule
   - agent_tool_binding
+  - tool_credential_binding

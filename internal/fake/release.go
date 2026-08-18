@@ -45,14 +45,14 @@ func (function DetailedRolloutHealthEvaluatorFunc) Evaluate(ctx context.Context,
 	return function(ctx, target)
 }
 
-// RecordingAuditSink records every event it receives.
+// RecordingAuditSink records every decision it receives.
 type RecordingAuditSink struct {
-	Events []domain.AuditEvent
+	Events []domain.DecisionRecord
 	Err    error
 }
 
-// Record appends the event unless a failure is configured.
-func (sink *RecordingAuditSink) Record(_ context.Context, event domain.AuditEvent) error {
+// Record appends the decision unless a failure is configured.
+func (sink *RecordingAuditSink) Record(_ context.Context, event domain.DecisionRecord) error {
 	if sink.Err != nil {
 		return sink.Err
 	}

@@ -2,13 +2,19 @@ package domain
 
 import "time"
 
-// TurnRequest contains one tenant-scoped end-user turn.
+// TurnRequest contains one tenant-scoped end-user turn. Principal is the acting
+// agent; OnBehalfOf names the human whose authority it exercises, if any.
 type TurnRequest struct {
-	TenantContext  TenantContext
-	RequestID      string
-	ConversationID string
-	AgentID        string
-	Input          []byte
+	TenantContext    TenantContext
+	Principal        Principal
+	DelegationBounds DelegationBounds
+	WorkItemID       int64
+	WorkItemDepth    int
+	OnBehalfOf       PrincipalRef
+	RequestID        string
+	ConversationID   string
+	AgentID          string
+	Input            []byte
 }
 
 // TurnDispatch couples a durable turn with its short-lived reply route.

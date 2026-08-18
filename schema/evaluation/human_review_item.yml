@@ -13,7 +13,7 @@ columns:
     type: BIGINT
   - name: example_id
     type: VARCHAR(120)
-  - name: risk_tier
+  - name: approval_risk_tier
     type: VARCHAR(20)
   - name: reason
     type: VARCHAR(400)

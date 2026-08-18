@@ -379,7 +379,12 @@ func (drainer *SessionDrainer) audit(ctx context.Context, release domain.Convers
 	if err != nil {
 		return fmt.Errorf("encode drain audit: %w", err)
 	}
-	if err := drainer.Audit.Record(ctx, domain.AuditEvent{TenantID: release.TenantID, Category: category, Payload: payload, OccurredAt: drainer.now()}); err != nil {
+	record := domain.DecisionRecord{
+		TenantID: release.TenantID, Principal: platformPrincipal, Category: category, Action: "drain",
+		Resource: release.PlatformVersion, ReleaseVersion: release.AgentVersion, Outcome: domain.DecisionAllow,
+		Reason: reason, ConversationID: release.ConversationID, Payload: payload, OccurredAt: drainer.now(),
+	}
+	if err := drainer.Audit.Record(ctx, record); err != nil {
 		return fmt.Errorf("audit drain: %w", err)
 	}
 	return nil

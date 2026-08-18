@@ -1,0 +1,41 @@
+table: agent_permission
+comment: Agent-to-role assignments; mirrors keel user_permission so both principal kinds evaluate through one authorization model
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: role_id
+    type: VARCHAR(30)
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: granted_by
+    type: BIGINT
+    nullable: true
+primary_key: [tenant_id, agent_id, role_id, begda]
+foreign_keys:
+  - name: agent_permissions
+    columns: [tenant_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: permitted_agents
+    columns: [role_id]
+    references:
+      table: authorization_role
+      columns: [id]
+  - name: granted_agent_permissions
+    columns: [granted_by]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: agent_permission_role_ix
+    columns: [role_id]
+checks:
+  - name: agent_permission_window_ck
+    expression: endda IS NULL OR endda > begda

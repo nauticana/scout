@@ -163,6 +163,14 @@ type TurnRecordStore interface {
 	Start(ctx context.Context, tenantID int64, requestID string) error
 	// Fail marks a live turn failed or cancelled with its error code once; a later Fail is a no-op.
 	Fail(ctx context.Context, tenantID int64, requestID, status, errorCode string) error
-	// RecordUsage writes the settled usage event for a turn once; a repeat is a no-op.
-	RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, usage domain.Usage) error
+	// Suspend parks a live turn awaiting a human decision. The budget reservation
+	// is held, not settled, and the worker releases its lease; a turn that is
+	// already suspended or terminal is a no-op.
+	Suspend(ctx context.Context, tenantID int64, requestID, reason string) error
+	// Resume returns a suspended turn to queued so a worker replays it from its
+	// last checkpoint. A turn that is not suspended is domain.ErrConflict.
+	Resume(ctx context.Context, tenantID int64, requestID string) error
+	// RecordUsage writes the settled usage event for a turn once, attributed to the
+	// principal and scope that spent it; a repeat is a no-op.
+	RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error
 }

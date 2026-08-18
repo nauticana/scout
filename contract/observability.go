@@ -6,10 +6,16 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// AuditSink records durable tenant-scoped security and governance events.
+// AuditSink records durable tenant-scoped governance evidence. Evidence is not
+// telemetry: metrics may be sampled and dropped, a decision record may not.
 type AuditSink interface {
-	// Record durably writes a redacted tenant-scoped audit event.
-	Record(ctx context.Context, event domain.AuditEvent) error
+	Record(ctx context.Context, decision domain.DecisionRecord) error
+}
+
+// AuditQuery is the read side of the evidence trail. Every query is bound to one
+// tenant; a cross-tenant read is not expressible.
+type AuditQuery interface {
+	Decisions(ctx context.Context, query domain.DecisionQuery) (domain.DecisionPage, error)
 }
 
 // RuntimeMetrics records data-plane latency, usage, and failure signals.

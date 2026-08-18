@@ -44,13 +44,13 @@ func (ledger *TenantLedger) RecordTenantObservation(ctx context.Context, observa
 	return nil
 }
 
-// AuditSink contains a configurable audit record callback.
+// AuditSink contains a configurable decision record callback.
 type AuditSink struct {
-	RecordFunc func(context.Context, domain.AuditEvent) error
+	RecordFunc func(context.Context, domain.DecisionRecord) error
 }
 
 // Record invokes RecordFunc when configured.
-func (sink *AuditSink) Record(ctx context.Context, event domain.AuditEvent) error {
+func (sink *AuditSink) Record(ctx context.Context, event domain.DecisionRecord) error {
 	if sink.RecordFunc != nil {
 		return sink.RecordFunc(ctx, event)
 	}

@@ -6,3 +6,11 @@ tables:
   - reservation_status
   - rollout_status
   - usage_category
+  - config_scope_kind
+  - config_resource_kind
+  - config_merge_mode
+  - audit_decision_outcome
+  - approval_status
+  - approval_risk_tier
+  - agent_output_class
+  - agent_state

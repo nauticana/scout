@@ -31,14 +31,14 @@ Scout seeds the `AGENT_STUDIO` authorization object, route verbs, `AGENT_ADMIN` 
 | HTTP field | Scout domain field | Persistence source |
 |---|---|---|
 | `agent_name` | `AgentID` | `agent_profile.agent_id` |
-| `agent_type` | `AgentKind` | `agent_profile.agent_kind` |
+| `agent_type` | `AgentTypeID` | `agent_profile.agent_type_id` |
 | `prompt_header_id` | `PromptSectionID` | `prompt_section.id` |
 | `agent_revision` / `expected_agent_revision` | draft revision | `agent_draft.draft_revision` |
 | `type_defaults_revision` / `expected_type_defaults_revision` | prompt profile revision | `agent_alias.revision` |
 | `published_version` / `version` | immutable version | `agent_version.agent_version` |
 | `is_default` | alias target equality | `agent_alias.agent_id` |
 | `active` | stable deployment equality | `agent_deployment.stable_version` |
-| `enabled` | operational and release-enabled compatibility value | `agent_profile.is_active`, `agent_draft.enabled` |
+| `enabled` | operational and release-enabled compatibility value | `agent_profile.state_code`, `agent_draft.enabled` |
 
 The `studio-v1` adapter emits versions as JSON numbers and rejects non-decimal versions. Scout treats versions as opaque strings internally so later profiles can use other version formats.
 

@@ -96,6 +96,7 @@ type GuardrailVerdict struct {
 // GuardrailSubject identifies the request an inspection belongs to; ReleaseVersion is the agent version.
 type GuardrailSubject struct {
 	TenantID       int64
+	Principal      PrincipalRef
 	RequestID      string
 	ConversationID string
 	ReleaseVersion string
@@ -104,6 +105,7 @@ type GuardrailSubject struct {
 // SafetyEvent is the redacted record of a rule hit; it never carries inspected content.
 type SafetyEvent struct {
 	TenantID       int64
+	Principal      PrincipalRef
 	Stage          GuardrailStage
 	Layer          GuardrailLayer
 	Action         GuardrailAction

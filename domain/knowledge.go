@@ -68,7 +68,7 @@ type KnowledgeQuery struct {
 	ConversationID     string
 	KnowledgeBaseID    string
 	KnowledgeVersion   string
-	Principal          string
+	Principal          Principal
 	Entitlements       []byte
 	EntitlementsDigest string
 	Query              []byte

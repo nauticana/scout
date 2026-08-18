@@ -19,10 +19,25 @@ type ToolAuthorizer interface {
 	Authorize(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) error
 }
 
-// ToolCredentialProvider supplies scoped, short-lived tool credentials.
+// ToolCredentialProvider resolves a scoped, short-lived credential just in time
+// for one authorized call. It is keyed on the principal, never on the tenant
+// alone, so two agents on the same tool version never share an identity. The
+// returned AuthorityRef records whose authority was exercised; the secret is
+// never recorded anywhere.
 type ToolCredentialProvider interface {
-	// Credential returns a short-lived credential for an authorized tool call.
-	Credential(ctx context.Context, tenantID int64, toolID string) ([]byte, error)
+	Credential(ctx context.Context, principal domain.Principal, toolID, action, purpose string) ([]byte, domain.AuthorityRef, error)
+}
+
+// CredentialBindingRepository resolves the reference bound to a principal for one
+// tool. It returns a pointer to a keel-held identity, never secret material.
+type CredentialBindingRepository interface {
+	Binding(ctx context.Context, principal domain.Principal, toolID, purpose string) (domain.CredentialBinding, error)
+}
+
+// CredentialRevoker reports bindings whose underlying delegation has ended, so
+// bound work stops instead of continuing under orphaned authority.
+type CredentialRevoker interface {
+	Revoked(ctx context.Context, tenantID int64, since time.Time) ([]domain.CredentialBinding, error)
 }
 
 // ToolEgressPolicy restricts tool calls to approved destinations.

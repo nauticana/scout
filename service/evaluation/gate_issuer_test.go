@@ -32,10 +32,10 @@ func newIssuer(store *fake.GateDecisionStore, audit *fake.AuditSink) *GateIssuer
 func TestGateIssuerSignsStoresAndAuditsDecision(t *testing.T) {
 	manifest := testManifest(t, testExample("a"))
 	var stored domain.GateDecision
-	var audited domain.AuditEvent
+	var audited domain.DecisionRecord
 	issuer := newIssuer(
 		&fake.GateDecisionStore{PutFunc: func(_ context.Context, decision domain.GateDecision) error { stored = decision; return nil }},
-		&fake.AuditSink{RecordFunc: func(_ context.Context, event domain.AuditEvent) error { audited = event; return nil }},
+		&fake.AuditSink{RecordFunc: func(_ context.Context, event domain.DecisionRecord) error { audited = event; return nil }},
 	)
 	decision, err := issuer.Issue(context.Background(), manifest, promotableSummary(manifest.ManifestID), "platform-9", testClock.Add(-time.Minute), nil)
 	if err != nil {

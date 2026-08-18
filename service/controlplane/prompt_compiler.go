@@ -104,7 +104,7 @@ func (*PromptCompiler) Compile(languageCode string, rows []domain.PromptSourceRo
 
 // DefinitionDigest returns a canonical digest of runtime-relevant definition fields.
 func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (string, error) {
-	if strings.TrimSpace(definition.AgentKind) == "" {
+	if strings.TrimSpace(definition.AgentTypeID) == "" {
 		return "", fmt.Errorf("%w: agent kind is required", domain.ErrValidation)
 	}
 	extension, err := canonicalJSON(definition.Extension)
@@ -130,7 +130,7 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 	var payload strings.Builder
 	payload.WriteString(definitionDigestVersion)
 	payload.WriteByte('\n')
-	writeDigestField(&payload, definition.AgentKind)
+	writeDigestField(&payload, definition.AgentTypeID)
 	writeModelReference(&payload, definition.Models.Text)
 	writeModelReference(&payload, definition.Models.Image)
 	writeModelReference(&payload, definition.Models.Video)

@@ -15,6 +15,7 @@ import (
 func validToolCall() domain.ToolCall {
 	return domain.ToolCall{
 		TenantContext:  domain.TenantContext{TenantID: 7},
+		Principal:      domain.Principal{Kind: domain.PrincipalAgent, ID: "agent", TenantID: 7, Release: "v1"},
 		RequestID:      "request",
 		ConversationID: "conversation",
 		ToolID:         "search",
@@ -36,9 +37,9 @@ func governedGateway(calls *[]string, transport fake.ToolTransportFunc) *Governe
 			*calls = append(*calls, "authorize")
 			return nil
 		}),
-		Credentials: fake.ToolCredentialProviderFunc(func(context.Context, int64, string) ([]byte, error) {
+		Credentials: fake.ToolCredentialProviderFunc(func(context.Context, domain.Principal, string, string, string) ([]byte, domain.AuthorityRef, error) {
 			*calls = append(*calls, "credential")
-			return []byte("secret"), nil
+			return []byte("secret"), domain.AuthorityRef{}, nil
 		}),
 		Egress: fake.ToolEgressPolicyFunc(func(context.Context, int64, string) error {
 			*calls = append(*calls, "egress")
@@ -160,7 +161,7 @@ func TestGovernedGatewayEnforcesGuardrailsAroundTheCall(t *testing.T) {
 			call.Arguments = []byte("sanitized")
 			return call, nil
 		},
-		AfterToolFunc: func(_ context.Context, _ domain.GuardrailConfig, result domain.ToolResult) (domain.ToolResult, error) {
+		AfterToolFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.GuardrailSubject, result domain.ToolResult) (domain.ToolResult, error) {
 			calls = append(calls, "guardrail_after")
 			result.Output = []byte("guarded")
 			return result, nil

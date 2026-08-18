@@ -11,6 +11,8 @@ type TenantContext struct {
 	Tier string
 	// Region is the tenant's home residency region.
 	Region string
+	// ScopeID places the work in the tenant's scope tree; empty means the tenant root.
+	ScopeID string
 }
 
 // TurnAdmissionPolicy states what a new prompt does to a running turn.
@@ -40,6 +42,13 @@ type Usage struct {
 	ToolCalls      int
 	CostMinorUnits int64
 	Currency       string
+}
+
+// UsageAttribution names who spent the usage and where, so cost is reportable
+// per agent and per organizational scope, not only per tenant.
+type UsageAttribution struct {
+	Principal PrincipalRef
+	ScopeID   string
 }
 
 // BudgetReservation represents tokens and cost reserved for an operation.

@@ -467,7 +467,12 @@ func (manager *PinnedTrafficManager) auditResolution(ctx context.Context, tenant
 	if err != nil {
 		return fmt.Errorf("encode version audit: %w", err)
 	}
-	if err := manager.Audit.Record(ctx, domain.AuditEvent{TenantID: tenantID, Category: "agent_version.resolved", Payload: payload, OccurredAt: manager.now()}); err != nil {
+	record := domain.DecisionRecord{
+		TenantID: tenantID, Principal: platformPrincipal, Category: "agent_version.resolved", Action: "resolve",
+		Resource: agentID, ReleaseVersion: resolution.Version, Outcome: domain.DecisionAllow,
+		Reason: string(resolution.Source), ConversationID: conversationID, Payload: payload, OccurredAt: manager.now(),
+	}
+	if err := manager.Audit.Record(ctx, record); err != nil {
 		return fmt.Errorf("audit version resolution: %w", err)
 	}
 	return nil
@@ -517,7 +522,12 @@ func (manager *PinnedTrafficManager) auditChange(ctx context.Context, tenantID i
 	if err != nil {
 		return fmt.Errorf("encode traffic audit: %w", err)
 	}
-	if err := manager.Audit.Record(ctx, domain.AuditEvent{TenantID: tenantID, Category: category, Payload: payload, OccurredAt: manager.now()}); err != nil {
+	record := domain.DecisionRecord{
+		TenantID: tenantID, Principal: platformPrincipal, Category: category, Action: "set_traffic",
+		Resource: agentID, ReleaseVersion: version, Outcome: domain.DecisionAllow,
+		Payload: payload, OccurredAt: manager.now(),
+	}
+	if err := manager.Audit.Record(ctx, record); err != nil {
 		return fmt.Errorf("audit traffic change: %w", err)
 	}
 	return nil

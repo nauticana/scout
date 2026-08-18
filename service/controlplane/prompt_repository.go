@@ -25,24 +25,24 @@ const (
 )
 
 var promptSourceQueries = map[string]string{
-	qPromptAgent: `SELECT agent_kind FROM agent_profile WHERE tenant_id = ? AND agent_id = ?`,
+	qPromptAgent: `SELECT agent_type_id FROM agent_profile WHERE tenant_id = ? AND agent_id = ?`,
 	qPromptBaselines: `
 SELECT b.baseline_key, s.id, s.caption, s.description, s.display_order, b.instruction, b.output
   FROM prompt_baseline b
   JOIN prompt_section s ON s.id = b.prompt_section_id
- WHERE b.agent_kind = ? AND b.language_code = ?`,
+ WHERE b.agent_type_id = ? AND b.language_code = ?`,
 	qPromptTenantDefaults: `
 SELECT s.id, s.caption, s.description, s.display_order, d.instruction, d.output
   FROM tenant_prompt_default d
   JOIN prompt_section s ON s.id = d.prompt_section_id
- WHERE d.tenant_id = ? AND d.agent_kind = ? AND d.language_code = ?`,
+ WHERE d.tenant_id = ? AND d.agent_type_id = ? AND d.language_code = ?`,
 	qPromptAgentOverrides: `
 SELECT s.id, s.caption, s.description, s.display_order, o.overwrite, o.instruction, o.output
   FROM agent_prompt_override o
   JOIN prompt_section s ON s.id = o.prompt_section_id
  WHERE o.tenant_id = ? AND o.agent_id = ? AND o.language_code = ?`,
-	qPromptBaseLanguages:   `SELECT baseline_key, language_code FROM prompt_baseline WHERE agent_kind = ?`,
-	qPromptTenantLanguages: `SELECT language_code FROM tenant_prompt_default WHERE tenant_id = ? AND agent_kind = ?`,
+	qPromptBaseLanguages:   `SELECT baseline_key, language_code FROM prompt_baseline WHERE agent_type_id = ?`,
+	qPromptTenantLanguages: `SELECT language_code FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
 	qPromptAgentLanguages:  `SELECT language_code FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ?`,
 }
 
@@ -69,7 +69,7 @@ func (r *PromptRepository) init(ctx context.Context) error {
 	return nil
 }
 
-func (r *PromptRepository) agentKind(ctx context.Context, tenantID int64, agentID string) (string, error) {
+func (r *PromptRepository) agentTypeID(ctx context.Context, tenantID int64, agentID string) (string, error) {
 	if err := r.init(ctx); err != nil {
 		return "", err
 	}
@@ -85,16 +85,16 @@ func (r *PromptRepository) agentKind(ctx context.Context, tenantID int64, agentI
 
 // Resolve returns ordered baseline, tenant-default, and agent-override rows.
 func (r *PromptRepository) Resolve(ctx context.Context, tenantID int64, agentID, languageCode string) (domain.ResolvedPrompts, error) {
-	agentKind, err := r.agentKind(ctx, tenantID, agentID)
+	agentTypeID, err := r.agentTypeID(ctx, tenantID, agentID)
 	if err != nil {
 		return domain.ResolvedPrompts{}, err
 	}
-	selection, err := r.Selector.Select(ctx, tenantID, agentID, agentKind)
+	selection, err := r.Selector.Select(ctx, tenantID, agentID, agentTypeID)
 	if err != nil {
 		return domain.ResolvedPrompts{}, fmt.Errorf("select prompt baseline: %w", err)
 	}
 	rank := baselineRank(selection.Keys)
-	rows, baselineKey, err := r.resolveRows(ctx, tenantID, agentID, agentKind, languageCode, rank)
+	rows, baselineKey, err := r.resolveRows(ctx, tenantID, agentID, agentTypeID, languageCode, rank)
 	if err != nil {
 		return domain.ResolvedPrompts{}, err
 	}
@@ -102,17 +102,17 @@ func (r *PromptRepository) Resolve(ctx context.Context, tenantID int64, agentID,
 		return domain.ResolvedPrompts{}, domain.ErrNoPrompts
 	}
 	return domain.ResolvedPrompts{
-		AgentID: agentID, AgentKind: agentKind, BaselineKey: baselineKey,
+		AgentID: agentID, AgentTypeID: agentTypeID, BaselineKey: baselineKey,
 		LanguageCode: languageCode, Rows: rows,
 	}, nil
 }
 
-func (r *PromptRepository) resolveRows(ctx context.Context, tenantID int64, agentID, agentKind, languageCode string, rank map[string]int) ([]domain.PromptSourceRow, string, error) {
-	base, err := r.qs.Query(ctx, qPromptBaselines, agentKind, languageCode)
+func (r *PromptRepository) resolveRows(ctx context.Context, tenantID int64, agentID, agentTypeID, languageCode string, rank map[string]int) ([]domain.PromptSourceRow, string, error) {
+	base, err := r.qs.Query(ctx, qPromptBaselines, agentTypeID, languageCode)
 	if err != nil {
 		return nil, "", fmt.Errorf("load prompt baselines: %w", err)
 	}
-	tenant, err := r.qs.Query(ctx, qPromptTenantDefaults, tenantID, agentKind, languageCode)
+	tenant, err := r.qs.Query(ctx, qPromptTenantDefaults, tenantID, agentTypeID, languageCode)
 	if err != nil {
 		return nil, "", fmt.Errorf("load tenant prompt defaults: %w", err)
 	}
@@ -149,7 +149,7 @@ func (r *PromptRepository) resolveRows(ctx context.Context, tenantID int64, agen
 		rows = append(rows, choice.row)
 	}
 	for _, row := range tenant.Rows {
-		rows = append(rows, sourceRow(row, domain.PromptSourceTenantDefault, agentKind, false, 4, 5))
+		rows = append(rows, sourceRow(row, domain.PromptSourceTenantDefault, agentTypeID, false, 4, 5))
 	}
 	for _, row := range agent.Rows {
 		rows = append(rows, sourceRow(row, domain.PromptSourceAgentOverride, agentID, common.AsBool(row[4]), 5, 6))
@@ -177,20 +177,20 @@ func sourceRow(row []any, level domain.PromptSourceLevel, key string, overwrite 
 
 // Languages lists every language present in the selected inheritance chain.
 func (r *PromptRepository) Languages(ctx context.Context, tenantID int64, agentID string) ([]string, error) {
-	agentKind, err := r.agentKind(ctx, tenantID, agentID)
+	agentTypeID, err := r.agentTypeID(ctx, tenantID, agentID)
 	if err != nil {
 		return nil, err
 	}
-	selection, err := r.Selector.Select(ctx, tenantID, agentID, agentKind)
+	selection, err := r.Selector.Select(ctx, tenantID, agentID, agentTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("select prompt baseline: %w", err)
 	}
 	rank := baselineRank(selection.Keys)
-	base, err := r.qs.Query(ctx, qPromptBaseLanguages, agentKind)
+	base, err := r.qs.Query(ctx, qPromptBaseLanguages, agentTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("list baseline languages: %w", err)
 	}
-	tenant, err := r.qs.Query(ctx, qPromptTenantLanguages, tenantID, agentKind)
+	tenant, err := r.qs.Query(ctx, qPromptTenantLanguages, tenantID, agentTypeID)
 	if err != nil {
 		return nil, fmt.Errorf("list tenant languages: %w", err)
 	}

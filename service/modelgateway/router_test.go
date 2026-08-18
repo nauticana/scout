@@ -29,7 +29,7 @@ type routerFixture struct {
 	capacity *fake.CapacitySnapshotSource
 	policies *fake.TenantRoutingPolicyRepository
 	audit    *fake.AuditSink
-	events   []domain.AuditEvent
+	events   []domain.DecisionRecord
 	router   *PolicyRouter
 }
 
@@ -48,7 +48,7 @@ func newRouterFixture(t *testing.T) *routerFixture {
 		}},
 		policies: &fake.TenantRoutingPolicyRepository{},
 	}
-	fixture.audit = &fake.AuditSink{RecordFunc: func(_ context.Context, event domain.AuditEvent) error {
+	fixture.audit = &fake.AuditSink{RecordFunc: func(_ context.Context, event domain.DecisionRecord) error {
 		fixture.events = append(fixture.events, event)
 		return nil
 	}}
@@ -251,7 +251,7 @@ func TestPolicyRouterAffinity(t *testing.T) {
 
 func TestPolicyRouterFailsWhenAuditFails(t *testing.T) {
 	fixture := newRouterFixture(t)
-	fixture.audit.RecordFunc = func(context.Context, domain.AuditEvent) error { return errors.New("audit down") }
+	fixture.audit.RecordFunc = func(context.Context, domain.DecisionRecord) error { return errors.New("audit down") }
 	if _, err := fixture.router.Select(context.Background(), routerRequest()); err == nil || !strings.Contains(err.Error(), "audit down") {
 		t.Fatalf("error = %v", err)
 	}

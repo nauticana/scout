@@ -3,7 +3,7 @@ comment: Product-supplied platform prompt baseline selected through an extension
 columns:
   - name: baseline_key
     type: VARCHAR(80)
-  - name: agent_kind
+  - name: agent_type_id
     type: VARCHAR(80)
   - name: prompt_section_id
     type: BIGINT
@@ -14,7 +14,7 @@ columns:
   - name: output
     type: TEXT
     nullable: true
-primary_key: [baseline_key, agent_kind, prompt_section_id, language_code]
+primary_key: [baseline_key, agent_type_id, prompt_section_id, language_code]
 foreign_keys:
   - name: prompt_baselines
     columns: [prompt_section_id]

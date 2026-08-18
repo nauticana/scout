@@ -160,6 +160,11 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_model_capacity_pool: "shared",
 		agent_model_capacity:      "32",
 		agent_model_max_waiters:   "4096",
+		agent_max_scope_depth:     "8",
+		agent_max_delegation_hops: "4",
+		agent_approval_deadline:   "3600",
+		agent_credential_ttl:      "300",
+		agent_audit_page_size:     "100",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

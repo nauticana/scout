@@ -13,9 +13,6 @@ columns:
     type: TEXT
   - name: output_schema
     type: TEXT
-  - name: credential_ref
-    type: TEXT
-    nullable: true
   - name: timeout_ms
     type: INTEGER
   - name: max_attempts

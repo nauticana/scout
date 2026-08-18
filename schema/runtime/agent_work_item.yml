@@ -1,0 +1,96 @@
+table: agent_work_item
+comment: One unit of work addressed to a principal rather than to a conversation
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: assignee_kind
+    type: VARCHAR(20)
+  - name: assignee_id
+    type: VARCHAR(120)
+  - name: requester_kind
+    type: VARCHAR(20)
+  - name: requester_id
+    type: VARCHAR(120)
+  - name: grant_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: parent_work_item_id
+    type: BIGINT
+    nullable: true
+  - name: delegation_depth
+    type: SMALLINT
+    default: "0"
+  - name: scope_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: task_kind
+    type: VARCHAR(80)
+  - name: input_uri
+    type: TEXT
+  - name: input_digest
+    type: CHAR(64)
+  - name: request_id
+    type: VARCHAR(120)
+  - name: status_code
+    type: VARCHAR(30)
+    default: queued
+  - name: budget_minor_units
+    type: BIGINT
+    nullable: true
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: agent_work_item_seq
+  column: id
+foreign_keys:
+  - name: agent_work_items
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: child_work_items
+    columns: [parent_work_item_id, tenant_id]
+    references:
+      table: agent_work_item
+      columns: [id, tenant_id]
+  - name: grant_work_items
+    columns: [tenant_id, grant_id]
+    references:
+      table: delegation_grant
+      columns: [tenant_id, grant_id]
+  - name: status_work_items
+    columns: [status_code]
+    references:
+      table: turn_status
+      columns: [code]
+  - name: currency_work_items
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: work_item_id_tenant_uq
+    columns: [id, tenant_id]
+    unique: true
+  - name: work_item_assignee_ix
+    columns: [tenant_id, assignee_kind, assignee_id, status_code]
+  - name: work_item_request_uq
+    columns: [tenant_id, request_id]
+    unique: true
+checks:
+  - name: work_item_depth_ck
+    expression: delegation_depth >= 0
+  - name: work_item_digest_ck
+    expression: CHAR_LENGTH(input_digest) = 64
+  - name: work_item_cycle_ck
+    expression: parent_work_item_id IS NULL OR parent_work_item_id <> id

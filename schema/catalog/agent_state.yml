@@ -1,0 +1,12 @@
+table: agent_state
+comment: Operational lifecycle of one agent identity
+columns:
+  - name: code
+    type: VARCHAR(30)
+  - name: admits_work
+    type: BOOLEAN
+  - name: is_terminal
+    type: BOOLEAN
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

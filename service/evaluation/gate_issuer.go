@@ -68,6 +68,15 @@ type GateIssuer struct {
 	Now             func() time.Time
 }
 
+var platformPrincipal = domain.PrincipalRef{Kind: domain.PrincipalService, ID: "platform"}
+
+func verdictOutcome(verdict domain.RolloutVerdict) domain.DecisionOutcome {
+	if verdict == domain.RolloutHealthy {
+		return domain.DecisionAllow
+	}
+	return domain.DecisionDeny
+}
+
 func (issuer *GateIssuer) now() time.Time {
 	if issuer.Now != nil {
 		return issuer.Now()
@@ -139,7 +148,12 @@ func (issuer *GateIssuer) Issue(ctx context.Context, manifest domain.EvaluationM
 	if err != nil {
 		return domain.GateDecision{}, fmt.Errorf("encode gate audit: %w", err)
 	}
-	if err := issuer.Audit.Record(ctx, domain.AuditEvent{TenantID: manifest.TenantID, Category: auditCategoryGateDecision, Payload: auditPayload, OccurredAt: now}); err != nil {
+	gateRecord := domain.DecisionRecord{
+		TenantID: manifest.TenantID, Principal: platformPrincipal, Category: auditCategoryGateDecision,
+		Action: "gate", Resource: decision.ManifestID, Outcome: verdictOutcome(decision.Verdict),
+		Reason: strings.Join(summary.Reasons, ","), Payload: auditPayload, OccurredAt: now,
+	}
+	if err := issuer.Audit.Record(ctx, gateRecord); err != nil {
 		return domain.GateDecision{}, fmt.Errorf("audit gate decision: %w", err)
 	}
 	return decision, nil

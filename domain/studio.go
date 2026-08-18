@@ -102,7 +102,7 @@ type PromptSourceRow struct {
 // ResolvedPrompts contains ordered source candidates for one agent language.
 type ResolvedPrompts struct {
 	AgentID      string            `json:"agent_id"`
-	AgentKind    string            `json:"agent_kind"`
+	AgentTypeID  string            `json:"agent_type_id"`
 	BaselineKey  string            `json:"baseline_key"`
 	LanguageCode string            `json:"language_code"`
 	Rows         []PromptSourceRow `json:"rows"`
@@ -152,7 +152,7 @@ type AgentDrift struct {
 // AgentDraft is the revision-checked mutable Studio representation of an agent.
 type AgentDraft struct {
 	AgentID                       string
-	AgentKind                     string
+	AgentTypeID                   string
 	DisplayName                   string
 	Active                        bool
 	Enabled                       bool
@@ -169,7 +169,7 @@ type AgentDraft struct {
 // AgentSummary is the compact list representation used by Studio navigation.
 type AgentSummary struct {
 	AgentID               string
-	AgentKind             string
+	AgentTypeID           string
 	DisplayName           string
 	Purpose               string
 	Active                bool
@@ -256,7 +256,7 @@ type AgentEnabledState struct {
 // AgentRelease is immutable publication metadata returned by Studio history.
 type AgentRelease struct {
 	AgentID               string
-	AgentKind             string
+	AgentTypeID           string
 	Version               string
 	Enabled               bool
 	Models                AgentModelSelection
@@ -296,7 +296,7 @@ type TenantIdentity struct {
 // mutable draft configuration, and the logical alias it should serve.
 type AgentSeed struct {
 	AgentID         string
-	AgentKind       string
+	AgentTypeID     string
 	AliasID         string
 	DisplayName     string
 	Enabled         bool
@@ -308,23 +308,23 @@ type AgentSeed struct {
 // immutable definition currently serving traffic. Definition is nil when the
 // alias has no stable deployment.
 type DeployedAgent struct {
-	AliasID    string
-	AgentID    string
-	AgentKind  string
-	Active     bool
-	Enabled    bool
-	Version    string
-	Definition *AgentDefinition
+	AliasID     string
+	AgentID     string
+	AgentTypeID string
+	Active      bool
+	Enabled     bool
+	Version     string
+	Definition  *AgentDefinition
 }
 
 // AgentAlias maps a tenant logical role to one named agent.
 type AgentAlias struct {
-	AliasID   string
-	AgentKind string
-	AgentID   string
-	Revision  int64
-	UpdatedBy *int64
-	UpdatedAt time.Time
+	AliasID     string
+	AgentTypeID string
+	AgentID     string
+	Revision    int64
+	UpdatedBy   *int64
+	UpdatedAt   time.Time
 }
 
 // PromptBaselineSelection supplies product-specific baseline precedence.
@@ -332,9 +332,9 @@ type PromptBaselineSelection struct {
 	Keys []string
 }
 
-// AgentKindDescriptor supplies product-owned labels without hard-coded catalogs.
-type AgentKindDescriptor struct {
-	AgentKind   string
+// AgentTypeDescriptor supplies product-owned labels without hard-coded catalogs.
+type AgentTypeDescriptor struct {
+	AgentTypeID string
 	DisplayName string
 	Purpose     string
 }

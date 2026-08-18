@@ -14,6 +14,13 @@ import (
 type AgentPublisher struct {
 	Compiler contract.AgentCompiler
 	Store    contract.AgentPublicationStore
+	// Effective and Releases are optional and set together; when present, the
+	// scope chain is compiled and frozen so the runtime never resolves inheritance
+	// on the request path. A binding that broadens what it inherits fails here.
+	Effective contract.EffectiveConfigCompiler
+	Releases  contract.EffectiveReleaseRepository
+	// ScopeID is the scope a published agent compiles against.
+	ScopeID string
 }
 
 // Publish compiles and persists one immutable definition without activating traffic.
@@ -36,6 +43,26 @@ func (publisher *AgentPublisher) Publish(ctx context.Context, tenantID int64, de
 	}
 	if err := publisher.Store.Publish(ctx, tenantID, definition, graph); err != nil {
 		return fmt.Errorf("publish agent %q version %q: %w", definition.AgentID, definition.Version, err)
+	}
+	return publisher.freeze(ctx, tenantID, definition)
+}
+
+func (publisher *AgentPublisher) freeze(ctx context.Context, tenantID int64, definition domain.AgentDefinition) error {
+	if publisher.Effective == nil && publisher.Releases == nil {
+		return nil
+	}
+	if publisher.Effective == nil || publisher.Releases == nil {
+		return fmt.Errorf("agent publisher: effective compilation needs both a compiler and a release repository")
+	}
+	release, err := publisher.Effective.Compile(ctx, domain.CompileRequest{
+		TenantID: tenantID, AgentID: definition.AgentID, AgentVersion: definition.Version,
+		ScopeID: publisher.ScopeID, CompiledBy: definition.PublishedBy,
+	})
+	if err != nil {
+		return fmt.Errorf("compile effective release for %q version %q: %w", definition.AgentID, definition.Version, err)
+	}
+	if err := publisher.Releases.Put(ctx, release); err != nil {
+		return fmt.Errorf("store effective release for %q version %q: %w", definition.AgentID, definition.Version, err)
 	}
 	return nil
 }

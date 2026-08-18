@@ -1,5 +1,5 @@
 table: usage_event
-comment: Immutable runtime usage ledger entry
+comment: Immutable runtime usage ledger entry, attributed to the principal and scope that spent it
 columns:
   - name: id
     type: BIGINT
@@ -13,6 +13,15 @@ columns:
     type: VARCHAR(30)
   - name: subject_ref
     type: VARCHAR(200)
+  - name: principal_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: principal_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: scope_id
+    type: VARCHAR(80)
+    nullable: true
   - name: input_tokens
     type: BIGINT
     default: "0"
@@ -50,6 +59,11 @@ foreign_keys:
     references:
       table: currency
       columns: [code]
+  - name: scope_usage_events
+    columns: [tenant_id, scope_id]
+    references:
+      table: config_scope
+      columns: [tenant_id, scope_id]
 indexes:
   - name: usage_event_turn_category_uq
     columns: [tenant_id, conversation_id, turn_no, category_code]
@@ -65,3 +79,5 @@ checks:
     expression: tool_calls >= 0
   - name: usage_event_cost_ck
     expression: cost_minor_units >= 0
+  - name: usage_event_principal_ck
+    expression: (principal_kind IS NULL AND principal_id IS NULL) OR (principal_kind IS NOT NULL AND principal_id IS NOT NULL)

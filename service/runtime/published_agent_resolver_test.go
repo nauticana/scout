@@ -33,7 +33,7 @@ func (publishedQueryFake) GenID() int64 { return 0 }
 func encodedDefinition(t *testing.T, version string) string {
 	t.Helper()
 	encoded, err := json.Marshal(domain.AgentDefinition{
-		AgentID: "writer-a", AgentKind: "writer", Version: version,
+		AgentID: "writer-a", AgentTypeID: "writer", Version: version,
 		DefinitionDigest: "digest", Languages: []domain.CompiledPrompt{{LanguageCode: "en-US"}},
 	})
 	if err != nil {

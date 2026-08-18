@@ -11,6 +11,8 @@ seeds:
       - [execution_step_kind, model, Model Inference]
       - [execution_step_kind, tool, Governed Tool Invocation]
       - [execution_step_kind, knowledge, Knowledge Retrieval]
+      - [execution_step_kind, agent, Delegated Agent Invocation]
+      - [execution_step_kind, wait, Suspension Awaiting a Human Decision]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

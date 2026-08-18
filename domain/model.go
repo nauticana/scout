@@ -4,7 +4,10 @@ import "time"
 
 // ModelRequest contains one tenant-scoped inference request.
 type ModelRequest struct {
-	TenantContext     TenantContext
+	TenantContext TenantContext
+	// Principal attributes routing decisions and spend; provider adapters must
+	// never forward it to a vendor.
+	Principal         PrincipalRef
 	RequestID         string
 	ConversationID    string
 	ComplexitySignals map[string]float64

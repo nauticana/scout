@@ -5,7 +5,7 @@ columns:
     type: BIGINT
   - name: alias_id
     type: VARCHAR(80)
-  - name: agent_kind
+  - name: agent_type_id
     type: VARCHAR(80)
   - name: agent_id
     type: VARCHAR(80)
@@ -21,10 +21,10 @@ columns:
 primary_key: [tenant_id, alias_id]
 foreign_keys:
   - name: agent_aliases
-    columns: [tenant_id, agent_kind, agent_id]
+    columns: [tenant_id, agent_type_id, agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_kind, agent_id]
+      columns: [tenant_id, agent_type_id, agent_id]
   - name: modified_agent_aliases
     columns: [modified_by]
     references:
@@ -32,7 +32,7 @@ foreign_keys:
       columns: [id]
 indexes:
   - name: agent_alias_kind_uq
-    columns: [tenant_id, agent_kind]
+    columns: [tenant_id, agent_type_id]
     unique: true
   - name: agent_alias_agent_ix
     columns: [tenant_id, agent_id]

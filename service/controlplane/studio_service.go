@@ -35,7 +35,7 @@ type StudioService struct {
 	Compiler   contract.PromptCompiler
 	Validators []contract.AgentDraftValidator
 	Tester     contract.AgentDraftTestExecutor
-	Kinds      contract.AgentKindCatalog
+	Kinds      contract.AgentTypeCatalog
 	Catalog    contract.StudioModelCatalog
 	Activity   contract.AgentActivityReporter
 	Now        func() time.Time
@@ -74,14 +74,14 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 	if err != nil {
 		return nil, fmt.Errorf("list studio agents: %w", err)
 	}
-	descriptors := map[string]domain.AgentKindDescriptor{}
+	descriptors := map[string]domain.AgentTypeDescriptor{}
 	if s.Kinds != nil {
 		items, listErr := s.Kinds.List(ctx)
 		if listErr != nil {
 			return nil, fmt.Errorf("list agent kinds: %w", listErr)
 		}
 		for _, item := range items {
-			descriptors[item.AgentKind] = item
+			descriptors[item.AgentTypeID] = item
 		}
 	}
 	lastRun, err := s.lastActivity(ctx, tenantID)
@@ -91,7 +91,7 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 	summaries := make([]domain.AgentSummary, 0, len(res.Rows))
 	for _, row := range res.Rows {
 		summary := domain.AgentSummary{
-			AgentID: common.AsString(row[0]), AgentKind: common.AsString(row[1]),
+			AgentID: common.AsString(row[0]), AgentTypeID: common.AsString(row[1]),
 			DisplayName: common.AsString(row[2]), Active: common.AsBool(row[3]), Enabled: common.AsBool(row[4]),
 			DraftRevision: common.AsInt64(row[5]), PromptProfileRevision: common.AsInt64(row[6]),
 			Default: common.AsBool(row[7]), PublishedVersion: common.AsString(row[8]),
@@ -99,7 +99,7 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 		if value, ok := row[9].(time.Time); ok {
 			summary.PublishedAt = &value
 		}
-		if descriptor, ok := descriptors[summary.AgentKind]; ok {
+		if descriptor, ok := descriptors[summary.AgentTypeID]; ok {
 			summary.Purpose = descriptor.Purpose
 			if summary.DisplayName == "" {
 				summary.DisplayName = descriptor.DisplayName
@@ -200,7 +200,7 @@ func (s *StudioService) getDraft(ctx context.Context, tenantID int64, agentID st
 	}
 	row := res.Rows[0]
 	return domain.AgentDraft{
-		AgentID: agentID, AgentKind: common.AsString(row[0]), DisplayName: common.AsString(row[1]),
+		AgentID: agentID, AgentTypeID: common.AsString(row[0]), DisplayName: common.AsString(row[1]),
 		Active: common.AsBool(row[2]), Enabled: common.AsBool(row[3]),
 		ApprovalPolicy: domain.AgentApprovalPolicy{RequireApproval: common.AsBool(row[4])},
 		Models: domain.AgentModelSelection{
@@ -223,7 +223,7 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentDraft{}, err
 	}
-	draft.AgentKind = current.AgentKind
+	draft.AgentTypeID = current.AgentTypeID
 	draft.Default = current.Default
 	draft.Models, err = s.resolveModels(ctx, actor.TenantID, draft.Models)
 	if err != nil {
@@ -243,7 +243,7 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	if _, err = tx.Query(ctx, qStudioUpdateProfile, draft.DisplayName, draft.Active, actor.TenantID, draft.AgentID); err != nil {
+	if _, err = tx.Query(ctx, qStudioUpdateProfile, draft.DisplayName, agentState(draft.Active), actor.TenantID, draft.AgentID); err != nil {
 		return domain.AgentDraft{}, fmt.Errorf("update agent profile: %w", err)
 	}
 	updated, err := tx.Query(ctx, qStudioUpdateDraft,
@@ -318,8 +318,9 @@ func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor
 	if len(res.Rows) == 0 {
 		return domain.AgentEnabledState{}, domain.ErrRevisionConflict
 	}
-	if _, err = tx.Query(ctx, qStudioSetProfileActive, request.Enabled, actor.TenantID, request.AgentID); err != nil {
-		return domain.AgentEnabledState{}, fmt.Errorf("set profile enabled: %w", err)
+	if _, err = tx.Query(ctx, qStudioSetProfileActive, agentState(request.Enabled), "kill_switch",
+		strconv.FormatInt(actor.ActorID, 10), actor.TenantID, request.AgentID); err != nil {
+		return domain.AgentEnabledState{}, fmt.Errorf("set profile state: %w", err)
 	}
 	event := "ENABLE"
 	if !request.Enabled {
@@ -411,7 +412,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if common.AsInt64(lock.Rows[0][0]) != request.ExpectedDraftRevision {
 		return domain.AgentRelease{}, domain.ErrRevisionConflict
 	}
-	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentKind)
+	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
 	if err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("lock publish alias: %w", err)
 	}
@@ -479,8 +480,8 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if len(lock.Rows) == 0 {
 		return domain.AgentRelease{}, domain.ErrNotFound
 	}
-	agentKind := common.AsString(lock.Rows[0][1])
-	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, agentKind)
+	agentTypeID := common.AsString(lock.Rows[0][1])
+	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, agentTypeID)
 	if err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("lock restore alias: %w", err)
 	}
@@ -566,14 +567,14 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 		}
 	}
 	if resetTenant {
-		res, bumpErr := tx.Query(ctx, qStudioBumpAlias, actor.ActorID, actor.TenantID, current.AgentKind, request.ExpectedPromptProfileRevision)
+		res, bumpErr := tx.Query(ctx, qStudioBumpAlias, actor.ActorID, actor.TenantID, current.AgentTypeID, request.ExpectedPromptProfileRevision)
 		if bumpErr != nil {
 			return domain.AgentDraft{}, fmt.Errorf("bump prompt profile revision: %w", bumpErr)
 		}
 		if len(res.Rows) == 0 {
 			return domain.AgentDraft{}, domain.ErrRevisionConflict
 		}
-		if err = resetPromptRows(ctx, tx, false, actor.TenantID, current.AgentKind, request); err != nil {
+		if err = resetPromptRows(ctx, tx, false, actor.TenantID, current.AgentTypeID, request); err != nil {
 			return domain.AgentDraft{}, err
 		}
 	}
@@ -606,7 +607,7 @@ func (s *StudioService) SetDefault(ctx context.Context, actor domain.StudioActor
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	res, err := tx.Query(ctx, qStudioSetAlias, request.AgentID, actor.ActorID, actor.TenantID, current.AgentKind, request.ExpectedAliasRevision)
+	res, err := tx.Query(ctx, qStudioSetAlias, request.AgentID, actor.ActorID, actor.TenantID, current.AgentTypeID, request.ExpectedAliasRevision)
 	if err != nil {
 		return nil, fmt.Errorf("set agent alias: %w", err)
 	}
@@ -702,7 +703,7 @@ func (s *StudioService) Models(ctx context.Context, tenantID int64) ([]domain.St
 
 func (s *StudioService) definition(ctx context.Context, tenantID int64, draft domain.AgentDraft) (domain.AgentDefinition, error) {
 	definition := domain.AgentDefinition{
-		AgentID: draft.AgentID, AgentKind: draft.AgentKind, Enabled: draft.Enabled, Models: draft.Models,
+		AgentID: draft.AgentID, AgentTypeID: draft.AgentTypeID, Enabled: draft.Enabled, Models: draft.Models,
 		ApprovalPolicy: draft.ApprovalPolicy, Extension: cloneJSON(draft.Extension),
 		DraftRevision: draft.ExpectedDraftRevision, PromptProfileRevision: draft.ExpectedPromptProfileRevision,
 	}
@@ -875,7 +876,7 @@ func resolveModelReference(reference *domain.ModelReference, field string, model
 
 func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, draft domain.AgentDraft) (bool, error) {
 	desired := desiredPromptDefaults(draft)
-	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentKind)
+	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
 	if err != nil {
 		return false, fmt.Errorf("lock prompt profile: %w", err)
 	}
@@ -885,7 +886,7 @@ func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQuerySer
 		}
 		return false, nil
 	}
-	persisted, err := tx.Query(ctx, qStudioListDefaults, actor.TenantID, draft.AgentKind)
+	persisted, err := tx.Query(ctx, qStudioListDefaults, actor.TenantID, draft.AgentTypeID)
 	if err != nil {
 		return false, fmt.Errorf("load prompt defaults: %w", err)
 	}
@@ -895,18 +896,18 @@ func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQuerySer
 	if common.AsInt64(alias.Rows[0][1]) != draft.ExpectedPromptProfileRevision {
 		return false, domain.ErrRevisionConflict
 	}
-	bumped, err := tx.Query(ctx, qStudioBumpAlias, actor.ActorID, actor.TenantID, draft.AgentKind, draft.ExpectedPromptProfileRevision)
+	bumped, err := tx.Query(ctx, qStudioBumpAlias, actor.ActorID, actor.TenantID, draft.AgentTypeID, draft.ExpectedPromptProfileRevision)
 	if err != nil {
 		return false, fmt.Errorf("bump prompt profile: %w", err)
 	}
 	if len(bumped.Rows) == 0 {
 		return false, domain.ErrRevisionConflict
 	}
-	if _, err = tx.Query(ctx, qStudioDeleteDefaults, actor.TenantID, draft.AgentKind); err != nil {
+	if _, err = tx.Query(ctx, qStudioDeleteDefaults, actor.TenantID, draft.AgentTypeID); err != nil {
 		return false, fmt.Errorf("delete prompt defaults: %w", err)
 	}
 	for key, value := range desired {
-		if _, err = tx.Query(ctx, qStudioInsertDefault, actor.TenantID, draft.AgentKind, key.sectionID,
+		if _, err = tx.Query(ctx, qStudioInsertDefault, actor.TenantID, draft.AgentTypeID, key.sectionID,
 			key.language, value.Instruction, nullableString(value.Output)); err != nil {
 			return false, fmt.Errorf("insert prompt default: %w", err)
 		}
@@ -1050,7 +1051,7 @@ func releaseFromDefinition(definition domain.AgentDefinition, active bool) domai
 		languages = append(languages, language.LanguageCode)
 	}
 	return domain.AgentRelease{
-		AgentID: definition.AgentID, AgentKind: definition.AgentKind, Version: definition.Version,
+		AgentID: definition.AgentID, AgentTypeID: definition.AgentTypeID, Version: definition.Version,
 		Enabled: definition.Enabled, Models: definition.Models, ApprovalPolicy: definition.ApprovalPolicy,
 		DefinitionDigest: definition.DefinitionDigest, DraftRevision: definition.DraftRevision,
 		PromptProfileRevision: definition.PromptProfileRevision, ChangeSummary: definition.ChangeSummary,
@@ -1154,3 +1155,13 @@ func languageDigests(languages []domain.CompiledPrompt) map[string]string {
 }
 
 var _ contract.AgentStudioHTTPBackend = (*StudioService)(nil)
+
+// agentState maps the studio-v1 enabled flag onto the agent lifecycle. Studio
+// only ever toggles between active and suspended; draining and retirement are
+// operational transitions, not authoring ones.
+func agentState(enabled bool) string {
+	if enabled {
+		return string(domain.AgentStateActive)
+	}
+	return string(domain.AgentStateSuspended)
+}

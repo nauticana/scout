@@ -46,7 +46,7 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 				recorder.failures = append(recorder.failures, status+":"+errorCode)
 				return nil
 			},
-			RecordUsageFunc: func(_ context.Context, _ int64, _ string, _ int64, _ string, usage domain.Usage) error {
+			RecordUsageFunc: func(_ context.Context, _ int64, _ string, _ int64, _ string, _ domain.UsageAttribution, usage domain.Usage) error {
 				recorder.record("usage")
 				recorder.usage = append(recorder.usage, usage)
 				return nil
@@ -99,7 +99,7 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 				return nil
 			},
 		},
-		Audit: &fake.AuditSink{RecordFunc: func(_ context.Context, event domain.AuditEvent) error {
+		Audit: &fake.AuditSink{RecordFunc: func(_ context.Context, event domain.DecisionRecord) error {
 			recorder.audits = append(recorder.audits, event.Category)
 			return nil
 		}},
@@ -249,7 +249,7 @@ func TestTurnRuntimeGuardrailRejectionPublishesNoRawOutput(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
 	rejection := errors.New("policy violation")
-	runtime.Guardrails = &fake.GuardrailEnforcer{AfterModelChunkFunc: func(context.Context, domain.GuardrailConfig, domain.ModelChunk) (domain.ModelChunk, error) {
+	runtime.Guardrails = &fake.GuardrailEnforcer{AfterModelChunkFunc: func(context.Context, domain.GuardrailConfig, domain.GuardrailSubject, domain.ModelChunk) (domain.ModelChunk, error) {
 		return domain.ModelChunk{}, rejection
 	}}
 	_, err := runtime.HandleTurn(context.Background(), runtimeDispatch())

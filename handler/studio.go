@@ -391,7 +391,7 @@ func mapStudioError(result any, err error) (any, error) {
 
 func domainDraft(value api.AgentDraft) domain.AgentDraft {
 	draft := domain.AgentDraft{
-		AgentID: value.AgentName, AgentKind: value.AgentType, DisplayName: value.DisplayName,
+		AgentID: value.AgentName, AgentTypeID: value.AgentType, DisplayName: value.DisplayName,
 		Active: value.Enabled, Enabled: value.Enabled, Default: value.Default,
 		ApprovalPolicy: domain.AgentApprovalPolicy{RequireApproval: value.ApprovalPolicy.RequireApproval},
 		Models: domain.AgentModelSelection{
@@ -426,7 +426,7 @@ func domainDraft(value api.AgentDraft) domain.AgentDraft {
 
 func apiDraft(value domain.AgentDraft) api.AgentDraft {
 	draft := api.AgentDraft{
-		AgentType: value.AgentKind, AgentName: value.AgentID, DisplayName: value.DisplayName,
+		AgentType: value.AgentTypeID, AgentName: value.AgentID, DisplayName: value.DisplayName,
 		Enabled: value.Enabled && value.Active, Default: value.Default,
 		ApprovalPolicy:               api.AgentApprovalPolicy{RequireApproval: value.ApprovalPolicy.RequireApproval},
 		Models:                       api.AgentModelSelection{TextModel: referenceID(value.Models.Text), ImageModel: referenceID(value.Models.Image), VideoModel: referenceID(value.Models.Video)},
@@ -464,7 +464,7 @@ func apiDraft(value domain.AgentDraft) api.AgentDraft {
 func apiSummary(value domain.AgentSummary) api.AgentSummary {
 	version, _ := strconv.ParseInt(value.PublishedVersion, 10, 64)
 	return api.AgentSummary{
-		AgentType: value.AgentKind, AgentName: value.AgentID, DisplayName: value.DisplayName,
+		AgentType: value.AgentTypeID, AgentName: value.AgentID, DisplayName: value.DisplayName,
 		Purpose: value.Purpose, Enabled: value.Active && value.Enabled, Default: value.Default,
 		Readiness: string(value.Readiness), ReadinessReason: value.ReadinessReason,
 		TypeDefaultsRevision: value.PromptProfileRevision, AgentRevision: value.DraftRevision,
@@ -482,7 +482,7 @@ func apiRelease(value domain.AgentRelease) (api.AgentRelease, error) {
 		publishedBy = *value.PublishedBy
 	}
 	return api.AgentRelease{
-		AgentName: value.AgentID, AgentType: value.AgentKind, Version: version, Enabled: value.Enabled,
+		AgentName: value.AgentID, AgentType: value.AgentTypeID, Version: version, Enabled: value.Enabled,
 		Models:          api.AgentModelSelection{TextModel: referenceID(value.Models.Text), ImageModel: referenceID(value.Models.Image), VideoModel: referenceID(value.Models.Video)},
 		RequireApproval: value.ApprovalPolicy.RequireApproval, DefinitionDigest: value.DefinitionDigest,
 		ChangeSummary: value.ChangeSummary, PublishedBy: publishedBy, PublishedAt: value.PublishedAt,

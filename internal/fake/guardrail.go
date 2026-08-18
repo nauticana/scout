@@ -10,9 +10,9 @@ import (
 // GuardrailEnforcer contains configurable guardrail callbacks; nil funcs pass values through.
 type GuardrailEnforcer struct {
 	BeforeModelFunc     func(context.Context, domain.GuardrailConfig, domain.ModelRequest) (domain.ModelRequest, error)
-	AfterModelChunkFunc func(context.Context, domain.GuardrailConfig, domain.ModelChunk) (domain.ModelChunk, error)
+	AfterModelChunkFunc func(context.Context, domain.GuardrailConfig, domain.GuardrailSubject, domain.ModelChunk) (domain.ModelChunk, error)
 	BeforeToolFunc      func(context.Context, domain.GuardrailConfig, domain.ToolCall) (domain.ToolCall, error)
-	AfterToolFunc       func(context.Context, domain.GuardrailConfig, domain.ToolResult) (domain.ToolResult, error)
+	AfterToolFunc       func(context.Context, domain.GuardrailConfig, domain.GuardrailSubject, domain.ToolResult) (domain.ToolResult, error)
 }
 
 func (enforcer *GuardrailEnforcer) BeforeModel(ctx context.Context, config domain.GuardrailConfig, request domain.ModelRequest) (domain.ModelRequest, error) {
@@ -22,11 +22,11 @@ func (enforcer *GuardrailEnforcer) BeforeModel(ctx context.Context, config domai
 	return enforcer.BeforeModelFunc(ctx, config, request)
 }
 
-func (enforcer *GuardrailEnforcer) AfterModelChunk(ctx context.Context, config domain.GuardrailConfig, chunk domain.ModelChunk) (domain.ModelChunk, error) {
+func (enforcer *GuardrailEnforcer) AfterModelChunk(ctx context.Context, config domain.GuardrailConfig, subject domain.GuardrailSubject, chunk domain.ModelChunk) (domain.ModelChunk, error) {
 	if enforcer.AfterModelChunkFunc == nil {
 		return chunk, nil
 	}
-	return enforcer.AfterModelChunkFunc(ctx, config, chunk)
+	return enforcer.AfterModelChunkFunc(ctx, config, subject, chunk)
 }
 
 func (enforcer *GuardrailEnforcer) BeforeTool(ctx context.Context, config domain.GuardrailConfig, call domain.ToolCall) (domain.ToolCall, error) {
@@ -36,11 +36,11 @@ func (enforcer *GuardrailEnforcer) BeforeTool(ctx context.Context, config domain
 	return enforcer.BeforeToolFunc(ctx, config, call)
 }
 
-func (enforcer *GuardrailEnforcer) AfterTool(ctx context.Context, config domain.GuardrailConfig, result domain.ToolResult) (domain.ToolResult, error) {
+func (enforcer *GuardrailEnforcer) AfterTool(ctx context.Context, config domain.GuardrailConfig, subject domain.GuardrailSubject, result domain.ToolResult) (domain.ToolResult, error) {
 	if enforcer.AfterToolFunc == nil {
 		return result, nil
 	}
-	return enforcer.AfterToolFunc(ctx, config, result)
+	return enforcer.AfterToolFunc(ctx, config, subject, result)
 }
 
 var _ contract.GuardrailEnforcer = (*GuardrailEnforcer)(nil)

@@ -1,0 +1,109 @@
+table: approval_request
+comment: One durable decision a human owes; proposed_digest binds the verdict to the exact action
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: execution_step_id
+    type: BIGINT
+  - name: principal_kind
+    type: VARCHAR(20)
+  - name: principal_id
+    type: VARCHAR(120)
+  - name: approver_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: approver_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: scope_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: rule_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: requested_action
+    type: VARCHAR(120)
+  - name: resource_ref
+    type: VARCHAR(200)
+  - name: output_class_code
+    type: VARCHAR(30)
+  - name: risk_tier_code
+    type: VARCHAR(20)
+  - name: summary
+    type: VARCHAR(400)
+  - name: evidence_uri
+    type: TEXT
+    nullable: true
+  - name: evidence_digest
+    type: CHAR(64)
+    nullable: true
+  - name: proposed_digest
+    type: CHAR(64)
+  - name: status_code
+    type: VARCHAR(30)
+    default: pending
+  - name: deadline_at
+    type: TIMESTAMP
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: resolved_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: approval_request_seq
+  column: id
+foreign_keys:
+  - name: approval_requests
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: scope_approval_requests
+    columns: [tenant_id, scope_id]
+    references:
+      table: config_scope
+      columns: [tenant_id, scope_id]
+  - name: status_approval_requests
+    columns: [status_code]
+    references:
+      table: approval_status
+      columns: [code]
+  - name: risk_approval_requests
+    columns: [risk_tier_code]
+    references:
+      table: approval_risk_tier
+      columns: [code]
+  - name: class_approval_requests
+    columns: [output_class_code]
+    references:
+      table: agent_output_class
+      columns: [code]
+indexes:
+  - name: approval_request_id_tenant_uq
+    columns: [id, tenant_id]
+    unique: true
+  - name: approval_request_step_uq
+    columns: [tenant_id, request_id, execution_step_id]
+    unique: true
+  - name: approval_request_pending_ix
+    columns: [tenant_id, status_code, deadline_at]
+  - name: approval_request_approver_ix
+    columns: [tenant_id, approver_kind, approver_id, status_code]
+checks:
+  - name: approval_request_digest_ck
+    expression: CHAR_LENGTH(proposed_digest) = 64
+  - name: approval_request_evidence_ck
+    expression: (evidence_uri IS NULL AND evidence_digest IS NULL) OR (evidence_uri IS NOT NULL AND CHAR_LENGTH(evidence_digest) = 64)
+  - name: approval_request_approver_ck
+    expression: (approver_kind IS NULL AND approver_id IS NULL) OR (approver_kind IS NOT NULL AND approver_id IS NOT NULL)
+  - name: approval_request_resolved_ck
+    expression: (status_code IN ('pending', 'escalated') AND resolved_at IS NULL) OR (status_code NOT IN ('pending', 'escalated') AND resolved_at IS NOT NULL)

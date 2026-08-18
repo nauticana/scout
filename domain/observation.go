@@ -30,7 +30,11 @@ const (
 // TenantID is for the ledger and tenant-scoped diagnostics; adapters label
 // fleet series only with the bounded fields.
 type Observation struct {
-	TenantID       int64
+	TenantID int64
+	// Principal and ScopeID are exact accounting dimensions for the tenant ledger,
+	// never fleet metric labels.
+	Principal      PrincipalRef
+	ScopeID        string
 	TenantTier     string
 	PriorityClass  string
 	Region         string

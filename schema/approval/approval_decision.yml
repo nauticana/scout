@@ -1,0 +1,63 @@
+table: approval_decision
+comment: The verdict on one approval request, with the principal that decided and the grant it used
+columns:
+  - name: approval_request_id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: status_code
+    type: VARCHAR(30)
+  - name: decider_kind
+    type: VARCHAR(20)
+  - name: decider_user_id
+    type: BIGINT
+    nullable: true
+  - name: decider_agent_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: decider_service_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: grant_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: proposed_digest
+    type: CHAR(64)
+  - name: reason
+    type: VARCHAR(400)
+    nullable: true
+  - name: decided_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [approval_request_id]
+foreign_keys:
+  - name: approval_decisions
+    columns: [approval_request_id, tenant_id]
+    references:
+      table: approval_request
+      columns: [id, tenant_id]
+  - name: status_approval_decisions
+    columns: [status_code]
+    references:
+      table: approval_status
+      columns: [code]
+  - name: decided_approval_decisions
+    columns: [decider_user_id]
+    references:
+      table: user_account
+      columns: [id]
+  - name: agent_approval_decisions
+    columns: [tenant_id, decider_agent_id]
+    references:
+      table: agent_profile
+      columns: [tenant_id, agent_id]
+  - name: grant_approval_decisions
+    columns: [tenant_id, grant_id]
+    references:
+      table: delegation_grant
+      columns: [tenant_id, grant_id]
+checks:
+  - name: approval_decision_decider_ck
+    expression: (CASE WHEN decider_user_id IS NULL THEN 0 ELSE 1 END + CASE WHEN decider_agent_id IS NULL THEN 0 ELSE 1 END + CASE WHEN decider_service_id IS NULL THEN 0 ELSE 1 END) = 1
+  - name: approval_decision_digest_ck
+    expression: CHAR_LENGTH(proposed_digest) = 64

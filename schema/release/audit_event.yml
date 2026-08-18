@@ -1,16 +1,63 @@
 table: audit_event
-comment: Redacted tenant governance and security event
+comment: One governed decision, with the principal, authority, and reasoning behind it; evidence stays in object storage
 columns:
   - name: id
     type: BIGINT
   - name: tenant_id
     type: BIGINT
+    nullable: true
   - name: category
     type: VARCHAR(80)
+  - name: principal_kind
+    type: VARCHAR(20)
+  - name: principal_id
+    type: VARCHAR(120)
+  - name: grant_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: grantor_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: grantor_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: scope_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: performed_action
+    type: VARCHAR(120)
+  - name: resource_ref
+    type: VARCHAR(200)
+    nullable: true
+  - name: release_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: policy_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: policy_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: outcome_code
+    type: VARCHAR(30)
+  - name: obligations
+    type: VARCHAR(200)
+    nullable: true
+  - name: reason
+    type: VARCHAR(400)
+    nullable: true
+  - name: request_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: conversation_id
+    type: VARCHAR(120)
+    nullable: true
   - name: payload_uri
     type: TEXT
+    nullable: true
   - name: payload_digest
     type: CHAR(64)
+    nullable: true
   - name: occurred_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -24,9 +71,25 @@ foreign_keys:
     references:
       table: agent_tenant
       columns: [partner_id]
+  - name: outcome_audit_events
+    columns: [outcome_code]
+    references:
+      table: audit_decision_outcome
+      columns: [code]
+  - name: scope_audit_events
+    columns: [tenant_id, scope_id]
+    references:
+      table: config_scope
+      columns: [tenant_id, scope_id]
 indexes:
   - name: audit_event_tenant_time_ix
     columns: [tenant_id, occurred_at]
+  - name: audit_event_principal_ix
+    columns: [tenant_id, principal_kind, principal_id, occurred_at]
+  - name: audit_event_request_ix
+    columns: [tenant_id, request_id]
 checks:
-  - name: audit_event_digest_ck
-    expression: CHAR_LENGTH(payload_digest) = 64
+  - name: audit_event_payload_ck
+    expression: (payload_uri IS NULL AND payload_digest IS NULL) OR (payload_uri IS NOT NULL AND CHAR_LENGTH(payload_digest) = 64)
+  - name: audit_event_grant_ck
+    expression: (grant_id IS NULL AND grantor_id IS NULL) OR (grant_id IS NOT NULL AND grantor_id IS NOT NULL)

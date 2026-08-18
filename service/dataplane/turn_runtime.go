@@ -76,6 +76,9 @@ type turnExecution struct {
 	config      domain.GuardrailConfig
 	reservation domain.BudgetReservation
 	settled     bool
+	// bounds are the delegation limits this turn may pass on; the zero value
+	// means the turn acts on its own authority and delegates nothing.
+	bounds domain.DelegationBounds
 }
 
 // HandleTurn executes the delivered turn and returns once its result is
@@ -93,15 +96,35 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.Turn
 	if err != nil {
 		return domain.TurnResult{}, err
 	}
-	execution := &turnExecution{dispatch: dispatch, turnNo: turnNo}
+	execution := &turnExecution{dispatch: dispatch, turnNo: turnNo, bounds: turn.DelegationBounds}
 	if isTerminalTurnStatus(status) {
 		return runtime.replayTerminal(ctx, execution, status, payload)
 	}
 	result, err := runtime.execute(ctx, execution)
-	if err != nil {
+	switch {
+	case err == nil:
+		return result, nil
+	case errors.Is(err, domain.ErrApprovalPending):
+		return domain.TurnResult{}, runtime.suspend(ctx, execution, err)
+	default:
 		return domain.TurnResult{}, runtime.fail(ctx, execution, err)
 	}
-	return result, nil
+}
+
+// suspend parks a turn awaiting a human decision. The budget reservation stays
+// held and no usage is settled, so the turn resumes with the budget it was
+// admitted on. The delivery is acked; whoever resolves the approval re-dispatches.
+func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecution, cause error) error {
+	turn := execution.dispatch.Turn
+	suspendCtx := context.WithoutCancel(ctx)
+	if err := runtime.Records.Suspend(suspendCtx, turn.TenantContext.TenantID, turn.RequestID, stage.ErrorClass(cause)); err != nil {
+		return err
+	}
+	runtime.audit(suspendCtx, execution, "turn_suspended", stage.ErrorClass(cause))
+	if err := runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // replayTerminal republishes the final frame of an already terminal turn; it
@@ -254,7 +277,12 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		if err != nil {
 			return domain.StepResult{}, err
 		}
-		if result, err = executor.Execute(ctx, domain.StepInput{Step: step, Snapshot: execution.snapshot}); err != nil {
+		input := domain.StepInput{
+			Step: step, Snapshot: execution.snapshot, RequestID: execution.dispatch.Turn.RequestID,
+			Principal: execution.dispatch.Turn.Principal, Bounds: execution.bounds,
+			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth,
+		}
+		if result, err = executor.Execute(ctx, input); err != nil {
 			runtime.observe(ctx, execution, step, started, domain.Usage{}, err)
 			if abandonErr := runtime.Idempotency.Abandon(context.WithoutCancel(ctx), tenantID, turn.RequestID, step); abandonErr != nil {
 				return domain.StepResult{}, errors.Join(err, abandonErr)
@@ -272,6 +300,7 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		return domain.StepResult{}, err
 	}
 	guarded, err := runtime.Guardrails.AfterModelChunk(ctx, execution.config,
+		guardrailSubject(turn, execution.snapshot.AgentVersion),
 		domain.ModelChunk{Sequence: execution.published, Payload: result.State})
 	if err != nil {
 		runtime.observe(ctx, execution, step, started, result.Usage, err)
@@ -337,7 +366,7 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 		execution.settled = true
 	}
 	subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
-	if err := runtime.Records.RecordUsage(settleCtx, tenantID, turn.ConversationID, execution.turnNo, subject, execution.usage); err != nil {
+	if err := runtime.Records.RecordUsage(settleCtx, tenantID, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
 		return err
 	}
 	if err := runtime.Sessions.Complete(settleCtx, tenantID, turn.ConversationID, execution.revision, *result); err != nil {
@@ -373,7 +402,7 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	}
 	if hasUsage(execution.usage) {
 		subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
-		if err := runtime.Records.RecordUsage(failCtx, tenantID, turn.ConversationID, execution.turnNo, subject, execution.usage); err != nil {
+		if err := runtime.Records.RecordUsage(failCtx, tenantID, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -482,10 +511,34 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 	if err != nil {
 		return
 	}
-	if err := runtime.Audit.Record(ctx, domain.AuditEvent{
-		TenantID: turn.TenantContext.TenantID, Category: category, Payload: payload, OccurredAt: runtime.now(),
+	outcome := domain.DecisionAllow
+	if errorCode != "" {
+		outcome = domain.DecisionDeny
+	}
+	if err := runtime.Audit.Record(ctx, domain.DecisionRecord{
+		TenantID: turn.TenantContext.TenantID, Principal: turnPrincipal(turn), ScopeID: turn.TenantContext.ScopeID,
+		Category: category, Action: "turn", Resource: turn.AgentID, Outcome: outcome, Reason: errorCode,
+		RequestID: turn.RequestID, ConversationID: turn.ConversationID, Payload: payload, OccurredAt: runtime.now(),
 	}); err != nil {
 		runtime.observeError(ctx, execution, err)
+	}
+}
+
+func usageAttribution(turn domain.TurnRequest) domain.UsageAttribution {
+	return domain.UsageAttribution{Principal: turnPrincipal(turn), ScopeID: turn.TenantContext.ScopeID}
+}
+
+func turnPrincipal(turn domain.TurnRequest) domain.PrincipalRef {
+	if turn.Principal.Kind != "" {
+		return domain.PrincipalRef{Kind: turn.Principal.Kind, ID: turn.Principal.ID}
+	}
+	return domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: turn.AgentID}
+}
+
+func guardrailSubject(turn domain.TurnRequest, release string) domain.GuardrailSubject {
+	return domain.GuardrailSubject{
+		TenantID: turn.TenantContext.TenantID, Principal: turnPrincipal(turn), RequestID: turn.RequestID,
+		ConversationID: turn.ConversationID, ReleaseVersion: release,
 	}
 }
 
@@ -496,6 +549,8 @@ func (runtime *TurnRuntime) observe(ctx context.Context, execution *turnExecutio
 	turn := execution.dispatch.Turn
 	span := stage.Begin(started, domain.StageTool, step.Kind, domain.ComponentVersions{Agent: execution.snapshot.AgentVersion})
 	span.Observation.TenantID = turn.TenantContext.TenantID
+	span.Observation.Principal = turnPrincipal(turn)
+	span.Observation.ScopeID = turn.TenantContext.ScopeID
 	span.Observation.TenantTier = turn.TenantContext.Tier
 	span.Observation.Region = turn.TenantContext.Region
 	span.Observation.QueueWait = started.Sub(execution.dispatch.EnqueuedAt)
@@ -508,6 +563,8 @@ func (runtime *TurnRuntime) observeError(ctx context.Context, execution *turnExe
 	}
 	span := stage.Begin(runtime.now(), domain.StagePublish, "audit", domain.ComponentVersions{Agent: execution.snapshot.AgentVersion})
 	span.Observation.TenantID = execution.dispatch.Turn.TenantContext.TenantID
+	span.Observation.Principal = turnPrincipal(execution.dispatch.Turn)
+	span.Observation.ScopeID = execution.dispatch.Turn.TenantContext.ScopeID
 	runtime.Observations.RecordObservation(ctx, span.End(runtime.now(), domain.OutcomeError, domain.Usage{}, err))
 }
 

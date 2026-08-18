@@ -50,7 +50,7 @@ func TestStreamPumpGuardsAndPublishesEveryChunk(t *testing.T) {
 	recorder := &publishRecorder{}
 	guarded := 0
 	pump := &StreamPump{
-		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, chunk domain.ModelChunk) (domain.ModelChunk, error) {
+		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.GuardrailSubject, chunk domain.ModelChunk) (domain.ModelChunk, error) {
 			guarded++
 			chunk.Payload = append([]byte("ok:"), chunk.Payload...)
 			return chunk, nil
@@ -127,7 +127,7 @@ func TestStreamPumpDropsChunkThatOvershootsTokenBudget(t *testing.T) {
 func TestStreamPumpStageAttribution(t *testing.T) {
 	guardrailErr := errors.New("blocked")
 	pump := &StreamPump{
-		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.ModelChunk) (domain.ModelChunk, error) {
+		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.GuardrailSubject, _ domain.ModelChunk) (domain.ModelChunk, error) {
 			return domain.ModelChunk{}, guardrailErr
 		}},
 		Publisher: &publishRecorder{},
@@ -160,7 +160,7 @@ func TestStreamPumpStageAttribution(t *testing.T) {
 func TestStreamPumpGuardrailFailurePublishesNoPayload(t *testing.T) {
 	recorder := &publishRecorder{}
 	pump := &StreamPump{
-		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.ModelChunk) (domain.ModelChunk, error) {
+		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.GuardrailSubject, _ domain.ModelChunk) (domain.ModelChunk, error) {
 			return domain.ModelChunk{}, errors.New("blocked")
 		}},
 		Publisher: recorder,
@@ -239,7 +239,7 @@ func TestStreamPumpObservesCanceledAndFailedStages(t *testing.T) {
 
 	observed = nil
 	pump = &StreamPump{
-		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(context.Context, domain.GuardrailConfig, domain.ModelChunk) (domain.ModelChunk, error) {
+		Guardrails: &fake.GuardrailEnforcer{AfterModelChunkFunc: func(context.Context, domain.GuardrailConfig, domain.GuardrailSubject, domain.ModelChunk) (domain.ModelChunk, error) {
 			return domain.ModelChunk{}, domain.ErrForbidden
 		}},
 		Publisher: &publishRecorder{},

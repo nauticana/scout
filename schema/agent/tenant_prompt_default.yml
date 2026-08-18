@@ -3,7 +3,7 @@ comment: Tenant default prompt value inherited by agents of one logical kind
 columns:
   - name: tenant_id
     type: BIGINT
-  - name: agent_kind
+  - name: agent_type_id
     type: VARCHAR(80)
   - name: prompt_section_id
     type: BIGINT
@@ -14,13 +14,13 @@ columns:
   - name: output
     type: TEXT
     nullable: true
-primary_key: [tenant_id, agent_kind, prompt_section_id, language_code]
+primary_key: [tenant_id, agent_type_id, prompt_section_id, language_code]
 foreign_keys:
   - name: tenant_prompt_defaults
-    columns: [tenant_id, agent_kind]
+    columns: [tenant_id, agent_type_id]
     references:
       table: agent_alias
-      columns: [tenant_id, agent_kind]
+      columns: [tenant_id, agent_type_id]
   - name: section_tenant_prompt_defaults
     columns: [prompt_section_id]
     references:

@@ -133,7 +133,7 @@ func TestPromptCompilerDefinitionDigestIsCanonical(t *testing.T) {
 	english, _ := compiler.Compile("en-US", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "")})
 	german, _ := compiler.Compile("de-DE", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "basis", "")})
 	definition := domain.AgentDefinition{
-		AgentKind:      "assistant",
+		AgentTypeID:    "assistant",
 		Enabled:        true,
 		Models:         domain.AgentModelSelection{Text: modelReference("provider", "model")},
 		ApprovalPolicy: domain.AgentApprovalPolicy{RequireApproval: true},
@@ -176,9 +176,9 @@ func TestPromptCompilerDefinitionDigestRejectsInvalidInput(t *testing.T) {
 		definition domain.AgentDefinition
 	}{
 		{"missing kind", domain.AgentDefinition{Languages: []domain.CompiledPrompt{language}}},
-		{"invalid extension", domain.AgentDefinition{AgentKind: "assistant", Languages: []domain.CompiledPrompt{language}, Extension: []byte("{")}},
-		{"duplicate language", domain.AgentDefinition{AgentKind: "assistant", Languages: []domain.CompiledPrompt{language, language}}},
-		{"stale language digest", domain.AgentDefinition{AgentKind: "assistant", Languages: []domain.CompiledPrompt{{LanguageCode: language.LanguageCode, Sections: language.Sections, Digest: "stale"}}}},
+		{"invalid extension", domain.AgentDefinition{AgentTypeID: "assistant", Languages: []domain.CompiledPrompt{language}, Extension: []byte("{")}},
+		{"duplicate language", domain.AgentDefinition{AgentTypeID: "assistant", Languages: []domain.CompiledPrompt{language, language}}},
+		{"stale language digest", domain.AgentDefinition{AgentTypeID: "assistant", Languages: []domain.CompiledPrompt{{LanguageCode: language.LanguageCode, Sections: language.Sections, Digest: "stale"}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

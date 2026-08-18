@@ -49,6 +49,8 @@ func (pump *StreamPump) Run(ctx context.Context, turn domain.TurnRequest, route,
 
 	span := stage.Begin(pump.clock()(), domain.StageModel, StreamPumpComponent, domain.ComponentVersions{Agent: agentVersion})
 	span.Observation.TenantID = turn.TenantContext.TenantID
+	span.Observation.Principal = turnPrincipal(turn)
+	span.Observation.ScopeID = turn.TenantContext.ScopeID
 	span.Observation.TenantTier = turn.TenantContext.Tier
 	span.Observation.PriorityClass = turn.TenantContext.PriorityClass
 	span.Observation.Region = turn.TenantContext.Region
@@ -106,7 +108,7 @@ func (pump *StreamPump) run(ctx context.Context, turn domain.TurnRequest, route,
 		}
 		done := errors.Is(receiveErr, io.EOF) || chunk.FinishReason != ""
 		if len(chunk.Payload) > 0 || done {
-			guarded, err := pump.Guardrails.AfterModelChunk(ctx, config, chunk)
+			guarded, err := pump.Guardrails.AfterModelChunk(ctx, config, guardrailSubject(turn, agentVersion), chunk)
 			if err != nil {
 				return usage, pump.fail(ctx, turn, route, agentVersion, sequence, domain.StageGuardrail, err)
 			}

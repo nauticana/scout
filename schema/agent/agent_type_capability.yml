@@ -1,0 +1,28 @@
+table: agent_type_capability
+comment: Capability packages one type version requires, resolved into bindings at instantiation
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_type_id
+    type: VARCHAR(80)
+  - name: type_version
+    type: VARCHAR(80)
+  - name: package_id
+    type: VARCHAR(80)
+  - name: package_version
+    type: VARCHAR(80)
+  - name: is_required
+    type: BOOLEAN
+    default: TRUE
+primary_key: [tenant_id, agent_type_id, type_version, package_id]
+foreign_keys:
+  - name: agent_type_capabilities
+    columns: [tenant_id, agent_type_id, type_version]
+    references:
+      table: agent_type_version
+      columns: [tenant_id, agent_type_id, type_version]
+  - name: package_agent_type_capabilities
+    columns: [tenant_id, package_id, package_version]
+    references:
+      table: agent_capability_package
+      columns: [tenant_id, package_id, package_version]

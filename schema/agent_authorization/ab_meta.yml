@@ -1,0 +1,3 @@
+tables:
+  - agent_permission
+  - delegation_grant

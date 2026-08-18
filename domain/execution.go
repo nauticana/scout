@@ -35,10 +35,17 @@ type StepCheckpoint struct {
 	Usage           Usage
 }
 
-// StepInput contains the step and state required for execution.
+// StepInput contains the step and state required for execution. Principal and
+// Bounds travel with it so a step that delegates knows who is acting and how
+// much authority is left to pass on.
 type StepInput struct {
-	Step     ExecutionStep
-	Snapshot SessionSnapshot
+	Step          ExecutionStep
+	Snapshot      SessionSnapshot
+	Principal     Principal
+	Bounds        DelegationBounds
+	WorkItemID    int64
+	WorkItemDepth int
+	RequestID     string
 }
 
 // StepResult contains state, routing, and usage produced by a step.

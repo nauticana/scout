@@ -1,0 +1,37 @@
+table: agent_type_version
+comment: Immutable published version of an agent type; instances pin one and never auto-upgrade
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_type_id
+    type: VARCHAR(80)
+  - name: type_version
+    type: VARCHAR(80)
+  - name: definition
+    type: TEXT
+  - name: definition_digest
+    type: CHAR(64)
+  - name: change_summary
+    type: VARCHAR(400)
+    nullable: true
+  - name: published_by
+    type: BIGINT
+    nullable: true
+  - name: published_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, agent_type_id, type_version]
+foreign_keys:
+  - name: agent_type_versions
+    columns: [tenant_id, agent_type_id]
+    references:
+      table: agent_type
+      columns: [tenant_id, agent_type_id]
+  - name: published_agent_type_versions
+    columns: [published_by]
+    references:
+      table: user_account
+      columns: [id]
+checks:
+  - name: agent_type_version_digest_ck
+    expression: CHAR_LENGTH(definition_digest) = 64

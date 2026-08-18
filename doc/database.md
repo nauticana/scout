@@ -8,31 +8,18 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 
 ## Module dependency graph
 
-Scout's schema is twelve selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
+Scout's schema is fifteen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
 
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
 - Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. `schema/dependency.yml` keeps the complete list.
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it.
+- `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
+- `approval` holds the durable human-in-the-loop record, and `release` reaches `configuration` because every decision record is attributable to a scope.
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 30, "rankSpacing": 55, "diagramPadding": 12}, "themeVariables": {"fontSize": "12px"}}}%%
 flowchart BT
-
-    core["keel core"]
-    tenant_management["keel tenant_management"]
-    catalog["Catalog<br/>7 tables"]
-    tenancy["Tenancy<br/>4 tables"]
-    prompt["Prompt<br/>2 tables"]
-    model["Model<br/>5 tables"]
-    agent["Agent<br/>9 tables"]
-    tool["Tool<br/>4 tables"]
-    graph_module["Execution Graph<br/>4 tables"]
-    knowledge["Knowledge<br/>8 tables"]
-    knowledge_vector["Knowledge Vector<br/>1 table"]
-    runtime["Runtime<br/>12 tables"]
-    release["Release<br/>16 tables"]
-    evaluation["Evaluation<br/>10 tables"]
 
     tenant_management --> core
     tenancy --> tenant_management
@@ -41,18 +28,44 @@ flowchart BT
     agent --> prompt
     agent --> model
     tool --> agent
-    graph_module --> agent
+    tool --> agent_authorization_module
     knowledge --> agent
+    configuration_module --> agent
+    execution_graph_module --> agent
+    agent_authorization_module --> agent
     knowledge_vector --> knowledge
-    runtime --> graph_module
+    runtime --> execution_graph_module
+    runtime --> agent_authorization_module
+    runtime --> configuration_module
     release --> runtime
+    release --> configuration_module
     evaluation --> knowledge
     evaluation --> release
+    approval --> configuration_module
+    approval --> agent_authorization_module
+
+    core["keel core"]
+    tenant_management["keel tenant_management"]
+    catalog["Catalog<br/>15 tables"]
+    tenancy["Tenancy<br/>4 tables"]
+    prompt["Prompt<br/>2 tables"]
+    model["Model<br/>5 tables"]
+    agent["Agent<br/>14 tables"]
+    tool["Tool<br/>5 tables"]
+    execution_graph_module["Execution Graph<br/>4 tables"]
+    knowledge["Knowledge<br/>8 tables"]
+    knowledge_vector["Knowledge Vector<br/>1 table"]
+    runtime["Runtime<br/>13 tables"]
+    release["Release<br/>16 tables"]
+    evaluation["Evaluation<br/>10 tables"]
+    agent_authorization_module["Agent Authorization<br/>2 tables"]
+    configuration_module["Configuration<br/>3 tables"]
+    approval["Approval<br/>2 tables"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 27 Scout tables — while the full platform is 82. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 40 Scout tables — while the full platform is 104. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module.
 
@@ -72,6 +85,14 @@ flowchart RL
         reservation_status["reservation_status"]
         rollout_status["rollout_status"]
         usage_category["usage_category"]
+        config_scope_kind["config_scope_kind"]
+        config_resource_kind["config_resource_kind"]
+        config_merge_mode["config_merge_mode"]
+        audit_decision_outcome["audit_decision_outcome"]
+        approval_status["approval_status"]
+        approval_risk_tier["approval_risk_tier"]
+        agent_output_class["agent_output_class"]
+        agent_state["agent_state"]
     end
 
     subgraph tenancy["Tenancy"]
@@ -107,6 +128,11 @@ flowchart RL
 
     subgraph agent["Agent"]
         direction BT
+        agent_type["agent_type"]
+        agent_type_version["agent_type_version"]
+        agent_capability_package["agent_capability_package"]
+        agent_type_capability["agent_type_capability"]
+        agent_version_quarantine["agent_version_quarantine"]
         agent_profile["agent_profile"]
         guardrail_config["guardrail_config"]
         agent_draft["agent_draft"]
@@ -117,6 +143,11 @@ flowchart RL
         agent_version["agent_version"]
         agent_deployment["agent_deployment"]
     end
+    agent_type_version --> agent_type
+    agent_type_capability --> agent_type_version
+    agent_type_capability --> agent_capability_package
+    agent_profile --> agent_type
+    agent_version_quarantine --> agent_version
     agent_version --> guardrail_config
     agent_studio_event --> agent_profile
     agent_alias --> agent_profile
@@ -126,18 +157,48 @@ flowchart RL
     agent_prompt_override --> agent_draft
     guardrail_config --> agent_profile
 
+    subgraph agent_authorization_module["Agent Authorization"]
+        direction BT
+        agent_permission["agent_permission"]
+        delegation_grant["delegation_grant"]
+    end
+    agent_permission --> agent_profile
+    delegation_grant --> agent_profile
+
+    subgraph configuration_module["Configuration"]
+        direction BT
+        scope["scope"]
+        config_scope_binding["config_scope_binding"]
+        effective_agent_release["effective_agent_release"]
+    end
+    config_scope_binding --> scope
+    effective_agent_release --> scope
+    effective_agent_release --> agent_version
+
+    subgraph approval["Approval"]
+        direction BT
+        approval_request["approval_request"]
+        approval_decision["approval_decision"]
+    end
+    approval_request --> scope
+    approval_decision --> approval_request
+    approval_decision --> delegation_grant
+
     subgraph tool["Tool"]
         direction BT
         tool_profile["tool_profile"]
         tool_version["tool_version"]
         tool_egress_rule["tool_egress_rule"]
         agent_tool_binding["agent_tool_binding"]
+        tool_credential_binding["tool_credential_binding"]
     end
+    tool_credential_binding --> tool_profile
+    tool_credential_binding --> delegation_grant
     tool_version --> tool_profile
     agent_tool_binding --> tool_version
     tool_egress_rule --> tool_version
 
-    subgraph graph_module["Execution Graph"]
+    subgraph execution_graph_module["Execution Graph"]
         direction BT
         execution_graph["execution_graph"]
         execution_step["execution_step"]
@@ -186,6 +247,7 @@ flowchart RL
         usage_event["usage_event"]
         agent_run["agent_run"]
         agent_ops_event["agent_ops_event"]
+        agent_work_item["agent_work_item"]
     end
     session_snapshot --> step_checkpoint
     turn_dead_letter --> turn_queue
@@ -194,6 +256,9 @@ flowchart RL
     conversation_turn --> agent_conversation
     step_checkpoint --> conversation_turn
     usage_event --> conversation_turn
+    usage_event --> scope
+    agent_work_item --> delegation_grant
+    agent_work_item --> agent_work_item
     step_idempotency --> conversation_turn
     budget_reservation --> conversation_turn
 
@@ -265,6 +330,12 @@ flowchart RL
 | Hot session and graph entries | Cache backed by durable relational/object state |
 | Turn dispatch and reply frames | Durable queue and short-lived reply broker |
 | Embedding vectors | Tenant-partitioned vector index |
+| Compiled effective configuration | `effective_agent_release`, frozen at publication |
+| Governed decisions and their evidence | `audit_event` typed columns; redacted payloads in object storage |
+| Pending human decisions | `approval_request` / `approval_decision` |
+| Compiled effective configuration | `effective_agent_release`, frozen at publication |
+| Governed decisions and their evidence | `audit_event` typed columns; redacted payloads in object storage |
+| Pending human decisions | `approval_request` / `approval_decision` |
 | Provider credentials | keel secret provider |
 
 All relational identifiers are lowercase. Tenant-owned relations carry `tenant_id` through their primary or foreign keys. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
@@ -285,6 +356,17 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `agent_version` | `canary_agent_deployments` | `agent_deployment[]` |
 | `execution_step` | `outgoing_execution_transitions` | `execution_transition[]` |
 | `execution_step` | `incoming_execution_transitions` | `execution_transition[]` |
+| `configuration` | `child_scopes` | `scope[]` |
+| `configuration` | `config_scope_bindings` | `config_scope_binding[]` |
+| `agent_type` | `agent_type_versions` | `agent_type_version[]` |
+| `agent_type` | `typed_agent_profiles` | `agent_profile[]` |
+| `agent_version` | `agent_version_quarantines` | `agent_version_quarantine[]` |
+| `delegation_grant` | `grant_work_items` | `agent_work_item[]` |
+| `agent_work_item` | `child_work_items` | `agent_work_item[]` |
+| `agent_profile` | `agent_permissions` | `agent_permission[]` |
+| `authorization_role` | `permitted_agents` | `agent_permission[]` |
+| `approval_request` | `approval_decisions` | `approval_decision[]` |
+| `tool_profile` | `tool_credential_bindings` | `tool_credential_binding[]` |
 
 The YAML foreign-key definitions are the complete relationship-name registry. Any future `foreign_key_lookup` or `rest_api_child` seed must reference those names verbatim. Renaming one is an API compatibility change even when its columns do not change.
 
@@ -558,6 +640,270 @@ erDiagram
 
 Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions and actor/time metadata; it is omitted from the ER layout to preserve the authoring flow.
 
+## Principals, scopes, and effective configuration
+
+### Permission
+
+```mermaid
+erDiagram
+    agent_profile ||--o{ agent_permission : agent_permissions
+    authorization_role ||--o{ agent_permission : permitted_agents
+
+    agent_permission {
+        bigint tenant_id PK,FK
+        varchar agent_id PK,FK
+        varchar role_id PK,FK
+        timestamp begda PK
+        timestamp endda
+    }
+    authorization_role {
+        varchar id PK
+    }
+```
+
+### Scope
+
+```mermaid
+erDiagram
+    config_merge_mode ||--o{ config_scope_binding : merge_scoped_bindings
+    config_resource_kind ||--o{ config_scope_binding : kind_scoped_bindings
+    agent_tenant ||--o{ scope : scopes
+    config_scope_kind ||--o{ scope : kind_scopes
+    scope ||--o{ scope : child_scopes
+    scope ||--o{ config_scope_binding : config_scope_bindings
+    scope ||--o{ effective_agent_release : scope_effective_agent_releases
+    agent_version ||--o| effective_agent_release : effective_agent_releases
+
+    scope {
+        bigint tenant_id PK,FK
+        varchar scope_id PK
+        varchar parent_scope_id FK
+        varchar scope_kind_code FK
+    }
+    config_scope_binding {
+        bigint tenant_id PK,FK
+        varchar scope_id PK,FK
+        varchar resource_kind_code PK,FK
+        varchar resource_id PK
+        timestamp begda PK
+        timestamp endda
+        varchar resource_version
+        varchar merge_mode_code FK
+        boolean sealed
+        text value
+        char value_digest
+    }
+    effective_agent_release {
+        bigint tenant_id PK,FK
+        varchar agent_id PK,FK
+        varchar agent_version PK,FK
+        varchar scope_id FK
+        text payload
+        char payload_digest
+    }
+```
+
+`configuration` is a per-tenant tree whose `scope_kind_code` Scout never interprets — the product names its
+own levels and Scout seeds only the `tenant` root kind. One `config_scope_binding` table serves every
+resource kind, so adding a level or a kind adds rows, not tables. `sealed` is set by the binding's
+own scope, which is what makes a company clause genuinely non-overridable; a narrower scope that
+tries fails with `domain.ErrSealed`.
+
+`effective_agent_release` is the frozen result: `payload` carries every effective value with the
+provenance of the binding that won and of each binding it superseded, so the runtime pins one row
+instead of walking the chain per request, and an explain view never recompiles.
+
+`agent_permission` mirrors keel's `user_permission`, including `begda`/`endda`, so agents and humans
+resolve through the same `authorization_role_permission` grants and the same `low_limit`/`high_limit`
+bounds. Agents are deliberately not rows in `user_account`: that table carries interactive
+credentials — password, lockout, 2FA, device session — that no machine identity should inherit.
+[doc/authority.md](authority.md) records the full rationale and the compilation rules.
+
+## Governed decisions, approvals, and credentials
+
+```mermaid
+erDiagram
+    approval_status ||--o{ approval_request : status_approval_requests
+    scope ||--o{ approval_request : scope_approval_requests
+    agent_tenant ||--o{ approval_request : approval_requests
+    approval_request ||--o| approval_decision : approval_decisions
+    tool_profile ||--o{ tool_credential_binding : tool_credential_bindings
+    approval_decision }o--|| user_account : decided_approval_decisions
+    tool_credential_binding }o--|| user_account : delegated_credential_bindings
+    delegation_grant ||--o{ tool_credential_binding : grant_credential_bindings
+    agent_tenant ||--o{ audit_event : audit_events
+    audit_decision_outcome ||--o{ audit_event : outcome_audit_events
+
+    approval_request {
+        bigint id PK
+        bigint tenant_id FK
+        varchar request_id UK
+        bigint execution_step_id UK
+        varchar principal_kind
+        varchar principal_id
+        varchar approver_kind
+        varchar approver_id
+        varchar output_class_code FK
+        varchar risk_tier_code FK
+        char proposed_digest
+        varchar status_code FK
+        timestamp deadline_at
+    }
+    approval_decision {
+        bigint approval_request_id PK,FK
+        bigint tenant_id FK
+        varchar status_code FK
+        bigint decider_user_id FK
+        varchar decider_agent_id FK
+        varchar decider_service_id
+        varchar grant_id
+        char proposed_digest
+    }
+    tool_credential_binding {
+        bigint tenant_id PK,FK
+        varchar principal_kind PK
+        varchar principal_id PK
+        varchar tool_id PK,FK
+        varchar purpose PK
+        timestamp begda PK
+        timestamp endda
+        text credential_ref
+        bigint delegated_from_user_id FK
+        varchar grant_id FK
+        text scopes
+        timestamp revoked_at
+    }
+    audit_event {
+        bigint id PK
+        bigint tenant_id FK
+        varchar category
+        varchar principal_kind
+        varchar principal_id
+        varchar grant_id
+        varchar grantor_id
+        varchar scope_id FK
+        varchar performed_action
+        varchar resource_ref
+        varchar policy_id
+        varchar outcome_code FK
+        varchar obligations
+        text payload_uri
+    }
+```
+
+`approval_request` is unique on `(tenant_id, request_id, execution_step_id)`, so opening a request is
+idempotent and a replayed turn re-attaches instead of asking a person the same question twice.
+`proposed_digest` binds a verdict to the exact action: resolving matches on it, so approving a
+changed action updates nothing. `approval_decision` records the decider through three nullable
+identity columns with an exactly-one check; human and agent identities keep real declared foreign
+keys, while platform service decisions retain their stable service id.
+
+`tool_credential_binding` maps one principal to a scoped identity for one tool and purpose. It holds a
+`credential_ref` into keel's secret or OAuth-connection store — never secret material — so two agents
+sharing a tool version never share an identity, and `revoked_at` stops work whose delegation ended.
+Delegated bindings name the `delegation_grant` they exercise, so revoking or expiring that grant also
+invalidates the credential binding.
+
+`audit_event` is the governed decision itself: who acted, under whose authority, on what, under which
+policy, with what outcome and obligations. The payload columns hold only a reference to redacted
+evidence in object storage. `audit_decision_outcome` classifies every row, and the query side is
+`contract.AuditQuery`, always bound to one tenant. [doc/governance.md](governance.md) has the rules.
+
+## Agent types, delegation, and work items
+
+```mermaid
+erDiagram
+    agent_type ||--o{ agent_type_version : agent_type_versions
+    agent_type ||--o{ agent_profile : typed_agent_profiles
+    agent_type_version ||--o{ agent_type_capability : agent_type_capabilities
+    agent_capability_package ||--o{ agent_type_capability : package_agent_type_capabilities
+    agent_state ||--o{ agent_profile : state_agent_profiles
+    agent_version ||--o| agent_version_quarantine : agent_version_quarantines
+    agent_profile ||--o{ delegation_grant : grantee_delegation_grants
+    delegation_grant ||--o{ agent_work_item : grant_work_items
+    agent_work_item ||--o{ agent_work_item : child_work_items
+
+    agent_type_version {
+        bigint tenant_id PK,FK
+        varchar agent_type_id PK,FK
+        varchar type_version PK
+        text definition
+        char definition_digest
+        bigint published_by FK
+    }
+    agent_capability_package {
+        bigint tenant_id PK,FK
+        varchar package_id PK
+        varchar package_version PK
+        text payload
+        char payload_digest
+    }
+    agent_type_capability {
+        bigint tenant_id PK,FK
+        varchar agent_type_id PK,FK
+        varchar type_version PK,FK
+        varchar package_id PK,FK
+        varchar package_version FK
+        boolean is_required
+    }
+    agent_profile {
+        bigint tenant_id PK,FK
+        varchar agent_id PK
+        varchar agent_type_id FK
+        varchar agent_type_version FK
+        varchar state_code FK
+        varchar state_reason
+        varchar state_changed_by
+        timestamp state_changed_at
+    }
+    agent_version_quarantine {
+        bigint tenant_id PK,FK
+        varchar agent_id PK,FK
+        varchar agent_version PK,FK
+        varchar reason
+        varchar actor_id
+        timestamp lifted_at
+    }
+    delegation_grant {
+        bigint tenant_id PK,FK
+        varchar grant_id PK
+        varchar grantor_kind
+        bigint grantor_user_id FK
+        varchar grantor_agent_id FK
+        varchar grantee_agent_id FK
+        varchar action_scope
+        smallint max_depth
+        bigint budget_minor_units
+        timestamp begda
+        timestamp endda
+        timestamp revoked_at
+    }
+    agent_work_item {
+        bigint id PK
+        bigint tenant_id FK
+        varchar assignee_id
+        varchar requester_id
+        varchar grant_id FK
+        bigint parent_work_item_id FK
+        smallint depth
+        varchar request_id UK
+        varchar status_code FK
+    }
+```
+
+`agent_profile.agent_type_id` is a real foreign key; it was a bare `VARCHAR` naming nothing. The
+column is called `agent_type_id` everywhere now, replacing `agent_kind`, which also matches the
+`agent_type` field the studio-v1 wire format already used.
+
+`state_code` replaces the old `is_active` boolean and carries the reason, actor, and time of the last
+change. `agent_version_quarantine` withdraws one version from all traffic without editing the
+deployment pointers that would otherwise select it.
+
+`delegation_grant` records who may assign or approve what, for how deep, under what budget, and until
+when. `agent_work_item` is unique on `(tenant_id, request_id)` so a redelivered delegation re-attaches
+rather than fanning out, and `parent_work_item_id` gives the chain that cycle detection walks.
+[doc/organization.md](organization.md) has the rules.
+
 ## Knowledge
 
 ```mermaid
@@ -701,13 +1047,27 @@ erDiagram
 erDiagram
     business_partner ||--o{ agent_ops_event : tenant_agent_ops_events
 
+    agent_ops_event {
+        bigint id PK
+        bigint tenant_id FK
+        varchar event
+        text detail
+        timestamp occurred_at
+    }
+    business_partner {
+        bigint id PK
+    }
+```
+
+### Agent Ops Events per partner
+
+```mermaid
+erDiagram
     agent_tenant ||--o{ agent_conversation : conversations
     agent_version ||--o{ agent_conversation : agent_version_conversations
-    agent_conversation ||--|{ conversation_turn : conversation_turns
-    turn_status ||--o{ conversation_turn : status_conversation_turns
-    conversation_turn ||--o{ step_checkpoint : step_checkpoints
     agent_conversation ||--o| session_snapshot : session_snapshots
-    step_checkpoint ||--o| session_snapshot : checkpoint_session_snapshots
+    session_snapshot |o--|| step_checkpoint : checkpoint_session_snapshots
+    conversation_turn ||--o{ step_checkpoint : step_checkpoints
     conversation_turn ||--o{ step_idempotency : step_idempotencies
     step_checkpoint }o--|| execution_step : execution_step_checkpoints
     step_idempotency }o--|| execution_step : execution_step_idempotencies
@@ -716,12 +1076,14 @@ erDiagram
     budget_reservation }o--|| reservation_status : status_budget_reservations
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
     conversation_turn ||--o{ usage_event : usage_events
+    usage_event }o--|| usage_category : category_usage_events
+    agent_conversation ||--|{ conversation_turn : conversation_turns
+    turn_status ||--o{ conversation_turn : status_conversation_turns
     conversation_turn ||--o| conversation_turn_detail : conversation_turn_details
     conversation_turn ||--o{ turn_dead_letter : dead_letter_turns
-    conversation_turn ||--o| turn_queue : turn_queue_turns
+    turn_queue |o--|| conversation_turn : turn_queue_turns
     agent_conversation ||--o{ turn_queue : turn_queue_entries
     turn_queue ||--o| turn_dead_letter : dead_letter_queue_entries
-    usage_event }o--|| usage_category : category_usage_events
     agent_version ||--o{ agent_run : agent_run_versions
 
     agent_tenant {
@@ -827,16 +1189,6 @@ erDiagram
         varchar task_kind
         timestamp completed_at
     }
-    agent_ops_event {
-        bigint id PK
-        bigint tenant_id FK
-        varchar event
-        text detail
-        timestamp occurred_at
-    }
-    business_partner {
-        bigint id PK
-    }
     turn_queue {
         bigint id PK
         bigint tenant_id FK
@@ -880,11 +1232,11 @@ Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enf
 ```mermaid
 erDiagram
     tenant_ring ||--o{ platform_rollout : ring_platform_rollouts
-    agent_version ||--o{ contract_test_case : contract_test_cases
     platform_release ||--o{ platform_rollout : platform_rollouts
     platform_release ||--o{ contract_test_run : contract_test_runs
     contract_test_run ||--|{ contract_test_result : contract_test_results
-    contract_test_case ||--o{ contract_test_result : case_test_results
+    contract_test_result }o--|| contract_test_case : case_test_results
+    contract_test_case }o--|| agent_version : contract_test_cases
     platform_rollout }o--|| rollout_status : status_platform_rollouts
     tenant_ring ||--o{ tenant_ring_member : ring_members
     tenant_ring_member |o--|| agent_tenant : tenant_ring_members
@@ -1129,7 +1481,7 @@ erDiagram
         varchar provenance
         varchar consent_class
         varchar retention_class
-        varchar risk_tier
+        varchar approval_risk_tier
         varchar domain_code
         varchar language_code
         text payload_uri
@@ -1197,7 +1549,7 @@ erDiagram
         bigint id PK
         bigint run_id FK
         varchar example_id FK
-        varchar risk_tier
+        varchar approval_risk_tier
         varchar status_code
         varchar reviewer
         varchar verdict
@@ -1225,18 +1577,21 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 
 | Module | Tables |
 |---|---|
-| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category` |
+| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state` |
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_price`, `tenant_model_access` |
-| `agent` | `agent_profile`, `guardrail_config`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_prompt_override`, `tenant_prompt_default`, `agent_version`, `agent_deployment` |
-| `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding` |
-| `graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
+| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_prompt_override`, `tenant_prompt_default`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
+| `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
+| `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
-| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event` |
+| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
+| `agent_authorization` | `agent_permission`, `delegation_grant` |
+| `configuration` | `configuration`, `config_scope_binding`, `effective_agent_release` |
+| `approval` | `approval_request`, `approval_decision` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them
 cannot accept a row until they hold values — Scout seeds them all. `prompt_section`
