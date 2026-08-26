@@ -7,7 +7,7 @@ tool github.com/nauticana/keel/cmd/schemagen
 require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/mark3labs/mcp-go v0.46.0
-	github.com/nauticana/keel v1.2.53
+	github.com/nauticana/keel v1.2.54
 	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.67.0
 )
@@ -78,6 +78,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.9.2 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/nyaruka/phonenumbers v1.7.2 // indirect
 	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect
