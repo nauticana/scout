@@ -184,7 +184,7 @@ func allConfigQueryRows(t *testing.T) [][]any {
 	}
 	queryRows := make([][]any, 0, len(rows))
 	for id, row := range rows {
-		queryRows = append(queryRows, []any{id, row.Value, row.Default})
+		queryRows = append(queryRows, []any{id, row.Value, row.Default, "default"})
 	}
 	return queryRows
 }
