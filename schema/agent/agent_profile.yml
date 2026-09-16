@@ -5,6 +5,7 @@ columns:
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
+    comment: The exact stable Charter AgentIdentity id; agent_permission grants are keyed by it
   - name: agent_type_id
     type: VARCHAR(80)
   - name: agent_type_version

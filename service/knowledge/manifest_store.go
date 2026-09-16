@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -99,7 +100,7 @@ func (store *ManifestStore) Activate(ctx context.Context, manifest domain.Knowle
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	if _, err = tx.Query(ctx, qManifestLock, manifestLockKey(manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID)); err != nil {

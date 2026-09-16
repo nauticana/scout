@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -48,7 +49,7 @@ type Runner struct {
 	Now            func() time.Time
 
 	once  sync.Once
-	cache *lru.Cache[string, domain.JudgeVerdict]
+	cache *keelcache.LRU[string, domain.JudgeVerdict]
 }
 
 var _ contract.EvaluationRunner = (*Runner)(nil)
@@ -97,7 +98,7 @@ func (runner *Runner) Run(ctx context.Context, manifest domain.EvaluationManifes
 		if size == 0 {
 			size = 1024
 		}
-		runner.cache = lru.New[string, domain.JudgeVerdict](size, runner.now)
+		runner.cache = keelcache.NewLRU[string, domain.JudgeVerdict](size, clk.Of(runner.now))
 	})
 	scope := runner.Scope
 	if scope == "" {

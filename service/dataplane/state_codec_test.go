@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 func newObjectStateStore(storage *fake.ObjectStorage) *ObjectStateStore {

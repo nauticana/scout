@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 func healthEvaluator(latest func(context.Context, string) (domain.GateDecision, error), online domain.OnlineMetrics) *GateHealthEvaluator {

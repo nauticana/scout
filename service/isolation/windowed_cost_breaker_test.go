@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	keellimiter "github.com/nauticana/keel/limiter"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/limiter"
 )
 
 func TestWindowedCostBreakerTripsPerScope(t *testing.T) {
@@ -24,7 +24,7 @@ func TestWindowedCostBreakerTripsPerScope(t *testing.T) {
 	if err := breaker.Record(ctx, 1, "writer", usage(50)); err != nil {
 		t.Fatal(err)
 	}
-	var limitErr *limiter.LimitError
+	var limitErr *keellimiter.LimitError
 	err := breaker.Allow(ctx, 1, "writer", 20)
 	if !errors.As(err, &limitErr) || !errors.Is(err, domain.ErrCircuitOpen) || limitErr.Scope != "cost.agent" {
 		t.Fatalf("agent trip = %v", err)

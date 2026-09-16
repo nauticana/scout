@@ -7,11 +7,14 @@ package principal
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
 
+	charterkeel "github.com/nauticana/charter/sdk/adapter/keel"
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
@@ -19,38 +22,13 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-const (
-	qAgentAuthorization = "scout_agent_authorization"
-	qUserAuthorization  = "scout_user_authorization"
-	qAgentPrincipal     = "scout_agent_principal"
-)
+const qAgentPrincipal = "scout_agent_principal"
 
-// The two authorization queries differ only in their assignment table, so the
-// low/high limit and bypass semantics stay one implementation.
+// agentGrants is where an agent or service principal's role grants live. keel
+// generates the lookup SQL from it, so agents and humans cannot drift apart.
+var agentGrants = keeldata.GrantSource{Table: "agent_permission", Subject: "agent_id", Filters: []string{"tenant_id"}}
+
 var principalQueries = map[string]string{
-	qAgentAuthorization: `
-SELECT a.low_limit, a.high_limit, a.bypass_scope
-  FROM agent_permission p, authorization_role_permission a
- WHERE p.role_id = a.role_id
-   AND p.begda <= CURRENT_TIMESTAMP
-   AND (p.endda IS NULL OR p.endda >= CURRENT_TIMESTAMP)
-   AND a.is_active IS TRUE
-   AND a.authorization_object_id = ?
-   AND a.action = ?
-   AND p.tenant_id = ?
-   AND p.agent_id = ?
-   AND (a.low_limit = ? OR a.low_limit = '*')`,
-	qUserAuthorization: `
-SELECT a.low_limit, a.high_limit, a.bypass_scope
-  FROM user_permission p, authorization_role_permission a
- WHERE p.role_id = a.role_id
-   AND p.begda <= CURRENT_TIMESTAMP
-   AND (p.endda IS NULL OR p.endda >= CURRENT_TIMESTAMP)
-   AND a.is_active IS TRUE
-   AND a.authorization_object_id = ?
-   AND a.action = ?
-   AND p.user_id = ?
-   AND (a.low_limit = ? OR a.low_limit = '*')`,
 	qAgentPrincipal: `
 SELECT p.agent_type_id, p.state_code, d.stable_version
   FROM agent_profile p
@@ -62,20 +40,74 @@ SELECT p.agent_type_id, p.state_code, d.stable_version
 // kind. A wildcard grant returns BypassScope; an exact grant is value-scoped.
 type RoleAuthorizer struct {
 	DB keelport.DatabaseRepository
+	// Grants resolves each kind's grant SQL; nil registers Scout's agent and
+	// service kinds on a fresh keel catalog.
+	Grants keelport.GrantCatalog
 
-	once sync.Once
-	qs   keelport.QueryService
+	once    sync.Once
+	qs      keelport.QueryService
+	initErr error
+}
+
+// newGrantCatalog registers Scout's non-human kinds alongside keel's human one.
+func newGrantCatalog() (keelport.GrantCatalog, error) {
+	catalog := keeldata.NewGrantCatalog()
+	// Agents register under Charter's kind so a Charter PermissionGate and Scout
+	// evaluate the same grants; services are Scout-only and share the table.
+	for _, kind := range []keelmodel.PrincipalKind{charterkeel.AgentPrincipalKind, keelmodel.PrincipalKind(domain.PrincipalService)} {
+		if err := catalog.Register(kind, agentGrants); err != nil {
+			return nil, err
+		}
+	}
+	return catalog, nil
 }
 
 func (a *RoleAuthorizer) init(ctx context.Context) error {
 	if a.DB == nil {
 		return fmt.Errorf("role authorizer: database is required")
 	}
-	a.once.Do(func() { a.qs = a.DB.GetQueryService(ctx, principalQueries) })
+	a.once.Do(func() {
+		if a.Grants == nil {
+			catalog, err := newGrantCatalog()
+			if err != nil {
+				a.initErr = fmt.Errorf("role authorizer: %w", err)
+				return
+			}
+			a.Grants = catalog
+		}
+		queries := make(map[string]string, len(principalQueries)+6)
+		maps.Copy(queries, principalQueries)
+		maps.Copy(queries, a.Grants.Queries())
+		a.qs = a.DB.GetQueryService(ctx, queries)
+	})
+	if a.initErr != nil {
+		return a.initErr
+	}
 	if a.qs == nil {
 		return fmt.Errorf("role authorizer: query service is required")
 	}
 	return nil
+}
+
+// keelPrincipal maps a Scout principal onto the subject keel binds into the
+// grant query. A human is keel's built-in kind, keyed by user_account.id.
+func keelPrincipal(principal domain.Principal) (keelmodel.Principal, error) {
+	switch principal.Kind {
+	case domain.PrincipalAgent, domain.PrincipalService:
+		return keelmodel.Principal{
+			Kind:  keelmodel.PrincipalKind(principal.Kind),
+			ID:    principal.ID,
+			Scope: []any{principal.TenantID},
+		}, nil
+	case domain.PrincipalHuman:
+		userID, err := strconv.ParseInt(principal.ID, 10, 64)
+		if err != nil {
+			return keelmodel.Principal{}, fmt.Errorf("%w: human principal id must be a user account id", domain.ErrValidation)
+		}
+		return keelmodel.Principal{Kind: keelmodel.PrincipalUser, ID: userID}, nil
+	default:
+		return keelmodel.Principal{}, fmt.Errorf("%w: unknown principal kind %q", domain.ErrValidation, principal.Kind)
+	}
 }
 
 // Authorize evaluates principal against one object, action, and scope value.
@@ -90,20 +122,16 @@ func (a *RoleAuthorizer) Authorize(ctx context.Context, principal domain.Princip
 		return domain.AuthorizationGrant{}, fmt.Errorf("%w: authorization object and action are required", domain.ErrValidation)
 	}
 
-	var result *keelmodel.QueryResult
-	var err error
-	switch principal.Kind {
-	case domain.PrincipalAgent, domain.PrincipalService:
-		result, err = a.qs.Query(ctx, qAgentAuthorization, object, action, principal.TenantID, principal.ID, value)
-	case domain.PrincipalHuman:
-		userID, convErr := strconv.ParseInt(principal.ID, 10, 64)
-		if convErr != nil {
-			return domain.AuthorizationGrant{}, fmt.Errorf("%w: human principal id must be a user account id", domain.ErrValidation)
-		}
-		result, err = a.qs.Query(ctx, qUserAuthorization, object, action, userID, value)
-	default:
-		return domain.AuthorizationGrant{}, fmt.Errorf("%w: unknown principal kind %q", domain.ErrValidation, principal.Kind)
+	subject, err := keelPrincipal(principal)
+	if err != nil {
+		return domain.AuthorizationGrant{}, err
 	}
+	args, err := a.Grants.Args(subject)
+	if err != nil {
+		return domain.AuthorizationGrant{}, fmt.Errorf("%w: %s", domain.ErrValidation, err)
+	}
+	args = append([]any{object, action}, append(args, value)...)
+	result, err := a.qs.Query(ctx, a.Grants.CheckQuery(subject.Kind), args...)
 	if err != nil {
 		return domain.AuthorizationGrant{}, fmt.Errorf("check authorization: %w", err)
 	}

@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -38,7 +39,7 @@ type SamplingPolicyEnforcer struct {
 	once     sync.Once
 	mu       sync.Mutex
 	random   *rand.Rand
-	counters *lru.Cache[int64, *sampleWindow]
+	counters *keelcache.LRU[int64, *sampleWindow]
 }
 
 type sampleWindow struct {
@@ -67,7 +68,7 @@ func (enforcer *SamplingPolicyEnforcer) init() error {
 		if size == 0 {
 			size = 10000
 		}
-		enforcer.counters = lru.New[int64, *sampleWindow](size, enforcer.now)
+		enforcer.counters = keelcache.NewLRU[int64, *sampleWindow](size, clk.Of(enforcer.now))
 		enforcer.random = rand.New(rand.NewPCG(uint64(enforcer.Seed), uint64(enforcer.Seed)^0x5851f42d4c957f2d))
 	})
 	return nil

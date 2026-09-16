@@ -31,7 +31,7 @@ Per example: heuristics first (deterministic, no model call), then the judge, th
 routing. `GatewayJudge` sees rubric, expected behavior, evidence, and two outputs
 labelled A and B in a seed-derived order computed from the content digests alone —
 never from the role — and its scores are mapped back to roles afterwards. Judge
-verdicts are cached in a bounded `internal/lru` keyed by the blinded input digest,
+verdicts are cached in a bounded keel `cache.LRU` keyed by the blinded input digest,
 so replays cost nothing. Low judge confidence, heuristic/judge disagreement above
 half a scale point, and configured high-risk tiers route the pair to
 `HumanReviewQueue`; the results still record the reason.

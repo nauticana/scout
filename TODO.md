@@ -155,7 +155,7 @@ Shipped: `KnowledgeQuery` with principal/entitlements/digest/budget, `knowledge.
 - [x] `service/knowledge/ingest_pipeline.go`: load+verify digest → decode/chunk → embed (via `BatchingEmbedder`) → index+persist, bounded handoff channels, per-stage worker counts, correlated per-document results.
 - [x] Bulk contract (`IngestBatch`) alongside per-document `Ingest`; systemic error cancels batch, isolated bad document records terminal item result.
 - [x] Idempotency key tenant+knowledge version+document+content digest.
-- [x] `cmd`-less: Scout ships the pipeline; downstream wires the keel Worker binary. Provide a reference Worker composition in `internal/fake` or docs.
+- [x] `cmd`-less: Scout ships the pipeline; downstream wires the keel Worker binary. Provide a reference Worker composition in `fake` or docs.
 - [x] Chunk content in object storage; relational chunk metadata + vector refs published atomically only after successful index; reconciliation for partial writes.
 
 ### K4 — Manifest versioning, tombstones, alias swap (HIGH)
@@ -308,5 +308,5 @@ The schema is fifteen selectable modules (`catalog`, `tenancy`, `prompt`, `model
 ## Remaining
 
 - **K7** — HANA vector adapter, on demand only; the trigger criteria are recorded above.
-- **Upstream keel** — `cache.CacheService` needs one atomic multi-scope admission primitive so `DistributedTenantRateLimiter` can charge tenant and fleet scopes in a single round trip. Until it exists, the limiter charges tenant then fleet and compensates on rejection, which leaves a documented over-admission window equal to the number of in-flight admissions.
+- ~~**Upstream keel** — atomic multi-scope admission~~ Closed 2026-09-12: keel v1.2.62 ships `cache.MultiScopeAdmitter` and `DistributedTenantRateLimiter` charges tenant and fleet as one decision; the over-admission window is gone.
 - **Schema** — `model_definition` has no model version, region, or quality-class column, so `TableCandidateCatalog` derives one route per model, takes the region from the deployment, and treats every model as one quality class. Routing by version, region, or quality needs those columns or a `model_route` child table.

@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/nauticana/keel/clock"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/stage"
@@ -122,14 +123,7 @@ func (gateway *ResilientGateway) sleep(ctx context.Context, delay time.Duration)
 	if gateway.Sleep != nil {
 		return gateway.Sleep(ctx, delay)
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return clock.System{}.Sleep(ctx, delay)
 }
 
 // backoff waits RetryBackoff·2^(attempt-1) scaled by a jitter fraction, capped by the budget left.

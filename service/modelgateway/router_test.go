@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 var routerNow = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)

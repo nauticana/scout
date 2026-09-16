@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // MemoryLoopDetector flags a conversation when one step fingerprint repeats past a threshold.
@@ -27,14 +28,14 @@ type MemoryLoopDetector struct {
 
 	once   sync.Once
 	mu     sync.Mutex
-	states *lru.Cache[string, map[string]int]
+	states *keelcache.LRU[string, map[string]int]
 }
 
 var _ contract.LoopDetector = (*MemoryLoopDetector)(nil)
 
 func (detector *MemoryLoopDetector) init() {
 	detector.once.Do(func() {
-		detector.states = lru.New[string, map[string]int](detector.MaxConversations, detector.Now)
+		detector.states = keelcache.NewLRU[string, map[string]int](detector.MaxConversations, clk.Of(detector.Now))
 	})
 }
 

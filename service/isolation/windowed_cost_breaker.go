@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
+	keellimiter "github.com/nauticana/keel/limiter"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/limiter"
 )
 
 // WindowedCostBreaker trips tenant, agent, and fleet scopes when cost inside a sliding window exceeds its limit.
@@ -81,16 +81,16 @@ func (breaker *WindowedCostBreaker) Allow(ctx context.Context, tenantID int64, a
 	defer breaker.mu.Unlock()
 	retry := breaker.Window
 	if breaker.FleetLimit > 0 && exceedsCost(breaker.fleet.total(now, slot), projectedCostMinorUnits, breaker.FleetLimit) {
-		return &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.fleet", After: retry}
+		return &keellimiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.fleet", After: retry}
 	}
 	if breaker.TenantLimit > 0 {
 		if w := breaker.tenants[tenantID]; w != nil && exceedsCost(w.total(now, slot), projectedCostMinorUnits, breaker.TenantLimit) {
-			return &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.tenant", After: retry}
+			return &keellimiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.tenant", After: retry}
 		}
 	}
 	if breaker.AgentLimit > 0 {
 		if w := breaker.agents[agentKey(tenantID, agentID)]; w != nil && exceedsCost(w.total(now, slot), projectedCostMinorUnits, breaker.AgentLimit) {
-			return &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.agent", After: retry}
+			return &keellimiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "cost.agent", After: retry}
 		}
 	}
 	if err := breaker.reserveTrackingLocked(now, slot, tenantID, agentID); err != nil {
@@ -191,10 +191,10 @@ func (breaker *WindowedCostBreaker) reserveTrackingLocked(now time.Time, slot ti
 		missingAgent = breaker.AgentLimit > 0 && breaker.agents[agentWindowKey] == nil
 	}
 	if missingTenant && len(breaker.tenants) >= breaker.maxEntries() {
-		return &limiter.LimitError{Err: domain.ErrRateLimited, Scope: "cost.tenant.capacity", After: breaker.Window}
+		return &keellimiter.LimitError{Err: domain.ErrRateLimited, Scope: "cost.tenant.capacity", After: breaker.Window}
 	}
 	if missingAgent && len(breaker.agents) >= breaker.maxEntries() {
-		return &limiter.LimitError{Err: domain.ErrRateLimited, Scope: "cost.agent.capacity", After: breaker.Window}
+		return &keellimiter.LimitError{Err: domain.ErrRateLimited, Scope: "cost.agent.capacity", After: breaker.Window}
 	}
 	if missingTenant {
 		breaker.tenants[tenantID] = newCostWindow(breaker.Buckets)

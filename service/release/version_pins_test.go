@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 func pinnedManager(pins []domain.VersionPin, cohort *domain.ExperimentCohort) (*PinnedTrafficManager, *fake.RecordingAuditSink) {

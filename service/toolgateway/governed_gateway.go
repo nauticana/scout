@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nauticana/keel/clock"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/stage"
@@ -26,6 +27,8 @@ type GovernedGateway struct {
 	// Guardrails is optional; when set, GuardrailConfigs is required and both tool stages are enforced.
 	Guardrails       contract.GuardrailEnforcer
 	GuardrailConfigs contract.ToolGuardrailConfigResolver
+	// Clock paces retry waits; nil uses the system clock.
+	Clock clock.Clock
 	// Classifier decides which failures reach the breaker; nil counts every failure except
 	// cancellation and typed tenant, authorization, and rate-limit errors.
 	Classifier contract.ToolFailureClassifier
@@ -126,7 +129,7 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 		if !retry {
 			return result, callErr
 		}
-		if err := waitForRetry(ctx, delay); err != nil {
+		if err := gateway.waitForRetry(ctx, delay); err != nil {
 			return result, errors.Join(callErr, err)
 		}
 	}
@@ -250,18 +253,11 @@ var validationProbe = domain.ToolCall{
 	RequestID:     "probe", ToolID: "probe", ToolVersion: "probe",
 }
 
-func waitForRetry(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return ctx.Err()
+func (gateway *GovernedGateway) waitForRetry(ctx context.Context, delay time.Duration) error {
+	if gateway.Clock == nil {
+		return clock.System{}.Sleep(ctx, delay)
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return gateway.Clock.Sleep(ctx, delay)
 }
 
 var _ contract.GovernedToolGateway = (*GovernedGateway)(nil)

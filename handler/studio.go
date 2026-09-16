@@ -347,10 +347,30 @@ func (h *StudioHandler) write(w http.ResponseWriter, result any, err error) {
 	}
 	var apiErr *keelhandler.APIError
 	if errors.As(err, &apiErr) {
+		for key, values := range apiErr.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
 		h.WriteError(w, apiErr.Status, http.StatusText(apiErr.Status), apiErr.Msg)
 		return
 	}
 	h.WriteError(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+}
+
+// withErrorHeaders carries a typed error's advisory headers onto the API error
+// that replaces it, so the status mapping does not discard them.
+func withErrorHeaders(apiErr *keelhandler.APIError, err error) *keelhandler.APIError {
+	var carrier keelhandler.HeaderCarrier
+	if !errors.As(err, &carrier) {
+		return apiErr
+	}
+	for key, values := range carrier.ErrorHeaders() {
+		for _, value := range values {
+			apiErr = apiErr.WithHeader(key, value)
+		}
+	}
+	return apiErr
 }
 
 func mapStudioError(result any, err error) (any, error) {
@@ -381,9 +401,9 @@ func mapStudioError(result any, err error) (any, error) {
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict):
 		return nil, keelhandler.NewAPIError(http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrRateLimited), errors.Is(err, domain.ErrBudgetExceeded):
-		return nil, keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error())
+		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error()), err)
 	case errors.Is(err, domain.ErrNotReady), errors.Is(err, domain.ErrCircuitOpen):
-		return nil, keelhandler.NewAPIError(http.StatusServiceUnavailable, err.Error())
+		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusServiceUnavailable, err.Error()), err)
 	default:
 		return result, err
 	}

@@ -254,13 +254,7 @@ func firstBound(parent, child string) string {
 }
 
 func inForce(grant domain.DelegationGrant, now time.Time) bool {
-	if !grant.RevokedAt.IsZero() {
-		return false
-	}
-	if !grant.ValidFrom.IsZero() && now.Before(grant.ValidFrom) {
-		return false
-	}
-	return grant.ValidTo.IsZero() || now.Before(grant.ValidTo)
+	return grant.RevokedAt.IsZero() && common.Period{From: grant.ValidFrom, To: grant.ValidTo}.Contains(now)
 }
 
 // actionCovered matches exactly or on a single trailing "*", like policy actions.

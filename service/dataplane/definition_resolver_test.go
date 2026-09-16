@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 func TestDefinitionResolverReturnsCacheHit(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -152,7 +153,7 @@ func (collector *GarbageCollector) reclaim(ctx context.Context, snapshot gcManif
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	if _, err = tx.Query(ctx, qGCLock, manifestLockKey(snapshot.tenantID, snapshot.knowledgeBaseID, snapshot.documentID)); err != nil {

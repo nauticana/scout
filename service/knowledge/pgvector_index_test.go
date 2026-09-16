@@ -11,7 +11,7 @@ import (
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 type pgQueryFake struct {

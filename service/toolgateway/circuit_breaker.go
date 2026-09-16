@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
+	keellimiter "github.com/nauticana/keel/limiter"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/limiter"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // ErrInvalidToolOutput marks a tool response that failed its registered output contract.
@@ -70,8 +71,8 @@ type circuit struct {
 type CircuitBreaker struct {
 	config       CircuitBreakerConfig
 	mu           sync.Mutex
-	entries      *lru.Cache[string, *circuit]
-	destinations *lru.Cache[string, *circuit]
+	entries      *keelcache.LRU[string, *circuit]
+	destinations *keelcache.LRU[string, *circuit]
 }
 
 var (
@@ -93,9 +94,9 @@ func NewCircuitBreaker(config CircuitBreakerConfig) (*CircuitBreaker, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	breaker := &CircuitBreaker{config: config, entries: lru.New[string, *circuit](config.MaxEntries, config.Now)}
+	breaker := &CircuitBreaker{config: config, entries: keelcache.NewLRU[string, *circuit](config.MaxEntries, clk.Of(config.Now))}
 	if config.SharedDestinationHealth {
-		breaker.destinations = lru.New[string, *circuit](config.MaxDestinations, config.Now)
+		breaker.destinations = keelcache.NewLRU[string, *circuit](config.MaxDestinations, clk.Of(config.Now))
 	}
 	return breaker, nil
 }
@@ -202,7 +203,7 @@ func (breaker *CircuitBreaker) State(tenantID int64, toolID string) (state strin
 	return entry.state.String(), entry.generation
 }
 
-func (breaker *CircuitBreaker) admitLocked(cache *lru.Cache[string, *circuit], key, scope string, now time.Time) (int64, error) {
+func (breaker *CircuitBreaker) admitLocked(cache *keelcache.LRU[string, *circuit], key, scope string, now time.Time) (int64, error) {
 	entry, ok := cache.Get(key)
 	if !ok {
 		entry = &circuit{windowStart: now}
@@ -215,14 +216,14 @@ func (breaker *CircuitBreaker) admitLocked(cache *lru.Cache[string, *circuit], k
 	case stateOpen:
 		remaining := entry.openedAt.Add(breaker.config.OpenDuration).Sub(now)
 		if remaining > 0 {
-			return 0, &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: scope, After: remaining}
+			return 0, &keellimiter.LimitError{Err: domain.ErrCircuitOpen, Scope: scope, After: remaining}
 		}
 		entry.state, entry.probing = stateHalfOpen, true
 		entry.generation++
 		return entry.generation, nil
 	default:
 		if entry.probing {
-			return 0, &limiter.LimitError{Err: domain.ErrCircuitOpen, Scope: scope + ".probe", After: breaker.config.OpenDuration}
+			return 0, &keellimiter.LimitError{Err: domain.ErrCircuitOpen, Scope: scope + ".probe", After: breaker.config.OpenDuration}
 		}
 		entry.probing = true
 		return entry.generation, nil
@@ -268,7 +269,7 @@ func (breaker *CircuitBreaker) expireWindowLocked(entry *circuit, now time.Time)
 }
 
 // releaseProbeLocked undoes a destination probe admission when the tenant circuit rejected the same call.
-func (breaker *CircuitBreaker) releaseProbeLocked(cache *lru.Cache[string, *circuit], endpoint string) {
+func (breaker *CircuitBreaker) releaseProbeLocked(cache *keelcache.LRU[string, *circuit], endpoint string) {
 	host, err := destinationHost(endpoint)
 	if err != nil {
 		return

@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nauticana/keel/common"
 	keelhandler "github.com/nauticana/keel/handler"
-	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -66,39 +64,25 @@ type BaseCallerResolver struct {
 func (resolver BaseCallerResolver) Resolve(ctx context.Context) (domain.MCPCaller, error) {
 	transport := TransportFromContext(ctx)
 	caller := domain.MCPCaller{
-		TenantID:     identifier(ctx, common.PartnerID),
-		CredentialID: identifier(ctx, common.ApiKeyID),
-		Subject:      common.AsString(ctx.Value(common.Subject)),
-		Scopes:       scopesFromContext(ctx),
-		SessionID:    sessionFromContext(ctx),
-		ClientIP:     keelhandler.ClientIPFromContext(ctx),
-		Transport:    transport,
+		SessionID:   sessionFromContext(ctx),
+		ClientIP:    keelhandler.ClientIPFromContext(ctx),
+		Transport:   transport,
+		HostTrusted: resolver.TrustHost && transport == domain.MCPTransportStdio,
+	}
+	// keel decides who the caller is: an unauthenticated context is an error there, not an empty identity.
+	session, err := common.CallerSessionFromContext(ctx)
+	if err == nil {
+		caller.TenantID, caller.CredentialID = session.PartnerID, session.APIKeyID
+		caller.Subject, caller.Scopes = session.Subject, session.Scopes
+		caller.Authenticated = true
 	}
 	if resolver.ActorID != nil {
 		caller.ActorID = resolver.ActorID(ctx)
 	}
-	caller.Authenticated = caller.Subject != "" || caller.CredentialID != 0
-	caller.HostTrusted = resolver.TrustHost && transport == domain.MCPTransportStdio
 	if !caller.Authenticated && !caller.HostTrusted {
-		return caller, fmt.Errorf("%w: mcp %q transport requires an authenticated caller", domain.ErrUnauthorized, transport)
+		return caller, fmt.Errorf("%w: mcp %q transport requires an authenticated caller: %w", domain.ErrUnauthorized, transport, err)
 	}
 	return caller, nil
-}
-
-// identifier reads a keel identity key. An absent key is zero, never the -1
-// sentinel common.AsInt64 returns for unknown values.
-func identifier(ctx context.Context, key common.ContextKey) int64 {
-	value, _ := common.AsInt64OK(ctx.Value(key))
-	return value
-}
-
-func scopesFromContext(ctx context.Context) []string {
-	if principal, ok := ctx.Value(common.AuthPrincipal).(*keelport.Principal); ok && principal != nil {
-		return principal.Scopes
-	}
-	return strings.FieldsFunc(common.AsString(ctx.Value(common.Scopes)), func(r rune) bool {
-		return r == ' ' || r == ','
-	})
 }
 
 func sessionFromContext(ctx context.Context) string {

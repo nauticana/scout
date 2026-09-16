@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	keelport "github.com/nauticana/keel/port"
+	keeldata "github.com/nauticana/keel/data"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -131,7 +131,7 @@ func (store *ResultStore) PutResults(ctx context.Context, tenantID int64, runID 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	set, err := tx.Query(ctx, qRunGetSet, tenantID, runID)

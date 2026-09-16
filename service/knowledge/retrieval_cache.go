@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/internal/singleflight"
 )
 
@@ -62,7 +63,7 @@ type CachedRetriever struct {
 	inner  contract.KnowledgeRetriever
 	keyer  RetrievalCacheKeyer
 	config CachedRetrieverConfig
-	cache  *lru.Cache[string, domain.KnowledgeResult]
+	cache  *keelcache.LRU[string, domain.KnowledgeResult]
 
 	flights singleflight.Group[string, domain.KnowledgeResult]
 
@@ -92,7 +93,7 @@ func NewCachedRetriever(inner contract.KnowledgeRetriever, keyer RetrievalCacheK
 		inner:       inner,
 		keyer:       keyer,
 		config:      config,
-		cache:       lru.New[string, domain.KnowledgeResult](config.Capacity, config.Now),
+		cache:       keelcache.NewLRU[string, domain.KnowledgeResult](config.Capacity, clk.Of(config.Now)),
 		generations: make(map[retrievalCacheScopeKey]uint64),
 	}, nil
 }

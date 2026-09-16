@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
-	keelport "github.com/nauticana/keel/port"
+	keeldata "github.com/nauticana/keel/data"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -52,7 +52,7 @@ func (store *ManifestStore) Put(ctx context.Context, manifest domain.EvaluationM
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	existing, err := tx.Query(ctx, qManifestGet, manifest.TenantID, manifest.ManifestID)

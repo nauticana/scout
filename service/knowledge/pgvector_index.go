@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
@@ -239,7 +240,7 @@ func (index *PgVectorIndex) Index(ctx context.Context, items []domain.ChunkEmbed
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	for i, args := range rows {

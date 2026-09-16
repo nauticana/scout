@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -85,7 +86,7 @@ func (aliaser *VersionAliaser) Swap(ctx context.Context, tenantID int64, knowled
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	if _, err = tx.Query(ctx, qAliasLock, fmt.Sprintf("knowledge_alias|%d|%s", tenantID, knowledgeBaseID)); err != nil {

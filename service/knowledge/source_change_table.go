@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -145,7 +146,7 @@ func (source *TableSourceChangeSource) Ack(ctx context.Context, events []domain.
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	for _, event := range events {

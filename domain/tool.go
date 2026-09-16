@@ -8,6 +8,12 @@ type ToolDefinition struct {
 	Contract []byte
 }
 
+// ToolReference names one registered tool version.
+type ToolReference struct {
+	ToolID  string
+	Version string
+}
+
 // ToolCall contains one governed tenant tool invocation. Principal is the agent
 // making the call; the gateway rejects a zero principal.
 type ToolCall struct {

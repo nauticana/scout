@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/internal/singleflight"
 )
 
@@ -30,7 +31,7 @@ type SessionCoordinator struct {
 
 	flights singleflight.Group[domain.SessionKey, domain.SessionSnapshot]
 	mu      sync.Mutex
-	floors  *lru.Cache[domain.SessionKey, int64]
+	floors  *keelcache.LRU[domain.SessionKey, int64]
 	reads   map[domain.SessionKey]*inflightRead
 }
 
@@ -147,13 +148,13 @@ func (coordinator *SessionCoordinator) validate() error {
 	return nil
 }
 
-func (coordinator *SessionCoordinator) floorCache() *lru.Cache[domain.SessionKey, int64] {
+func (coordinator *SessionCoordinator) floorCache() *keelcache.LRU[domain.SessionKey, int64] {
 	if coordinator.floors == nil {
 		capacity := coordinator.RevisionMemory
 		if capacity == 0 {
 			capacity = defaultRevisionMemory
 		}
-		coordinator.floors = lru.New[domain.SessionKey, int64](capacity, nil)
+		coordinator.floors = keelcache.NewLRU[domain.SessionKey, int64](capacity, clk.Of(nil))
 	}
 	return coordinator.floors
 }

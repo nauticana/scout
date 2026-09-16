@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/fake"
+	"github.com/nauticana/scout/fake"
 )
 
 func TestTurnLedgerBeginAppliesAdmissionBeforePersistence(t *testing.T) {

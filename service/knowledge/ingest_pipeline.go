@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -511,7 +512,7 @@ func (pipeline *IngestPipeline) persist(ctx context.Context, job *ingestJob, ref
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	if _, err = tx.Query(ctx, qIngestInsertDocument, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion,

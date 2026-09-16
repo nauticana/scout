@@ -23,7 +23,7 @@ Conventions this plan inherits (global engineering rules + [TODO.md](TODO.md)): 
 | C3 | `NarrowingChecker` — monotonic restriction at publish | DWF-2 | 1 | **HIGH** | ✅ done |
 | C4 | `domain.Provenance` + `effective_agent_release` | DWF-2 | 1 | **HIGH** | ✅ done |
 | C5 | Retrofit prompt inheritance onto the compiler (clean break) | DWF-2 | 1 | MED | ⏳ open — the only wave-1 item left |
-| P3a | Principal-aware `CheckPermission` signature in keel | DWF-1a | 1 | **HIGH** | ⏳ open — keel release |
+| P3a | Principal-aware `CheckPermission` signature in keel | DWF-1a | 1 | **HIGH** | ✅ done — keel v1.2.62 |
 | A1 | `PolicyDecisionPoint` port + native evaluator | DWF-5 | 2 | **HIGH** | ✅ done |
 | A2 | Obligations consumed at the tool boundary | DWF-5 | 2 | **HIGH** | ✅ done |
 | A3 | OPA / cedar-go adapter behind the port | DWF-5 | 2 | LOW | ⏳ open — port exists; adopt on demand |
@@ -89,7 +89,7 @@ Both items break contracts widely. Do them in one release, one `migration_guide.
 - [ ] `domain.ModelRequest` deliberately does **not**: it crosses into provider adapters, and principal identity has no business leaving the platform. Attribution happens on the `Observation` the call produces.
 - [x] `service/toolgateway/governed_gateway.go`: authorize against `agent_tool_binding` for the calling principal **at invoke time**. Today the binding exists in schema but is only consulted at publication; `ToolRegistry.Get` is keyed on `(tenant, tool, version)` alone.
 - [x] `TenantContext` gains `ScopeID` so org placement reaches routing, retrieval, budgets and the usage ledger.
-- [x] Fakes in `internal/fake/principal.go` and every affected test updated; no `…WithPrincipal` overload kept alongside the old signature.
+- [x] Fakes in `fake/principal.go` and every affected test updated; no `…WithPrincipal` overload kept alongside the old signature.
 - [x] Tests: a call with a zero principal is rejected; a principal without the tool binding is rejected even when the tenant holds it; an expired authority hop is rejected mid-turn.
 
 ### P3 — `agent_permission` and principal-aware RBAC (HIGH, keel)
@@ -98,11 +98,11 @@ Decision and rationale: [IDEAS.DWF.md §DWF-1a](IDEAS.DWF.md). The authorization
 
 - [x] `schema/agent_authorization/agent_permission.yml`: `(tenant_id, agent_id, role_id, begda, endda, granted_by)`, PK `(tenant_id, agent_id, role_id, begda)`, FKs to `agent_profile` and `authorization_role`, mirroring `user_permission` including effective dating. Composite child table — no sequence. It lives in Scout, not keel, because it references `agent_profile`, which keel cannot see.
 - [x] Second named query beside `QCheckAuthorization`, joining `agent_permission`, identical in `low_limit` / `high_limit` / `bypass_scope` handling so the semantics stay one implementation.
-- [ ] **P3a, keel release.** `Principal{Kind, ID}` replaces the bare `userID` on `AbstractRepository.CheckActionPermission`, `AbstractTableService.CheckPermission`, `RestService.GetPermission` and the table-action middleware. Clean break — no `…ForUser` wrapper. Scout evaluates agents through `principal.RoleAuthorizer` until then, which runs the same grant query against `agent_permission`.
+- [x] **P3a.** Shipped in keel v1.2.62: `model.Principal{Kind, ID, Scope}` replaced the bare `userID` on `CheckActionPermission`, `CheckPermission`, `GetPermission` and the table-action middleware. Scout registers its agent and service kinds on a keel `GrantCatalog` and no longer carries a copy of the grant SQL.
 - [ ] Where a column records "who did this" and either kind is possible: two nullable FK columns with an XOR check constraint, never a polymorphic pair. No such column exists yet — the pattern lands with H2 and V1.
 - [ ] Agent authority never exceeds the delegating human's effective permission set. The model now makes this a set comparison over one lattice; the comparison itself lands with `delegation_grant` (D2).
 - [x] Scout's existing `user_account` FKs (`agent_version.published_by`, `agent_alias.modified_by`, `agent_studio_event.actor_id`) stay human-only; an agent that publishes does so under a recorded delegation grant.
-- [ ] keel migration guide entry for P3a: the old→new signature mapping, generically, naming no downstream.
+- [x] keel migration guide entry for P3a: the old→new signature mapping, generically, naming no downstream.
 
 ### P4 — `PrincipalResolver` and external sources (MED)
 
@@ -216,7 +216,7 @@ Today a pending approval wraps `ErrForbidden` and **fails the turn** ([service/g
 ### H5 — `Notifier` port (MED, keel-owned)
 
 - [x] Thin `contract.Notifier` in Scout, emitted from `approval.Gate`; delivery is keel messaging/outbox, per the horizontal-concerns rule.
-- [ ] Delivery record referenced from `approval_request` so "nobody was told" is provable. Needs keel's outbox row to reference.
+- [ ] Delivery record referenced from `approval_request` so "nobody was told" is provable. keel's `outbox_event` is the row to reference — stable id, never deleted, `dispatched_at` since v1.2.62 — so only the Scout-side FK is left.
 - [x] Never include evidence content or a proposed-action payload in a notification — reference only.
 
 ### K1 — `tool_credential_binding` (HIGH)

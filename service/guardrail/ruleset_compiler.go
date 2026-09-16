@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
+	keelcache "github.com/nauticana/keel/cache"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/lru"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // RuleSetSchemaVersion is the only envelope version this compiler accepts.
@@ -64,7 +65,7 @@ func (config CompilerConfig) withDefaults() CompilerConfig {
 type RuleSetCompiler struct {
 	config CompilerConfig
 	mu     sync.Mutex
-	cache  *lru.Cache[string, *CompiledRuleSet]
+	cache  *keelcache.LRU[string, *CompiledRuleSet]
 }
 
 var _ contract.GuardrailRuleCompiler = (*RuleSetCompiler)(nil)
@@ -78,7 +79,7 @@ func NewRuleSetCompiler(config CompilerConfig) (*RuleSetCompiler, error) {
 	if config.MaxLookbackBytes < config.MaxPatternBytes {
 		return nil, fmt.Errorf("guardrail compiler: max lookback must cover the longest phrase")
 	}
-	return &RuleSetCompiler{config: config, cache: lru.New[string, *CompiledRuleSet](config.CacheEntries, config.Now)}, nil
+	return &RuleSetCompiler{config: config, cache: keelcache.NewLRU[string, *CompiledRuleSet](config.CacheEntries, clk.Of(config.Now))}, nil
 }
 
 // Validate parses the envelope, verifies its digest, and compiles every rule without caching.

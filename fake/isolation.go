@@ -156,6 +156,44 @@ func (c *CacheService) IncrementByWithTTL(ctx context.Context, key string, n int
 	return c.counts[key], nil
 }
 
+var _ cache.MultiScopeAdmitter = (*CacheService)(nil)
+
+// Admit charges every scope or none, mirroring keel's backends; each scope is recorded as one call.
+func (c *CacheService) Admit(ctx context.Context, scopes ...cache.AdmissionScope) (cache.AdmissionResult, error) {
+	c.mu.Lock()
+	gate, fail := c.block, c.fail
+	c.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return cache.AdmissionResult{}, ctx.Err()
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, scope := range scopes {
+		c.calls = append(c.calls, CacheCall{Key: scope.Key, N: max(scope.Cost, 1)})
+	}
+	if fail != nil {
+		return cache.AdmissionResult{}, fail
+	}
+	if c.counts == nil {
+		c.counts = make(map[string]int64)
+	}
+	for _, scope := range scopes {
+		if c.counts[scope.Key]+max(scope.Cost, 1) > scope.Limit {
+			return cache.AdmissionResult{RejectedKey: scope.Key, RetryAfter: scope.Window}, nil
+		}
+	}
+	counts := make([]int64, len(scopes))
+	for i, scope := range scopes {
+		c.counts[scope.Key] += max(scope.Cost, 1)
+		counts[i] = c.counts[scope.Key]
+	}
+	return cache.AdmissionResult{Admitted: true, Counts: counts}, nil
+}
+
 func (c *CacheService) RPush(_ context.Context, key, value string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

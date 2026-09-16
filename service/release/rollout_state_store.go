@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -163,7 +164,7 @@ func (store *TableRolloutStateStore) Transition(ctx context.Context, transition 
 	committed := false
 	defer func() {
 		if !committed {
-			_ = keelport.RollbackDetached(tx)
+			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
 	updated, err := tx.Query(ctx, qRolloutCasState,

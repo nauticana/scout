@@ -9,17 +9,17 @@ The study set is not scaffolding to copy. It is a catalogue of mechanisms that c
 | Idea | Shipped as |
 |---|---|
 | A1 | `isolation.TenantRateLimiter` — tenant × fleet buckets per lane, full-bucket-only sweep |
-| A2 | `isolation.LimitError` + optional `contract.RetryAfterError` capability |
+| A2 | keel `limiter.LimitError` + optional `port.RetryAfterError` capability |
 | A3 + E4 | attempt-aware `isolation.BudgetLedger` with expiry fencing, actual settlement, and bounded `Expire` |
 | A4 | Distributed admission remains open; the prior one-key counter primitive could not atomically enforce tenant and fleet scopes |
-| A5 | `isolation.FairSlotLimiter` (round-robin) + weighted `SlotCapacityScheduler`; the existing turn contract stays one-slot |
+| A5 | keel `limiter.FairSlotLimiter` (round-robin) under `modelgateway.NewFairCapacityScheduler`; the existing turn contract stays one-slot |
 | A6 | `modelgateway.AdaptiveCapacityScheduler` (latency-gradient AIMD) |
 | A7 | `isolation.WindowedCostBreaker` — pre-work capacity admission and non-failing completed records |
 | B2 | `dataplane.MemoryReplyHub` + replay and verified publish deduplication |
 | B3 | `dataplane.StreamPump` |
 | B4 | `contract.TurnCanceller`, `dataplane.MemoryTurnCanceller`, `domain.TurnAdmissionPolicy` |
 | B5 | `knowledge.BatchingEmbedder` over `contract.BatchEmbedder` |
-| C1 | `dataplane.MemorySessionCache` / `MemoryGraphCache` over `internal/lru` |
+| C1 | `dataplane.MemorySessionCache` / `MemoryGraphCache` over keel `cache.ShardedLRU` |
 | C2 | `internal/singleflight` wired into `SessionCoordinator` and `DefinitionResolver` |
 | D1 | `KnowledgeQuery` principal, entitlements(+digest), budget |
 | D2 | `knowledge.HybridRetriever` (RRF fusion, budget-gated `KnowledgeReranker`) |
@@ -35,7 +35,7 @@ Still open after the 2026-08-16 pass: C4 semantic response cache (research until
 
 | Idea | Shipped as |
 |---|---|
-| A4 | `isolation.DistributedTenantRateLimiter` — tenant × fleet fixed windows over keel cache, coalesced hot keys, bounded local fallback with a degraded flag. Needs an atomic multi-scope keel primitive to close the documented over-admission window |
+| A4 | `isolation.DistributedTenantRateLimiter` — tenant × fleet fixed windows over keel cache, coalesced hot keys, bounded local fallback with a degraded flag. Charges tenant and fleet atomically through keel `limiter.DistributedRateLimiter` (v1.2.63) |
 | A8 | `toolgateway.CircuitBreaker` — closed/open/half-open, one generation-fenced probe, LRU-bounded tenant × tool, shared destination health, injected failure classifier |
 | B0 + B0a | `dataplane.TurnIngress`, `QueueTurnDispatcher`, `QueueTurnScheduler`, `TableDeadLetterQueue`, `TurnRuntime`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `MemoryTurnQueue`, `dataplanetest` conformance suites; DTO/table identity resolved in `doc/persistence.md` |
 | B1 | `modelgateway.HedgingGateway` — one delayed attempt on a different route, idempotent requests only, per-tenant budget and kill switch, independently fenced per-attempt reservations |
@@ -179,7 +179,7 @@ The reservation caller estimates prompt tokens plus `MaxOutputTokens` and prices
 
 The local limiter cannot be both an unconditional fast-path admission and a second full distributed limit without changing the effective policy. In healthy operation the shared counter remains authoritative; the local ceiling protects the process and bounds the chosen fail-open behavior.
 
-**keel note.** A future backend contract needs one atomic operation covering every charged scope. The earlier `SharedCounter` subset was removed because composing independent increments could consume one scope while rejecting another.
+**keel note.** Landed as `cache.MultiScopeAdmitter` in keel v1.2.62: one all-or-nothing charge over every scope. The earlier `SharedCounter` subset was removed because composing independent increments could consume one scope while rejecting another.
 
 **Owner.** keel for the atomic-counter capability and backend implementations; Scout for limiter policy and composition.
 
@@ -621,7 +621,7 @@ Adopt one convention before writing the mechanisms, not after. A useful abstract
 
 ### G2. Prove the absence of leaks
 
-New concurrent services need lifecycle tests, not just happy-path behavior tests: deterministic construct/use/close completion, `-race` in CI, and cases for the four shapes `q11` names—the function blocks until cancellation, one worker fails early, input is empty, and the worker count is invalid. Raw `runtime.NumGoroutine` equality is noisy; prefer explicit wait groups/hooks or a proven leak checker around isolated tests. Extend `internal/fake` with a controllable clock, blocking provider/stream, and close acknowledgements so shutdown can be asserted without sleeps.
+New concurrent services need lifecycle tests, not just happy-path behavior tests: deterministic construct/use/close completion, `-race` in CI, and cases for the four shapes `q11` names—the function blocks until cancellation, one worker fails early, input is empty, and the worker count is invalid. Raw `runtime.NumGoroutine` equality is noisy; prefer explicit wait groups/hooks or a proven leak checker around isolated tests. Extend `fake` with a controllable clock, blocking provider/stream, and close acknowledgements so shutdown can be asserted without sleeps.
 
 ### G3. Make limits and lifecycle explicit configuration
 
