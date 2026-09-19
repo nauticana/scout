@@ -93,6 +93,6 @@ two compiled releases of one agent, classifying each resource as added, removed,
 
 ## What is not here yet
 
-Tracked in [TODO_DWF.md](../TODO_DWF.md): the A2A adapter behind `AgentInvoker` (D5), and the
+Tracked in [TODO.md](../TODO.md): the A2A adapter behind `AgentInvoker` (D5), and the
 prompt retrofit onto `config_scope_binding` (C5), which is the last item keeping two inheritance
 mechanisms in the tree.

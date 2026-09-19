@@ -301,7 +301,7 @@ func (enforcer *LayeredEnforcer) match(ctx context.Context, rule *compiledRule, 
 		if err := json.Unmarshal(in.content, &value); err != nil {
 			return nil, true, nil
 		}
-		return nil, rule.schema.check(value, "$") != nil, nil
+		return nil, rule.schema.Validate(value) != nil, nil
 	case domain.GuardrailKindToolAllowlist:
 		if in.call == nil {
 			return nil, true, nil

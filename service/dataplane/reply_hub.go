@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -182,7 +183,8 @@ func sameReply(left, right domain.TurnReply) bool {
 	return left.TenantID == right.TenantID && left.RequestID == right.RequestID &&
 		left.ConversationID == right.ConversationID && left.ReplyRoute == right.ReplyRoute &&
 		left.Sequence == right.Sequence && bytes.Equal(left.Payload, right.Payload) &&
-		left.Final == right.Final && left.ErrorCode == right.ErrorCode && left.AgentVersion == right.AgentVersion
+		left.Final == right.Final && left.ErrorCode == right.ErrorCode && left.AgentVersion == right.AgentVersion &&
+		reflect.DeepEqual(left.Events, right.Events)
 }
 
 // Subscribe opens one reply stream without a replay cursor.

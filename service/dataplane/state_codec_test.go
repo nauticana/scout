@@ -95,3 +95,23 @@ func TestObjectStateStoreEnforcesBounds(t *testing.T) {
 		t.Fatalf("oversize download = %v", err)
 	}
 }
+
+func TestObjectStateStoreEvidenceVerificationEnforcesTenantAndNamespace(t *testing.T) {
+	storage := &fake.ObjectStorage{}
+	store := newObjectStateStore(storage)
+	ref, err := store.Dehydrate(context.Background(), "evidence/7/report", []byte("verified"))
+	if err != nil {
+		t.Fatalf("Dehydrate: %v", err)
+	}
+	if err := store.VerifyObject(context.Background(), 7, ref); err != nil {
+		t.Fatalf("VerifyObject: %v", err)
+	}
+	if err := store.VerifyObject(context.Background(), 8, ref); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("cross-tenant evidence must be forbidden, got %v", err)
+	}
+	outside := ref
+	outside.URI = strings.Replace(outside.URI, "/scout/", "/other/", 1)
+	if err := store.VerifyObject(context.Background(), 7, outside); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("out-of-namespace evidence must be forbidden, got %v", err)
+	}
+}

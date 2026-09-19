@@ -59,6 +59,9 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 	if definition.ToolID != call.ToolID || definition.Version != call.ToolVersion || strings.TrimSpace(definition.Endpoint) == "" {
 		return domain.ToolResult{}, fmt.Errorf("%w: registered tool definition is inconsistent", domain.ErrConflict)
 	}
+	if err := validateArguments(definition, call.Arguments); err != nil {
+		return domain.ToolResult{}, err
+	}
 	if err := gateway.Authorizer.Authorize(ctx, call, definition); err != nil {
 		return domain.ToolResult{}, err
 	}

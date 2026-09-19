@@ -33,6 +33,12 @@ const (
 	agent_approval_deadline   = "agent_approval_deadline"
 	agent_credential_ttl      = "agent_credential_ttl"
 	agent_audit_page_size     = "agent_audit_page_size"
+	agent_loop_max_iterations = "agent_loop_max_iterations"
+	agent_loop_max_tool_calls = "agent_loop_max_tool_calls"
+	agent_loop_max_tokens     = "agent_loop_max_tokens"
+	agent_loop_max_cost       = "agent_loop_max_cost"
+	agent_loop_max_repeats    = "agent_loop_max_repeats"
+	agent_loop_deadline       = "agent_loop_deadline"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -93,6 +99,12 @@ type ScoutConfig struct {
 	AgentApprovalDeadline  int     // agent_approval_deadline    3600                          Seconds a reviewer has before escalation; 0 leaves a request open
 	AgentCredentialTTL     int     // agent_credential_ttl       300                           Default lifetime in seconds of a just-in-time tool credential
 	AgentAuditPageSize     int     // agent_audit_page_size      100                           Decision records returned per audit query page
+	AgentLoopMaxIterations int     // agent_loop_max_iterations 12 Model decisions one tool loop step may make
+	AgentLoopMaxToolCalls  int     // agent_loop_max_tool_calls 24 Governed tool calls one tool loop step may make
+	AgentLoopMaxTokens     int     // agent_loop_max_tokens 200000 Input plus output tokens one tool loop step may spend
+	AgentLoopMaxCost       int     // agent_loop_max_cost 0 Minor-unit cost one tool loop step may spend; 0 leaves cost to the turn budget
+	AgentLoopMaxRepeats    int     // agent_loop_max_repeats 3 Identical calls of one tool before a loop is declared
+	AgentLoopDeadline      int     // agent_loop_deadline 300 Wall-clock seconds one tool loop step may run
 }
 
 // Apply parses Scout's section of the shared application configuration.
@@ -121,5 +133,11 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentApprovalDeadline = c.Int(rows, agent_approval_deadline)
 	c.AgentCredentialTTL = c.Int(rows, agent_credential_ttl)
 	c.AgentAuditPageSize = c.Int(rows, agent_audit_page_size)
+	c.AgentLoopMaxIterations = c.Int(rows, agent_loop_max_iterations)
+	c.AgentLoopMaxToolCalls = c.Int(rows, agent_loop_max_tool_calls)
+	c.AgentLoopMaxTokens = c.Int(rows, agent_loop_max_tokens)
+	c.AgentLoopMaxCost = c.Int(rows, agent_loop_max_cost)
+	c.AgentLoopMaxRepeats = c.Int(rows, agent_loop_max_repeats)
+	c.AgentLoopDeadline = c.Int(rows, agent_loop_deadline)
 	return c.ParseErr()
 }

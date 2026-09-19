@@ -21,11 +21,90 @@ type ModelRequest struct {
 	Idempotent bool
 	// ExcludedRouteIDs are routes a hedge or retry must avoid; the router treats them as ineligible.
 	ExcludedRouteIDs []string
+	// Messages continue the conversation after Prompt: earlier model turns with
+	// their tool calls, and the observations answering them.
+	Messages []ModelMessage
+	// Tools are the pinned tool versions the model may call; a non-empty list
+	// requires the CapabilityTools route capability.
+	Tools []ModelTool
+	// Output constrains the terminal answer; a set Mode requires CapabilityStructuredOutput
+	// and is never downgraded to free text.
+	Output OutputConstraint
+}
+
+// Route capabilities a request can require. Tools and a constrained Output imply
+// theirs, so a caller cannot forget to ask.
+const (
+	CapabilityTools            = "tools"
+	CapabilityStructuredOutput = "structured_output"
+)
+
+// ModelTool is one pinned tool version offered to the model. Name is the
+// provider-safe identifier the model calls it by; InputSchema is JSON Schema.
+type ModelTool struct {
+	Name        string
+	Description string
+	ToolID      string
+	ToolVersion string
+	InputSchema []byte
+}
+
+// ModelToolCall is one structured call the model proposed. CallID pairs it with
+// its observation; adapters synthesize one where the provider sends none.
+type ModelToolCall struct {
+	CallID    string
+	Name      string
+	Arguments []byte
+}
+
+// ModelToolObservation answers one ModelToolCall.
+type ModelToolObservation struct {
+	CallID  string
+	Name    string
+	Output  []byte
+	IsError bool
+}
+
+// ModelRole names who produced a ModelMessage.
+type ModelRole string
+
+const (
+	ModelRoleUser      ModelRole = "user"
+	ModelRoleAssistant ModelRole = "assistant"
+	ModelRoleTool      ModelRole = "tool"
+)
+
+// ModelMessage is one provider-neutral conversation entry. An assistant message
+// carries Text and ToolCalls; a tool message carries Observations.
+type ModelMessage struct {
+	Role         ModelRole
+	Text         []byte
+	ToolCalls    []ModelToolCall
+	Observations []ModelToolObservation
+}
+
+// OutputMode selects how the terminal answer is constrained.
+type OutputMode string
+
+const (
+	OutputModeText       OutputMode = ""
+	OutputModeJSONSchema OutputMode = "json_schema"
+)
+
+// OutputConstraint asks the provider to decode against Schema natively.
+type OutputConstraint struct {
+	Mode       OutputMode
+	SchemaName string
+	Schema     []byte
 }
 
 // FinishReasonInterrupted ends a stream that was cut after its first token; the
 // output delivered so far is a partial completion, never restarted or spliced.
 const FinishReasonInterrupted = "interrupted"
+
+// FinishReasonToolCalls is the normalized reason every adapter reports when the
+// model stopped to call tools; other reasons stay provider-specific.
+const FinishReasonToolCalls = "tool_calls"
 
 // ModelSelection identifies the chosen provider, model, and capacity pool, plus
 // the routing provenance needed by usage, audit, rollout, and hedging consumers.
@@ -46,6 +125,7 @@ type ModelSelection struct {
 // ModelResult contains model output, termination reason, and usage.
 type ModelResult struct {
 	Output       []byte
+	ToolCalls    []ModelToolCall
 	FinishReason string
 	Usage        Usage
 }
@@ -54,6 +134,7 @@ type ModelResult struct {
 type ModelChunk struct {
 	Sequence     int64
 	Payload      []byte
+	ToolCalls    []ModelToolCall
 	FinishReason string
 	Usage        Usage
 }

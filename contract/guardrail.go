@@ -55,3 +55,14 @@ type SafetyEventSink interface {
 type ToolApprovalGate interface {
 	Decide(ctx context.Context, call domain.ToolCall, ruleID string) (domain.ApprovalDecision, error)
 }
+
+// EvidenceObjectVerifier confirms an immutable object still matches its digest.
+type EvidenceObjectVerifier interface {
+	VerifyObject(ctx context.Context, tenantID int64, object domain.ObjectRef) error
+}
+
+// EvidenceValidator reports which claims of an answer their evidence supports.
+// It is usable as a guardrail; agents whose output makes no claims skip it.
+type EvidenceValidator interface {
+	Validate(ctx context.Context, scope domain.EvidenceScope, answer domain.EvidencedAnswer) (domain.EvidenceReport, error)
+}

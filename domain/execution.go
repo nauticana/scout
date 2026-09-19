@@ -54,4 +54,6 @@ type StepResult struct {
 	NextStepID  string
 	Fingerprint string
 	Usage       Usage
+	// Events are published on this step's reply frame, after its guardrails pass.
+	Events []TurnEvent
 }

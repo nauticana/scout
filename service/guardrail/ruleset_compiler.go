@@ -16,6 +16,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/jsonschema"
 )
 
 // RuleSetSchemaVersion is the only envelope version this compiler accepts.
@@ -202,17 +203,17 @@ func (compiler *RuleSetCompiler) compileRule(rule domain.GuardrailRule, layer do
 func (compiler *RuleSetCompiler) compileParams(item *compiledRule) error {
 	rule := item.rule
 	var params struct {
-		Max             *int        `json:"max"`
-		Schema          *jsonSchema `json:"schema"`
-		Tools           []string    `json:"tools"`
-		Hosts           []string    `json:"hosts"`
-		Phrases         []string    `json:"phrases"`
-		CaseInsensitive bool        `json:"case_insensitive"`
-		Pattern         string      `json:"pattern"`
-		MaxMatchBytes   int         `json:"max_match_bytes"`
-		Open            string      `json:"open"`
-		Close           string      `json:"close"`
-		Threshold       *float64    `json:"threshold"`
+		Max             *int               `json:"max"`
+		Schema          *jsonschema.Schema `json:"schema"`
+		Tools           []string           `json:"tools"`
+		Hosts           []string           `json:"hosts"`
+		Phrases         []string           `json:"phrases"`
+		CaseInsensitive bool               `json:"case_insensitive"`
+		Pattern         string             `json:"pattern"`
+		MaxMatchBytes   int                `json:"max_match_bytes"`
+		Open            string             `json:"open"`
+		Close           string             `json:"close"`
+		Threshold       *float64           `json:"threshold"`
 	}
 	if len(rule.Params) > 0 {
 		decoder := json.NewDecoder(bytes.NewReader(rule.Params))
@@ -242,7 +243,7 @@ func (compiler *RuleSetCompiler) compileParams(item *compiledRule) error {
 		if params.Schema == nil {
 			return fmt.Errorf("schema is required")
 		}
-		if err := params.Schema.validate(0); err != nil {
+		if err := params.Schema.Check(); err != nil {
 			return err
 		}
 		item.schema = params.Schema
@@ -369,7 +370,7 @@ type compiledRule struct {
 	kindSpec  kindSpec
 	stages    map[domain.GuardrailStage]struct{}
 	maxBytes  int
-	schema    *jsonSchema
+	schema    *jsonschema.Schema
 	names     map[string]struct{}
 	phrases   [][]byte
 	fold      bool

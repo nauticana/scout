@@ -49,13 +49,13 @@ flowchart BT
     catalog["Catalog<br/>15 tables"]
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
-    model["Model<br/>5 tables"]
+    model["Model<br/>6 tables"]
     agent["Agent<br/>14 tables"]
     tool["Tool<br/>5 tables"]
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>8 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
-    runtime["Runtime<br/>13 tables"]
+    runtime["Runtime<br/>14 tables"]
     release["Release<br/>16 tables"]
     evaluation["Evaluation<br/>10 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
@@ -65,7 +65,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 40 Scout tables — while the full platform is 104. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 106. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module.
 
@@ -118,6 +118,7 @@ flowchart RL
         model_provider["model_provider"]
         model_definition["model_definition"]
         model_capability["model_capability"]
+        model_route["model_route"]
         model_price["model_price"]
         tenant_model_access["tenant_model_access"]
     end
@@ -125,6 +126,7 @@ flowchart RL
     model_definition --> model_provider
     model_price --> model_definition
     model_capability --> model_definition
+    model_route --> model_definition
 
     subgraph agent["Agent"]
         direction BT
@@ -241,6 +243,7 @@ flowchart RL
         step_checkpoint["step_checkpoint"]
         session_snapshot["session_snapshot"]
         step_idempotency["step_idempotency"]
+        step_loop_entry["step_loop_entry"]
         turn_queue["turn_queue"]
         turn_dead_letter["turn_dead_letter"]
         budget_reservation["budget_reservation"]
@@ -260,6 +263,7 @@ flowchart RL
     agent_work_item --> delegation_grant
     agent_work_item --> agent_work_item
     step_idempotency --> conversation_turn
+    step_loop_entry --> step_idempotency
     budget_reservation --> conversation_turn
 
     subgraph release["Release"]
@@ -380,6 +384,7 @@ erDiagram
     model_definition ||--o{ tenant_model_access : model_tenant_accesses
     model_definition ||--o{ model_price : model_prices
     model_definition ||--o{ model_capability : model_capabilities
+    model_definition ||--o{ model_route : model_routes
     priority_class ||--o{ tenant_model_access : priority_tenant_accesses
     tenant_runtime_policy }o--|| agent_tenant : tenant_runtime_policies
     tenant_model_access }o--|| agent_tenant : tenant_model_accesses
@@ -430,6 +435,15 @@ erDiagram
         varchar provider_id PK,FK
         varchar model_id PK,FK
         varchar capability_code PK
+    }
+    model_route {
+        varchar provider_id PK,FK
+        varchar model_id PK,FK
+        varchar route_id PK
+        varchar model_version
+        varchar region
+        smallint quality_class
+        boolean is_active
     }
     model_price {
         varchar provider_id PK,FK
@@ -1072,6 +1086,7 @@ erDiagram
     step_checkpoint }o--|| execution_step : execution_step_checkpoints
     step_idempotency }o--|| execution_step : execution_step_idempotencies
     step_idempotency }o--|| idempotency_status : status_step_idempotencies
+    step_idempotency ||--o{ step_loop_entry : step_loop_entries
     conversation_turn ||--o{ budget_reservation : budget_reservations
     budget_reservation }o--|| reservation_status : status_budget_reservations
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
@@ -1152,6 +1167,14 @@ erDiagram
         varchar status_code FK
         text result_uri
     }
+    step_loop_entry {
+        bigint tenant_id PK,FK
+        varchar request_id PK,FK
+        bigint execution_step_id PK,FK
+        integer entry_no PK
+        text entry_uri
+        char entry_digest
+    }
     idempotency_status {
         varchar code PK
         boolean is_terminal
@@ -1221,7 +1244,7 @@ erDiagram
     }
 ```
 
-`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe.
+`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of a `tool_loop` step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
 
 Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry.
 
@@ -1580,13 +1603,13 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state` |
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
-| `model` | `model_provider`, `model_definition`, `model_capability`, `model_price`, `tenant_model_access` |
+| `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
 | `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_prompt_override`, `tenant_prompt_default`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
-| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
+| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |

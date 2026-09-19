@@ -56,6 +56,13 @@ type ToolRegistry interface {
 	List(ctx context.Context, tenantID int64, agentID, agentVersion string) ([]domain.ToolDefinition, error)
 }
 
+// ToolBinder pins registered tool versions to one immutable agent version.
+type ToolBinder interface {
+	// Bind is all or nothing: an unregistered version is ErrNotFound, and rebinding
+	// a tool at a different version is ErrConflict.
+	Bind(ctx context.Context, tenantID int64, agentID, agentVersion string, tools []domain.ToolReference) error
+}
+
 // GuardrailConfigRepository stores versioned tenant guardrail policies.
 type GuardrailConfigRepository interface {
 	// Publish persists a new immutable guardrail configuration.

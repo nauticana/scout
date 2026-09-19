@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/nauticana/scout/contract"
@@ -59,8 +60,9 @@ func streamCause(err error) error {
 }
 
 func (stream *leasedModelStream) addUsage(usage domain.Usage) error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.CostMinorUnits < 0 {
-		return fmt.Errorf("%w: model stream usage cannot be negative", domain.ErrValidation)
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.CostMinorUnits < 0 ||
+		usage.CostMinorUnits > 0 && strings.TrimSpace(usage.Currency) == "" {
+		return fmt.Errorf("%w: model stream usage is invalid", domain.ErrValidation)
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()

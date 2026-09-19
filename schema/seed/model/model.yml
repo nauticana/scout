@@ -11,6 +11,8 @@ seeds:
       - [model_capability, text, Text Generation]
       - [model_capability, image, Image Generation]
       - [model_capability, video, Video Generation]
+      - [model_capability, tools, Tool Calling]
+      - [model_capability, structured_output, Schema-Constrained Output]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
@@ -31,4 +33,5 @@ seeds:
     rows:
       - [model_definitions, D, display_name]
       - [model_capabilities, S, "*"]
+      - [model_routes, S, "*"]
       - [model_prices, S, "*"]

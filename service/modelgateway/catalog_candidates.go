@@ -23,12 +23,14 @@ const (
 
 var candidateCatalogQueries = map[string]string{
 	qCandidateModels: `
-SELECT d.provider_id, d.model_id, d.context_token_limit, d.output_token_limit
+SELECT d.provider_id, d.model_id, d.context_token_limit, d.output_token_limit,
+       r.route_id, r.model_version, r.region, r.quality_class, r.is_active
   FROM tenant_model_access a
   JOIN model_definition d ON d.provider_id = a.provider_id AND d.model_id = a.model_id
   JOIN model_provider p ON p.provider_id = d.provider_id
+  LEFT JOIN model_route r ON r.provider_id = d.provider_id AND r.model_id = d.model_id
  WHERE a.tenant_id = ? AND d.is_active AND p.is_active
- ORDER BY d.provider_id, d.model_id`,
+ ORDER BY d.provider_id, d.model_id, r.route_id`,
 	qCandidateCapabilities: `
 SELECT c.provider_id, c.model_id, c.capability_code
   FROM tenant_model_access a
@@ -38,10 +40,10 @@ SELECT c.provider_id, c.model_id, c.capability_code
 }
 
 // TableCandidateCatalog derives a tenant's candidate set from model_definition,
-// model_capability, and tenant_model_access. The schema carries no version,
-// region, route, or quality columns, so each model is one route (RouteID
-// provider/model) in the configured Region with quality class zero, and the
-// generation is a content hash of the returned rows.
+// model_capability, model_route, and tenant_model_access. Each active model_route
+// row is one candidate. A model with no route rows is one route (RouteID
+// provider/model) in the configured Region with quality class zero; a model whose
+// routes are all inactive offers nothing. The generation is a content hash of the rows.
 type TableCandidateCatalog struct {
 	DB keelport.DatabaseRepository
 	// Region stamps every candidate with the deployment's residency region; empty leaves it unknown.
@@ -99,8 +101,17 @@ func (catalog *TableCandidateCatalog) CandidatesFor(ctx context.Context, tenant 
 			MaxContextTokens: common.AsInt64(row[2]),
 			MaxOutputTokens:  common.AsInt64(row[3]),
 		}
+		if routeID := strings.TrimSpace(common.AsString(row[4])); routeID != "" {
+			if !common.AsBool(row[8]) {
+				continue
+			}
+			candidate.RouteID += "/" + routeID
+			candidate.ModelVersion = strings.TrimSpace(common.AsString(row[5]))
+			candidate.Region = strings.TrimSpace(common.AsString(row[6]))
+			candidate.QualityClass = int(common.AsInt64(row[7]))
+		}
 		set.Candidates = append(set.Candidates, candidate)
-		_, _ = hash.Write([]byte(candidate.RouteID + "|" + strconv.FormatInt(candidate.MaxContextTokens, 10) + "|" +
+		_, _ = hash.Write([]byte(candidate.RouteID + "|" + candidate.ModelVersion + "|" + candidate.Region + "|" + strconv.Itoa(candidate.QualityClass) + "|" + strconv.FormatInt(candidate.MaxContextTokens, 10) + "|" +
 			strconv.FormatInt(candidate.MaxOutputTokens, 10) + "|" + strings.Join(candidate.Capabilities, ",") + "\n"))
 	}
 	set.Generation = int64(hash.Sum64() & math.MaxInt64)

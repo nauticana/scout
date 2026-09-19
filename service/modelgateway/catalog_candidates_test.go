@@ -43,8 +43,8 @@ func (db catalogDBFake) GetQueryService(context.Context, map[string]string) keel
 func TestTableCandidateCatalogDerivesRoutes(t *testing.T) {
 	query := &catalogQueryFake{rows: map[string][][]any{
 		qCandidateModels: {
-			{"anthropic", "sonnet", int64(200_000), int64(8_000)},
-			{"openai", "gpt", int64(128_000), int64(16_000)},
+			{"anthropic", "sonnet", int64(200_000), int64(8_000), nil, nil, nil, nil, nil},
+			{"openai", "gpt", int64(128_000), int64(16_000), nil, nil, nil, nil, nil},
 		},
 		qCandidateCapabilities: {
 			{"anthropic", "sonnet", "text"},
@@ -83,6 +83,30 @@ func TestTableCandidateCatalogDerivesRoutes(t *testing.T) {
 	changed, err := catalog.CandidatesFor(context.Background(), domain.TenantContext{TenantID: 42})
 	if err != nil || changed.Generation == set.Generation {
 		t.Fatalf("generation must follow content: %d (%v)", changed.Generation, err)
+	}
+}
+
+func TestTableCandidateCatalogOffersOneCandidatePerActiveRoute(t *testing.T) {
+	query := &catalogQueryFake{rows: map[string][][]any{
+		qCandidateModels: {
+			{"anthropic", "sonnet", int64(200_000), int64(8_000), "eu-1", "2026-05", "eu-west", int64(2), true},
+			{"anthropic", "sonnet", int64(200_000), int64(8_000), "us-1", "2026-03", "us-east", int64(1), true},
+			{"openai", "gpt", int64(128_000), int64(16_000), "retired", "1", "eu-west", int64(1), false},
+		},
+	}}
+	catalog := &TableCandidateCatalog{DB: catalogDBFake{query: query}, Region: "deployment-default"}
+	set, err := catalog.CandidatesFor(context.Background(), domain.TenantContext{TenantID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.ModelCandidate{
+		{Provider: "anthropic", Model: "sonnet", ModelVersion: "2026-05", Region: "eu-west", RouteID: "anthropic/sonnet/eu-1",
+			QualityClass: 2, MaxContextTokens: 200_000, MaxOutputTokens: 8_000},
+		{Provider: "anthropic", Model: "sonnet", ModelVersion: "2026-03", Region: "us-east", RouteID: "anthropic/sonnet/us-1",
+			QualityClass: 1, MaxContextTokens: 200_000, MaxOutputTokens: 8_000},
+	}
+	if !reflect.DeepEqual(set.Candidates, want) {
+		t.Fatalf("a model whose only route is inactive must offer nothing; candidates = %+v", set.Candidates)
 	}
 }
 

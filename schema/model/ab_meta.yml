@@ -2,5 +2,6 @@ tables:
   - model_provider
   - model_definition
   - model_capability
+  - model_route
   - model_price
   - tenant_model_access

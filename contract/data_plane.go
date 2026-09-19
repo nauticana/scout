@@ -118,6 +118,24 @@ type StepExecutor interface {
 	Execute(ctx context.Context, input domain.StepInput) (domain.StepResult, error)
 }
 
+// LoopJournal is the durable, append-only record of one model↔tool loop. It is
+// what lets a redelivered or resumed loop continue instead of repeating a model
+// decision or a committed tool effect.
+type LoopJournal interface {
+	// Load returns the entries in order; an unknown key is an empty journal.
+	Load(ctx context.Context, key domain.LoopKey) ([]domain.LoopEntry, error)
+	// Append stores entry at entry.EntryNo. The first writer wins: the stored
+	// entry is returned, which is the caller's own unless a concurrent worker got there first.
+	Append(ctx context.Context, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error)
+}
+
+// ToolLoopRequestBuilder builds the opening model request of a loop step from
+// the step input. Prompt assembly is product behavior; the executor owns the
+// tools, the conversation that follows, and the output constraint.
+type ToolLoopRequestBuilder interface {
+	Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, error)
+}
+
 // StepExecutorRegistry resolves executors by graph step kind.
 type StepExecutorRegistry interface {
 	// ExecutorFor returns the executor registered for a graph step kind.

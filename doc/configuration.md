@@ -31,6 +31,12 @@ catalog and `ScoutConfig` cannot drift.
 | `agent_approval_deadline` | 3600 | Seconds a reviewer has before escalation; 0 leaves a request open |
 | `agent_credential_ttl` | 300 | Default lifetime of a just-in-time tool credential |
 | `agent_audit_page_size` | 100 | Decision records per audit query page |
+| `agent_loop_max_iterations` | 12 | Model decisions one tool loop step may make |
+| `agent_loop_max_tool_calls` | 24 | Governed tool calls one tool loop step may make |
+| `agent_loop_max_tokens` | 200000 | Input plus output tokens one tool loop step may spend |
+| `agent_loop_max_cost` | 0 | Minor-unit cost one tool loop step may spend; 0 leaves cost to the turn budget |
+| `agent_loop_max_repeats` | 3 | Identical calls of one tool before a loop is declared |
+| `agent_loop_deadline` | 300 | Wall-clock seconds one tool loop step may run |
 
 ## Admission (`service/isolation`)
 
@@ -85,6 +91,8 @@ catalog and `ScoutConfig` cannot drift.
 | `approval.Gate.Deadline` | `agent_approval_deadline` | seconds; zero leaves a request open with no escalation |
 | `toolgateway.BoundCredentialProvider.DefaultTTL` | `agent_credential_ttl` | seconds; a binding's own `MaxTTL` always wins when tighter |
 | `observability.TableAuditSink` page size | `agent_audit_page_size` | positive; clamped to `MaxDecisionPageSize` (1000) |
+| `dataplane.ToolLoopExecutor.Limits` | `agent_loop_max_iterations`, `agent_loop_max_tool_calls`, `agent_loop_max_tokens`, `agent_loop_max_repeats`, `agent_loop_deadline` | all positive, or construction fails; a step's configuration may only narrow them |
+| `dataplane.ToolLoopExecutor.Limits.MaxCostMinorUnits` | `agent_loop_max_cost` | non-negative minor units; zero leaves cost to the turn budget and the delegated bound |
 
 Both are configuration-time ceilings, not runtime hints: exceeding either is a typed error, never a
 truncation.

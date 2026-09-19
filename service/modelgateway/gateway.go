@@ -26,6 +26,9 @@ type Gateway struct {
 	RateLimiter contract.TenantRateLimiter
 	Providers   contract.ModelProviderRegistry
 	Capacity    contract.CapacityScheduler
+	// Catalog confirms route capabilities; a request needing tools, constrained
+	// output, or any explicit capability is refused without it.
+	Catalog contract.ModelCandidateCatalog
 	// Observer receives one StageModel observation per call when set.
 	Observer contract.ObservationRecorder
 	// Signals receives admission and completion samples per route when set.
@@ -66,6 +69,9 @@ func (gateway *Gateway) Generate(ctx context.Context, selection domain.ModelSele
 		return domain.ModelResult{}, err
 	}
 	result, callErr := provider.Generate(ctx, selected, request)
+	if callErr == nil {
+		callErr = call.contract.checkResult(result)
+	}
 	releaseErr := lease.Release(context.WithoutCancel(ctx), result.Usage)
 	call.finish(context.WithoutCancel(ctx), result.Usage, callErr)
 	return result, errors.Join(callErr, releaseErr)
@@ -94,7 +100,7 @@ func (gateway *Gateway) Stream(ctx context.Context, selection domain.ModelSelect
 		call.finish(context.WithoutCancel(ctx), domain.Usage{}, err)
 		return nil, errors.Join(err, lease.Release(context.WithoutCancel(ctx), domain.Usage{}))
 	}
-	return &leasedModelStream{stream: stream, lease: lease, call: call, releaseCtx: context.WithoutCancel(ctx)}, nil
+	return &leasedModelStream{stream: &contractStream{stream: stream, contract: call.contract}, lease: lease, call: call, releaseCtx: context.WithoutCancel(ctx)}, nil
 }
 
 func (gateway *Gateway) validate(selection domain.ModelSelection, request domain.ModelRequest) error {
@@ -118,7 +124,14 @@ func (gateway *Gateway) admit(ctx context.Context, selection domain.ModelSelecti
 	if err := gateway.validate(selection, request); err != nil {
 		return nil, err
 	}
-	call := &modelCall{gateway: gateway, selection: selection, request: request, started: gateway.now(),
+	compiled, err := compileModelContract(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkCapabilities(ctx, gateway.Catalog, selection, request); err != nil {
+		return nil, err
+	}
+	call := &modelCall{gateway: gateway, selection: selection, request: request, started: gateway.now(), contract: compiled,
 		prefillTokens: promptTokens(gateway.PromptTokens, request.Prompt)}
 	if err := gateway.RateLimiter.AllowModelCall(ctx, request); err != nil {
 		call.admissionRejected(ctx, err)

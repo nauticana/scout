@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -276,6 +277,36 @@ func TestTurnRuntimeGuardrailRejectionPublishesNoRawOutput(t *testing.T) {
 	}
 }
 
+func TestTurnRuntimeUsesGuardedOutputForStateAndTypedResult(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	runtime.Definitions = fake.DefinitionResolverFunc(func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
+		return domain.ExecutionGraph{AgentID: "agent", Version: "v1", EntryStepID: "answer", Steps: []domain.ExecutionStep{
+			{ExecutionStepID: 1, StepID: "answer", Kind: "answer"},
+		}}, nil
+	})
+	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{State: []byte("secret"), Events: []domain.TurnEvent{
+				{Version: domain.TurnEventVersion, Kind: domain.TurnEventTextDelta, Text: "sec"},
+				{Version: domain.TurnEventVersion, Kind: domain.TurnEventResult, Text: "secret"},
+			}}, nil
+		}), nil
+	})
+	runtime.Guardrails = &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.GuardrailSubject, chunk domain.ModelChunk) (domain.ModelChunk, error) {
+		chunk.Payload = []byte("redacted")
+		return chunk, nil
+	}}
+	result, err := runtime.HandleTurn(context.Background(), runtimeDispatch())
+	if err != nil {
+		t.Fatalf("HandleTurn: %v", err)
+	}
+	if string(result.Response) != "redacted" || string(recorder.frames[0].Payload) != "redacted" ||
+		len(recorder.frames[0].Events) != 1 || recorder.frames[0].Events[0].Text != "redacted" {
+		t.Fatalf("unguarded result escaped: result=%q frame=%+v", result.Response, recorder.frames[0])
+	}
+}
+
 func TestTurnRuntimeCancellationRefundsAndMarksCancelled(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
@@ -381,5 +412,58 @@ func TestTurnRuntimeRequiresCollaboratorsAndValidDispatch(t *testing.T) {
 	dispatch.ReplyRoute = ""
 	if _, err := runtime.HandleTurn(context.Background(), dispatch); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
+	}
+}
+
+func TestTurnRuntimePublishesStepEventsOnTheStepFrame(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	events := []domain.TurnEvent{{Version: domain.TurnEventVersion, Kind: domain.TurnEventToolResult, Tool: &domain.TurnToolEvent{CallID: "a", ToolID: "search"}}}
+	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{State: []byte("answer"), Events: events}, nil
+		}), nil
+	})
+	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+		t.Fatalf("HandleTurn: %v", err)
+	}
+	if len(recorder.frames) != 2 || !reflect.DeepEqual(recorder.frames[0].Events, events) || recorder.frames[0].Sequence != 0 {
+		t.Fatalf("frames = %+v", recorder.frames)
+	}
+	if final := recorder.frames[1]; !final.Final || len(final.Events) != 0 {
+		t.Fatalf("final frame = %+v", final)
+	}
+}
+
+func TestTurnRuntimeSettlesUsageAFailedStepAlreadySpent(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{}, &LoopError{Err: domain.ErrExecutionLimit, Usage: domain.Usage{InputTokens: 40, Currency: "USD"}}
+		}), nil
+	})
+	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrExecutionLimit) {
+		t.Fatalf("want ErrExecutionLimit, got %v", err)
+	}
+	if recorder.committed != 1 || recorder.released != 0 || len(recorder.usage) != 1 || recorder.usage[0].InputTokens != 40 {
+		t.Fatalf("spent usage must be settled, not refunded: committed %d released %d usage %+v", recorder.committed, recorder.released, recorder.usage)
+	}
+}
+
+func TestTurnRuntimeSuspensionFrameCarriesTheApprovalPendingEvent(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{}, &LoopError{Err: domain.ErrApprovalPending, Usage: domain.Usage{InputTokens: 40}}
+		}), nil
+	})
+	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+		t.Fatalf("a suspended turn acks its delivery, got %v", err)
+	}
+	last := recorder.frames[len(recorder.frames)-1]
+	if len(last.Events) != 1 || last.Events[0].Kind != domain.TurnEventApprovalPending || recorder.committed != 0 {
+		t.Fatalf("suspension frame = %+v, committed %d", last, recorder.committed)
 	}
 }

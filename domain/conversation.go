@@ -40,10 +40,12 @@ type TurnReply struct {
 	ReplyRoute     string
 	Sequence       int64
 	Payload        []byte
-	Final          bool
-	ErrorCode      string
-	AgentVersion   string
-	EmittedAt      time.Time
+	// Events are the typed view of the frame; Payload stays the opaque one.
+	Events       []TurnEvent
+	Final        bool
+	ErrorCode    string
+	AgentVersion string
+	EmittedAt    time.Time
 }
 
 // SessionSnapshot contains the latest durable conversation state. State is

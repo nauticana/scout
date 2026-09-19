@@ -7,6 +7,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -29,26 +30,97 @@ func (p *OpenAI) Generate(ctx context.Context, selection domain.ModelSelection, 
 	if p.APIKey == "" {
 		return domain.ModelResult{}, fmt.Errorf("%w: openai API key is not set", domain.ErrNotReady)
 	}
+	params, err := p.completionParams(selection, request)
+	if err != nil {
+		return domain.ModelResult{}, err
+	}
 	client := openai.NewClient(option.WithAPIKey(p.APIKey))
-	resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model:       selection.Model,
-		Messages:    []openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(request.Prompt))},
-		Temperature: openai.Float(temperature(p.Temperature, p.TemperatureConfigured)),
-		MaxTokens:   openai.Int(maxOutputTokens(request)),
-	})
+	resp, err := client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return domain.ModelResult{}, fmt.Errorf("openai ChatCompletion: %w", err)
 	}
+	return openAIResult(resp)
+}
+
+func (p *OpenAI) completionParams(selection domain.ModelSelection, request domain.ModelRequest) (openai.ChatCompletionNewParams, error) {
+	if err := checkOutputMode(OpenAIProviderID, request.Output); err != nil {
+		return openai.ChatCompletionNewParams{}, err
+	}
+	params := openai.ChatCompletionNewParams{
+		Model:       selection.Model,
+		Temperature: openai.Float(temperature(p.Temperature, p.TemperatureConfigured)),
+		MaxTokens:   openai.Int(maxOutputTokens(request)),
+	}
+	for _, message := range conversation(request) {
+		params.Messages = append(params.Messages, openAIMessages(message)...)
+	}
+	for _, tool := range request.Tools {
+		schema, err := schemaObject(tool.InputSchema)
+		if err != nil {
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("tool %q: %w", tool.Name, err)
+		}
+		function := shared.FunctionDefinitionParam{Name: tool.Name, Parameters: shared.FunctionParameters(schema)}
+		if tool.Description != "" {
+			function.Description = openai.String(tool.Description)
+		}
+		params.Tools = append(params.Tools, openai.ChatCompletionToolParam{Function: function})
+	}
+	if request.Output.Mode == domain.OutputModeJSONSchema {
+		schema, err := schemaObject(request.Output.Schema)
+		if err != nil {
+			return openai.ChatCompletionNewParams{}, err
+		}
+		params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name: schemaName(request.Output), Schema: schema, Strict: openai.Bool(true),
+			}},
+		}
+	}
+	return params, nil
+}
+
+// openAIMessages maps one message; a tool message fans out because Chat
+// Completions answers each call id in its own message.
+func openAIMessages(message domain.ModelMessage) []openai.ChatCompletionMessageParamUnion {
+	switch message.Role {
+	case domain.ModelRoleAssistant:
+		assistant := openai.ChatCompletionAssistantMessageParam{}
+		if len(message.Text) > 0 {
+			assistant.Content.OfString = openai.String(string(message.Text))
+		}
+		for _, call := range message.ToolCalls {
+			assistant.ToolCalls = append(assistant.ToolCalls, openai.ChatCompletionMessageToolCallParam{
+				ID:       call.CallID,
+				Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: call.Name, Arguments: string(call.Arguments)},
+			})
+		}
+		return []openai.ChatCompletionMessageParamUnion{{OfAssistant: &assistant}}
+	case domain.ModelRoleTool:
+		messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(message.Observations))
+		for _, observation := range message.Observations {
+			messages = append(messages, openai.ToolMessage(string(observation.Output), observation.CallID))
+		}
+		return messages
+	}
+	return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(message.Text))}
+}
+
+func openAIResult(resp *openai.ChatCompletion) (domain.ModelResult, error) {
 	if len(resp.Choices) == 0 {
 		return domain.ModelResult{}, fmt.Errorf("openai: no choices returned")
 	}
-	text := resp.Choices[0].Message.Content
-	if text == "" {
-		return domain.ModelResult{}, fmt.Errorf("openai: empty response content")
+	choice := resp.Choices[0]
+	var calls []domain.ModelToolCall
+	for _, call := range choice.Message.ToolCalls {
+		calls = append(calls, domain.ModelToolCall{CallID: call.ID, Name: call.Function.Name, Arguments: []byte(call.Function.Arguments)})
+	}
+	if err := emptyResult(OpenAIProviderID, choice.Message.Content, calls); err != nil {
+		return domain.ModelResult{}, err
 	}
 	return domain.ModelResult{
-		Output:       []byte(text),
-		FinishReason: resp.Choices[0].FinishReason,
+		Output:       []byte(choice.Message.Content),
+		ToolCalls:    calls,
+		FinishReason: finishReason(choice.FinishReason, calls),
 		Usage: domain.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
 			OutputTokens: resp.Usage.CompletionTokens,

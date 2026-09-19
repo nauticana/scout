@@ -22,7 +22,7 @@ The repository never invents a fingerprint, currency, or digest: `Checkpoint` re
 
 `ObjectStateStore` writes `<KeyPrefix>/<name>/<sha256>` where `<name>` is deterministic:
 `checkpoint/<tenant>/<conversation>/<turn>/<step>`, `turn/<tenant>/<conversation>/<turn>/response`,
-`step/<tenant>/<request>/<execution_step_id>`. Identical retries overwrite the same object; different content
+`step/<tenant>/<request>/<execution_step_id>`, `loop/<tenant>/<request>/<execution_step_id>/<entry_no>`. Identical retries overwrite the same object; different content
 from a concurrent writer never collides, so a loser can never corrupt the winner's referenced bytes.
 
 Object upload always precedes the row write. On row failure the store deletes its upload only after confirming
@@ -68,6 +68,25 @@ claimed (live) --Begin--> ErrConflict
 delivery → no-op). `Abandon` twice is a no-op; `Abandon` after `committed` is `ErrConflict`. The schema has no
 owner column, so a worker whose lease expired can still commit if it finishes before the reclaimer; both ran the
 side effect (inherent to lease expiry) and the second `Commit` observes `ErrConflict`.
+
+## Tool-loop journal
+
+A `tool_loop` step is one row of `step_idempotency`, but it makes several decisions and effects before it
+commits. `step_loop_entry` records them one entry at a time, keyed `(tenant, request, execution_step_id, entry_no)`
+and numbered from 1 without gaps; the body is an object, the row keeps URI and digest.
+
+```
+model decision  --Append--> entry n        (the proposed calls are now fixed)
+tool call k     --Invoke--> --Append--> entry n+k   (the observation is now fixed)
+pending approval            --Append--> approval_pending entry, step returns ErrApprovalPending
+```
+`Append` is first-writer-wins on the primary key: a concurrent worker gets the stored entry back and deletes its
+own upload; if the stored content differs from what it offered, the step fails with `ErrConflict` rather than
+continuing on a decision it did not make. On redelivery or approval resume the executor reads the journal and consumes it in order — a
+journaled decision is never re-asked, a journaled observation is never re-invoked — and appends only past its
+end. A crash between a tool effect and its entry is the one window where the call repeats; it carries the same
+`ToolCall.IdempotencyKey` (`loop:` + SHA-256 of tenant, request, execution step, and call id), which is what a transport dedupes on.
+The step result, not the journal, remains what `step_idempotency` replays once the step commits.
 
 ## Cache discipline (`SessionCoordinator`, `MemorySessionCache`)
 

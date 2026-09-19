@@ -1,6 +1,7 @@
 package dataplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -121,7 +122,8 @@ func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecutio
 		return err
 	}
 	runtime.audit(suspendCtx, execution, "turn_suspended", stage.ErrorClass(cause))
-	if err := runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause)); err != nil {
+	pending := domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventApprovalPending, Approval: &domain.TurnApprovalEvent{}}
+	if err := runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause), pending); err != nil {
 		return err
 	}
 	return nil
@@ -283,7 +285,11 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth,
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {
-			runtime.observe(ctx, execution, step, started, domain.Usage{}, err)
+			spent := spentUsage(err)
+			if !errors.Is(err, domain.ErrApprovalPending) {
+				err = errors.Join(err, addChunkUsage(&execution.usage, spent))
+			}
+			runtime.observe(ctx, execution, step, started, spent, err)
 			if abandonErr := runtime.Idempotency.Abandon(context.WithoutCancel(ctx), tenantID, turn.RequestID, step); abandonErr != nil {
 				return domain.StepResult{}, errors.Join(err, abandonErr)
 			}
@@ -306,11 +312,25 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		runtime.observe(ctx, execution, step, started, result.Usage, err)
 		return domain.StepResult{}, stage.At(domain.StageGuardrail, err)
 	}
+	transformed := !bytes.Equal(result.State, guarded.Payload)
+	result.State = guarded.Payload
+	result.Fingerprint = DigestBytes(result.State)
+	guardedEvents := result.Events[:0]
+	for _, event := range result.Events {
+		if transformed && event.Kind == domain.TurnEventTextDelta {
+			continue
+		}
+		if event.Kind == domain.TurnEventResult {
+			event.Text = string(result.State)
+		}
+		guardedEvents = append(guardedEvents, event)
+	}
+	result.Events = guardedEvents
 	if err := runtime.checkpoint(ctx, execution, step, stepNo, result, policy); err != nil {
 		runtime.observe(ctx, execution, step, started, result.Usage, err)
 		return domain.StepResult{}, stage.At(domain.StageCheckpoint, err)
 	}
-	if err := runtime.publish(ctx, execution, guarded.Payload, false, ""); err != nil {
+	if err := runtime.publish(ctx, execution, result.State, false, "", result.Events...); err != nil {
 		runtime.observe(ctx, execution, step, started, result.Usage, err)
 		return domain.StepResult{}, stage.At(domain.StagePublish, err)
 	}
@@ -465,11 +485,21 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 	return failure
 }
 
+// spentUsage is what a failed step reports it already consumed, so the turn
+// settles it instead of refunding it.
+func spentUsage(err error) domain.Usage {
+	var spent interface{ SpentUsage() domain.Usage }
+	if errors.As(err, &spent) {
+		return spent.SpentUsage()
+	}
+	return domain.Usage{}
+}
+
 func hasUsage(usage domain.Usage) bool {
 	return usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ToolCalls > 0 || usage.CostMinorUnits > 0
 }
 
-func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecution, payload []byte, final bool, errorCode string) error {
+func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecution, payload []byte, final bool, errorCode string, events ...domain.TurnEvent) error {
 	turn := execution.dispatch.Turn
 	err := runtime.Publisher.Publish(ctx, domain.TurnReply{
 		TenantID:       turn.TenantContext.TenantID,
@@ -478,6 +508,7 @@ func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecutio
 		ReplyRoute:     execution.dispatch.ReplyRoute,
 		Sequence:       execution.published,
 		Payload:        payload,
+		Events:         events,
 		Final:          final,
 		ErrorCode:      errorCode,
 		AgentVersion:   execution.snapshot.AgentVersion,

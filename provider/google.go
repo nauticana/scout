@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -44,17 +45,132 @@ func (p *Google) Generate(ctx context.Context, selection domain.ModelSelection, 
 	if err != nil {
 		return domain.ModelResult{}, fmt.Errorf("genai.NewClient: %w", err)
 	}
-	prompt := string(request.Prompt)
-	resp, err := client.Models.GenerateContent(ctx, selection.Model, genai.Text(prompt), &genai.GenerateContentConfig{
-		Temperature:     genai.Ptr(float32(temperature(p.Temperature, p.TemperatureConfigured))),
-		MaxOutputTokens: int32(maxOutputTokens(request)),
-	})
+	contents, config, err := p.contentParams(request)
+	if err != nil {
+		return domain.ModelResult{}, err
+	}
+	resp, err := client.Models.GenerateContent(ctx, selection.Model, contents, config)
 	if err != nil {
 		return domain.ModelResult{}, fmt.Errorf("genai GenerateContent: %w", err)
 	}
-	text := resp.Text()
-	if text == "" {
-		return domain.ModelResult{}, fmt.Errorf("genai: no text content generated")
+	return googleResult(resp, request)
+}
+
+func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *genai.GenerateContentConfig, error) {
+	if err := checkOutputMode(GoogleProviderID, request.Output); err != nil {
+		return nil, nil, err
+	}
+	config := &genai.GenerateContentConfig{
+		Temperature:     genai.Ptr(float32(temperature(p.Temperature, p.TemperatureConfigured))),
+		MaxOutputTokens: int32(maxOutputTokens(request)),
+	}
+	if len(request.Tools) > 0 {
+		declarations := make([]*genai.FunctionDeclaration, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			schema, err := schemaObject(tool.InputSchema)
+			if err != nil {
+				return nil, nil, fmt.Errorf("tool %q: %w", tool.Name, err)
+			}
+			declarations = append(declarations, &genai.FunctionDeclaration{Name: tool.Name, Description: tool.Description, ParametersJsonSchema: schema})
+		}
+		config.Tools = []*genai.Tool{{FunctionDeclarations: declarations}}
+	}
+	if request.Output.Mode == domain.OutputModeJSONSchema {
+		schema, err := schemaObject(request.Output.Schema)
+		if err != nil {
+			return nil, nil, err
+		}
+		config.ResponseMIMEType = "application/json"
+		config.ResponseJsonSchema = schema
+	}
+	contents := make([]*genai.Content, 0, len(request.Messages)+1)
+	for _, message := range conversation(request) {
+		content, err := googleContent(message)
+		if err != nil {
+			return nil, nil, err
+		}
+		contents = append(contents, content)
+	}
+	return contents, config, nil
+}
+
+func googleContent(message domain.ModelMessage) (*genai.Content, error) {
+	parts := make([]*genai.Part, 0, 1+len(message.ToolCalls)+len(message.Observations))
+	if len(message.Text) > 0 {
+		parts = append(parts, genai.NewPartFromText(string(message.Text)))
+	}
+	for _, call := range message.ToolCalls {
+		var args map[string]any
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, fmt.Errorf("%w: arguments of tool call %q: %w", domain.ErrValidation, call.CallID, err)
+		}
+		part := genai.NewPartFromFunctionCall(call.Name, args)
+		part.FunctionCall.ID = call.CallID
+		parts = append(parts, part)
+	}
+	for _, observation := range message.Observations {
+		part := genai.NewPartFromFunctionResponse(observation.Name, googleObservation(observation))
+		part.FunctionResponse.ID = observation.CallID
+		parts = append(parts, part)
+	}
+	if message.Role == domain.ModelRoleAssistant {
+		return genai.NewContentFromParts(parts, genai.RoleModel), nil
+	}
+	return genai.NewContentFromParts(parts, genai.RoleUser), nil
+}
+
+// googleObservation wraps output in the object Gemini requires: "output" on
+// success, "error" on failure, with JSON output passed through structured.
+func googleObservation(observation domain.ModelToolObservation) map[string]any {
+	key := "output"
+	if observation.IsError {
+		key = "error"
+	}
+	var decoded any
+	if json.Unmarshal(observation.Output, &decoded) != nil {
+		decoded = string(observation.Output)
+	}
+	return map[string]any{key: decoded}
+}
+
+func googleResult(resp *genai.GenerateContentResponse, request domain.ModelRequest) (domain.ModelResult, error) {
+	var calls []domain.ModelToolCall
+	turnNo := 1
+	for _, message := range request.Messages {
+		if message.Role == domain.ModelRoleAssistant {
+			turnNo++
+		}
+	}
+	for index, call := range resp.FunctionCalls() {
+		arguments, err := json.Marshal(call.Args)
+		if err != nil {
+			return domain.ModelResult{}, fmt.Errorf("genai: encode arguments of %q: %w", call.Name, err)
+		}
+		if call.Args == nil {
+			arguments = []byte("{}")
+		}
+		callID := call.ID
+		if callID == "" {
+			// Gemini omits ids outside Vertex. Include the assistant turn so ids
+			// remain distinct across a multi-iteration tool conversation.
+			callID = fmt.Sprintf("call_%d_%d", turnNo, index+1)
+		}
+		calls = append(calls, domain.ModelToolCall{CallID: callID, Name: call.Name, Arguments: arguments})
+	}
+	text := ""
+	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if part != nil && !part.Thought {
+				text += part.Text
+			}
+		}
+	}
+	if err := emptyResult(GoogleProviderID, text, calls); err != nil {
+		return domain.ModelResult{}, err
+	}
+	native := ""
+	if len(resp.Candidates) > 0 {
+		native = string(resp.Candidates[0].FinishReason)
 	}
 	usage := domain.Usage{}
 	if resp.UsageMetadata != nil {
@@ -63,10 +179,10 @@ func (p *Google) Generate(ctx context.Context, selection domain.ModelSelection, 
 	} else {
 		// Vertex omits usage on some model families; a 4-chars-per-token
 		// estimate keeps accounting non-zero rather than silently free.
-		usage.InputTokens = int64(len(prompt)) / 4
+		usage.InputTokens = int64(len(request.Prompt)) / 4
 		usage.OutputTokens = int64(len(text)) / 4
 	}
-	return domain.ModelResult{Output: []byte(text), Usage: usage}, nil
+	return domain.ModelResult{Output: []byte(text), ToolCalls: calls, FinishReason: finishReason(native, calls), Usage: usage}, nil
 }
 
 func (p *Google) Stream(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {

@@ -4,7 +4,7 @@ Gap analysis for the **Enterprise Agent Organization Control Plane** (Digital Wo
 
 This document covers **shared building blocks only**. It deliberately does not design the product: no organizational unit, position, HR semantics, policy pack, process template, or Sail screen appears here. Those are the proprietary layer (idea-12 §12, "settle the open-core line first"). What follows is the generic substrate that layer needs and that Scout does not have today.
 
-Companion task list: [TODO_DWF.md](TODO_DWF.md). Prior idea/task inventory: [IDEAS.md](IDEAS.md) / [TODO.md](TODO.md).
+Open work: [TODO.md](TODO.md). Prior idea inventory: [IDEAS.md](IDEAS.md).
 
 **Status.** All three waves shipped on 2026-08-17. Every block DWF-1 through DWF-13 now has an implementation in the tree, with four deliberate exceptions, all of them external adapters or the prompt retrofit: OPA/cedar-go behind the policy port (A3), SPIFFE and RFC 8693 behind the credential port (K4), the OpenTelemetry GenAI mapping (V4), the A2A adapter behind `AgentInvoker` (D5), and the prompt inheritance retrofit onto `config_scope_binding` (C5). The gap descriptions below are kept as written — they are the evidence the design answers — with a shipped note on each block.
 

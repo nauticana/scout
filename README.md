@@ -21,8 +21,9 @@ Scout is licensed under the [Apache License 2.0](LICENSE).
 | `internal/` | Mechanisms with no downstream call site, including shared test fakes |
 | `doc/` | Database reference and one design reference per mechanism, linked from this guide |
 | `STUDIO_API.md` | Agent Studio HTTP compatibility reference |
-| `IDEAS.md` / `TODO.md` | Gap analysis against the design study set, and the task lists it produced |
-| `IDEAS.DWF.md` / `TODO_DWF.md` | Digital Work Force gap analysis: the shared building blocks an enterprise agent-organization control plane needs, and their work plan |
+| `IDEAS.md` | Gap analysis against the design study set |
+| `TODO.md` | Work still open |
+| `IDEAS.DWF.md` | Digital Work Force gap analysis: the shared building blocks an enterprise agent-organization control plane needs |
 | `migration_guide.json` | Versioned upgrade history; this guide documents only the current state |
 | `go.mod` | Module identity and the pinned keel schema compiler tool |
 
@@ -129,12 +130,12 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
 | `service/controlplane` | `control_plane.go`, `studio*.go`, `agent_type.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner`, `AgentTypeStore` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
-| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `AgentStepExecutor`, `TableWorkItemStore`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
+| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `ToolLoopExecutor`, `TableLoopJournal`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `AgentStepExecutor`, `TableWorkItemStore`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
 | `service/charter` | `runtime.go` | `Runtime`, `Admission`, `Directory`, `Transport`, `TriggerHandler`, `Adapter`, `Claim` | Charter governed runtime over Scout tools and keel: admission, capability invocation, evidence, event delivery, conformance |
 | `service/isolation` | `isolation.go` | `ExecutionGovernor`, keel-backed rate-limiter factories, `DistributedTenantRateLimiter`, `LatencyBudgetAllocator`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector`, `ReleaseLimits` | Keel database and cache, admission policy, budget policy, stage latency model, loop detection, and cost circuit breaking |
 | `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever`, `ReleaseEntitlements` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
 | `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
-| `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
+| `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, `EvidenceValidator`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
 | `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
 | `service/evaluation` | `evaluation.go` | `Runner`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
 | `service/observability` | `observability.go` | `BoundedRuntimeMetrics`, `LabelPolicy`, `TenantHeavyHitters`, `AuditingObservationRecorder`, `TableAuditSink`, `KeelMetricSink` | Metric backends, tenant ledger, and audit sink |
@@ -143,7 +144,7 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | `service/approval` | `approval.go` | `TableStore`, `Gate`, `Resumer`, `BackupEscalation`, `Sweeper` | Keel database, notification transport, turn dispatch |
 | `service/principal` | `principal.go`, `delegation.go` | `RoleAuthorizer`, `TableResolver`, `ChainVerifier`, `TableGrants`, `GrantAuthorizer` | Keel database, external identity planes |
 | `service/scope` | `scope.go` | `Compiler`, `MergerRegistry`, `LatticeChecker`, `TableScopeRepository`, `TableEffectiveReleaseStore`, `Explainer` | Keel database and product-registered resource mergers |
-| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway`, `BindingAuthorizer`, `BoundCredentialProvider`, `TableCredentialBindings`, and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
+| `service/toolgateway` | `tool_gateway.go` | `GovernedGateway`, `TableToolRegistry`, `SchemaResultValidator`, `BindingAuthorizer`, `BoundCredentialProvider`, `TableCredentialBindings`, and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
 
 These services enforce ordering and failure semantics but do not provide no-op infrastructure. Cache failures fall back to durable storage and are reported through `RuntimeMetrics`; durable writes complete before cache invalidation; model capacity is released on every unary or streaming terminal path; and tool calls cannot bypass authorization, egress, circuit, credential, or result validation boundaries.
 
@@ -494,7 +495,7 @@ Run `mcp/mcptest` manifest and tool-text conformance checks before publishing a 
 
 ## Database schema
 
-Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 40 Scout tables rather than all 104.
+Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 41 Scout tables rather than all 106.
 
 The schema uses portable types supported by keel's PostgreSQL and MySQL dialects. Structured definitions are canonical JSON stored as `TEXT` and validated at service or compilation boundaries. Timestamps use `TIMESTAMP`; large data stays outside the relational database behind URI and digest columns.
 
@@ -511,13 +512,13 @@ Scout's schema is fifteen modules so a downstream installs only what its product
 | `catalog` | 15 | Currency, priority, lifecycle, usage, scope, resource-kind, merge-mode, decision, approval, risk, output-class, and agent-state catalogs | — |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
 | `prompt` | 2 | Prompt sections and platform baselines | — |
-| `model` | 5 | Providers, model definitions, capabilities, pricing, tenant access | `catalog`, `tenancy` |
+| `model` | 6 | Providers, model definitions, capabilities, routes, pricing, tenant access | `catalog`, `tenancy` |
 | `agent` | 14 | Types and type versions, capability packages, profiles, drafts, aliases, prompt overrides, guardrail config, published versions, deployments, version quarantine, Studio audit | `tenancy`, `prompt`, `model` |
 | `tool` | 5 | Tool profiles, immutable versions, egress rules, agent bindings, principal credential bindings | `tenancy`, `agent`, `agent_authorization` |
 | `execution_graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
 | `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
-| `runtime` | 13 | Conversations, turns, checkpoints, replay, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
+| `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
 | `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
@@ -542,18 +543,18 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 38 selected keel tables and 104 Scout tables. Drop the modules the product does not use:
+That full set is 38 selected keel tables and 106 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent` | 40 |
-| … plus agent principals, delegation, and scoped configuration | `+ agent_authorization`, `configuration` | 45 |
-| … plus compiled execution graphs | `+ execution_graph` | 49 |
-| … plus governed tools and credential bindings | `+ tool` | 54 |
-| … plus durable human approvals | `+ approval` | 56 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 65 |
-| … plus the durable turn runtime | `+ runtime` | 78 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 104 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent` | 41 |
+| … plus agent principals, delegation, and scoped configuration | `+ agent_authorization`, `configuration` | 46 |
+| … plus compiled execution graphs | `+ execution_graph` | 50 |
+| … plus governed tools and credential bindings | `+ tool` | 55 |
+| … plus durable human approvals | `+ approval` | 57 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 66 |
+| … plus the durable turn runtime | `+ runtime` | 80 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 106 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -628,6 +629,20 @@ resilient, _ := modelgateway.NewResilientGateway(gateway, modelgateway.StreamDea
     FirstToken: 2 * time.Second, Idle: 5 * time.Second, Total: 90 * time.Second,
 }, 2, 50*time.Millisecond)
 ```
+
+### Tool calls and constrained output
+
+A `domain.ModelRequest` is provider-neutral beyond its prompt. `Tools` offers pinned tool versions as `ModelTool` values, `Messages` continues the conversation with earlier `ModelToolCall`s and the `ModelToolObservation`s answering them, and `Output` asks for a JSON Schema-constrained answer. `ModelResult.ToolCalls` and `ModelChunk.ToolCalls` carry what the model proposed, with `FinishReason` normalized to `tool_calls`. No SDK type crosses `domain` or `contract`: the Anthropic, OpenAI, and Google adapters map tools, parallel calls, call ids (synthesized per assistant turn and position where Gemini sends none, so they stay unique across loop iterations), observations, and the provider's native structured-output mode, and refuse an output mode they cannot enforce with `ErrCapabilityUnsupported` rather than serving free text.
+
+Offering tools implies the `tools` capability and a constrained output implies `structured_output`; `modelgateway.RequiredCapabilities` is what both the router and the gateway check. The gateway confirms the selected route against its `Catalog` before the provider is invoked and fails closed — no catalog, or a route the catalog does not list, is `ErrCapabilityUnsupported`. Before the call it validates the conversation in `Messages` — roles, offered tools, argument schemas, and that every call id is unique and answered by exactly one observation. After the call it validates usage and every tool call (offered name, a call id unused anywhere in the conversation, arguments against the tool's input schema) and the terminal output against the requested schema; a violation is `ErrInvalidModelOutput`. `Stream` applies the same checks per frame and at the terminal frame, so unary and streamed calls are equivalent.
+
+```go
+gateway.Catalog = catalog // required once a request offers tools or constrains output
+request.Tools = []domain.ModelTool{{Name: "lookup", ToolID: "lookup", ToolVersion: "3", InputSchema: schema}}
+request.Output = domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, SchemaName: "answer", Schema: answerSchema}
+```
+
+`TableCandidateCatalog` reads `model_route` when a model has rows there: each active route is one candidate with its own model version, region, and quality class. A model with no routes stays one derived route in the deployment region; a model whose routes are all inactive offers nothing.
 
 Scout is not a GPU scheduler. It closes the loop with the serving control plane instead: `ServingSignalCollector` aggregates queued prefill tokens, decode token-seconds, queue-wait percentiles, TTFT and TPOT percentiles, admission rejections, and capacity outcomes per route, and `Flush` hands them to a `ServingSignalExporter` an external autoscaler consumes. A draining route admits nothing new and its running streams end with an explicit partial completion at `DrainDeadline`. See [doc/serving_signals.md](doc/serving_signals.md).
 
@@ -778,7 +793,34 @@ cached, err := knowledge.NewCachedRetriever(hybrid, keyer, knowledge.CachedRetri
 })
 ```
 
-The model never calls a destination directly. A governed tool path resolves the registered immutable version, authorizes tenant and agent access, retrieves scoped credentials, validates egress, applies timeout/retry/circuit-breaker policy, validates output, and records a redacted audit event.
+The model never calls a destination directly. A governed tool path resolves the registered immutable version, validates the arguments against its input schema, authorizes tenant and agent access, retrieves scoped credentials, validates egress, applies timeout/retry/circuit-breaker policy, validates output, and records a redacted audit event.
+
+### Tool registry
+
+`toolgateway.TableToolRegistry` is the `ToolRegistry` and `ToolBinder` over `tool_profile`, `tool_version`, and `agent_tool_binding`. `Register` compiles and canonicalizes both JSON Schemas — a schema using a keyword Scout cannot enforce (`pattern`, `format`, `oneOf`, `$ref`, …) is rejected, never half-enforced — and writes the profile and its version in one transaction; registering identical content again is a no-op in any formatting, and different content under the same `(tenant, tool, version)`, or a different display name for an existing profile, is `ErrConflict`. `Get` is tenant-scoped and answers another tenant's tool with `ErrNotFound`. `Bind` pins registered versions to one agent version all-or-nothing, and `List` returns only what that pinned agent version binds — which is what `BindingAuthorizer` enforces at invoke time. `SchemaResultValidator` is the matching `ToolResultValidator`.
+
+### Bounded model↔tool loop
+
+`dataplane.ToolLoopExecutor` is the `StepExecutor` for the `tool_loop` step kind: model → governed tool calls → observations → model, until the model answers without calling a tool. It offers exactly the tools the principal's pinned release binds, reaches them only through `contract.GovernedToolGateway`, and carries the principal, tenant, authority chain, and a stable per-call `ToolCall.IdempotencyKey` through every iteration.
+
+Every model decision and every observation is appended to a `contract.LoopJournal` (`TableLoopJournal` over `step_loop_entry`, first writer wins) before the loop moves on. A redelivered step replays the journal, so a decision is never re-asked and a committed tool effect never repeats. A call that needs approval returns `ErrApprovalPending`, which suspends the turn; on resume the journaled proposal is presented again unchanged, so the digest the reviewer approved still matches. A recoverable tool failure is returned to the model as an error observation carrying only its error class; limits, identity, and authority failures end the loop.
+
+`domain.ToolLoopLimits` bounds iterations, tool calls, tokens, cost, identical repeated calls, and wall-clock time, and the delegated budget in `StepInput.Bounds` bounds cost as well. Each fails closed with `ErrExecutionLimit`, `ErrBudgetExceeded`, or `ErrLoopDetected`; a step's `ToolLoopConfig` may narrow every limit, never widen one, and unknown configuration keys are rejected. A cost limit or a delegated budget requires a `Pricer` and a matching currency, or the step fails closed with `ErrDegraded`. A failed loop reports what it already spent through `LoopError`, and the runtime settles that usage instead of refunding it. `LoopTrajectory` projects a journal onto `domain.TrajectoryEvent`s for `evaluation.TrajectoryScorer`.
+
+```go
+loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
+    Requests: promptBuilder, Router: router, Models: gateway, Registry: registry, Tools: governed,
+    Journal: &dataplane.TableLoopJournal{DB: db, Objects: objects}, Evidence: &guardrail.EvidenceValidator{Objects: objects},
+    Limits: domain.ToolLoopLimits{MaxIterations: 12, MaxToolCalls: 24, MaxTokens: 200_000, MaxRepeatedCalls: 3, Deadline: 5 * time.Minute},
+})
+_ = executors.Register(domain.StepKindToolLoop, loop)
+```
+
+### Typed turn events and evidence
+
+`domain.TurnEvent` is the versioned event vocabulary — `text_delta`, `tool_proposal`, `tool_result`, `approval_pending`, `approval_resolved`, `evidence`, `progress`, `result`, and a typed, versioned `extension` for product payloads. A step returns events in `StepResult.Events` and the runtime publishes them on that step's `TurnReply.Events`, after the step is committed and its guardrails passed, so they inherit the frame's sequence, deduplication, and replay; `Payload` stays the opaque view. When an output guardrail rewrites the step's state, the rewritten state is what is checkpointed, returned, published, and carried as the `result` event's text. A tool result becomes an event only after the gateway validated it and applied the tool guardrails.
+
+`domain.EvidencedAnswer` is the optional result shape for agents that make factual claims: each `Claim` cites `EvidenceRef`s. `guardrail.EvidenceValidator` accepts evidence only as an object whose digest verifies, a tool result of the same turn, or a resource link such a tool returned (`ToolResult.Evidence`); a URL the model supplies verifies as nothing. The `EvidenceReport` names each unsupported claim and keeps the supported ones, so a caller can return the safe part. A `tool_loop` step with `require_evidence` fails with `ErrUnsupportedClaim` instead.
 
 ## Principals and scoped configuration
 

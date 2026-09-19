@@ -165,6 +165,12 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_approval_deadline:   "3600",
 		agent_credential_ttl:      "300",
 		agent_audit_page_size:     "100",
+		agent_loop_max_iterations: "12",
+		agent_loop_max_tool_calls: "24",
+		agent_loop_max_tokens:     "200000",
+		agent_loop_max_cost:       "0",
+		agent_loop_max_repeats:    "3",
+		agent_loop_deadline:       "300",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

@@ -218,7 +218,7 @@ func (router *PolicyRouter) score(ctx context.Context, candidate domain.ModelCan
 	if _, excluded := inputs.excluded[candidate.RouteID]; excluded && candidate.RouteID != "" {
 		return scored, rejectExcluded, nil
 	}
-	for _, required := range inputs.request.RequiredCapabilities {
+	for _, required := range RequiredCapabilities(inputs.request) {
 		if !slices.Contains(candidate.Capabilities, required) {
 			return scored, rejectCapability, nil
 		}

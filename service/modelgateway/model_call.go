@@ -14,6 +14,7 @@ type modelCall struct {
 	gateway       *Gateway
 	selection     domain.ModelSelection
 	request       domain.ModelRequest
+	contract      *modelContract
 	started       time.Time
 	queueWait     time.Duration
 	prefillTokens int64

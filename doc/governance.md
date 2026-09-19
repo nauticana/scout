@@ -112,6 +112,6 @@ than stopping, so out-of-hours work is queued for a human instead of lost.
 
 ## What is not here yet
 
-Tracked in [TODO_DWF.md](../TODO_DWF.md): the OPA/cedar-go adapter behind the decision point (A3),
+Tracked in [TODO.md](../TODO.md): the OPA/cedar-go adapter behind the decision point (A3),
 SPIFFE and RFC 8693 credential adapters (K4), the OpenTelemetry GenAI mapping (V4), and keel's
 outbound `Notifier` delivery (H5 ships the port; keel owns the transport).

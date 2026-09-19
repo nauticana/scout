@@ -125,7 +125,18 @@ func (function ToolGuardrailConfigResolverFunc) GuardrailConfig(ctx context.Cont
 	return function(ctx, call)
 }
 
-var _ contract.ToolRegistry = (*ToolRegistry)(nil)
+// GovernedToolGatewayFunc adapts a function into a governed tool gateway.
+type GovernedToolGatewayFunc func(context.Context, domain.ToolCall) (domain.ToolResult, error)
+
+// Invoke invokes the configured function.
+func (function GovernedToolGatewayFunc) Invoke(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
+	return function(ctx, call)
+}
+
+var (
+	_ contract.ToolRegistry        = (*ToolRegistry)(nil)
+	_ contract.GovernedToolGateway = GovernedToolGatewayFunc(nil)
+)
 var _ contract.ToolAuthorizer = ToolAuthorizerFunc(nil)
 var _ contract.ToolCredentialProvider = ToolCredentialProviderFunc(nil)
 var _ contract.ToolEgressPolicy = ToolEgressPolicyFunc(nil)

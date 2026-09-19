@@ -108,7 +108,7 @@ hierarchy fails loudly instead of looping.
 
 ## What is not here yet
 
-The compiler is the generic half. Still open, tracked in [TODO_DWF.md](../TODO_DWF.md): prompt
+The compiler is the generic half. Still open, tracked in [TODO.md](../TODO.md): prompt
 inheritance still uses its own three tables rather than `config_scope_binding` (C5). Everything that
 consumes these primitives — the policy decision point, durable approvals, credential bindings,
 scope-keyed budgets, delegation — is in [doc/governance.md](governance.md) and

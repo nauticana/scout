@@ -60,6 +60,13 @@ var (
 	// ErrApprovalPending indicates work is parked awaiting a human decision. It is
 	// control flow, not a denial: the turn suspends and resumes on the verdict.
 	ErrApprovalPending = errors.New("approval pending")
+	// ErrCapabilityUnsupported indicates a route or adapter cannot honor a required
+	// capability; the request is refused instead of degraded.
+	ErrCapabilityUnsupported = errors.New("capability unsupported")
+	// ErrInvalidModelOutput indicates tool arguments or constrained output failed their schema.
+	ErrInvalidModelOutput = errors.New("invalid model output")
+	// ErrUnsupportedClaim indicates an answer makes a claim its evidence does not verify.
+	ErrUnsupportedClaim = errors.New("unsupported claim")
 )
 
 // TurnStage identifies the turn-lifecycle boundary that produced an error.

@@ -82,7 +82,7 @@ func (s *completedStream) Receive(context.Context) (domain.ModelChunk, error) {
 		return domain.ModelChunk{}, io.EOF
 	}
 	return domain.ModelChunk{
-		Sequence: 1, Payload: s.result.Output,
+		Sequence: 1, Payload: s.result.Output, ToolCalls: s.result.ToolCalls,
 		FinishReason: s.result.FinishReason, Usage: s.result.Usage,
 	}, nil
 }

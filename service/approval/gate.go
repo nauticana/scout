@@ -102,9 +102,14 @@ func ProposalDigest(call domain.ToolCall) string {
 }
 
 // stepIDFor keys the request within its turn. The tool call has no compiled step
-// id, so the tool identity within the request serves as the stable key.
+// id, so the tool identity serves, with the idempotency key telling apart several
+// calls of one tool in the same turn.
 func stepIDFor(call domain.ToolCall) int64 {
-	sum := sha256.Sum256([]byte(call.ToolID + "\x1f" + call.ToolVersion))
+	identity := call.ToolID + "\x1f" + call.ToolVersion
+	if call.IdempotencyKey != "" {
+		identity += "\x1f" + call.IdempotencyKey
+	}
+	sum := sha256.Sum256([]byte(identity))
 	var key int64
 	for _, b := range sum[:7] {
 		key = key<<8 | int64(b)

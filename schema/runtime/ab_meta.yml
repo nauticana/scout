@@ -4,6 +4,7 @@ tables:
   - step_checkpoint
   - session_snapshot
   - step_idempotency
+  - step_loop_entry
   - budget_reservation
   - conversation_turn_detail
   - usage_event

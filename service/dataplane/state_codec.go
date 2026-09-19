@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/nauticana/keel/storage"
 
+	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
 
@@ -150,6 +152,12 @@ func (store *ObjectStateStore) locate(ref domain.ObjectRef) (bucket, key string,
 	if !ok || bucket == "" || key == "" {
 		return "", "", fmt.Errorf("%w: object uri %q lacks bucket or key", domain.ErrValidation, ref.URI)
 	}
+	if bucket != store.Bucket {
+		return "", "", fmt.Errorf("%w: object uri %q is outside bucket %q", domain.ErrForbidden, ref.URI, store.Bucket)
+	}
+	if prefix := strings.Trim(store.KeyPrefix, "/"); prefix != "" && key != prefix && !strings.HasPrefix(key, prefix+"/") {
+		return "", "", fmt.Errorf("%w: object uri %q is outside key prefix %q", domain.ErrForbidden, ref.URI, prefix)
+	}
 	return bucket, key, nil
 }
 
@@ -172,4 +180,29 @@ func stepResultName(tenantID int64, requestID string, executionStepID int64) str
 	return fmt.Sprintf("step/%d/%s/%d", tenantID, url.PathEscape(requestID), executionStepID)
 }
 
-var _ ObjectStateCodec = (*ObjectStateStore)(nil)
+// VerifyObject reports whether a tenant-owned object still matches its digest.
+// Scout object names put the tenant immediately after the object kind. Objects
+// without that ownership segment cannot be admitted as evidence by this verifier.
+func (store *ObjectStateStore) VerifyObject(ctx context.Context, tenantID int64, object domain.ObjectRef) error {
+	if tenantID <= 0 {
+		return fmt.Errorf("%w: evidence object tenant is required", domain.ErrValidation)
+	}
+	_, key, err := store.locate(object)
+	if err != nil {
+		return err
+	}
+	if prefix := strings.Trim(store.KeyPrefix, "/"); prefix != "" {
+		key = strings.TrimPrefix(key, prefix+"/")
+	}
+	parts := strings.SplitN(key, "/", 3)
+	if len(parts) < 3 || parts[1] != strconv.FormatInt(tenantID, 10) {
+		return fmt.Errorf("%w: object %q is not owned by tenant %d", domain.ErrForbidden, object.URI, tenantID)
+	}
+	_, err = store.Hydrate(ctx, object)
+	return err
+}
+
+var (
+	_ ObjectStateCodec                = (*ObjectStateStore)(nil)
+	_ contract.EvidenceObjectVerifier = (*ObjectStateStore)(nil)
+)

@@ -1,0 +1,30 @@
+table: model_route
+comment: One served endpoint of a model with the version, region, and quality class routing ranks on
+columns:
+  - name: provider_id
+    type: VARCHAR(80)
+  - name: model_id
+    type: VARCHAR(120)
+  - name: route_id
+    type: VARCHAR(80)
+  - name: model_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: region
+    type: VARCHAR(80)
+  - name: quality_class
+    type: SMALLINT
+    default: 0
+  - name: is_active
+    type: BOOLEAN
+    default: TRUE
+primary_key: [provider_id, model_id, route_id]
+foreign_keys:
+  - name: model_routes
+    columns: [provider_id, model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
+checks:
+  - name: model_route_quality_ck
+    expression: quality_class >= 0
