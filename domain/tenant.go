@@ -4,15 +4,15 @@ import "time"
 
 // TenantContext identifies the tenant and its scheduling class.
 type TenantContext struct {
-	TenantID          int64
-	PriorityClass     string
-	DedicatedCapacity bool
+	TenantID          int64  `json:"tenant_id"`
+	PriorityClass     string `json:"priority_class,omitempty"`
+	DedicatedCapacity bool   `json:"dedicated_capacity,omitempty"`
 	// Tier is the bounded commercial class used as a metric label; never the tenant id.
-	Tier string
+	Tier string `json:"tier,omitempty"`
 	// Region is the tenant's home residency region.
-	Region string
+	Region string `json:"region,omitempty"`
 	// ScopeID places the work in the tenant's scope tree; empty means the tenant root.
-	ScopeID string
+	ScopeID string `json:"scope_id,omitempty"`
 }
 
 // TurnAdmissionPolicy states what a new prompt does to a running turn.
@@ -35,6 +35,12 @@ type TenantRuntimePolicy struct {
 	MidTurnPolicy     TurnAdmissionPolicy
 }
 
+// RuntimePolicyVersion names one immutable TenantRuntimePolicy. MidTurnPolicy is not versioned.
+type RuntimePolicyVersion struct {
+	Version string
+	Policy  TenantRuntimePolicy
+}
+
 // Usage records model, tool, and cost consumption.
 type Usage struct {
 	InputTokens    int64
@@ -49,6 +55,17 @@ type Usage struct {
 type UsageAttribution struct {
 	Principal PrincipalRef
 	ScopeID   string
+}
+
+// BudgetRequest asks for a hold on one request's tokens and cost. Principal is who
+// spends; it is what a per-principal budget is counted against.
+type BudgetRequest struct {
+	TenantID       int64
+	RequestID      string
+	Principal      PrincipalRef
+	Tokens         int64
+	CostMinorUnits int64
+	Currency       string
 }
 
 // BudgetReservation represents tokens and cost reserved for an operation.

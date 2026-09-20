@@ -30,7 +30,8 @@ func newBudgetRecorder() *budgetRecorder {
 
 func (recorder *budgetRecorder) manager() *fake.TenantBudgetManager {
 	return &fake.TenantBudgetManager{
-		ReserveFunc: func(_ context.Context, tenantID int64, requestID string, tokens, cost int64, currency string) (domain.BudgetReservation, error) {
+		ReserveFunc: func(_ context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
+			tenantID, requestID, tokens, cost, currency := request.TenantID, request.RequestID, request.Tokens, request.CostMinorUnits, request.Currency
 			recorder.mu.Lock()
 			defer recorder.mu.Unlock()
 			if requestID == recorder.failFor {

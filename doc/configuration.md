@@ -81,6 +81,8 @@ catalog and `ScoutConfig` cannot drift.
 | `knowledge.HybridRetriever.{Overfetch,MinRerankBudget}` | `--retrieval_overfetch`, `--retrieval_min_rerank_budget` | overfetch positive; budget non-negative |
 | `dataplane.MemoryReplyHub.{SubscriberBuffer,RetainedFrames,MaxStreams}` | `--reply_{subscriber_buffer,retained_frames,max_streams}` | non-negative; zero takes 16 / 64 / 4096 |
 | `dataplane.MemoryReplyHub.{Linger,IdleTTL}` | `--reply_linger`, `--reply_idle_ttl` | non-negative; zero takes 30s / 10m |
+| `dataplane.CacheReplyHub.{Retention,PollInterval}` | `--reply_retention`, `--reply_poll_interval` | non-positive takes 10m / 500ms |
+| `dataplane.TableTurnCanceller.PollInterval` | `--turn_cancel_poll_interval` | non-positive takes 1s |
 
 ## Principals and scoped configuration (`service/scope`, `service/principal`)
 
@@ -97,7 +99,7 @@ catalog and `ScoutConfig` cannot drift.
 Both are configuration-time ceilings, not runtime hints: exceeding either is a typed error, never a
 truncation.
 
-Every service owning timers or goroutines (`BatchingEmbedder`, `MemoryReplyHub`,
+Every service owning timers or goroutines (`BatchingEmbedder`, `MemoryReplyHub`, `CacheReplyHub`, `TableTurnCanceller`,
 `DistributedTenantRateLimiter`) exposes an idempotent `Close`; the composing binary owns the call
 during shutdown. Clocks are injected as `Now func() time.Time` (nil takes `time.Now`), so a
 downstream test can drive every window, TTL, and budget deterministically.

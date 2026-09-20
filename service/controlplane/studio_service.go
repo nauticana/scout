@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ type StudioService struct {
 	Kinds      contract.AgentTypeCatalog
 	Catalog    contract.StudioModelCatalog
 	Activity   contract.AgentActivityReporter
+	// Layout places an agent's prompt scopes; nil uses BasePromptScopeLayout. It must be the prompt repository's.
+	Layout contract.PromptScopeLayout
 	// ReleaseWriters run inside the publish and restore transaction, after the
 	// version row exists: tool bindings and the compiled execution graph commit
 	// with the release or not at all.
@@ -186,6 +189,9 @@ func (s *StudioService) GetDraft(ctx context.Context, tenantID int64, agentID st
 	if err != nil {
 		return domain.AgentDraft{}, err
 	}
+	if draft.PromptScopes, err = s.promptScopes(ctx, tenantID, agentID, draft.AgentTypeID); err != nil {
+		return domain.AgentDraft{}, err
+	}
 	languages, err := s.Sources.Languages(ctx, tenantID, agentID)
 	if err != nil {
 		return domain.AgentDraft{}, fmt.Errorf("list draft languages: %w", err)
@@ -253,6 +259,13 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 	if err = s.validateDraft(ctx, actor.TenantID, draft, false); err != nil {
 		return domain.AgentDraft{}, err
 	}
+	scopes, err := s.promptScopes(ctx, actor.TenantID, draft.AgentID, draft.AgentTypeID)
+	if err != nil {
+		return domain.AgentDraft{}, err
+	}
+	if err = s.checkSealedLayers(ctx, actor.TenantID, draft, scopes); err != nil {
+		return domain.AgentDraft{}, err
+	}
 
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
 	if err != nil {
@@ -278,22 +291,14 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 	if len(updated.Rows) == 0 {
 		return domain.AgentDraft{}, domain.ErrRevisionConflict
 	}
-	if _, err = tx.Query(ctx, qStudioDeleteOverrides, actor.TenantID, draft.AgentID); err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("delete prompt overrides: %w", err)
+	persisted, err := persistedPromptBindings(ctx, tx, actor.TenantID, scopes.AgentScopeID)
+	if err != nil {
+		return domain.AgentDraft{}, err
 	}
-	for _, language := range draft.Languages {
-		for _, section := range language.Sections {
-			if section.AgentOverride == nil {
-				continue
-			}
-			if _, err = tx.Query(ctx, qStudioInsertOverride, actor.TenantID, draft.AgentID, section.PromptSectionID,
-				language.LanguageCode, section.AgentOverride.Overwrite, section.AgentOverride.Instruction,
-				nullableString(section.AgentOverride.Output)); err != nil {
-				return domain.AgentDraft{}, fmt.Errorf("insert prompt override: %w", err)
-			}
-		}
+	if err = syncPromptBindings(ctx, tx, actor, scopes.AgentScopeID, desiredPromptBindings(draft, scopes.AgentScopeID), persisted); err != nil {
+		return domain.AgentDraft{}, err
 	}
-	changedDefaults, err := s.saveDefaults(ctx, tx, actor, draft)
+	changedDefaults, err := s.saveDefaults(ctx, tx, actor, draft, scopes.TypeScopeID)
 	if err != nil {
 		return domain.AgentDraft{}, err
 	}
@@ -378,6 +383,9 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
+	if err = s.freezeTools(ctx, &definition, nil, nil); err != nil {
+		return domain.AgentTestResult{}, err
+	}
 	result, err := s.Tester.Execute(ctx, actor, request, definition)
 	if err != nil {
 		return domain.AgentTestResult{}, err
@@ -408,11 +416,8 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	if len(request.Tools) > 0 || request.ToolLoop != nil {
-		definition.Tools, definition.ToolLoop = request.Tools, request.ToolLoop
-		if definition.DefinitionDigest, err = s.Compiler.DefinitionDigest(definition); err != nil {
-			return domain.AgentRelease{}, err
-		}
+	if err = s.freezeTools(ctx, &definition, request.Tools, request.ToolLoop); err != nil {
+		return domain.AgentRelease{}, err
 	}
 	definition.ChangeSummary = request.ChangeSummary
 	definition.DraftRevision = request.ExpectedDraftRevision
@@ -582,6 +587,10 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 	if !resetAgent && !resetTenant {
 		return domain.AgentDraft{}, validationError("scope", "must be agent_override, type_default, or platform_baseline")
 	}
+	scopes, err := s.promptScopes(ctx, actor.TenantID, request.AgentID, current.AgentTypeID)
+	if err != nil {
+		return domain.AgentDraft{}, err
+	}
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
 	if err != nil {
 		return domain.AgentDraft{}, fmt.Errorf("begin reset transaction: %w", err)
@@ -600,7 +609,7 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 		if len(res.Rows) == 0 {
 			return domain.AgentDraft{}, domain.ErrRevisionConflict
 		}
-		if err = resetPromptRows(ctx, tx, true, actor.TenantID, request.AgentID, request); err != nil {
+		if err = resetPromptBindings(ctx, tx, actor.TenantID, scopes.AgentScopeID, request); err != nil {
 			return domain.AgentDraft{}, err
 		}
 	}
@@ -612,7 +621,7 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 		if len(res.Rows) == 0 {
 			return domain.AgentDraft{}, domain.ErrRevisionConflict
 		}
-		if err = resetPromptRows(ctx, tx, false, actor.TenantID, current.AgentTypeID, request); err != nil {
+		if err = resetPromptBindings(ctx, tx, actor.TenantID, scopes.TypeScopeID, request); err != nil {
 			return domain.AgentDraft{}, err
 		}
 	}
@@ -750,11 +759,10 @@ func (s *StudioService) definition(ctx context.Context, tenantID int64, draft do
 		if err != nil {
 			return domain.AgentDefinition{}, fmt.Errorf("resolve publish language %q: %w", language.LanguageCode, err)
 		}
-		compiled, err := s.Compiler.Compile(language.LanguageCode, resolved.Rows)
+		compiled, err := s.Compiler.Compile(language.LanguageCode, resolved.Sections)
 		if err != nil {
 			return domain.AgentDefinition{}, fmt.Errorf("compile publish language %q: %w", language.LanguageCode, err)
 		}
-		definition.Sources = append(definition.Sources, resolved)
 		definition.Languages = append(definition.Languages, compiled)
 	}
 	if len(definition.Languages) == 0 {
@@ -766,6 +774,28 @@ func (s *StudioService) definition(ctx context.Context, tenantID int64, draft do
 	}
 	definition.DefinitionDigest = digest
 	return definition, nil
+}
+
+// freezeTools takes the given tools and loop, else the ones the agent type declares, so a publish that
+// names none cannot drop a type's tool set.
+func (s *StudioService) freezeTools(ctx context.Context, definition *domain.AgentDefinition, tools []domain.ToolReference, loop *domain.ToolLoopConfig) error {
+	if len(tools) == 0 && loop == nil && s.Kinds != nil {
+		descriptor, err := s.Kinds.Get(ctx, definition.AgentTypeID)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("load agent type %q: %w", definition.AgentTypeID, err)
+		}
+		tools, loop = descriptor.Tools, descriptor.ToolLoop
+	}
+	if len(tools) == 0 && loop == nil {
+		return nil
+	}
+	definition.Tools, definition.ToolLoop = slices.Clone(tools), loop
+	digest, err := s.Compiler.DefinitionDigest(*definition)
+	if err != nil {
+		return err
+	}
+	definition.DefinitionDigest = digest
+	return nil
 }
 
 func (s *StudioService) drift(ctx context.Context, tenantID int64, draft domain.AgentDraft) (*domain.AgentDrift, error) {
@@ -912,8 +942,10 @@ func resolveModelReference(reference *domain.ModelReference, field string, model
 	return &resolved
 }
 
-func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, draft domain.AgentDraft) (bool, error) {
-	desired := desiredPromptDefaults(draft)
+// saveDefaults syncs the type scope's bindings behind the prompt profile revision. An unchanged
+// set bumps nothing, so an agent-only save never collides with a concurrent type-level edit.
+func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, draft domain.AgentDraft, typeScopeID string) (bool, error) {
+	desired := desiredPromptBindings(draft, typeScopeID)
 	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
 	if err != nil {
 		return false, fmt.Errorf("lock prompt profile: %w", err)
@@ -924,11 +956,11 @@ func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQuerySer
 		}
 		return false, nil
 	}
-	persisted, err := tx.Query(ctx, qStudioListDefaults, actor.TenantID, draft.AgentTypeID)
+	persisted, err := persistedPromptBindings(ctx, tx, actor.TenantID, typeScopeID)
 	if err != nil {
-		return false, fmt.Errorf("load prompt defaults: %w", err)
+		return false, err
 	}
-	if promptDefaultsEqual(desired, persistedPromptDefaults(persisted.Rows)) {
+	if promptBindingsEqual(desired, persisted) {
 		return false, nil
 	}
 	if common.AsInt64(alias.Rows[0][1]) != draft.ExpectedPromptProfileRevision {
@@ -941,55 +973,7 @@ func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQuerySer
 	if len(bumped.Rows) == 0 {
 		return false, domain.ErrRevisionConflict
 	}
-	if _, err = tx.Query(ctx, qStudioDeleteDefaults, actor.TenantID, draft.AgentTypeID); err != nil {
-		return false, fmt.Errorf("delete prompt defaults: %w", err)
-	}
-	for key, value := range desired {
-		if _, err = tx.Query(ctx, qStudioInsertDefault, actor.TenantID, draft.AgentTypeID, key.sectionID,
-			key.language, value.Instruction, nullableString(value.Output)); err != nil {
-			return false, fmt.Errorf("insert prompt default: %w", err)
-		}
-	}
-	return true, nil
-}
-
-type promptDefaultKey struct {
-	sectionID int64
-	language  string
-}
-
-func desiredPromptDefaults(draft domain.AgentDraft) map[promptDefaultKey]domain.PromptValue {
-	values := map[promptDefaultKey]domain.PromptValue{}
-	for _, language := range draft.Languages {
-		for _, section := range language.Sections {
-			if section.TenantDefault != nil {
-				values[promptDefaultKey{section.PromptSectionID, language.LanguageCode}] = *section.TenantDefault
-			}
-		}
-	}
-	return values
-}
-
-func persistedPromptDefaults(rows [][]any) map[promptDefaultKey]domain.PromptValue {
-	values := make(map[promptDefaultKey]domain.PromptValue, len(rows))
-	for _, row := range rows {
-		values[promptDefaultKey{common.AsInt64(row[0]), common.AsString(row[1])}] = domain.PromptValue{
-			Instruction: common.AsString(row[2]), Output: common.AsString(row[3]),
-		}
-	}
-	return values
-}
-
-func promptDefaultsEqual(left, right map[promptDefaultKey]domain.PromptValue) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if right[key] != value {
-			return false
-		}
-	}
-	return true
+	return true, syncPromptBindings(ctx, tx, actor, typeScopeID, desired, persisted)
 }
 
 func validatePromptDraft(draft domain.AgentDraft) []domain.AgentFieldError {
@@ -1013,56 +997,17 @@ func validatePromptDraft(draft domain.AgentDraft) []domain.AgentFieldError {
 				fields = append(fields, domain.AgentFieldError{Field: "prompt_section_id", Message: "duplicate in language"})
 			}
 			sections[section.PromptSectionID] = struct{}{}
-			for _, value := range []*domain.PromptValue{section.TenantDefault, promptOverrideValue(section.AgentOverride)} {
-				if value != nil && (len(value.Instruction) > 16000 || len(value.Output) > 16000) {
+			for _, layer := range section.Layers {
+				if len(layer.Instruction) > 16000 || len(layer.Output) > 16000 {
 					fields = append(fields, domain.AgentFieldError{Field: "prompt", Message: "instruction and output must not exceed 16000 characters"})
+				}
+				if layer.MergeMode != "" && layer.MergeMode != domain.MergeAppend && layer.MergeMode != domain.MergeReplace {
+					fields = append(fields, domain.AgentFieldError{Field: "merge_mode", Message: "must be append or replace"})
 				}
 			}
 		}
 	}
 	return fields
-}
-
-func promptOverrideValue(value *domain.PromptOverride) *domain.PromptValue {
-	if value == nil {
-		return nil
-	}
-	return &value.PromptValue
-}
-
-func resetPromptRows(ctx context.Context, tx keelport.TxQueryService, agent bool, tenantID int64, scope string, request domain.AgentResetRequest) error {
-	query := qStudioResetDefaults
-	if agent {
-		query = qStudioResetOverrides
-	}
-	args := []any{tenantID, scope}
-	switch {
-	case request.PromptSectionID > 0 && request.LanguageCode != "":
-		if agent {
-			query = qStudioResetOverrideOne
-		} else {
-			query = qStudioResetDefaultOne
-		}
-		args = append(args, request.PromptSectionID, request.LanguageCode)
-	case request.PromptSectionID > 0:
-		if agent {
-			query = qStudioResetOverrideSec
-		} else {
-			query = qStudioResetDefaultSec
-		}
-		args = append(args, request.PromptSectionID)
-	case request.LanguageCode != "":
-		if agent {
-			query = qStudioResetOverrideLng
-		} else {
-			query = qStudioResetDefaultLng
-		}
-		args = append(args, request.LanguageCode)
-	}
-	if _, err := tx.Query(ctx, query, args...); err != nil {
-		return fmt.Errorf("reset prompt rows: %w", err)
-	}
-	return nil
 }
 
 func auditStudio(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, agentID, event, detail string) error {

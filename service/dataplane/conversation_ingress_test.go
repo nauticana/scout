@@ -43,7 +43,8 @@ func newTestIngress(t *testing.T, recorder *ingressRecorder, enqueueErr error) *
 		Objects:   &ObjectStateStore{Storage: &fake.ObjectStorage{}, Bucket: "turns", MaxBytes: 1 << 20},
 		Estimator: &fake.TurnBudgetEstimator{},
 		Budget: &fake.TenantBudgetManager{
-			ReserveFunc: func(_ context.Context, tenantID int64, requestID string, tokens, cost int64, currency string) (domain.BudgetReservation, error) {
+			ReserveFunc: func(_ context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
+				tenantID, requestID, tokens, currency := request.TenantID, request.RequestID, request.Tokens, request.Currency
 				recorder.calls = append(recorder.calls, "reserve")
 				return domain.BudgetReservation{TenantID: tenantID, ReservationID: "reservation-1", RequestID: requestID, Attempt: 1, GrantedTokens: tokens, Currency: currency}, nil
 			},

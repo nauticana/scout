@@ -15,6 +15,10 @@ columns:
     type: VARCHAR(120)
   - name: agent_id
     type: VARCHAR(80)
+  - name: principal_kind
+    type: VARCHAR(20)
+  - name: principal_id
+    type: VARCHAR(120)
   - name: partition_no
     type: SMALLINT
   - name: priority_rank
@@ -26,6 +30,9 @@ columns:
     type: TEXT
   - name: input_digest
     type: CHAR(64)
+  - name: acting_context
+    type: TEXT
+    nullable: true
   - name: attempt
     type: INTEGER
     default: "0"
@@ -75,6 +82,8 @@ indexes:
     columns: [tenant_id, conversation_id, status_code, enqueued_at]
   - name: turn_queue_lease_ix
     columns: [status_code, lease_until]
+  - name: turn_queue_principal_ix
+    columns: [tenant_id, principal_kind, principal_id, status_code]
 checks:
   - name: turn_queue_status_ck
     expression: status_code IN ('queued', 'leased', 'acked', 'dead')

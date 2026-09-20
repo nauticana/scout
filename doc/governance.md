@@ -96,8 +96,22 @@ name no tenant, such as a rollout transition. Reading across tenants is not expr
 Evidence is deliberately not telemetry. Metrics are sampled and lossy; a decision record is not, and
 never derives from one.
 
-Records are emitted at model routing, tool invocation, guardrail hits, credential resolution,
-approval verdicts, rollout transitions, version resolution, and turn terminal states.
+Records are emitted at turn admission, model routing, every governed tool invocation, guardrail
+hits, credential resolution, approval verdicts, rollout transitions, version resolution, and turn
+terminal states.
+
+A decision is recorded once. `domain.WithDecisionScope` marks the replay-stable position a decision
+is made at — the turn, the step, the loop iteration, the tool call by its idempotency key — and
+`domain.DecisionKeyFor` derives `audit_event.decision_key` from that scope and the record's
+category, action, and resource; the nth identical decision in one scope gets the nth key. The sink
+keeps the first record of a key, so a redelivered turn re-makes a decision without writing it twice.
+A decision made outside any scope has no key and stays append-only.
+
+A turn's chain is gap-free: it opens with `turn_admitted`, written before dispatch, and closes with
+exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`. An audit write that fails fails
+the delivery rather than passing silently, and the terminal replay offers the terminal record again,
+which the key makes a no-op unless the first write was lost. `observability.VerifyTurnChain` asserts
+all of this over one request's records.
 
 ## Attribution
 

@@ -23,7 +23,7 @@ func newSchedulerCodec(t *testing.T) (*ObjectStateStore, domain.ObjectRef) {
 
 func queueRow(id int64, tenantID int64, requestID, conversationID string, ref domain.ObjectRef, attempt int, token int64, enqueuedAt, leaseUntil time.Time) []any {
 	return []any{id, tenantID, requestID, conversationID, "agent", "route:" + requestID,
-		ref.URI, ref.Digest, int64(attempt), enqueuedAt, token, leaseUntil}
+		ref.URI, ref.Digest, int64(attempt), enqueuedAt, token, leaseUntil, nil}
 }
 
 func newTestScheduler(t *testing.T, query *queueQueryFake, deadLetters *fake.DeadLetterQueue) (*QueueTurnScheduler, time.Time) {
@@ -46,11 +46,14 @@ func TestQueueTurnSchedulerClaimsFairestTenant(t *testing.T) {
 			{int64(1), int64(3), int64(0), now},
 			{int64(2), int64(0), int64(0), now},
 		},
-		qSchedClaim: {queueRow(11, 2, "request-1", "conversation-1", ref, 1, 99, now, now.Add(time.Minute))},
+		qSchedPrincipals: {{"agent", "busy", int64(2)}, {"agent", "idle", int64(0)}, {"agent", "open", int64(5)}},
+		qSchedClaim:      {queueRow(11, 2, "request-1", "conversation-1", ref, 1, 99, now, now.Add(time.Minute))},
 	}}
+	busy := domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "busy"}
 	scheduler := &QueueTurnScheduler{
 		DB: queueDBFake{query: query}, Objects: codec, DeadLetters: &fake.DeadLetterQueue{},
 		MaxAttempts: 3, PartitionTo: 7, Now: func() time.Time { return now },
+		Weights: &weightPolicy{principals: map[domain.PrincipalRef]int{busy: 2}},
 	}
 	lease, err := scheduler.Claim(context.Background(), "worker-1", time.Minute)
 	if err != nil {
@@ -63,7 +66,8 @@ func TestQueueTurnSchedulerClaimsFairestTenant(t *testing.T) {
 		t.Fatalf("deadline = %s", lease.Deadline)
 	}
 	args := query.firstArgs(qSchedClaim)
-	want := []any{int64(99), now.Add(time.Minute), "worker-1", int64(2), now, 0, 7, 3}
+	// Only the principal at its ceiling is passed over; one without a ceiling never is.
+	want := []any{int64(99), now.Add(time.Minute), "worker-1", int64(2), now, 0, 7, 3, "agent:busy"}
 	if len(args) != len(want) {
 		t.Fatalf("claim args = %v", args)
 	}

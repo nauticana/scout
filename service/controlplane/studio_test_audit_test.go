@@ -16,10 +16,7 @@ func testDraftService(query *studioQueryFake, tester fake.DraftTester) *StudioSe
 		Assembler: &PromptDraftAssembler{Compiler: compiler},
 		Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
 			AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
-			Rows: []domain.PromptSourceRow{{
-				PromptSectionID: 1, Caption: "task", DisplayOrder: 1,
-				SourceLevel: domain.PromptSourceBaseline, SourceKey: "global", Instruction: "write",
-			}},
+			Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))},
 		}},
 		Catalog: studioModelCatalogFake{}, Tester: tester,
 	}

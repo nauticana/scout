@@ -58,6 +58,9 @@ columns:
   - name: payload_digest
     type: CHAR(64)
     nullable: true
+  - name: decision_key
+    type: CHAR(64)
+    nullable: true
   - name: occurred_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -88,6 +91,9 @@ indexes:
     columns: [tenant_id, principal_kind, principal_id, occurred_at]
   - name: audit_event_request_ix
     columns: [tenant_id, request_id]
+  - name: audit_event_decision_uq
+    columns: [tenant_id, decision_key]
+    unique: true
 checks:
   - name: audit_event_payload_ck
     expression: (payload_uri IS NULL AND payload_digest IS NULL) OR (payload_uri IS NOT NULL AND CHAR_LENGTH(payload_digest) = 64)

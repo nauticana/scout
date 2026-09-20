@@ -9,7 +9,7 @@ import (
 
 // PromptCompiler merges resolved prompt levels and creates canonical digests.
 type PromptCompiler interface {
-	Compile(languageCode string, rows []domain.PromptSourceRow) (domain.CompiledPrompt, error)
+	Compile(languageCode string, sections []domain.PromptSectionSource) (domain.CompiledPrompt, error)
 	DefinitionDigest(definition domain.AgentDefinition) (string, error)
 }
 
@@ -22,6 +22,13 @@ type PromptDraftAssembler interface {
 type PromptSourceRepository interface {
 	Resolve(ctx context.Context, tenantID int64, agentID, languageCode string) (domain.ResolvedPrompts, error)
 	Languages(ctx context.Context, tenantID int64, agentID string) ([]string, error)
+}
+
+// PromptScopeLayout places an agent in the tenant's scope tree: the scope its own
+// prompts bind to and the scope its type's tenant defaults bind to. The tree is the
+// product's; controlplane.BasePromptScopeLayout is the two-level convention.
+type PromptScopeLayout interface {
+	Scopes(ctx context.Context, tenantID int64, agentID, agentTypeID string) (domain.PromptScopes, error)
 }
 
 // PromptBaselineSelector returns product-specific baseline keys in precedence order.

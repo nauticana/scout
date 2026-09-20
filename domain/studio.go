@@ -22,14 +22,9 @@ const (
 	AgentForbidden        AgentReadiness = "forbidden"
 )
 
-// PromptSourceLevel identifies one level in the shared prompt inheritance chain.
-type PromptSourceLevel int16
-
-const (
-	PromptSourceBaseline PromptSourceLevel = iota + 1
-	PromptSourceTenantDefault
-	PromptSourceAgentOverride
-)
+// ScopeKindPlatform labels the product baseline a prompt chain starts from; it is
+// not a row of config_scope, because a baseline belongs to no tenant.
+const ScopeKindPlatform = "platform"
 
 // ValidationPhase distinguishes editing a draft from producing executable
 // state, so product validators can gate release-only requirements such as
@@ -74,38 +69,52 @@ type AgentApprovalPolicy struct {
 	RequireApproval bool `json:"require_approval"`
 }
 
-// PromptValue is the instruction and optional output contract at one source level.
+// PromptValue is an instruction and its optional output contract.
 type PromptValue struct {
 	Instruction string
 	Output      string
 }
 
-// PromptOverride is an agent prompt value with append-or-replace behavior.
-type PromptOverride struct {
-	PromptValue
-	Overwrite bool
+// PromptLayer is one contribution to a prompt section, widest scope first: the
+// platform baseline, then the prompt_section binding of each scope on the agent's
+// chain. Sealed is set by the layer's own scope; a narrower layer under it is refused.
+type PromptLayer struct {
+	ScopeID   string    `json:"scope_id"`
+	ScopeKind string    `json:"scope_kind"`
+	MergeMode MergeMode `json:"merge_mode"`
+	Sealed    bool      `json:"sealed"`
+	// Editable marks the two scopes Studio writes: the agent's own and its type's tenant default.
+	Editable bool `json:"editable"`
+	// Version and BoundBy carry the binding's provenance; both are empty on the baseline.
+	Version     string `json:"version,omitempty"`
+	BoundBy     *int64 `json:"bound_by,omitempty"`
+	Instruction string `json:"instruction"`
+	Output      string `json:"output,omitempty"`
 }
 
-// PromptSourceRow is one resolved compiler input with its provenance.
-type PromptSourceRow struct {
-	PromptSectionID int64             `json:"prompt_section_id"`
-	Caption         string            `json:"caption"`
-	Description     string            `json:"description"`
-	DisplayOrder    int64             `json:"display_order"`
-	SourceLevel     PromptSourceLevel `json:"source_level"`
-	SourceKey       string            `json:"source_key"`
-	Overwrite       bool              `json:"overwrite"`
-	Instruction     string            `json:"instruction"`
-	Output          string            `json:"output,omitempty"`
+// PromptSectionSource is one section's layers for one agent language.
+type PromptSectionSource struct {
+	PromptSectionID int64         `json:"prompt_section_id"`
+	Caption         string        `json:"caption"`
+	Description     string        `json:"description"`
+	DisplayOrder    int64         `json:"display_order"`
+	Layers          []PromptLayer `json:"layers"`
 }
 
-// ResolvedPrompts contains ordered source candidates for one agent language.
+// PromptScopes names the two scopes of the tenant's tree that Studio edits for one agent.
+type PromptScopes struct {
+	AgentScopeID string
+	TypeScopeID  string
+}
+
+// ResolvedPrompts contains the layered sources of one agent language.
 type ResolvedPrompts struct {
-	AgentID      string            `json:"agent_id"`
-	AgentTypeID  string            `json:"agent_type_id"`
-	BaselineKey  string            `json:"baseline_key"`
-	LanguageCode string            `json:"language_code"`
-	Rows         []PromptSourceRow `json:"rows"`
+	AgentID      string                `json:"agent_id"`
+	AgentTypeID  string                `json:"agent_type_id"`
+	BaselineKey  string                `json:"baseline_key"`
+	LanguageCode string                `json:"language_code"`
+	Scopes       PromptScopes          `json:"-"`
+	Sections     []PromptSectionSource `json:"sections"`
 }
 
 // CompiledPromptSection is one frozen runtime prompt section.
@@ -116,6 +125,8 @@ type CompiledPromptSection struct {
 	Description     string `json:"description"`
 	Instruction     string `json:"instruction"`
 	Output          string `json:"output,omitempty"`
+	// Source says which layer decided the section; it is provenance and no part of the prompt digest.
+	Source Provenance `json:"source"`
 }
 
 // CompiledPrompt is the immutable prompt snapshot for one language.
@@ -125,14 +136,13 @@ type CompiledPrompt struct {
 	Digest       string                  `json:"digest"`
 }
 
-// AgentPromptSection exposes prompt provenance and effective content to Studio.
+// AgentPromptSection exposes a section's layers and effective content to Studio. A save
+// writes the editable layers: one that is absent ends its binding.
 type AgentPromptSection struct {
 	PromptSectionID int64
 	Caption         string
 	Description     string
-	Baseline        PromptValue
-	TenantDefault   *PromptValue
-	AgentOverride   *PromptOverride
+	Layers          []PromptLayer
 	Effective       PromptValue
 }
 
@@ -151,15 +161,17 @@ type AgentDrift struct {
 
 // AgentDraft is the revision-checked mutable Studio representation of an agent.
 type AgentDraft struct {
-	AgentID                       string
-	AgentTypeID                   string
-	DisplayName                   string
-	Active                        bool
-	Enabled                       bool
-	Default                       bool
-	ApprovalPolicy                AgentApprovalPolicy
-	Models                        AgentModelSelection
-	Languages                     []AgentLanguageDraft
+	AgentID        string
+	AgentTypeID    string
+	DisplayName    string
+	Active         bool
+	Enabled        bool
+	Default        bool
+	ApprovalPolicy AgentApprovalPolicy
+	Models         AgentModelSelection
+	Languages      []AgentLanguageDraft
+	// PromptScopes are the two scopes a layer may be written at; set on read, ignored on save.
+	PromptScopes                  PromptScopes
 	Extension                     json.RawMessage
 	Drift                         *AgentDrift
 	ExpectedDraftRevision         int64
@@ -216,7 +228,7 @@ type AgentPublishRequest struct {
 	ChangeSummary                 string
 	ExpectedDraftRevision         int64
 	ExpectedPromptProfileRevision int64
-	// Tools and ToolLoop are frozen into the definition; both are optional.
+	// Tools and ToolLoop are frozen into the definition; with neither set the agent type's declaration applies.
 	Tools    []ToolReference
 	ToolLoop *ToolLoopConfig
 }
@@ -293,6 +305,8 @@ type AgentStudioEvent struct {
 type TenantIdentity struct {
 	TenantKey  string
 	HomeRegion string
+	// DefaultPolicy becomes current only while the tenant has no runtime policy; nil provisions none.
+	DefaultPolicy *RuntimePolicyVersion
 }
 
 // AgentSeed is one idempotent agent provisioning request: the identity, its
@@ -340,6 +354,9 @@ type AgentTypeDescriptor struct {
 	AgentTypeID string
 	DisplayName string
 	Purpose     string
+	// Tools and ToolLoop are frozen into every release of the type that a publish request gives neither.
+	Tools    []ToolReference
+	ToolLoop *ToolLoopConfig
 }
 
 // ModelRate is one currency-denominated price for a model usage category.

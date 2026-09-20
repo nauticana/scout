@@ -107,6 +107,43 @@ func TestMemoryTurnQueueBoundsAndCloses(t *testing.T) {
 	}
 }
 
+// One agent at its ceiling is passed over; the tenant's other agents keep running.
+func TestMemoryTurnQueuePassesOverAPrincipalAtItsCeiling(t *testing.T) {
+	clock := newTestClock()
+	busy := domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "busy"}
+	queue, err := NewMemoryTurnQueue(MemoryTurnQueueConfig{
+		Partitions: 8, ShardsPerTenant: 4, MaxMessages: 32, MaxAttempts: 3, Now: clock.Now,
+		Weights: &weightPolicy{principals: map[domain.PrincipalRef]int{busy: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, turn := range []struct{ request, agent string }{{"b1", "busy"}, {"b2", "busy"}, {"o1", "other"}} {
+		dispatch := dataplanetest.Dispatch(1, turn.request, "conversation-"+turn.request, []byte("x"))
+		dispatch.Turn.AgentID = turn.agent
+		clock.Advance(time.Second)
+		dispatch.EnqueuedAt = clock.Now()
+		if err := queue.Enqueue(ctx, dispatch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var claimed []string
+	for range 2 {
+		lease, err := queue.Claim(ctx, "worker", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed = append(claimed, lease.Message.Dispatch.Turn.RequestID)
+	}
+	if claimed[0] != "b1" || claimed[1] != "o1" {
+		t.Fatalf("claimed %v: the busy agent's second turn must wait behind its ceiling", claimed)
+	}
+	if _, err := queue.Claim(ctx, "worker", time.Minute); !errors.Is(err, ErrNoReadyTurn) {
+		t.Fatalf("want ErrNoReadyTurn while the agent is at its ceiling, got %v", err)
+	}
+}
+
 func TestMemoryTurnQueueHonorsTenantWeightsAndConcurrency(t *testing.T) {
 	clock := newTestClock()
 	weights := &weightPolicy{weights: map[int64]int{1: 3, 2: 1}, maxConcurrent: map[int64]int{2: 1}}
@@ -148,6 +185,11 @@ func TestMemoryTurnQueueHonorsTenantWeightsAndConcurrency(t *testing.T) {
 type weightPolicy struct {
 	weights       map[int64]int
 	maxConcurrent map[int64]int
+	principals    map[domain.PrincipalRef]int
+}
+
+func (policy *weightPolicy) PrincipalCeiling(_ context.Context, _ int64, principal domain.PrincipalRef) (int, error) {
+	return policy.principals[principal], nil
 }
 
 func (policy *weightPolicy) SchedulingWeight(_ context.Context, tenantID int64) (int, int, error) {

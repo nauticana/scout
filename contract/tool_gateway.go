@@ -52,6 +52,14 @@ type ToolTransport interface {
 	Invoke(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition, credential []byte, timeout time.Duration) (domain.ToolResult, error)
 }
 
+// ToolEffectVerifier reads the postcondition of a mutating call from the external system and
+// stores what it saw as immutable evidence. It never mutates. result is nil before the mutation
+// runs, when a satisfied observation means an earlier attempt already landed and must carry Output.
+// An error means the state could not be observed.
+type ToolEffectVerifier interface {
+	Observe(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition, result *domain.ToolResult) (domain.EffectObservation, error)
+}
+
 // ToolRetryPolicy governs bounded retries for tool failures.
 type ToolRetryPolicy interface {
 	// NextDelay returns the next retry delay and whether another attempt is allowed.

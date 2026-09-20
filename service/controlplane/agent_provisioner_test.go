@@ -28,7 +28,8 @@ func TestProvisionSeedsTenantProfileDraftAndAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	want := []string{qProvisionTenant, qProvisionType, qProvisionProfile, qProvisionDraft, qProvisionAccess, qProvisionAlias}
+	// The root, type, and agent scopes come first: they are what the agent's prompts bind to.
+	want := []string{qProvisionTenant, qProvisionScope, qProvisionScope, qProvisionScope, qProvisionType, qProvisionProfile, qProvisionDraft, qProvisionAccess, qProvisionAlias}
 	if len(qs.queries) != len(want) {
 		t.Fatalf("queries = %v, want %v", qs.queries, want)
 	}
@@ -39,6 +40,9 @@ func TestProvisionSeedsTenantProfileDraftAndAlias(t *testing.T) {
 	}
 	if access := qs.args[qProvisionAccess]; access[1] != "p" || access[2] != "m" {
 		t.Fatalf("routing reads tenant_model_access, so the seed's model must be granted; args = %v", access)
+	}
+	if scope := qs.args[qProvisionScope]; scope[1] != "a:Writer" || scope[2] != "t:BL" || scope[3] != "agent" {
+		t.Fatalf("agent scope args = %v", scope)
 	}
 	if qs.args[qProvisionAlias][1] != "BL" || qs.args[qProvisionAlias][3] != "Writer" {
 		t.Fatalf("alias args = %v", qs.args[qProvisionAlias])
@@ -87,6 +91,22 @@ func TestProvisionRequiresTenant(t *testing.T) {
 	_, provisioner := provisionerFake()
 	err := provisioner.Provision(context.Background(), 0, domain.TenantIdentity{}, nil)
 	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("want ErrValidation, got %v", err)
+	}
+}
+
+func TestProvisionWritesTheDefaultPolicyWithoutReplacingACurrentOne(t *testing.T) {
+	qs, provisioner := provisionerFake()
+	qs.rows[qRuntimePolicyGet] = [][]any{standardPolicyRow}
+	policy := standardPolicy()
+	if err := provisioner.Provision(context.Background(), 3, domain.TenantIdentity{DefaultPolicy: &policy}, nil); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if _, moved := qs.args[qRuntimePolicyPoint]; moved || qs.args[qRuntimePolicyDefault][1] != "p1" {
+		t.Fatalf("the default must only fill an empty pointer; queries = %v", qs.queries)
+	}
+	policy.Policy.MaxTokens = 0
+	if err := provisioner.Provision(context.Background(), 3, domain.TenantIdentity{DefaultPolicy: &policy}, nil); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("want ErrValidation, got %v", err)
 	}
 }

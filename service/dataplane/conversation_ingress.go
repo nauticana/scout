@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/observability"
 )
 
 // TurnIngress admits one turn: rate limit, durable turn identity, budget
@@ -22,7 +23,9 @@ type TurnIngress struct {
 	Budget     contract.TenantBudgetManager
 	Replies    contract.TurnReplySubscriber
 	Dispatcher contract.TurnDispatcher
-	Now        func() time.Time
+	// Audit is optional; when set an admitted turn opens its decision chain with turn_admitted.
+	Audit contract.AuditSink
+	Now   func() time.Time
 }
 
 var _ contract.ConversationIngress = (*TurnIngress)(nil)
@@ -75,8 +78,7 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 	if err != nil {
 		return nil, fmt.Errorf("estimate turn budget: %w", err)
 	}
-	reservation, err := ingress.Budget.Reserve(ctx, tenantID, request.RequestID,
-		quote.InputTokens+quote.OutputTokens, quote.CostMinorUnits, quote.Currency)
+	reservation, err := ingress.Budget.Reserve(ctx, turnBudgetRequest(request, quote))
 	if err != nil {
 		return nil, fmt.Errorf("reserve turn budget: %w", err)
 	}
@@ -86,11 +88,30 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 		return nil, errors.Join(fmt.Errorf("subscribe reply route: %w", err), ingress.refund(ctx, reservation, request, "subscribe_failed"))
 	}
 	dispatch := domain.TurnDispatch{Turn: request, ReplyRoute: subscription.Route(), EnqueuedAt: ingress.now()}
-	if err = ingress.Dispatcher.Enqueue(ctx, dispatch); err != nil {
+	if err = ingress.admitted(ctx, request); err == nil {
+		err = ingress.Dispatcher.Enqueue(ctx, dispatch)
+	}
+	if err != nil {
 		return nil, errors.Join(fmt.Errorf("dispatch turn %q: %w", request.RequestID, err),
 			ingress.refund(ctx, reservation, request, "dispatch_failed"), subscription.Close())
 	}
 	return subscription, nil
+}
+
+// admitted is recorded before dispatch, so no turn runs without the head of its chain.
+func (ingress *TurnIngress) admitted(ctx context.Context, request domain.TurnRequest) error {
+	if ingress.Audit == nil {
+		return nil
+	}
+	err := ingress.Audit.Record(domain.WithDecisionScope(ctx, "turn/", request.RequestID), domain.DecisionRecord{
+		TenantID: request.TenantContext.TenantID, Principal: turnPrincipal(request), ScopeID: request.TenantContext.ScopeID,
+		Category: observability.AuditCategoryTurnAdmitted, Action: "turn", Resource: request.AgentID, Outcome: domain.DecisionAllow,
+		RequestID: request.RequestID, ConversationID: request.ConversationID, OccurredAt: ingress.now(),
+	})
+	if err != nil {
+		return fmt.Errorf("record %s: %w", observability.AuditCategoryTurnAdmitted, err)
+	}
+	return nil
 }
 
 // refund releases the reservation and fails the turn record; a client that

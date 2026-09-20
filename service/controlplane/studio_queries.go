@@ -1,43 +1,68 @@
 package controlplane
 
 const (
-	qStudioListAgents       = "scout_studio_list_agents"
-	qStudioGetDraft         = "scout_studio_get_draft"
-	qStudioUpdateProfile    = "scout_studio_update_profile"
-	qStudioSetProfileActive = "scout_studio_set_profile_active"
-	qStudioUpdateDraft      = "scout_studio_update_draft"
-	qStudioSetDraftEnabled  = "scout_studio_set_draft_enabled"
-	qStudioDeleteOverrides  = "scout_studio_delete_overrides"
-	qStudioInsertOverride   = "scout_studio_insert_override"
-	qStudioLockAlias        = "scout_studio_lock_alias"
-	qStudioListDefaults     = "scout_studio_list_defaults"
-	qStudioBumpAlias        = "scout_studio_bump_alias"
-	qStudioDeleteDefaults   = "scout_studio_delete_defaults"
-	qStudioInsertDefault    = "scout_studio_insert_default"
-	qStudioAudit            = "scout_studio_audit"
-	qStudioLockDraft        = "scout_studio_lock_draft"
-	qStudioNextVersion      = "scout_studio_next_version"
-	qStudioInsertVersion    = "scout_studio_insert_version"
-	qStudioGrantModel       = "scout_studio_grant_model_access"
-	qStudioDeployVersion    = "scout_studio_deploy_version"
-	qStudioGetVersion       = "scout_studio_get_version"
-	qStudioHistory          = "scout_studio_history"
-	qStudioAuditLog         = "scout_studio_audit_log"
-	qStudioSetAlias         = "scout_studio_set_alias"
-	qStudioBumpDraft        = "scout_studio_bump_draft"
-	qStudioResetOverrides   = "scout_studio_reset_overrides"
-	qStudioResetOverrideSec = "scout_studio_reset_override_section"
-	qStudioResetOverrideLng = "scout_studio_reset_override_language"
-	qStudioResetOverrideOne = "scout_studio_reset_override_one"
-	qStudioResetDefaults    = "scout_studio_reset_defaults"
-	qStudioResetDefaultSec  = "scout_studio_reset_default_section"
-	qStudioResetDefaultLng  = "scout_studio_reset_default_language"
-	qStudioResetDefaultOne  = "scout_studio_reset_default_one"
-	qStudioActiveDefinition = "scout_studio_active_definition"
-	qStudioLastTest         = "scout_studio_last_test"
+	qStudioListBindings      = "scout_studio_list_prompt_bindings"
+	qStudioInsertBinding     = "scout_studio_insert_prompt_binding"
+	qStudioDropBinding       = "scout_studio_drop_prompt_binding"
+	qStudioEndBinding        = "scout_studio_end_prompt_binding"
+	qStudioResetDropBindings = "scout_studio_reset_drop_prompt_bindings"
+	qStudioResetEndBindings  = "scout_studio_reset_end_prompt_bindings"
+	qStudioListAgents        = "scout_studio_list_agents"
+	qStudioGetDraft          = "scout_studio_get_draft"
+	qStudioUpdateProfile     = "scout_studio_update_profile"
+	qStudioSetProfileActive  = "scout_studio_set_profile_active"
+	qStudioUpdateDraft       = "scout_studio_update_draft"
+	qStudioSetDraftEnabled   = "scout_studio_set_draft_enabled"
+	qStudioLockAlias         = "scout_studio_lock_alias"
+	qStudioBumpAlias         = "scout_studio_bump_alias"
+	qStudioAudit             = "scout_studio_audit"
+	qStudioLockDraft         = "scout_studio_lock_draft"
+	qStudioNextVersion       = "scout_studio_next_version"
+	qStudioInsertVersion     = "scout_studio_insert_version"
+	qStudioGrantModel        = "scout_studio_grant_model_access"
+	qStudioDeployVersion     = "scout_studio_deploy_version"
+	qStudioGetVersion        = "scout_studio_get_version"
+	qStudioHistory           = "scout_studio_history"
+	qStudioAuditLog          = "scout_studio_audit_log"
+	qStudioSetAlias          = "scout_studio_set_alias"
+	qStudioBumpDraft         = "scout_studio_bump_draft"
+	qStudioActiveDefinition  = "scout_studio_active_definition"
+	qStudioLastTest          = "scout_studio_last_test"
 )
 
 var studioQueries = map[string]string{
+	// Prompt bindings are temporal: an edit ends the open row and binds a new one. A row bound
+	// in this same instant was never in force, so it is dropped rather than ended at its own begda.
+	qStudioListBindings: `
+SELECT resource_id, merge_mode_code, sealed, resource_value
+  FROM config_scope_binding
+ WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND endda IS NULL`,
+	qStudioInsertBinding: `
+INSERT INTO config_scope_binding (tenant_id, scope_id, resource_kind_code, resource_id, resource_version,
+                                  merge_mode_code, sealed, resource_value, resource_value_digest, bound_by)
+VALUES (?, ?, 'prompt_section', ?, ?, ?, ?, ?, ?, ?)`,
+	qStudioDropBinding: `
+DELETE FROM config_scope_binding
+ WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND resource_id = ?
+   AND endda IS NULL AND begda >= CURRENT_TIMESTAMP`,
+	qStudioEndBinding: `
+UPDATE config_scope_binding
+   SET endda = CURRENT_TIMESTAMP
+ WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND resource_id = ?
+   AND endda IS NULL`,
+	qStudioResetDropBindings: `
+DELETE FROM config_scope_binding
+ WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section'
+   AND (? = '' OR split_part(resource_id, '/', 1) = ?)
+   AND (? = '' OR split_part(resource_id, '/', 2) = ?)
+   AND endda IS NULL AND begda >= CURRENT_TIMESTAMP`,
+	qStudioResetEndBindings: `
+UPDATE config_scope_binding
+   SET endda = CURRENT_TIMESTAMP
+ WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section'
+   AND (? = '' OR split_part(resource_id, '/', 1) = ?)
+   AND (? = '' OR split_part(resource_id, '/', 2) = ?)
+   AND endda IS NULL`,
 	qStudioListAgents: `
 SELECT p.agent_id, p.agent_type_id, p.display_name, p.state_code = 'active', d.enabled,
        d.draft_revision, COALESCE(a.revision, 0), COALESCE(a.agent_id = p.agent_id, FALSE),
@@ -72,23 +97,10 @@ UPDATE agent_draft
    SET enabled = ?, modified_by = ?, modified_at = CURRENT_TIMESTAMP, draft_revision = draft_revision + 1
  WHERE tenant_id = ? AND agent_id = ? AND draft_revision = ?
  RETURNING draft_revision`,
-	qStudioDeleteOverrides: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ?`,
-	qStudioInsertOverride: `
-INSERT INTO agent_prompt_override
-       (tenant_id, agent_id, prompt_section_id, language_code, overwrite, instruction, output)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	qStudioLockAlias: `SELECT agent_id, revision FROM agent_alias WHERE tenant_id = ? AND agent_type_id = ? FOR UPDATE`,
-	qStudioListDefaults: `
-SELECT prompt_section_id, language_code, instruction, output
-  FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
 	qStudioBumpAlias: `
 UPDATE agent_alias SET revision = revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
  WHERE tenant_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
-	qStudioDeleteDefaults: `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
-	qStudioInsertDefault: `
-INSERT INTO tenant_prompt_default
-       (tenant_id, agent_type_id, prompt_section_id, language_code, instruction, output)
-VALUES (?, ?, ?, ?, ?, ?)`,
 	qStudioAudit: `
 INSERT INTO agent_studio_event (id, tenant_id, agent_id, event, detail, actor_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?)`,
@@ -137,14 +149,6 @@ UPDATE agent_alias
 	qStudioBumpDraft: `
 UPDATE agent_draft SET draft_revision = draft_revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
  WHERE tenant_id = ? AND agent_id = ? AND draft_revision = ? RETURNING draft_revision`,
-	qStudioResetOverrides:   `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ?`,
-	qStudioResetOverrideSec: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ? AND prompt_section_id = ?`,
-	qStudioResetOverrideLng: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ? AND language_code = ?`,
-	qStudioResetOverrideOne: `DELETE FROM agent_prompt_override WHERE tenant_id = ? AND agent_id = ? AND prompt_section_id = ? AND language_code = ?`,
-	qStudioResetDefaults:    `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ?`,
-	qStudioResetDefaultSec:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ? AND prompt_section_id = ?`,
-	qStudioResetDefaultLng:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ? AND language_code = ?`,
-	qStudioResetDefaultOne:  `DELETE FROM tenant_prompt_default WHERE tenant_id = ? AND agent_type_id = ? AND prompt_section_id = ? AND language_code = ?`,
 	qStudioLastTest: `
 SELECT agent_id, MAX(occurred_at) FROM agent_studio_event
  WHERE tenant_id = ? AND event = 'TEST' GROUP BY agent_id`,

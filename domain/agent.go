@@ -14,7 +14,6 @@ type AgentDefinition struct {
 	Models         AgentModelSelection `json:"models"`
 	ApprovalPolicy AgentApprovalPolicy `json:"approval_policy"`
 	Languages      []CompiledPrompt    `json:"languages"`
-	Sources        []ResolvedPrompts   `json:"sources"`
 	Extension      json.RawMessage     `json:"extension,omitempty"`
 	// Tools are the tool versions this release binds; publication writes the bindings.
 	Tools []ToolReference `json:"tools,omitempty"`

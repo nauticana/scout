@@ -50,7 +50,8 @@ func (m SetMerger) Merge(_ context.Context, inherited []byte, override domain.Sc
 }
 
 // PromptMerger combines instruction and output text. Append keeps the inherited
-// text and adds the child's below it; replace substitutes it outright.
+// text and adds the child's a paragraph below it, so a child may add an output
+// contract alone; replace substitutes it outright and needs an instruction.
 type PromptMerger struct{}
 
 func (PromptMerger) Kind() domain.ResourceKind { return domain.ResourcePromptSection }
@@ -64,7 +65,8 @@ func (PromptMerger) Merge(_ context.Context, inherited []byte, override domain.S
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(child.Instruction) == "" {
+	blank := strings.TrimSpace(child.Instruction) == ""
+	if blank && (override.MergeMode != domain.MergeAppend || strings.TrimSpace(child.Output) == "") {
 		return nil, fmt.Errorf("%w: prompt instruction is required", domain.ErrValidation)
 	}
 	merged := child
@@ -235,7 +237,7 @@ func joinText(parent, child string) string {
 	case strings.TrimSpace(child) == "":
 		return parent
 	default:
-		return parent + "\n" + child
+		return parent + "\n\n" + child
 	}
 }
 

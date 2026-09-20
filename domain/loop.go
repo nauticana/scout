@@ -65,7 +65,10 @@ type LoopEntry struct {
 	Tool        ToolReference         `json:"tool,omitzero"`
 	Observation *ModelToolObservation `json:"observation,omitempty"`
 	// ResourceURIs are the evidence links the tool returned with the observation.
-	ResourceURIs []string      `json:"resource_uris,omitempty"`
-	Usage        Usage         `json:"usage,omitzero"`
-	Offset       time.Duration `json:"offset,omitempty"`
+	ResourceURIs []string `json:"resource_uris,omitempty"`
+	// Effect is the observed postcondition of a verified mutating call, journaled with its
+	// observation so replay neither repeats the mutation nor loses the evidence.
+	Effect *EffectObservation `json:"effect,omitempty"`
+	Usage  Usage              `json:"usage,omitzero"`
+	Offset time.Duration      `json:"offset,omitempty"`
 }

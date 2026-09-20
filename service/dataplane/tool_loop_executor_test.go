@@ -97,6 +97,7 @@ func loopInput() domain.StepInput {
 	return domain.StepInput{
 		Step:      domain.ExecutionStep{ExecutionStepID: 11, StepID: "work", Kind: domain.StepKindToolLoop},
 		Principal: loopPrincipal, RequestID: "request-1",
+		OnBehalfOf: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"},
 	}
 }
 
@@ -127,7 +128,7 @@ func TestToolLoopRunsParallelCallsThroughTheGovernedGatewayToATerminalAnswer(t *
 		t.Fatalf("tool calls = %+v", harness.calls)
 	}
 	for _, call := range harness.calls {
-		if !reflect.DeepEqual(call.Principal, loopPrincipal) || call.TenantContext.TenantID != 7 || call.RequestID != "request-1" || call.IdempotencyKey == "" {
+		if !reflect.DeepEqual(call.Principal, loopPrincipal) || call.TenantContext.TenantID != 7 || call.RequestID != "request-1" || call.IdempotencyKey == "" || call.OnBehalfOf.ID != "42" {
 			t.Fatalf("identity did not survive the iteration: %+v", call)
 		}
 	}

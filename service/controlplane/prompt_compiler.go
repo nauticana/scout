@@ -2,16 +2,19 @@ package controlplane
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 const (
@@ -19,87 +22,102 @@ const (
 	definitionDigestVersion = "scout.agent_definition.v1"
 )
 
-// PromptCompiler merges prompt inheritance levels and creates canonical digests.
-type PromptCompiler struct{}
+// PromptCompiler folds each section's layers, widest first, through the scope
+// engine's prompt merger and creates canonical digests. A layer under a sealed one is refused.
+type PromptCompiler struct {
+	// Merger is optional; nil uses scope.PromptMerger.
+	Merger contract.ResourceMerger
+}
 
-// Compile merges prompt rows into an ordered immutable language snapshot.
-func (*PromptCompiler) Compile(languageCode string, rows []domain.PromptSourceRow) (domain.CompiledPrompt, error) {
+// Compile merges layered sections into an ordered immutable language snapshot.
+func (compiler *PromptCompiler) Compile(languageCode string, sections []domain.PromptSectionSource) (domain.CompiledPrompt, error) {
 	if strings.TrimSpace(languageCode) == "" {
 		return domain.CompiledPrompt{}, fmt.Errorf("%w: language code is required", domain.ErrValidation)
 	}
-	type section struct {
-		id           int64
-		displayOrder int64
-		levels       [4]*domain.PromptSourceRow
-	}
-	byID := make(map[int64]*section)
-	ordered := make([]*section, 0)
-	for i := range rows {
-		row := &rows[i]
-		if row.PromptSectionID <= 0 {
-			return domain.CompiledPrompt{}, fmt.Errorf("%w: prompt section id must be positive", domain.ErrValidation)
-		}
-		if row.SourceLevel < domain.PromptSourceBaseline || row.SourceLevel > domain.PromptSourceAgentOverride {
-			return domain.CompiledPrompt{}, fmt.Errorf("%w: prompt section %d has invalid source level %d", domain.ErrValidation, row.PromptSectionID, row.SourceLevel)
-		}
-		item := byID[row.PromptSectionID]
-		if item == nil {
-			item = &section{id: row.PromptSectionID, displayOrder: row.DisplayOrder}
-			byID[row.PromptSectionID] = item
-			ordered = append(ordered, item)
-		} else if item.displayOrder != row.DisplayOrder {
-			return domain.CompiledPrompt{}, fmt.Errorf("%w: prompt section %d has inconsistent display order", domain.ErrValidation, row.PromptSectionID)
-		}
-		if item.levels[row.SourceLevel] != nil {
-			return domain.CompiledPrompt{}, fmt.Errorf("%w: prompt section %d has duplicate source level %d", domain.ErrValidation, row.PromptSectionID, row.SourceLevel)
-		}
-		item.levels[row.SourceLevel] = row
-	}
-	if len(ordered) == 0 {
+	if len(sections) == 0 {
 		return domain.CompiledPrompt{}, fmt.Errorf("language %q: %w", languageCode, domain.ErrNoPrompts)
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].displayOrder != ordered[j].displayOrder {
-			return ordered[i].displayOrder < ordered[j].displayOrder
+	ordered := slices.Clone(sections)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].DisplayOrder != ordered[j].DisplayOrder {
+			return ordered[i].DisplayOrder < ordered[j].DisplayOrder
 		}
-		return ordered[i].id < ordered[j].id
+		return ordered[i].PromptSectionID < ordered[j].PromptSectionID
 	})
-
-	compiled := domain.CompiledPrompt{LanguageCode: languageCode}
-	for i, item := range ordered {
-		baseline := item.levels[domain.PromptSourceBaseline]
-		tenantDefault := item.levels[domain.PromptSourceTenantDefault]
-		agentOverride := item.levels[domain.PromptSourceAgentOverride]
-		parts := make([]string, 0, 3)
-		output := ""
-		if baseline != nil {
-			parts = append(parts, baseline.Instruction)
-			output = baseline.Output
+	compiled := domain.CompiledPrompt{LanguageCode: languageCode, Sections: make([]domain.CompiledPromptSection, 0, len(ordered))}
+	seen := make(map[int64]struct{}, len(ordered))
+	for _, section := range ordered {
+		if _, duplicate := seen[section.PromptSectionID]; duplicate || section.PromptSectionID <= 0 {
+			return domain.CompiledPrompt{}, fmt.Errorf("%w: prompt section %d is invalid or repeated", domain.ErrValidation, section.PromptSectionID)
 		}
-		if tenantDefault != nil && (agentOverride == nil || !agentOverride.Overwrite) {
-			parts = append(parts, tenantDefault.Instruction)
+		seen[section.PromptSectionID] = struct{}{}
+		value, source, err := compiler.fold(languageCode, section)
+		if err != nil {
+			return domain.CompiledPrompt{}, err
 		}
-		if tenantDefault != nil && tenantDefault.Output != "" {
-			output = tenantDefault.Output
-		}
-		if agentOverride != nil {
-			parts = append(parts, agentOverride.Instruction)
-			if agentOverride.Output != "" {
-				output = agentOverride.Output
-			}
-		}
-		source := firstPromptRow(agentOverride, tenantDefault, baseline)
 		compiled.Sections = append(compiled.Sections, domain.CompiledPromptSection{
-			Sequence:        int64(i + 1),
-			PromptSectionID: item.id,
-			Caption:         source.Caption,
-			Description:     source.Description,
-			Instruction:     strings.Join(parts, "\n\n"),
-			Output:          output,
+			Sequence: int64(len(compiled.Sections) + 1), PromptSectionID: section.PromptSectionID,
+			Caption: section.Caption, Description: section.Description,
+			Instruction: value.Instruction, Output: value.Output, Source: source,
 		})
 	}
 	compiled.Digest = compiledPromptDigest(compiled)
 	return compiled, nil
+}
+
+// fold applies one section's layers in order and reports the layer that decided it.
+func (compiler *PromptCompiler) fold(languageCode string, section domain.PromptSectionSource) (domain.PromptValue, domain.Provenance, error) {
+	merger := compiler.Merger
+	if merger == nil {
+		merger = scope.PromptMerger{}
+	}
+	if len(section.Layers) == 0 {
+		return domain.PromptValue{}, domain.Provenance{}, fmt.Errorf("%w: prompt section %d has no layer", domain.ErrValidation, section.PromptSectionID)
+	}
+	resourceID := PromptResourceID(section.PromptSectionID, languageCode)
+	var merged []byte
+	var source domain.Provenance
+	var sealedBy *domain.PromptLayer
+	for index, layer := range section.Layers {
+		if sealedBy != nil {
+			return domain.PromptValue{}, domain.Provenance{}, fmt.Errorf("%w: scope %q cannot override prompt section %d sealed at scope %q",
+				domain.ErrSealed, layer.ScopeID, section.PromptSectionID, sealedBy.ScopeID)
+		}
+		value, err := json.Marshal(promptBindingValue{Instruction: layer.Instruction, Output: layer.Output})
+		if err != nil {
+			return domain.PromptValue{}, domain.Provenance{}, err
+		}
+		binding := domain.ScopedBinding{
+			ScopeID: layer.ScopeID, ResourceKind: domain.ResourcePromptSection, ResourceID: resourceID,
+			MergeMode: layer.MergeMode, Sealed: layer.Sealed, Value: value,
+		}
+		if merged, err = merger.Merge(context.Background(), merged, binding); err != nil {
+			return domain.PromptValue{}, domain.Provenance{}, fmt.Errorf("prompt section %d at scope %q: %w", section.PromptSectionID, layer.ScopeID, err)
+		}
+		source = domain.Provenance{
+			ScopeID: layer.ScopeID, ScopeKind: layer.ScopeKind, ResourceKind: domain.ResourcePromptSection, ResourceID: resourceID,
+			ResourceVersion: layer.Version, MergeMode: mergeModeOrReplace(layer.MergeMode), Sealed: layer.Sealed, Approver: layer.BoundBy,
+		}
+		if layer.Sealed {
+			sealedBy = &section.Layers[index]
+		}
+	}
+	var effective promptBindingValue
+	if err := json.Unmarshal(merged, &effective); err != nil {
+		return domain.PromptValue{}, domain.Provenance{}, err
+	}
+	return domain.PromptValue{Instruction: effective.Instruction, Output: effective.Output}, source, nil
+}
+
+// promptBindingValue is the canonical prompt_section binding value.
+type promptBindingValue struct {
+	Instruction string `json:"instruction"`
+	Output      string `json:"output,omitempty"`
+}
+
+// PromptResourceID is the config_scope_binding resource id of one section in one language.
+func PromptResourceID(promptSectionID int64, languageCode string) string {
+	return fmt.Sprintf("%d/%s", promptSectionID, languageCode)
 }
 
 // DefinitionDigest returns a canonical digest of runtime-relevant definition fields.
@@ -158,15 +176,6 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 		writeDigestField(&payload, string(loop))
 	}
 	return sha256Hex(payload.String()), nil
-}
-
-func firstPromptRow(rows ...*domain.PromptSourceRow) *domain.PromptSourceRow {
-	for _, row := range rows {
-		if row != nil {
-			return row
-		}
-	}
-	return nil
 }
 
 func compiledPromptDigest(prompt domain.CompiledPrompt) string {

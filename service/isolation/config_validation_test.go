@@ -88,7 +88,7 @@ func TestBudgetLedgerRejectsNegativeReservationTTL(t *testing.T) {
 		Policy:         staticBudgetPolicy{limits: domain.BudgetLimits{WindowTokens: 100, WindowCostMinorUnits: 100, Currency: "EUR", Window: time.Minute}},
 		ReservationTTL: -time.Second,
 	}
-	if _, err := ledger.Reserve(context.Background(), 1, "req", 10, 1, "EUR"); !errors.Is(err, domain.ErrValidation) {
+	if _, err := ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 1, RequestID: "req", Tokens: 10, CostMinorUnits: 1, Currency: "EUR"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("negative TTL = %v", err)
 	}
 }

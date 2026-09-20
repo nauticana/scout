@@ -33,9 +33,12 @@ type TurnRuntime struct {
 	Publisher   contract.TurnReplyPublisher
 	Estimator   contract.TurnBudgetEstimator
 	Budget      contract.TenantBudgetManager
+	// Cancels is optional; when set a requested cancellation stops the running turn.
+	Cancels contract.TurnCancelWatcher
 	// GuardrailConfigs pins the policy version of the running agent; nil uses an empty policy.
 	GuardrailConfigs contract.GuardrailConfigRepository
-	// Audit records one event per terminal transition; nil skips auditing.
+	// Audit records each turn transition once; nil skips auditing. A failed write fails the
+	// delivery, and the terminal replay offers the record again.
 	Audit contract.AuditSink
 	// Observations records per-step stage observations; nil skips them.
 	Observations contract.ObservationRecorder
@@ -97,6 +100,7 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.Turn
 	}
 	turn := dispatch.Turn
 	tenantID := turn.TenantContext.TenantID
+	ctx = domain.WithDecisionScope(ctx, "turn/", turn.RequestID)
 	turnNo, status, payload, err := runtime.Records.Find(ctx, tenantID, turn.RequestID)
 	if err != nil {
 		return domain.TurnResult{}, err
@@ -105,7 +109,24 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.Turn
 	if isTerminalTurnStatus(status) {
 		return runtime.replayTerminal(ctx, execution, status, payload)
 	}
-	result, err := runtime.execute(ctx, execution)
+	turnCtx, release := ctx, func() {}
+	if runtime.Cancels != nil {
+		if turnCtx, release, err = runtime.Cancels.Watch(ctx, tenantID, turn.RequestID); err != nil {
+			return domain.TurnResult{}, err
+		}
+	}
+	defer release()
+	if cause := context.Cause(turnCtx); errors.Is(cause, domain.ErrTurnCanceled) {
+		// Cancelled before pickup: a suspended turn still holds a reservation, which fail releases once in hand.
+		if err = runtime.reserve(ctx, execution); err != nil {
+			cause = errors.Join(cause, err)
+		}
+		return domain.TurnResult{}, runtime.fail(ctx, execution, cause)
+	}
+	result, err := runtime.execute(turnCtx, execution)
+	if cause := context.Cause(turnCtx); err != nil && errors.Is(cause, domain.ErrTurnCanceled) {
+		err = errors.Join(cause, err)
+	}
 	switch {
 	case err == nil:
 		return result, nil
@@ -125,7 +146,10 @@ func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecutio
 	if err := runtime.Records.Suspend(suspendCtx, turn.TenantContext.TenantID, turn.RequestID, stage.ErrorClass(cause)); err != nil {
 		return err
 	}
-	runtime.audit(suspendCtx, execution, "turn_suspended", stage.ErrorClass(cause))
+	// A turn may suspend more than once; the frame it suspends at tells the suspensions apart.
+	if err := runtime.audit(domain.WithDecisionScope(suspendCtx, "frame/", execution.published), execution, "turn_suspended", stage.ErrorClass(cause)); err != nil {
+		return err
+	}
 	pending := domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventApprovalPending, Approval: &domain.TurnApprovalEvent{}}
 	if err := runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause), pending); err != nil {
 		return err
@@ -133,8 +157,8 @@ func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecutio
 	return nil
 }
 
-// replayTerminal republishes the final frame of an already terminal turn; it
-// never re-executes and never settles again.
+// replayTerminal re-offers the terminal record and republishes the final frame of an
+// already terminal turn; it never re-executes and never settles again.
 func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnExecution, status string, payload []byte) (domain.TurnResult, error) {
 	turn := execution.dispatch.Turn
 	snapshot, err := runtime.Sessions.Load(ctx, turn.TenantContext.TenantID, turn.ConversationID)
@@ -149,6 +173,10 @@ func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnE
 		if errorCode == "" {
 			errorCode = status
 		}
+	}
+	// The key of the first record makes this a no-op unless that write was lost.
+	if err := runtime.audit(context.WithoutCancel(ctx), execution, "turn_"+status, errorCode); err != nil {
+		return domain.TurnResult{}, err
 	}
 	if err := runtime.publish(ctx, execution, nil, true, errorCode); err != nil {
 		return domain.TurnResult{}, err
@@ -222,8 +250,7 @@ func (runtime *TurnRuntime) reserve(ctx context.Context, execution *turnExecutio
 	if err != nil {
 		return fmt.Errorf("estimate turn budget: %w", err)
 	}
-	reservation, err := runtime.Budget.Reserve(ctx, turn.TenantContext.TenantID, turn.RequestID,
-		quote.InputTokens+quote.OutputTokens, quote.CostMinorUnits, quote.Currency)
+	reservation, err := runtime.Budget.Reserve(ctx, turnBudgetRequest(turn, quote))
 	if errors.Is(err, domain.ErrBudgetSettled) {
 		execution.settled = true
 		return nil
@@ -271,6 +298,7 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 	turn := execution.dispatch.Turn
 	tenantID := turn.TenantContext.TenantID
 	started := runtime.now()
+	ctx = domain.WithDecisionScope(ctx, "step/", stepNo)
 	if err := permit.BeforeStep(ctx, step); err != nil {
 		return domain.StepResult{}, err
 	}
@@ -285,8 +313,9 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		}
 		input := domain.StepInput{
 			Step: step, Snapshot: execution.snapshot, RequestID: execution.dispatch.Turn.RequestID,
-			Input:     execution.dispatch.Turn.Input,
-			Principal: pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion), Bounds: execution.bounds,
+			Input:      execution.dispatch.Turn.Input,
+			Principal:  pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion),
+			OnBehalfOf: actingFor(execution.dispatch.Turn, execution.snapshot), Bounds: execution.bounds,
 			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth,
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {
@@ -400,7 +429,9 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 	if err := runtime.Sessions.Complete(settleCtx, tenantID, turn.ConversationID, execution.revision, *result); err != nil {
 		return err
 	}
-	runtime.audit(settleCtx, execution, "turn_completed", "")
+	if err := runtime.audit(settleCtx, execution, "turn_completed", ""); err != nil {
+		return err
+	}
 	return runtime.publish(settleCtx, execution, nil, true, "")
 }
 
@@ -439,7 +470,9 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	if err := runtime.Records.Fail(failCtx, tenantID, turn.RequestID, status, errorCode); err != nil {
 		errs = append(errs, err)
 	}
-	runtime.audit(failCtx, execution, "turn_"+status, errorCode)
+	if err := runtime.audit(failCtx, execution, "turn_"+status, errorCode); err != nil {
+		errs = append(errs, err)
+	}
 	if err := runtime.publish(failCtx, execution, nil, true, errorCode); err != nil {
 		errs = append(errs, err)
 	}
@@ -460,6 +493,7 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 	}
 	turn := dispatch.Turn
 	tenantID := turn.TenantContext.TenantID
+	ctx = domain.WithDecisionScope(ctx, "turn/", turn.RequestID)
 	turnNo, status, _, err := runtime.Records.Find(ctx, tenantID, turn.RequestID)
 	if err != nil {
 		return err
@@ -478,8 +512,7 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 	if err != nil {
 		return fmt.Errorf("estimate turn budget: %w", err)
 	}
-	reservation, err := runtime.Budget.Reserve(ctx, tenantID, turn.RequestID,
-		quote.InputTokens+quote.OutputTokens, quote.CostMinorUnits, quote.Currency)
+	reservation, err := runtime.Budget.Reserve(ctx, turnBudgetRequest(turn, quote))
 	switch {
 	case err == nil:
 		execution.reservation = reservation
@@ -501,8 +534,7 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 func pinnedPrincipal(turn domain.TurnRequest, agentVersion string) domain.Principal {
 	principal := turn.Principal
 	if principal.Kind == "" {
-		// The durable queue carries the agent id, not the principal; a turn
-		// delivered from it acts as that agent on its own authority.
+		// A turn dispatched without a principal acts as its agent on its own authority.
 		principal = domain.Principal{
 			Kind: domain.PrincipalAgent, ID: turn.AgentID,
 			TenantID: turn.TenantContext.TenantID, ScopeID: turn.TenantContext.ScopeID,
@@ -512,6 +544,14 @@ func pinnedPrincipal(turn domain.TurnRequest, agentVersion string) domain.Princi
 		principal.Release = agentVersion
 	}
 	return principal
+}
+
+// actingFor falls back to the conversation's human for a turn dispatched without one.
+func actingFor(turn domain.TurnRequest, snapshot domain.SessionSnapshot) domain.PrincipalRef {
+	if turn.OnBehalfOf.ID != "" || snapshot.EndUserRef == "" {
+		return turn.OnBehalfOf
+	}
+	return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: snapshot.EndUserRef}
 }
 
 func (runtime *TurnRuntime) settled(ctx context.Context, execution *turnExecution) error {
@@ -561,9 +601,9 @@ func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecutio
 	return nil
 }
 
-func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution, category, errorCode string) {
+func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution, category, errorCode string) error {
 	if runtime.Audit == nil {
-		return
+		return nil
 	}
 	turn := execution.dispatch.Turn
 	payload, err := json.Marshal(map[string]any{
@@ -579,7 +619,7 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 		"error_code":       errorCode,
 	})
 	if err != nil {
-		return
+		return fmt.Errorf("encode turn audit: %w", err)
 	}
 	outcome := domain.DecisionAllow
 	if errorCode != "" {
@@ -590,12 +630,27 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 		Category: category, Action: "turn", Resource: turn.AgentID, Outcome: outcome, Reason: errorCode,
 		RequestID: turn.RequestID, ConversationID: turn.ConversationID, Payload: payload, OccurredAt: runtime.now(),
 	}); err != nil {
-		runtime.observeError(ctx, execution, err)
+		return fmt.Errorf("record %s: %w", category, err)
 	}
+	return nil
 }
 
 func usageAttribution(turn domain.TurnRequest) domain.UsageAttribution {
 	return domain.UsageAttribution{Principal: turnPrincipal(turn), ScopeID: turn.TenantContext.ScopeID}
+}
+
+// turnBudgetRequest is the hold one turn asks for, the same at ingress and in the runtime so a
+// replay re-attaches to it. It is attributed to the acting principal, and a delegated hop never
+// holds more cost than the budget its delegator passed down.
+func turnBudgetRequest(turn domain.TurnRequest, quote domain.Usage) domain.BudgetRequest {
+	cost := quote.CostMinorUnits
+	if bound := turn.DelegationBounds; bound.BudgetMinorUnits > 0 && bound.Currency == quote.Currency && cost > bound.BudgetMinorUnits {
+		cost = bound.BudgetMinorUnits
+	}
+	return domain.BudgetRequest{
+		TenantID: turn.TenantContext.TenantID, RequestID: turn.RequestID, Principal: turnPrincipal(turn),
+		Tokens: quote.InputTokens + quote.OutputTokens, CostMinorUnits: cost, Currency: quote.Currency,
+	}
 }
 
 func turnPrincipal(turn domain.TurnRequest) domain.PrincipalRef {

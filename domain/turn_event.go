@@ -15,6 +15,7 @@ const (
 	TurnEventApprovalPending  TurnEventKind = "approval_pending"
 	TurnEventApprovalResolved TurnEventKind = "approval_resolved"
 	TurnEventEvidence         TurnEventKind = "evidence"
+	TurnEventEffect           TurnEventKind = "effect"
 	TurnEventProgress         TurnEventKind = "progress"
 	TurnEventResult           TurnEventKind = "result"
 	TurnEventExtension        TurnEventKind = "extension"
@@ -30,6 +31,7 @@ type TurnEvent struct {
 	Tool      *TurnToolEvent      `json:"tool,omitempty"`
 	Approval  *TurnApprovalEvent  `json:"approval,omitempty"`
 	Evidence  []EvidenceRef       `json:"evidence,omitempty"`
+	Effect    *TurnEffectEvent    `json:"effect,omitempty"`
 	Progress  *TurnProgressEvent  `json:"progress,omitempty"`
 	Extension *TurnExtensionEvent `json:"extension,omitempty"`
 }
@@ -42,6 +44,14 @@ type TurnToolEvent struct {
 	Arguments   json.RawMessage `json:"arguments,omitempty"`
 	Output      json.RawMessage `json:"output,omitempty"`
 	IsError     bool            `json:"is_error,omitempty"`
+}
+
+// TurnEffectEvent reports what reading a mutating call's effect back established.
+type TurnEffectEvent struct {
+	CallID      string            `json:"call_id"`
+	ToolID      string            `json:"tool_id"`
+	ToolVersion string            `json:"tool_version"`
+	Observation EffectObservation `json:"observation"`
 }
 
 // TurnApprovalEvent reports a call parked for, or released by, a human decision.

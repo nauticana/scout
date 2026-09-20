@@ -60,12 +60,19 @@ var usdBudget = budgetPolicyFunc(func(context.Context, int64) (domain.BudgetLimi
 	return domain.BudgetLimits{WindowTokens: 10_000, WindowCostMinorUnits: 500, Currency: "USD", Window: time.Hour}, nil
 })
 
+type principalBudget map[domain.PrincipalRef]domain.BudgetLimits
+
+func (budgets principalBudget) PrincipalBudgetFor(_ context.Context, _ int64, principal domain.PrincipalRef) (domain.BudgetLimits, bool, error) {
+	limits, bounded := budgets[principal]
+	return limits, bounded, nil
+}
+
 func TestBudgetLedgerReserveGrantsAndDenies(t *testing.T) {
 	expires := time.Now().Add(time.Minute)
 	query := &budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{false}}, qReserveBudget: {{"any", expires}}}}
 	ledger := newBudgetLedger(query)
 
-	reservation, err := ledger.Reserve(context.Background(), 8, "req-1", 1_000, 50, "USD")
+	reservation, err := ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req-1", Tokens: 1_000, CostMinorUnits: 50, Currency: "USD"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,13 +80,28 @@ func TestBudgetLedgerReserveGrantsAndDenies(t *testing.T) {
 		t.Fatalf("reservation = %+v", reservation)
 	}
 	args := query.args[qReserveBudget]
-	if len(args) != 17 || args[0] != int64(8) || args[3] != int64(1) || args[11] != int64(10_000) || args[16] != int64(500) {
+	if len(args) != 33 || args[0] != int64(8) || args[5] != int64(1) || args[13] != int64(10_000) || args[18] != int64(500) || args[19] != false {
 		t.Fatalf("reserve args = %v", args)
+	}
+
+	// A bounded principal reserves inside its own window as well as the tenant's.
+	writer := domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "writer"}
+	ledger.Principals = principalBudget{writer: {WindowTokens: 2_000, WindowCostMinorUnits: 80, Currency: "USD", Window: time.Minute}}
+	if _, err = ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req-1", Principal: writer, Tokens: 1_000, CostMinorUnits: 50, Currency: "USD"}); err != nil {
+		t.Fatal(err)
+	}
+	args = query.args[qReserveBudget]
+	if args[3] != "agent" || args[4] != "writer" || args[19] != true || args[23] != int64(60) || args[25] != int64(2_000) || args[32] != int64(80) {
+		t.Fatalf("principal reserve args = %v", args)
+	}
+	ledger.Principals = principalBudget{writer: {WindowTokens: 2_000, Currency: "EUR", Window: time.Minute}}
+	if _, err = ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req-1", Principal: writer, Tokens: 1_000, CostMinorUnits: 50, Currency: "USD"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a principal budget in another currency must be refused, got %v", err)
 	}
 
 	// No returned row means the window budget denied the hold.
 	denied := newBudgetLedger(&budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{false}}}})
-	_, err = denied.Reserve(context.Background(), 8, "req-2", 1_000, 50, "USD")
+	_, err = denied.Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req-2", Tokens: 1_000, CostMinorUnits: 50, Currency: "USD"})
 	if !errors.Is(err, domain.ErrBudgetExceeded) {
 		t.Fatalf("denied = %v", err)
 	}
@@ -87,10 +109,10 @@ func TestBudgetLedgerReserveGrantsAndDenies(t *testing.T) {
 
 func TestBudgetLedgerReserveValidation(t *testing.T) {
 	ledger := newBudgetLedger(&budgetQueryFake{})
-	if _, err := ledger.Reserve(context.Background(), 0, "", 0, -1, "x"); !errors.Is(err, domain.ErrValidation) {
+	if _, err := ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 0, RequestID: "", Tokens: 0, CostMinorUnits: -1, Currency: "x"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("invalid = %v", err)
 	}
-	if _, err := ledger.Reserve(context.Background(), 8, "req", 10, 1, "EUR"); !errors.Is(err, domain.ErrValidation) {
+	if _, err := ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 1, Currency: "EUR"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("currency mismatch = %v", err)
 	}
 }
@@ -99,7 +121,7 @@ func TestBudgetLedgerReserveIsIdempotentByRequest(t *testing.T) {
 	expires := time.Now().Add(time.Minute)
 	existing := storedBudget("reservation", "req", "held", 10, 2, 1, expires.Format(time.RFC3339), nil, nil, false)
 	query := &budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{false}}, qFindBudget: {existing}}}
-	reservation, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD")
+	reservation, err := newBudgetLedger(query).Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 2, Currency: "USD"})
 	if err != nil || reservation.ReservationID != "reservation" || reservation.Attempt != 1 || !reservation.ExpiresAt.Equal(expires.Truncate(time.Second)) {
 		t.Fatalf("replay = %+v, %v", reservation, err)
 	}
@@ -111,7 +133,7 @@ func TestBudgetLedgerReserveIsIdempotentByRequest(t *testing.T) {
 func TestBudgetLedgerReserveClassifiesSettledReplay(t *testing.T) {
 	existing := storedBudget("reservation", "req", "settled", 10, 2, 1, time.Now(), int64(8), int64(1), false)
 	query := &budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{false}}, qFindBudget: {existing}}}
-	if _, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD"); !errors.Is(err, domain.ErrBudgetSettled) {
+	if _, err := newBudgetLedger(query).Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 2, Currency: "USD"}); !errors.Is(err, domain.ErrBudgetSettled) {
 		t.Fatalf("settled replay = %v", err)
 	}
 }
@@ -126,11 +148,11 @@ func TestBudgetLedgerRenewsExpiredReservation(t *testing.T) {
 		qExpireOneBudget: {{"old"}},
 		qReserveBudget:   {{"new", newExpiry}},
 	}}
-	reservation, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD")
+	reservation, err := newBudgetLedger(query).Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 2, Currency: "USD"})
 	if err != nil || reservation.ReservationID != "new" || reservation.Attempt != 2 {
 		t.Fatalf("renewed = %+v, %v", reservation, err)
 	}
-	if args := query.args[qReserveBudget]; len(args) != 17 || args[3] != int64(2) {
+	if args := query.args[qReserveBudget]; len(args) != 33 || args[5] != int64(2) {
 		t.Fatalf("reserve args = %v", args)
 	}
 }
@@ -143,7 +165,7 @@ func TestBudgetLedgerRenewsAttemptExpiredBySweeper(t *testing.T) {
 		qGetBudget:     {storedBudget("old", "req", "expired", 10, 2, 1, expires, int64(0), int64(0), false)},
 		qReserveBudget: {{"new", time.Now().Add(time.Minute)}},
 	}}
-	reservation, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD")
+	reservation, err := newBudgetLedger(query).Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 2, Currency: "USD"})
 	if err != nil || reservation.Attempt != 2 {
 		t.Fatalf("renewed after sweep = %+v, %v", reservation, err)
 	}
@@ -151,7 +173,7 @@ func TestBudgetLedgerRenewsAttemptExpiredBySweeper(t *testing.T) {
 
 func TestBudgetLedgerDoesNotRenewTerminalTurn(t *testing.T) {
 	query := &budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{true}}}}
-	if _, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := newBudgetLedger(query).Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 2, Currency: "USD"}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("terminal turn = %v", err)
 	}
 }
@@ -193,7 +215,7 @@ func TestBudgetLedgerCommitAndRelease(t *testing.T) {
 
 func TestBudgetLedgerRejectsInvalidExpiryEncoding(t *testing.T) {
 	query := &budgetQueryFake{rows: map[string][][]any{qGetTurnState: {{false}}, qReserveBudget: {{"r", "not-a-time"}}}}
-	if _, err := newBudgetLedger(query).Reserve(context.Background(), 8, "req", 10, 2, "USD"); err == nil {
+	if _, err := newBudgetLedger(query).Reserve(context.Background(), domain.BudgetRequest{TenantID: 8, RequestID: "req", Tokens: 10, CostMinorUnits: 2, Currency: "USD"}); err == nil {
 		t.Fatal("invalid expiry must fail")
 	}
 }

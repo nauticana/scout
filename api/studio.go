@@ -19,7 +19,7 @@ const (
 	StudioModelsPath     = StudioBasePath + "models"
 )
 
-// AgentSummary is the studio-v1 agent list item.
+// AgentSummary is the studio-v2 agent list item.
 type AgentSummary struct {
 	AgentType            string     `json:"agent_type"`
 	AgentName            string     `json:"agent_name"`
@@ -36,75 +36,86 @@ type AgentSummary struct {
 	LastRunAt            *time.Time `json:"last_run_at,omitempty"`
 }
 
-// AgentFieldError is one studio-v1 field validation failure.
+// AgentFieldError is one studio-v2 field validation failure.
 type AgentFieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
 }
 
-// ValidationProblem is the studio-v1 validation response detail.
+// ValidationProblem is the studio-v2 validation response detail.
 type ValidationProblem struct {
 	Message string            `json:"message"`
 	Fields  []AgentFieldError `json:"fields"`
 }
 
-// AgentModelSelection is the studio-v1 standard model selection.
+// AgentModelSelection is the studio-v2 standard model selection.
 type AgentModelSelection struct {
 	TextModel  string `json:"text_model"`
 	ImageModel string `json:"image_model"`
 	VideoModel string `json:"video_model"`
 }
 
-// AgentApprovalPolicy is the studio-v1 approval policy.
+// AgentApprovalPolicy is the studio-v2 approval policy.
 type AgentApprovalPolicy struct {
 	RequireApproval bool `json:"require_approval"`
 }
 
-// AgentPromptSection is the studio-v1 prompt inheritance view.
-type AgentPromptSection struct {
-	PromptHeaderID  int64   `json:"prompt_header_id"`
-	Caption         string  `json:"caption"`
-	Description     string  `json:"description"`
-	BusinessText    string  `json:"business_text"`
-	BusinessOutput  string  `json:"business_output"`
-	DefaultText     *string `json:"default_text"`
-	DefaultOutput   *string `json:"default_output"`
-	OverrideText    *string `json:"override_text"`
-	OverrideOutput  *string `json:"override_output"`
-	Overwrite       bool    `json:"overwrite"`
-	EffectiveText   string  `json:"effective_text"`
-	EffectiveOutput string  `json:"effective_output"`
+// AgentPromptLayer is one contribution to a prompt section, widest scope first. The first
+// is the platform baseline (scope_kind "platform"); the rest are the prompt_section bindings
+// of the scopes on the agent's chain. A save writes the editable layers it is sent and ends
+// an editable binding it is not sent; layers that are not editable are ignored on the way in.
+type AgentPromptLayer struct {
+	ScopeID     string `json:"scope_id"`
+	ScopeKind   string `json:"scope_kind"`
+	MergeMode   string `json:"merge_mode"`
+	Sealed      bool   `json:"sealed"`
+	Editable    bool   `json:"editable"`
+	Instruction string `json:"instruction"`
+	Output      string `json:"output"`
 }
 
-// AgentLanguageDraft is the studio-v1 prompt draft for one language.
+// AgentPromptSection is the studio-v2 prompt inheritance view.
+type AgentPromptSection struct {
+	PromptHeaderID  int64              `json:"prompt_header_id"`
+	Caption         string             `json:"caption"`
+	Description     string             `json:"description"`
+	Layers          []AgentPromptLayer `json:"layers"`
+	EffectiveText   string             `json:"effective_text"`
+	EffectiveOutput string             `json:"effective_output"`
+}
+
+// AgentLanguageDraft is the studio-v2 prompt draft for one language.
 type AgentLanguageDraft struct {
 	LanguageCode   string               `json:"language_code"`
 	PromptSections []AgentPromptSection `json:"prompt_sections"`
 }
 
-// AgentDrift is the studio-v1 active-release drift report.
+// AgentDrift is the studio-v2 active-release drift report.
 type AgentDrift struct {
 	ActiveVersion    int64    `json:"active_version"`
 	ChangedLanguages []string `json:"changed_languages"`
 	Causes           []string `json:"causes"`
 }
 
-// AgentDraft is the studio-v1 revision-checked editable representation.
+// AgentDraft is the studio-v2 revision-checked editable representation.
 type AgentDraft struct {
-	AgentType                    string               `json:"agent_type"`
-	AgentName                    string               `json:"agent_name"`
-	DisplayName                  string               `json:"display_name"`
-	Enabled                      bool                 `json:"enabled"`
-	Default                      bool                 `json:"is_default"`
-	ApprovalPolicy               AgentApprovalPolicy  `json:"approval_policy"`
-	Models                       AgentModelSelection  `json:"models"`
-	Languages                    []AgentLanguageDraft `json:"languages"`
-	Drift                        *AgentDrift          `json:"drift,omitempty"`
-	ExpectedTypeDefaultsRevision int64                `json:"expected_type_defaults_revision"`
-	ExpectedAgentRevision        int64                `json:"expected_agent_revision"`
+	AgentType      string               `json:"agent_type"`
+	AgentName      string               `json:"agent_name"`
+	DisplayName    string               `json:"display_name"`
+	Enabled        bool                 `json:"enabled"`
+	Default        bool                 `json:"is_default"`
+	ApprovalPolicy AgentApprovalPolicy  `json:"approval_policy"`
+	Models         AgentModelSelection  `json:"models"`
+	Languages      []AgentLanguageDraft `json:"languages"`
+	// AgentScopeID and TypeScopeID are the two scopes a client may add a layer at; response only.
+	AgentScopeID                 string      `json:"agent_scope_id,omitempty"`
+	TypeScopeID                  string      `json:"type_scope_id,omitempty"`
+	Drift                        *AgentDrift `json:"drift,omitempty"`
+	ExpectedTypeDefaultsRevision int64       `json:"expected_type_defaults_revision"`
+	ExpectedAgentRevision        int64       `json:"expected_agent_revision"`
 }
 
-// AgentTestRequest is the studio-v1 saved-draft test request.
+// AgentTestRequest is the studio-v2 saved-draft test request.
 type AgentTestRequest struct {
 	AgentName    string `json:"agent_name"`
 	LanguageCode string `json:"language_code"`
@@ -112,7 +123,7 @@ type AgentTestRequest struct {
 	InputData    string `json:"input_data"`
 }
 
-// AgentTestResult is the studio-v1 test result and usage view.
+// AgentTestResult is the studio-v2 test result and usage view.
 type AgentTestResult struct {
 	AgentName    string   `json:"agent_name"`
 	LanguageCode string   `json:"language_code"`
@@ -126,7 +137,7 @@ type AgentTestResult struct {
 	Sections     []string `json:"sections"`
 }
 
-// AgentPublishRequest is the studio-v1 optimistic publish request.
+// AgentPublishRequest is the studio-v2 optimistic publish request.
 type AgentPublishRequest struct {
 	AgentName                    string `json:"agent_name"`
 	ChangeSummary                string `json:"change_summary"`
@@ -134,13 +145,13 @@ type AgentPublishRequest struct {
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
 }
 
-// AgentRestoreRequest is the studio-v1 restore request.
+// AgentRestoreRequest is the studio-v2 restore request.
 type AgentRestoreRequest struct {
 	AgentName string `json:"agent_name"`
 	Version   int64  `json:"version"`
 }
 
-// AgentResetRequest is the studio-v1 prompt reset request.
+// AgentResetRequest is the studio-v2 prompt reset request.
 type AgentResetRequest struct {
 	AgentName                    string `json:"agent_name"`
 	Scope                        string `json:"scope"`
@@ -150,26 +161,26 @@ type AgentResetRequest struct {
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
 }
 
-// AgentSetDefaultRequest is the studio-v1 logical-kind alias update.
+// AgentSetDefaultRequest is the studio-v2 logical-kind alias update.
 type AgentSetDefaultRequest struct {
 	AgentName                    string `json:"agent_name"`
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
 }
 
-// AgentSetEnabledRequest is the studio-v1 kill-switch request.
+// AgentSetEnabledRequest is the studio-v2 kill-switch request.
 type AgentSetEnabledRequest struct {
 	AgentName             string `json:"agent_name"`
 	Enabled               bool   `json:"enabled"`
 	ExpectedAgentRevision int64  `json:"expected_agent_revision"`
 }
 
-// AgentEnabledState is the studio-v1 kill-switch result.
+// AgentEnabledState is the studio-v2 kill-switch result.
 type AgentEnabledState struct {
 	Enabled               bool  `json:"enabled"`
 	ExpectedAgentRevision int64 `json:"expected_agent_revision"`
 }
 
-// AgentRelease is the studio-v1 immutable release history item.
+// AgentRelease is the studio-v2 immutable release history item.
 type AgentRelease struct {
 	AgentName        string              `json:"agent_name"`
 	AgentType        string              `json:"agent_type"`
@@ -185,7 +196,7 @@ type AgentRelease struct {
 	Languages        []string            `json:"languages"`
 }
 
-// AgentAuditEvent is one studio-v1 lifecycle event.
+// AgentAuditEvent is one studio-v2 lifecycle event.
 type AgentAuditEvent struct {
 	Event     string    `json:"event"`
 	Detail    string    `json:"detail"`
@@ -193,7 +204,7 @@ type AgentAuditEvent struct {
 	EventTime time.Time `json:"event_time"`
 }
 
-// AgentReleaseSection is one studio-v1 immutable prompt section.
+// AgentReleaseSection is one studio-v2 immutable prompt section.
 type AgentReleaseSection struct {
 	LanguageCode   string `json:"language_code"`
 	PromptHeaderID int64  `json:"prompt_header_id"`
@@ -202,9 +213,19 @@ type AgentReleaseSection struct {
 	Instruction    string `json:"instruction"`
 	Output         string `json:"output"`
 	Sequence       int64  `json:"sequence"`
+	// Source is the layer that decided the section when the release was compiled.
+	Source AgentPromptSource `json:"source"`
 }
 
-// StudioModel is the studio-v1 model catalog item with display credit guidance.
+// AgentPromptSource is the provenance frozen into a release section.
+type AgentPromptSource struct {
+	ScopeID   string `json:"scope_id"`
+	ScopeKind string `json:"scope_kind"`
+	MergeMode string `json:"merge_mode"`
+	Sealed    bool   `json:"sealed"`
+}
+
+// StudioModel is the studio-v2 model catalog item with display credit guidance.
 type StudioModel struct {
 	ID                 string  `json:"id"`
 	Provider           string  `json:"provider"`

@@ -18,6 +18,7 @@ const (
 	qProvisionDraft   = "scout_provision_draft"
 	qProvisionAlias   = "scout_provision_alias"
 	qProvisionAccess  = "scout_provision_model_access"
+	qProvisionScope   = "scout_provision_prompt_scope"
 )
 
 // Every statement is idempotent, so a repeated provision run is a no-op.
@@ -44,16 +45,26 @@ ON CONFLICT (tenant_id, agent_id) DO NOTHING`,
 INSERT INTO tenant_model_access (tenant_id, provider_id, model_id, priority_class_code)
 VALUES (?, ?, ?, 'standard')
 ON CONFLICT (tenant_id, provider_id, model_id) DO NOTHING`,
+	// A scope the product already placed elsewhere in its tree is left where it is.
+	qProvisionScope: `
+INSERT INTO config_scope (tenant_id, scope_id, parent_scope_id, scope_kind_code, display_name)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, scope_id) DO NOTHING`,
 	qProvisionAlias: `
 INSERT INTO agent_alias (tenant_id, alias_id, agent_type_id, agent_id)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (tenant_id, alias_id) DO NOTHING`,
+	qRuntimePolicyInsert:  runtimePolicyQueries[qRuntimePolicyInsert],
+	qRuntimePolicyGet:     runtimePolicyQueries[qRuntimePolicyGet],
+	qRuntimePolicyDefault: runtimePolicyQueries[qRuntimePolicyDefault],
 }
 
-// AgentProvisioner seeds tenant registration, agent identities, drafts, and
-// aliases in one transaction.
+// AgentProvisioner seeds tenant registration, its default runtime policy, agent
+// identities, drafts, aliases, and the scopes their prompts bind to in one transaction.
 type AgentProvisioner struct {
 	DB keelport.DatabaseRepository
+	// Layout names the scopes each agent's prompts bind to; nil uses BasePromptScopeLayout.
+	Layout contract.PromptScopeLayout
 }
 
 var _ contract.AgentProvisioner = (*AgentProvisioner)(nil)
@@ -70,6 +81,15 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 			return err
 		}
 	}
+	if identity.DefaultPolicy != nil {
+		if err := validateRuntimePolicy(tenantID, *identity.DefaultPolicy); err != nil {
+			return err
+		}
+	}
+	layout := p.Layout
+	if layout == nil {
+		layout = BasePromptScopeLayout{}
+	}
 	tx, err := p.DB.BeginTx(ctx, provisionQueries)
 	if err != nil {
 		return fmt.Errorf("begin provisioning transaction: %w", err)
@@ -83,7 +103,25 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 	if _, err = tx.Query(ctx, qProvisionTenant, tenantID, identity.TenantKey, identity.HomeRegion); err != nil {
 		return fmt.Errorf("register agent tenant: %w", err)
 	}
+	if identity.DefaultPolicy != nil {
+		if err = writeRuntimePolicy(ctx, tx, tenantID, *identity.DefaultPolicy, qRuntimePolicyDefault); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Query(ctx, qProvisionScope, tenantID, RootPromptScopeID, nil, "tenant", identity.TenantKey); err != nil {
+		return fmt.Errorf("seed tenant root scope: %w", err)
+	}
 	for _, seed := range seeds {
+		scopes, scopeErr := layout.Scopes(ctx, tenantID, seed.AgentID, seed.AgentTypeID)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if _, err = tx.Query(ctx, qProvisionScope, tenantID, scopes.TypeScopeID, RootPromptScopeID, "agent_type", seed.AgentTypeID); err != nil {
+			return fmt.Errorf("seed prompt scope of type %q: %w", seed.AgentTypeID, err)
+		}
+		if _, err = tx.Query(ctx, qProvisionScope, tenantID, scopes.AgentScopeID, scopes.TypeScopeID, "agent", seed.DisplayName); err != nil {
+			return fmt.Errorf("seed prompt scope of agent %q: %w", seed.AgentID, err)
+		}
 		if _, err = tx.Query(ctx, qProvisionType, tenantID, seed.AgentTypeID, seed.DisplayName); err != nil {
 			return fmt.Errorf("seed agent type %q: %w", seed.AgentTypeID, err)
 		}

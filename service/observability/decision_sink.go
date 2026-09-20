@@ -33,8 +33,9 @@ var decisionQueries = map[string]string{
 INSERT INTO audit_event
        (id, tenant_id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
         scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
-        obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at)
-VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, decision_key)
+VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, decision_key) DO NOTHING`,
 	qDecisionPage: `
 SELECT id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
        scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
@@ -84,7 +85,8 @@ func (sink *TableAuditSink) init(ctx context.Context) error {
 	return nil
 }
 
-// Record writes one decision. Writes never inherit the caller's cancellation:
+// Record writes one decision, once: a decision re-made under turn replay carries the key
+// of the first and is a no-op. Writes never inherit the caller's cancellation:
 // evidence for work that already happened must survive a client disconnect.
 func (sink *TableAuditSink) Record(ctx context.Context, decision domain.DecisionRecord) error {
 	if err := sink.init(ctx); err != nil {
@@ -126,7 +128,8 @@ func (sink *TableAuditSink) Record(ctx context.Context, decision domain.Decision
 		nullable(decision.PolicyID), nullable(decision.PolicyVersion), string(decision.Outcome),
 		nullable(strings.Join(obligations, ",")), nullable(decision.Reason),
 		nullable(decision.RequestID), nullable(decision.ConversationID),
-		nullable(decision.Evidence.URI), nullable(decision.Evidence.Digest), occurred)
+		nullable(decision.Evidence.URI), nullable(decision.Evidence.Digest), occurred,
+		nullable(domain.DecisionKeyFor(ctx, decision)))
 	if err != nil {
 		return fmt.Errorf("record decision: %w", err)
 	}

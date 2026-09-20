@@ -7,16 +7,12 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-func TestPromptDraftAssemblerPreservesSourcesAndEffectiveValues(t *testing.T) {
-	rows := []domain.PromptSourceRow{
-		promptRow(2, 2, domain.PromptSourceBaseline, false, "base two", "base output"),
-		promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant one", "tenant output"),
-		promptRow(1, 1, domain.PromptSourceBaseline, false, "base one", "base output"),
-		promptRow(1, 1, domain.PromptSourceAgentOverride, true, "agent one", ""),
-	}
-	rows[3].Caption = "specific caption"
+func TestPromptDraftAssemblerKeepsLayersAndTheCompilersEffectiveValues(t *testing.T) {
 	assembler := &PromptDraftAssembler{Compiler: &PromptCompiler{}}
-	draft, err := assembler.Assemble(domain.ResolvedPrompts{LanguageCode: "en-US", Rows: rows})
+	draft, err := assembler.Assemble(domain.ResolvedPrompts{LanguageCode: "en-US", Sections: []domain.PromptSectionSource{
+		layered(2, 2, baseLayer("base two", "base output")),
+		layered(1, 1, baseLayer("base one", "base output"), typeLayer(domain.MergeAppend, "tenant one", ""), agentLayer(domain.MergeAppend, "agent one", "")),
+	}})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -24,13 +20,10 @@ func TestPromptDraftAssemblerPreservesSourcesAndEffectiveValues(t *testing.T) {
 		t.Fatalf("draft = %+v", draft)
 	}
 	first := draft.Sections[0]
-	if first.PromptSectionID != 1 || first.Caption != "specific caption" {
+	if first.PromptSectionID != 1 || len(first.Layers) != 3 || first.Layers[1].ScopeID != "t:writer" || !first.Layers[2].Editable {
 		t.Fatalf("first section = %+v", first)
 	}
-	if first.Baseline.Instruction != "base one" || first.TenantDefault == nil || first.AgentOverride == nil {
-		t.Fatalf("source values = %+v", first)
-	}
-	if !first.AgentOverride.Overwrite || first.Effective.Instruction != "base one\n\nagent one" || first.Effective.Output != "tenant output" {
+	if first.Effective.Instruction != "base one\n\ntenant one\n\nagent one" || first.Effective.Output != "base output" {
 		t.Fatalf("effective value = %+v", first.Effective)
 	}
 }

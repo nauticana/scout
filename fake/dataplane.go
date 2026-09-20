@@ -74,6 +74,7 @@ func (queue *DeadLetterQueue) Publish(ctx context.Context, message domain.QueueM
 // TenantWeightPolicy contains a configurable fair-scheduling weight callback.
 type TenantWeightPolicy struct {
 	SchedulingWeightFunc func(context.Context, int64) (int, int, error)
+	PrincipalCeilingFunc func(context.Context, int64, domain.PrincipalRef) (int, error)
 }
 
 // SchedulingWeight invokes SchedulingWeightFunc when configured; the default is weight 1, unlimited.
@@ -82,6 +83,14 @@ func (policy *TenantWeightPolicy) SchedulingWeight(ctx context.Context, tenantID
 		return 1, 0, nil
 	}
 	return policy.SchedulingWeightFunc(ctx, tenantID)
+}
+
+// PrincipalCeiling invokes PrincipalCeilingFunc when configured; the default is unlimited.
+func (policy *TenantWeightPolicy) PrincipalCeiling(ctx context.Context, tenantID int64, principal domain.PrincipalRef) (int, error) {
+	if policy.PrincipalCeilingFunc == nil {
+		return 0, nil
+	}
+	return policy.PrincipalCeilingFunc(ctx, tenantID, principal)
 }
 
 // TurnBudgetEstimator contains a configurable turn quote callback.
@@ -247,6 +256,14 @@ func (function TenantPolicyRepositoryFunc) GetRuntimePolicy(ctx context.Context,
 	return function(ctx, tenantID)
 }
 
+// TenantPolicyPublisherFunc adapts a function to contract.TenantPolicyPublisher.
+type TenantPolicyPublisherFunc func(context.Context, int64, domain.RuntimePolicyVersion) error
+
+// PublishRuntimePolicy invokes the configured function.
+func (function TenantPolicyPublisherFunc) PublishRuntimePolicy(ctx context.Context, tenantID int64, version domain.RuntimePolicyVersion) error {
+	return function(ctx, tenantID, version)
+}
+
 // GuardrailConfigRepository contains configurable guardrail policy callbacks.
 type GuardrailConfigRepository struct {
 	PublishFunc func(context.Context, int64, string, domain.GuardrailConfig) error
@@ -369,6 +386,7 @@ var (
 	_ contract.DefinitionResolver        = DefinitionResolverFunc(nil)
 	_ contract.StepExecutorRegistry      = StepExecutorRegistryFunc(nil)
 	_ contract.TenantPolicyRepository    = TenantPolicyRepositoryFunc(nil)
+	_ contract.TenantPolicyPublisher     = TenantPolicyPublisherFunc(nil)
 	_ contract.GuardrailConfigRepository = (*GuardrailConfigRepository)(nil)
 	_ contract.TenantBudgetManager       = (*TenantBudgetManager)(nil)
 	_ contract.ExecutionGovernor         = (*ExecutionGovernor)(nil)

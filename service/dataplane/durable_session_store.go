@@ -2,6 +2,7 @@ package dataplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,7 +30,8 @@ const (
 var durableSessionQueries = map[string]string{
 	qSessionLoad: `
 SELECT conversation.agent_version, snapshot.latest_turn_no, snapshot.latest_step_no,
-       snapshot.state_uri, snapshot.state_digest, snapshot.revision, step.step_id
+       snapshot.state_uri, snapshot.state_digest, snapshot.revision, step.step_id,
+       conversation.end_user_ref
   FROM agent_conversation conversation
   LEFT JOIN session_snapshot snapshot
     ON snapshot.tenant_id = conversation.tenant_id
@@ -76,7 +78,9 @@ SELECT turn.turn_no, COALESCE(snapshot.revision, 0)
  ORDER BY turn.turn_no
  LIMIT 1`,
 
+	// The history row, when the turn has one, receives the result card in the same statement.
 	qSessionCompleteTurn: `
+WITH completed AS (
 UPDATE conversation_turn turn
    SET status_code = 'completed', response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
@@ -86,7 +90,14 @@ UPDATE conversation_turn turn
                    FROM session_snapshot snapshot
                   WHERE snapshot.tenant_id = turn.tenant_id
                     AND snapshot.conversation_id = turn.conversation_id), 0) = ?
-RETURNING turn.turn_no`,
+RETURNING turn.tenant_id, turn.conversation_id, turn.turn_no),
+mirrored AS (
+UPDATE conversation_turn_detail detail
+   SET result_kind = ?, result_payload = ?, error_text = NULL
+  FROM completed
+ WHERE detail.tenant_id = completed.tenant_id AND detail.conversation_id = completed.conversation_id AND detail.turn_no = completed.turn_no
+RETURNING detail.turn_no)
+SELECT turn_no FROM completed`,
 
 	qSessionCheckpointDigest: `
 SELECT state_digest
@@ -139,10 +150,10 @@ func (store *DurableSessionStore) Load(ctx context.Context, tenantID int64, conv
 		return domain.SessionSnapshot{}, fmt.Errorf("%w: conversation %q", domain.ErrNotFound, conversationID)
 	}
 	row := result.Rows[0]
-	if len(row) < 7 {
-		return domain.SessionSnapshot{}, fmt.Errorf("decode session: expected 7 columns, got %d", len(row))
+	if len(row) < 8 {
+		return domain.SessionSnapshot{}, fmt.Errorf("decode session: expected 8 columns, got %d", len(row))
 	}
-	snapshot := domain.SessionSnapshot{ConversationID: conversationID, AgentVersion: common.AsString(row[0])}
+	snapshot := domain.SessionSnapshot{ConversationID: conversationID, AgentVersion: common.AsString(row[0]), EndUserRef: common.AsString(row[7])}
 	revision, hasSnapshot := common.AsInt64OK(row[5])
 	if !hasSnapshot {
 		return snapshot, nil
@@ -249,8 +260,9 @@ func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, 
 		return fmt.Errorf("dehydrate turn response: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
+	kind, card := resultCard(result.Response, ref)
 	completed, err := store.queries(ctx).Query(ctx, qSessionCompleteTurn,
-		ref.URI, ref.Digest, tenantID, conversationID, turnNo, expectedRevision)
+		ref.URI, ref.Digest, tenantID, conversationID, turnNo, expectedRevision, kind, card)
 	if err != nil {
 		err = fmt.Errorf("complete turn: %w", err)
 	} else if len(completed.Rows) == 0 {
@@ -260,6 +272,23 @@ func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, 
 		return store.discardUnlessReferenced(ctx, ref, err, qSessionResponseDigest, tenantID, conversationID, turnNo)
 	}
 	return nil
+}
+
+// maxResultCard bounds the response copy kept in turn history; a larger one is referenced, not copied.
+const maxResultCard = 64 << 10
+
+// resultCard is the turn-history view of a response: JSON verbatim, anything else as text.
+func resultCard(response []byte, ref domain.ObjectRef) (kind, card string) {
+	switch {
+	case len(response) > maxResultCard:
+		encoded, _ := json.Marshal(map[string]string{"response_uri": ref.URI, "response_digest": ref.Digest})
+		return "reference", string(encoded)
+	case json.Valid(response):
+		return "json", string(response)
+	default:
+		encoded, _ := json.Marshal(map[string]string{"text": string(response)})
+		return "text", string(encoded)
+	}
 }
 
 // A concurrent writer may already have committed a row pointing at the same

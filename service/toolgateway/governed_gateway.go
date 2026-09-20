@@ -24,6 +24,8 @@ type GovernedGateway struct {
 	Transport   contract.ToolTransport
 	Retry       contract.ToolRetryPolicy
 	Validator   contract.ToolResultValidator
+	// Effects observes the postcondition of tools that declare VerifyEffect; such a tool is refused without it.
+	Effects contract.ToolEffectVerifier
 	// Guardrails is optional; when set, GuardrailConfigs is required and both tool stages are enforced.
 	Guardrails       contract.GuardrailEnforcer
 	GuardrailConfigs contract.ToolGuardrailConfigResolver
@@ -36,19 +38,31 @@ type GovernedGateway struct {
 	// are applied before egress. An obligation with no enforcer fails the call.
 	Policy      contract.PolicyDecisionPoint
 	Obligations []contract.ObligationEnforcer
-	// Audit is optional; when set every credential resolution records which
-	// authority it exercised, never the secret.
+	// Audit is optional; when set every call records its outcome and every credential
+	// resolution which authority it exercised, never the secret.
 	Audit contract.AuditSink
 	// CredentialPurpose labels why the credential is requested; it selects the binding.
 	CredentialPurpose string
 	Timeout           time.Duration
 }
 
-// Invoke executes one tool call through the complete governance chain.
+// Invoke executes one tool call through the complete governance chain and records its outcome.
 func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
 	if err := gateway.validate(call); err != nil {
 		return domain.ToolResult{}, err
 	}
+	// The idempotency key is stable across redelivery, so the call's decisions are recorded once.
+	if call.IdempotencyKey != "" {
+		ctx = domain.WithDecisionScope(ctx, "tool/", call.IdempotencyKey)
+	}
+	result, err := gateway.invoke(ctx, call)
+	if errors.Is(err, domain.ErrApprovalPending) {
+		return result, err
+	}
+	return result, errors.Join(err, gateway.recordInvocation(ctx, call, result, err))
+}
+
+func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
 	if err := gateway.RateLimiter.AllowToolCall(ctx, call); err != nil {
 		return domain.ToolResult{}, err
 	}
@@ -58,6 +72,9 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 	}
 	if definition.ToolID != call.ToolID || definition.Version != call.ToolVersion || strings.TrimSpace(definition.Endpoint) == "" {
 		return domain.ToolResult{}, fmt.Errorf("%w: registered tool definition is inconsistent", domain.ErrConflict)
+	}
+	if definition.VerifyEffect && gateway.Effects == nil {
+		return domain.ToolResult{}, fmt.Errorf("%w: tool %q requires effect verification but no verifier is composed", domain.ErrNotReady, call.ToolID)
 	}
 	if err := validateArguments(definition, call.Arguments); err != nil {
 		return domain.ToolResult{}, err
@@ -99,10 +116,27 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 		timeout = definition.Timeout
 	}
 	for attempt := 1; ; attempt++ {
-		result, callErr := gateway.Transport.Invoke(ctx, call, definition, credential, timeout)
+		// Observing first keeps a redelivered or retried call from repeating an effect that already landed.
+		result, reconciled, err := gateway.reconcile(ctx, call, definition)
+		if err != nil {
+			return result, err
+		}
+		var callErr error
+		if !reconciled {
+			result, callErr = gateway.Transport.Invoke(ctx, call, definition, credential, timeout)
+		}
 		if callErr == nil {
 			if err := gateway.Validator.Validate(ctx, definition, result); err != nil {
 				callErr = fmt.Errorf("%w: %w", ErrInvalidToolOutput, err)
+			}
+		}
+		if callErr == nil && !result.Retryable && !reconciled {
+			if result, err = gateway.verifyEffect(ctx, call, definition, result); err != nil {
+				if !definition.RetryWhenEffectAbsent || !errors.Is(err, domain.ErrEffectViolated) {
+					return result, errors.Join(err, gateway.settle(ctx, call, definition, generation, true))
+				}
+				// A proven-absent effect the contract declares safe to resend takes the bounded retry path.
+				callErr, result.Retryable = err, true
 			}
 		}
 		if callErr == nil && !result.Retryable {
@@ -215,6 +249,27 @@ func (gateway *GovernedGateway) recordCredential(ctx context.Context, call domai
 		Authority: authority, ScopeID: call.Principal.ScopeID, Category: domain.DecisionCategoryCredential,
 		Action: "resolve", Resource: definition.ToolID, ReleaseVersion: call.Principal.Release,
 		Outcome: domain.DecisionAllow, RequestID: call.RequestID, ConversationID: call.ConversationID,
+	})
+}
+
+// recordInvocation writes the tool_invoke decision: what was called and how it ended, never the arguments or output.
+func (gateway *GovernedGateway) recordInvocation(ctx context.Context, call domain.ToolCall, result domain.ToolResult, cause error) error {
+	if gateway.Audit == nil {
+		return nil
+	}
+	outcome := domain.DecisionAllow
+	if cause != nil {
+		outcome = domain.DecisionDeny
+	}
+	reason := stage.ErrorClass(cause)
+	if result.Effect != nil {
+		reason = strings.TrimPrefix(reason+" effect "+string(result.Effect.Status), " ")
+	}
+	return gateway.Audit.Record(ctx, domain.DecisionRecord{
+		TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+		ScopeID: call.Principal.ScopeID, Category: domain.DecisionCategoryToolInvoke, Action: "invoke",
+		Resource: call.ToolID, ReleaseVersion: call.Principal.Release, Outcome: outcome, Reason: reason,
+		RequestID: call.RequestID, ConversationID: call.ConversationID,
 	})
 }
 

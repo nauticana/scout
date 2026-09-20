@@ -33,6 +33,12 @@ columns:
   - name: completed_at
     type: TIMESTAMP
     nullable: true
+  - name: cancel_requested_at
+    type: TIMESTAMP
+    nullable: true
+  - name: cancel_reason
+    type: VARCHAR(200)
+    nullable: true
 primary_key: [tenant_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turns

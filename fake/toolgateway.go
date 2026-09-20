@@ -140,6 +140,16 @@ var (
 var _ contract.ToolAuthorizer = ToolAuthorizerFunc(nil)
 var _ contract.ToolCredentialProvider = ToolCredentialProviderFunc(nil)
 var _ contract.ToolEgressPolicy = ToolEgressPolicyFunc(nil)
+
+// ToolEffectVerifierFunc adapts a function to contract.ToolEffectVerifier.
+type ToolEffectVerifierFunc func(context.Context, domain.ToolCall, domain.ToolDefinition, *domain.ToolResult) (domain.EffectObservation, error)
+
+// Observe invokes the configured function.
+func (function ToolEffectVerifierFunc) Observe(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition, result *domain.ToolResult) (domain.EffectObservation, error) {
+	return function(ctx, call, definition, result)
+}
+
+var _ contract.ToolEffectVerifier = ToolEffectVerifierFunc(nil)
 var _ contract.ToolTransport = ToolTransportFunc(nil)
 var _ contract.ToolCircuitBreaker = (*ToolCircuitBreaker)(nil)
 var _ contract.ToolResultValidator = ToolResultValidatorFunc(nil)

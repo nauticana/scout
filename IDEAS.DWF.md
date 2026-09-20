@@ -6,7 +6,7 @@ This document covers **shared building blocks only**. It deliberately does not d
 
 Open work: [TODO.md](TODO.md). Prior idea inventory: [IDEAS.md](IDEAS.md).
 
-**Status.** All three waves shipped on 2026-08-17. Every block DWF-1 through DWF-13 now has an implementation in the tree, with four deliberate exceptions, all of them external adapters or the prompt retrofit: OPA/cedar-go behind the policy port (A3), SPIFFE and RFC 8693 behind the credential port (K4), the OpenTelemetry GenAI mapping (V4), the A2A adapter behind `AgentInvoker` (D5), and the prompt inheritance retrofit onto `config_scope_binding` (C5). The gap descriptions below are kept as written — they are the evidence the design answers — with a shipped note on each block.
+**Status.** All three waves shipped on 2026-08-17. Every block DWF-1 through DWF-13 now has an implementation in the tree, with four deliberate exceptions, all of them external adapters: OPA/cedar-go behind the policy port (A3), SPIFFE and RFC 8693 behind the credential port (K4), the OpenTelemetry GenAI mapping (V4), and the A2A adapter behind `AgentInvoker` (D5). The gap descriptions below are kept as written — they are the evidence the design answers — with a shipped note on each block.
 
 ---
 
@@ -149,7 +149,7 @@ Retrofit prompts onto this engine rather than leaving a second mechanism (clean 
 
 **Reuse.** None. No evaluated project supplies a compile-and-freeze-with-provenance primitive over arbitrary resource kinds — this is idea-12's own §12 finding, and it is why the block is build-not-buy. Cedar's policy *validation* tooling is the nearest relative and is worth reading for how it proves a policy set well-formed before deployment, but it validates policies, not a merge lattice.
 
-**Shipped.** The `scope` module (`scope`, `config_scope_binding`, `effective_agent_release`) with `config_scope_kind`, `config_resource_kind`, and `config_merge_mode` catalogs; `service/scope` with `Compiler`, `MergerRegistry`, `LatticeChecker`, and the table-backed repositories; `domain.Provenance` retained per effective resource alongside every binding it superseded; and the freeze step in `AgentPublisher`. Two design points proved out in the build: `sealed` is set by the binding's own scope rather than the child, which is what makes a company clause genuinely non-overridable; and the narrowing check runs on the **merged result** rather than the candidate, which is what makes one rule cover every merge mode — a `replace` that grants more and an `append` that widens a set fail the same comparison. Prompt inheritance still runs on its own three tables (C5), so two mechanisms exist until that retrofit lands.
+**Shipped.** The `scope` module (`scope`, `config_scope_binding`, `effective_agent_release`) with `config_scope_kind`, `config_resource_kind`, and `config_merge_mode` catalogs; `service/scope` with `Compiler`, `MergerRegistry`, `LatticeChecker`, and the table-backed repositories; `domain.Provenance` retained per effective resource alongside every binding it superseded; and the freeze step in `AgentPublisher`. Two design points proved out in the build: `sealed` is set by the binding's own scope rather than the child, which is what makes a company clause genuinely non-overridable; and the narrowing check runs on the **merged result** rather than the candidate, which is what makes one rule cover every merge mode — a `replace` that grants more and an `append` that widens a set fail the same comparison. Prompt inheritance was retrofitted onto it afterwards: tenant defaults and agent prompts are `prompt_section` bindings over the product baseline, `PromptSourceLevel` is gone, and each `CompiledPromptSection` carries its `Provenance`.
 
 ---
 
@@ -219,7 +219,7 @@ Write the port first and ship a native rule evaluator behind it; adopt OPA when 
 
 **Required block.** A scope-keyed budget/quota/concurrency policy resolved through DWF-2 (so a child narrows and never broadens), per-principal reservation on the existing ledger, an autonomy-mode-aware time window, and principal + scope dimensions on `usage_event` and `domain.Observation`. The money rules from the global conventions hold: integer minor units, currency-derived exponent.
 
-**Shipped.** `isolation.ReleaseLimits` reads the budget and autonomy frozen into the release (compilation already narrowed both), degrading a `bounded_autonomous` agent to `execute_with_approval` outside its operating window rather than stopping it; and `usage_event` plus `RecordUsage` gained principal and scope attribution. Per-principal concurrency on `TenantWeightPolicy` is the one piece left (B1a).
+**Shipped.** `isolation.ReleaseLimits` reads the budget and autonomy frozen into the release (compilation already narrowed both), degrading a `bounded_autonomous` agent to `execute_with_approval` outside its operating window rather than stopping it; and `usage_event` plus `RecordUsage` gained principal and scope attribution. Per-principal concurrency (`TenantWeightPolicy.PrincipalCeiling`) and per-principal reservation (`PrincipalBudgetPolicy` on `isolation.BudgetLedger`) followed, and `dataplane.TurnAgentInvoker` makes a delegation chain settle per hop.
 
 **Reuse.** None. This is an extension of Scout's own isolation package, which is already the right shape.
 

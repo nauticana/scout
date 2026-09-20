@@ -7,6 +7,12 @@ columns:
     type: VARCHAR(120)
   - name: request_id
     type: VARCHAR(120)
+  - name: principal_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: principal_id
+    type: VARCHAR(120)
+    nullable: true
   - name: attempt_no
     type: BIGINT
   - name: status_code
@@ -53,10 +59,14 @@ indexes:
     columns: [tenant_id, status_code, created_at]
   - name: budget_reservation_expiry_ix
     columns: [status_code, expires_at]
+  - name: budget_reservation_principal_ix
+    columns: [tenant_id, principal_kind, principal_id, status_code]
   - name: budget_reservation_request_attempt_uq
     columns: [tenant_id, request_id, attempt_no]
     unique: true
 checks:
+  - name: budget_reservation_principal_ck
+    expression: (principal_kind IS NULL) = (principal_id IS NULL)
   - name: budget_reservation_attempt_ck
     expression: attempt_no > 0
   - name: budget_reservation_tokens_ck

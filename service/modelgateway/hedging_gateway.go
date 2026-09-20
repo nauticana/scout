@@ -103,7 +103,10 @@ func (gateway *HedgingGateway) start(ctx context.Context, number int, selection 
 	if err != nil {
 		return nil, fmt.Errorf("price attempt %d: %w", number, err)
 	}
-	reservation, err := gateway.Budgets.Reserve(ctx, request.TenantContext.TenantID, AttemptRequestID(request.RequestID, number), tokens, cost, currency)
+	reservation, err := gateway.Budgets.Reserve(ctx, domain.BudgetRequest{
+		TenantID: request.TenantContext.TenantID, RequestID: AttemptRequestID(request.RequestID, number),
+		Principal: request.Principal, Tokens: tokens, CostMinorUnits: cost, Currency: currency,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("reserve attempt %d: %w", number, err)
 	}

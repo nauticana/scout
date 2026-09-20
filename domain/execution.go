@@ -39,9 +39,11 @@ type StepCheckpoint struct {
 // Bounds travel with it so a step that delegates knows who is acting and how
 // much authority is left to pass on.
 type StepInput struct {
-	Step          ExecutionStep
-	Snapshot      SessionSnapshot
-	Principal     Principal
+	Step      ExecutionStep
+	Snapshot  SessionSnapshot
+	Principal Principal
+	// OnBehalfOf is the human the turn acts for; zero when it acts for no one.
+	OnBehalfOf    PrincipalRef
 	Bounds        DelegationBounds
 	WorkItemID    int64
 	WorkItemDepth int

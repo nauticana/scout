@@ -9,14 +9,16 @@ import (
 	"github.com/nauticana/scout/service/controlplane"
 )
 
-func TestStudioDraftCompatibilityMapping(t *testing.T) {
-	text := "tenant"
-	override := "agent"
+func TestStudioDraftLayerMapping(t *testing.T) {
 	request := api.AgentDraft{
 		AgentName: "writer-a", AgentType: "writer", DisplayName: "Writer", Enabled: true,
 		Models: api.AgentModelSelection{TextModel: "model-a"}, ExpectedAgentRevision: 3, ExpectedTypeDefaultsRevision: 5,
 		Languages: []api.AgentLanguageDraft{{LanguageCode: "en-US", PromptSections: []api.AgentPromptSection{{
-			PromptHeaderID: 4, BusinessText: "base", DefaultText: &text, OverrideText: &override, Overwrite: true,
+			PromptHeaderID: 4, Layers: []api.AgentPromptLayer{
+				{ScopeID: "global", ScopeKind: "platform", MergeMode: "replace", Instruction: "base"},
+				{ScopeID: "t:writer", ScopeKind: "agent_type", MergeMode: "append", Sealed: true, Editable: true, Instruction: "tenant"},
+				{ScopeID: "a:writer-a", ScopeKind: "agent", MergeMode: "replace", Instruction: "agent"},
+			},
 		}}}},
 	}
 
@@ -24,13 +26,17 @@ func TestStudioDraftCompatibilityMapping(t *testing.T) {
 	if draft.AgentID != "writer-a" || !draft.Active || draft.Models.Text.ProviderID != "" {
 		t.Fatalf("unexpected domain draft: %+v", draft)
 	}
-	section := draft.Languages[0].Sections[0]
-	if section.TenantDefault.Instruction != "tenant" || !section.AgentOverride.Overwrite {
-		t.Fatalf("prompt mapping lost inheritance data: %+v", section)
+	layers := draft.Languages[0].Sections[0].Layers
+	if len(layers) != 3 || layers[1].Instruction != "tenant" || !layers[1].Sealed || layers[2].MergeMode != domain.MergeReplace {
+		t.Fatalf("prompt mapping lost its layers: %+v", layers)
+	}
+	// Editable is the server's statement; a client cannot grant it to itself.
+	if layers[1].Editable {
+		t.Fatalf("editable must not be read from the request: %+v", layers[1])
 	}
 	response := apiDraft(draft)
-	if response.Models.TextModel != "model-a" || *response.Languages[0].PromptSections[0].OverrideText != "agent" {
-		t.Fatalf("unexpected compatibility response: %+v", response)
+	if response.Models.TextModel != "model-a" || response.Languages[0].PromptSections[0].Layers[2].Instruction != "agent" {
+		t.Fatalf("unexpected response: %+v", response)
 	}
 }
 

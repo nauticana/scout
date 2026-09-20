@@ -48,3 +48,37 @@ func TestTableGuardrailConfigRepositoryIsImmutableAndReadsThePinnedVersion(t *te
 		t.Fatalf("pinned config = %+v, %v", config, err)
 	}
 }
+
+func standardPolicy() domain.RuntimePolicyVersion {
+	return domain.RuntimePolicyVersion{Version: "p1", Policy: domain.TenantRuntimePolicy{
+		PriorityClass: "standard", CapacityClass: "shared", MaxSteps: 12, MaxTokens: 9000,
+		MaxCostMinorUnits: 50, CostCurrency: "USD", TurnTimeout: 30 * time.Second,
+	}}
+}
+
+var standardPolicyRow = []any{"standard", "shared", int64(12), int64(9000), int64(50), "USD", int64(30000)}
+
+func TestPublishRuntimePolicyIsImmutableAndMovesThePointerInOneTransaction(t *testing.T) {
+	query := &studioQueryFake{rows: map[string][][]any{qRuntimePolicyGet: {standardPolicyRow}}, args: map[string][]any{}}
+	repository := &TableTenantPolicyRepository{DB: studioDBFake{qs: query}}
+	ctx := context.Background()
+	if err := repository.PublishRuntimePolicy(ctx, 7, standardPolicy()); err != nil {
+		t.Fatalf("PublishRuntimePolicy: %v", err)
+	}
+	if query.commits != 1 || query.args[qRuntimePolicyPoint][1] != "p1" || query.args[qRuntimePolicyInsert][8] != int64(30000) {
+		t.Fatalf("commits = %d, queries = %v", query.commits, query.queries)
+	}
+	changed := standardPolicy()
+	changed.Policy.MaxSteps = 99
+	if err := repository.PublishRuntimePolicy(ctx, 7, changed); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("want ErrConflict for different limits under one version, got %v", err)
+	}
+	if query.commits != 1 {
+		t.Fatal("a conflicting version must not move the pointer")
+	}
+	invalid := standardPolicy()
+	invalid.Policy.TurnTimeout = 0
+	if err := repository.PublishRuntimePolicy(ctx, 7, invalid); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("want ErrValidation, got %v", err)
+	}
+}

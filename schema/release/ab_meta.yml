@@ -15,4 +15,3 @@ tables:
   - experiment_cohort
   - conversation_release
   - audit_event
-  - safety_event

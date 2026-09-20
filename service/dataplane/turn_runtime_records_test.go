@@ -89,7 +89,7 @@ func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	failArgs := query.firstArgs(qRecordFail)
-	if len(failArgs) != 5 || failArgs[0] != "failed" || failArgs[3] != int64(7) || failArgs[4] != "request-1" {
+	if len(failArgs) != 6 || failArgs[0] != "failed" || failArgs[3] != int64(7) || failArgs[4] != "request-1" || failArgs[5] != "dispatch_failed" {
 		t.Fatalf("fail args = %v", failArgs)
 	}
 	if err := store.Fail(context.Background(), 7, "request-1", "completed", "x"); !errors.Is(err, domain.ErrValidation) {

@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -86,7 +87,8 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 		}),
 		Estimator: &fake.TurnBudgetEstimator{},
 		Budget: &fake.TenantBudgetManager{
-			ReserveFunc: func(_ context.Context, tenantID int64, requestID string, tokens, cost int64, currency string) (domain.BudgetReservation, error) {
+			ReserveFunc: func(_ context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
+				tenantID, requestID, tokens, currency := request.TenantID, request.RequestID, request.Tokens, request.Currency
 				return domain.BudgetReservation{TenantID: tenantID, ReservationID: "reservation-1", RequestID: requestID, Attempt: 1, GrantedTokens: tokens, Currency: currency}, nil
 			},
 			CommitFunc: func(context.Context, domain.BudgetReservation, domain.Usage) error {
@@ -347,7 +349,7 @@ func TestTurnRuntimeSkipsSettlementWhenAlreadySettled(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
 	runtime.Budget = &fake.TenantBudgetManager{
-		ReserveFunc: func(context.Context, int64, string, int64, int64, string) (domain.BudgetReservation, error) {
+		ReserveFunc: func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error) {
 			return domain.BudgetReservation{}, domain.ErrBudgetSettled
 		},
 		CommitFunc:  func(context.Context, domain.BudgetReservation, domain.Usage) error { recorder.committed++; return nil },
@@ -368,7 +370,7 @@ func TestTurnRuntimeRejectsUnclassifiedBudgetConflict(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
 	runtime.Budget = &fake.TenantBudgetManager{
-		ReserveFunc: func(context.Context, int64, string, int64, int64, string) (domain.BudgetReservation, error) {
+		ReserveFunc: func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error) {
 			return domain.BudgetReservation{}, domain.ErrConflict
 		},
 	}
@@ -492,4 +494,63 @@ func TestTurnRuntimeRunsTheSettledHookOnSuccessAndOnABilledFailure(t *testing.T)
 			t.Fatalf("%s: settled = %+v", name, settled)
 		}
 	}
+}
+
+func TestActingForPrefersTheTurnAndFallsBackToTheConversation(t *testing.T) {
+	snapshot := domain.SessionSnapshot{EndUserRef: "42"}
+	carried := domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "7"}
+	if got := actingFor(domain.TurnRequest{OnBehalfOf: carried}, snapshot); got != carried {
+		t.Fatalf("the turn's own human wins, got %+v", got)
+	}
+	if got := actingFor(domain.TurnRequest{}, snapshot); got != (domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}) {
+		t.Fatalf("a queue-delivered turn recovers the conversation's human, got %+v", got)
+	}
+	if got := actingFor(domain.TurnRequest{}, domain.SessionSnapshot{}); got != (domain.PrincipalRef{}) {
+		t.Fatalf("a conversation without a human acts for no one, got %+v", got)
+	}
+}
+
+// A step only sees its context end; the runtime recovers the cancellation from the watcher's cause.
+func TestTurnRuntimeStopsAStepWhenItsTurnIsCancelledElsewhere(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	canceller := &MemoryTurnCanceller{}
+	runtime.Cancels = canceller
+	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(ctx context.Context, _ domain.StepInput) (domain.StepResult, error) {
+			turn := runtimeDispatch().Turn
+			if err := canceller.Cancel(context.Background(), turn.TenantContext.TenantID, turn.RequestID, "user stopped it"); err != nil {
+				t.Errorf("Cancel: %v", err)
+			}
+			<-ctx.Done()
+			return domain.StepResult{}, ctx.Err()
+		}), nil
+	})
+	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrTurnCanceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(recorder.failures) != 1 || recorder.failures[0] != "cancelled:canceled" || recorder.released != 1 {
+		t.Fatalf("failures = %v, refunds = %d", recorder.failures, recorder.released)
+	}
+}
+
+// A turn cancelled while queued or suspended never runs a step, and the reservation a suspension held is released.
+func TestTurnRuntimeSettlesATurnCancelledBeforePickup(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	runtime.Cancels = cancelledWatcher{}
+	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrTurnCanceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(recorder.executed) != 0 || recorder.released != 1 || len(recorder.failures) != 1 || recorder.failures[0] != "cancelled:canceled" {
+		t.Fatalf("executed %v, refunds %d, failures %v", recorder.executed, recorder.released, recorder.failures)
+	}
+}
+
+type cancelledWatcher struct{}
+
+func (cancelledWatcher) Watch(ctx context.Context, _ int64, _ string) (context.Context, func(), error) {
+	turnCtx, cancel := context.WithCancelCause(ctx)
+	cancel(fmt.Errorf("%w: stopped while suspended", domain.ErrTurnCanceled))
+	return turnCtx, func() {}, nil
 }

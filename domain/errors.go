@@ -67,6 +67,11 @@ var (
 	ErrInvalidModelOutput = errors.New("invalid model output")
 	// ErrUnsupportedClaim indicates an answer makes a claim its evidence does not verify.
 	ErrUnsupportedClaim = errors.New("unsupported claim")
+	// ErrEffectViolated indicates a mutation was accepted but its observed effect does not hold.
+	ErrEffectViolated = errors.New("effect violated")
+	// ErrEffectUnknown indicates a mutation's effect could not be observed; the outcome is
+	// unknown, never success, and the mutation is not invoked again until it can be.
+	ErrEffectUnknown = errors.New("effect unknown")
 )
 
 // TurnStage identifies the turn-lifecycle boundary that produced an error.

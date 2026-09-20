@@ -87,7 +87,7 @@ func TestQueueTurnDispatcherEnqueueArgumentOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []any{"agent", partition, 1, "route:request-1", dispatch.EnqueuedAt, dispatch.EnqueuedAt,
+	want := []any{"agent", "agent", "agent", partition, 1, "route:request-1", nil, dispatch.EnqueuedAt, dispatch.EnqueuedAt,
 		int64(7), "request-1", "conversation-1", DigestBytes([]byte("input"))}
 	if len(args) != len(want) {
 		t.Fatalf("args = %v", args)
@@ -123,6 +123,10 @@ func TestQueueTurnDispatcherDeduplicatesAndDetectsConflict(t *testing.T) {
 			}
 			if testCase.wantErr != nil && !errors.Is(err, testCase.wantErr) {
 				t.Fatalf("error = %v, want %v", err, testCase.wantErr)
+			}
+			// A matching replay offers the acknowledged delivery of a resumed turn back to the queue.
+			if requeue := query.firstArgs(qQueueRequeue); (requeue != nil) != (testCase.wantErr == nil && testCase.queued != nil) {
+				t.Fatalf("requeue args = %v", requeue)
 			}
 		})
 	}

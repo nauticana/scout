@@ -27,6 +27,8 @@ import (
 type Runtime struct {
 	Documents corpus.Source
 	Transport binding.Executor
+	// Observer reads effects back; without one a contract with required postconditions is denied before the transport.
+	Observer binding.Observer
 	// Store keeps evidence; nil is in-memory. Publisher additionally publishes each redacted document to Topic.
 	Store     evidence.Store
 	Publisher keelport.MessagePublisher
@@ -51,14 +53,18 @@ type Runtime struct {
 
 var _ validate.Subject = Runtime{}
 
-// Compose builds the governed runtime over documents. A non-nil transport replaces Runtime.Transport, which is how
-// the conformance harness scripts the external system.
-func (r Runtime) Compose(_ context.Context, documents corpus.Source, transport binding.Executor) (validate.Runtime, error) {
+// Compose builds the governed runtime over documents. Non-nil members of external replace Runtime.Transport and
+// Runtime.Observer, which is how the conformance harness scripts the external system.
+func (r Runtime) Compose(_ context.Context, documents corpus.Source, external validate.External) (validate.Runtime, error) {
 	if documents == nil {
 		documents = r.Documents
 	}
+	transport, observer := external.Transport, external.Observer
 	if transport == nil {
 		transport = r.Transport
+	}
+	if observer == nil {
+		observer = r.Observer
 	}
 	if documents == nil || transport == nil {
 		return validate.Runtime{}, fmt.Errorf("charter runtime: documents and transport are required")
@@ -86,7 +92,7 @@ func (r Runtime) Compose(_ context.Context, documents corpus.Source, transport b
 	if r.Keel != nil {
 		grants = &charterkeel.PermissionGate{Charter: grants, Keel: r.Keel, Identities: r.Identities, Permissions: r.Permissions}
 	}
-	var invoker capability.Invoker = &capability.AbstractInvoker{
+	base := &capability.BaseInvoker{
 		Catalog:          capability.NewBaseCatalog(documents),
 		Identities:       identity.NewBaseResolver(documents),
 		Authority:        grants,
@@ -95,19 +101,21 @@ func (r Runtime) Compose(_ context.Context, documents corpus.Source, transport b
 		Information:      &information.BaseEvaluator{Provider: information.NewBaseProvider(documents)},
 		Bindings:         binding.NewBaseProvider(documents),
 		Transport:        transport,
+		Observer:         observer,
 		Ledger:           ledger,
 		Evidence:         sink,
 		Escalation:       &capability.BaseEscalator{Recipients: &capability.BaseAccountableRecipient{Agents: agents, Organization: org}, IDs: ids},
 		IDs:              ids,
 		ReadWithoutGrant: r.ReadWithoutGrant,
 	}
+	var invoker capability.Invoker = base
 	if r.Guards != nil {
 		invoker = &charterkeel.GuardedInvoker{Next: invoker, Guards: r.Guards, Querier: r.Querier}
 	}
 	if r.Metrics != nil {
 		invoker = &charterkeel.MetricsInvoker{Next: invoker, Metrics: r.Metrics}
 	}
-	return validate.Runtime{Admission: &agent.BaseAdmission{Agents: agents, Assignments: org}, Invoker: invoker, Evidence: records}, nil
+	return validate.Runtime{Admission: &agent.BaseAdmission{Agents: agents, Assignments: org}, Invoker: invoker, Reconciler: base, Evidence: records}, nil
 }
 
 // ledger prefers an explicit ledger, then a durable keel-backed one, then memory. The invoker runs its transport

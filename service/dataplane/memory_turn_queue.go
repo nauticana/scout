@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -164,7 +165,11 @@ func (queue *MemoryTurnQueue) Claim(ctx context.Context, workerID string, leaseD
 		return domain.QueueLease{}, err
 	}
 	for _, candidate := range ordered {
-		entry := queue.headLocked(candidate.tenantID, now)
+		passedOver, err := saturatedPrincipals(ctx, queue.config.Weights, candidate.tenantID, queue.principalLoadLocked(candidate.tenantID, now))
+		if err != nil {
+			return domain.QueueLease{}, err
+		}
+		entry := queue.headLocked(candidate.tenantID, now, passedOver)
 		if entry == nil {
 			continue
 		}
@@ -225,11 +230,12 @@ func (queue *MemoryTurnQueue) candidatesLocked(now time.Time) []tenantCandidate 
 
 // headLocked returns the tenant's next claimable message: nothing of a
 // conversation is claimable while an older message of it is still live.
-func (queue *MemoryTurnQueue) headLocked(tenantID int64, now time.Time) *memoryQueueEntry {
+func (queue *MemoryTurnQueue) headLocked(tenantID int64, now time.Time, passedOver []domain.PrincipalRef) *memoryQueueEntry {
 	var head *memoryQueueEntry
 	for _, entry := range queue.messages {
 		if entry.dispatch.Turn.TenantContext.TenantID != tenantID || entry.status != "queued" ||
-			entry.availableAt.After(now) || entry.attempt >= queue.config.MaxAttempts {
+			entry.availableAt.After(now) || entry.attempt >= queue.config.MaxAttempts ||
+			slices.Contains(passedOver, turnPrincipal(entry.dispatch.Turn)) {
 			continue
 		}
 		if queue.blockedLocked(entry) {
@@ -242,6 +248,28 @@ func (queue *MemoryTurnQueue) headLocked(tenantID int64, now time.Time) *memoryQ
 		}
 	}
 	return head
+}
+
+// principalLoadLocked mirrors the table scheduler: leased turns per principal that still has ready work.
+func (queue *MemoryTurnQueue) principalLoadLocked(tenantID int64, now time.Time) []principalLoad {
+	leased, ready := map[domain.PrincipalRef]int{}, map[domain.PrincipalRef]bool{}
+	for _, entry := range queue.messages {
+		if entry.dispatch.Turn.TenantContext.TenantID != tenantID {
+			continue
+		}
+		principal := turnPrincipal(entry.dispatch.Turn)
+		switch {
+		case entry.status == "leased":
+			leased[principal]++
+		case entry.status == "queued" && !entry.availableAt.After(now):
+			ready[principal] = true
+		}
+	}
+	loads := make([]principalLoad, 0, len(ready))
+	for principal := range ready {
+		loads = append(loads, principalLoad{principal: principal, leased: leased[principal]})
+	}
+	return loads
 }
 
 func (queue *MemoryTurnQueue) blockedLocked(entry *memoryQueueEntry) bool {

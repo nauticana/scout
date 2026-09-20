@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -52,20 +53,17 @@ func (e *AgentStepExecutor) Execute(ctx context.Context, input domain.StepInput)
 
 	authorization, err := e.Delegation.Authorize(ctx, caller, config.Target, config.Action)
 	if err != nil {
-		e.record(ctx, caller, config, domain.DecisionDeny, err.Error())
-		return domain.StepResult{}, err
+		return domain.StepResult{}, errors.Join(err, e.record(ctx, input, config, domain.DecisionDeny, stage.ErrorClass(err)))
 	}
 	next := authorization.Bounds
 	if len(caller.Authority) > 0 || hasDelegationBounds(input.Bounds) {
 		next, err = principal.Narrow(input.Bounds, authorization.Bounds)
 		if err != nil {
-			e.record(ctx, caller, config, domain.DecisionDeny, err.Error())
-			return domain.StepResult{}, err
+			return domain.StepResult{}, errors.Join(err, e.record(ctx, input, config, domain.DecisionDeny, stage.ErrorClass(err)))
 		}
 	}
 	if err := e.checkCycle(ctx, caller, config.Target, input); err != nil {
-		e.record(ctx, caller, config, domain.DecisionDeny, err.Error())
-		return domain.StepResult{}, err
+		return domain.StepResult{}, errors.Join(err, e.record(ctx, input, config, domain.DecisionDeny, stage.ErrorClass(err)))
 	}
 
 	ref, err := e.Objects.Dehydrate(ctx, delegationInputName(input), input.Snapshot.State)
@@ -83,7 +81,9 @@ func (e *AgentStepExecutor) Execute(ctx context.Context, input domain.StepInput)
 	if err != nil {
 		return domain.StepResult{}, err
 	}
-	e.record(ctx, caller, config, domain.DecisionAllow, "delegated")
+	if err = e.record(ctx, input, config, domain.DecisionAllow, "delegated"); err != nil {
+		return domain.StepResult{}, err
+	}
 
 	result, err := e.Invoker.Invoke(ctx, domain.DelegatedCall{
 		Caller: caller, Target: config.Target, Authority: authorization.Authority, Bounds: next, WorkItem: item,
@@ -129,16 +129,21 @@ func (e *AgentStepExecutor) checkCycle(ctx context.Context, caller domain.Princi
 	return nil
 }
 
-func (e *AgentStepExecutor) record(ctx context.Context, caller domain.Principal, config agentStepConfig, outcome domain.DecisionOutcome, reason string) {
+func (e *AgentStepExecutor) record(ctx context.Context, input domain.StepInput, config agentStepConfig, outcome domain.DecisionOutcome, reason string) error {
 	if e.Audit == nil {
-		return
+		return nil
 	}
-	// Evidence must not mask the delegation outcome the caller is about to see.
-	_ = e.Audit.Record(ctx, domain.DecisionRecord{
+	caller := input.Principal
+	err := e.Audit.Record(ctx, domain.DecisionRecord{
 		TenantID: caller.TenantID, Principal: domain.PrincipalRef{Kind: caller.Kind, ID: caller.ID},
 		ScopeID: caller.ScopeID, Category: domain.DecisionCategoryToolInvoke, Action: config.Action,
 		Resource: config.Target.ID, ReleaseVersion: caller.Release, Outcome: outcome, Reason: reason,
+		RequestID: input.RequestID, ConversationID: input.Snapshot.ConversationID,
 	})
+	if err != nil {
+		return fmt.Errorf("record delegation: %w", err)
+	}
+	return nil
 }
 
 func decodeAgentStep(step domain.ExecutionStep) (agentStepConfig, error) {

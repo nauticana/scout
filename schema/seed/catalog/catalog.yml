@@ -73,6 +73,8 @@ seeds:
     columns: [code, depth_rank, description]
     rows:
       - [tenant, 0, Tenant root scope every other scope descends from]
+      - [agent_type, 1, Tenant defaults shared by every agent of one type]
+      - [agent, 2, One agent]
   - table: config_resource_kind
     columns: [code, narrowing_rule, description]
     rows:

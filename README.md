@@ -158,12 +158,12 @@ Studio separates mutable authoring state from immutable runtime state:
 
 1. `agent_profile` owns identity, logical kind, display name, and the operational kill switch.
 2. `agent_draft` owns revisioned model, approval, enabled, and product-extension settings.
-3. Prompt compilation resolves platform baseline, tenant-kind default, and agent override rows.
+3. Prompt compilation folds the platform baseline and the `prompt_section` bindings of every scope on the agent's chain, widest first.
 4. `agent_alias` maps a logical tenant role to one named agent and carries the shared prompt-profile revision.
-5. Publication freezes compiled prompts and provenance into canonical `agent_version.definition` JSON.
+5. Publication freezes compiled prompts, each section with the provenance of the layer that decided it, into canonical `agent_version.definition` JSON.
 6. `agent_deployment` selects stable and optional canary versions for the aliased agent.
 
-`controlplane.StudioService` implements `AgentStudioHTTPBackend`. It owns named SQL, prompt resolution, common validation, optimistic revisions, kill-switch updates, publication, restore, reset, history, release sections, and lifecycle audit. `handler.StudioHandler` authenticates through keel, derives `domain.StudioActor`, calls one backend method, and maps `studio-v1` DTOs and errors.
+`controlplane.StudioService` implements `AgentStudioHTTPBackend`. It owns named SQL, prompt resolution, common validation, optimistic revisions, kill-switch updates, publication, restore, reset, history, release sections, and lifecycle audit. `handler.StudioHandler` authenticates through keel, derives `domain.StudioActor`, calls one backend method, and maps `studio-v2` DTOs and errors.
 
 Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, `AgentDraftTestExecutor`, `AgentTypeCatalog`, and `StudioModelCatalog`, and may implement `AgentActivityReporter`. Scout owns the inheritance vocabulary and lifecycle contract but never hard-codes product agent types, prompt text, capability catalogs, or provider construction.
 
@@ -177,30 +177,27 @@ Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, 
 
 Two services cover the generic control-plane access a product would otherwise re-implement in its own SQL:
 
-- `controlplane.AgentProvisioner` idempotently registers the tenant and seeds agent profiles, drafts, and aliases from `[]domain.AgentSeed`. Which agents to seed, and whether the resulting set is usable, stay product decisions.
+- `controlplane.AgentProvisioner` idempotently registers the tenant and seeds agent profiles, drafts, and aliases from `[]domain.AgentSeed`. `TenantIdentity.DefaultPolicy` is written as the tenant's runtime policy only while it has none, so a provisioned tenant can run a turn. Which agents to seed, the policy values, and whether the resulting set is usable, stay product decisions.
 - `runtime.DeployedAgentIndex` returns each alias with its operational state and deployed definition, so products can derive readiness views without querying `agent_alias`, `agent_profile`, `agent_draft`, `agent_deployment`, or `agent_version` directly.
 
 See [STUDIO_API.md](STUDIO_API.md) for the initial HTTP compatibility profile.
 
 ### Shared prompt compiler
 
-`controlplane.PromptCompiler` and `controlplane.PromptDraftAssembler` merge resolved prompt rows, combine source provenance with effective Studio content, produce immutable language snapshots, and create versioned SHA-256 digests without database or provider dependencies.
+Prompts inherit through the same engine as every other scoped resource. A section's layers are the product's `prompt_baseline` row, then the `prompt_section` binding (`config_scope_binding`, resource id `<section id>/<language>`) of each scope on the agent's chain, widest first. `controlplane.PromptCompiler` folds them through `scope.PromptMerger`, and `PromptDraftAssembler` pairs the layers with the text the compiler makes of them; both are free of database and provider dependencies.
 
-For each prompt section, the compiler applies these rules:
-
-1. The platform baseline is retained when present.
-2. The tenant default appends to the baseline.
-3. An agent override with `Overwrite` removes the tenant-default instruction but retains the baseline.
-4. An agent override without `Overwrite` appends after the other levels.
-5. The most specific non-empty output contract wins.
-6. Sections are ordered by display order and then prompt-section id.
+1. `append` adds the layer's instruction, and its output contract, a paragraph below what it inherits; a layer may add an output contract alone.
+2. `replace` drops everything inherited and needs an instruction.
+3. `sealed` is set by the layer's own scope: any narrower layer under it fails with `ErrSealed`, so a company clause cannot be overridden by the agent it constrains.
+4. Sections are ordered by display order and then prompt-section id.
+5. Each `CompiledPromptSection.Source` is the `domain.Provenance` of the layer that decided it. Provenance is no part of the prompt digest, so a prompt whose text did not change keeps its digest.
 
 `DefinitionDigest` includes agent kind, model provider/model pairs, enabled and approval policy, canonical extension JSON, and sorted compiled-language digests. Identity, version, revision, publication, and release-note fields are excluded because they do not change runtime behavior. Stored language digests are verified before a definition digest is produced.
 
 ```go
 compiler := &controlplane.PromptCompiler{}
 
-compiled, err := compiler.Compile(languageCode, resolved.Rows)
+compiled, err := compiler.Compile(languageCode, resolved.Sections)
 if err != nil {
     return err
 }
@@ -209,7 +206,7 @@ definition.Languages = append(definition.Languages, compiled)
 definition.DefinitionDigest, err = compiler.DefinitionDigest(definition)
 ```
 
-`controlplane.KeelPromptSourceRepository` implements `PromptSourceRepository` over `prompt_baseline`, `tenant_prompt_default`, and `agent_prompt_override`. The injected `PromptBaselineSelector` supplies ordered product keys; Scout selects the first matching baseline per section and never embeds product precedence.
+`controlplane.PromptRepository` implements `PromptSourceRepository` over `prompt_baseline` and the bindings of the agent's scope chain (`contract.ScopeRepository`). The injected `PromptBaselineSelector` supplies ordered product keys; Scout selects the first matching baseline per section and never embeds product precedence. A `contract.PromptScopeLayout` places the agent in the tenant's tree; `BasePromptScopeLayout` is the convention `AgentProvisioner` creates — `tenant` → `t:<agent type>` → `a:<agent>` — and the repository, the provisioner, and `StudioService` must share one layout. Studio edits the agent's scope and its type's scope, behind the draft and prompt-profile revisions; a layer of any other scope is read-only. Bindings are temporal, so an edit ends the open binding and binds a new one, and a save that would bind under a sealed layer is refused before anything is written.
 
 `runtime.PublishedAgentResolver` resolves an active alias to its immutable stable or sticky canary definition, enforces the operational kill switch, and validates the requested language.
 
@@ -366,7 +363,7 @@ Use released module coordinates; never use a local `replace` or filesystem depen
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.2.59
+go get github.com/nauticana/keel@v1.2.68
 ```
 
 Import Scout contracts and keel infrastructure directly:
@@ -517,13 +514,13 @@ Scout's schema is fifteen modules so a downstream installs only what its product
 | `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
 | `prompt` | 2 | Prompt sections and platform baselines | — |
 | `model` | 6 | Providers, model definitions, capabilities, routes, pricing, tenant access | `catalog`, `tenancy` |
-| `agent` | 14 | Types and type versions, capability packages, profiles, drafts, aliases, prompt overrides, guardrail config, published versions, deployments, version quarantine, Studio audit | `tenancy`, `prompt`, `model` |
+| `agent` | 13 | Types and type versions, capability packages, profiles, drafts, aliases, guardrail config and safety events, published versions, deployments, version quarantine, Studio audit | `tenancy`, `model` |
 | `tool` | 5 | Tool profiles, immutable versions, egress rules, agent bindings, principal credential bindings | `tenancy`, `agent`, `agent_authorization` |
 | `execution_graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
 | `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
 | `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
-| `release` | 17 | Guardrail safety events, platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
+| `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
 | `configuration` | 3 | Configuration hierarchy, scoped bindings, compiled effective releases | `catalog`, `tenancy`, `agent` |
@@ -547,24 +544,24 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 38 selected keel tables and 107 Scout tables. Drop the modules the product does not use:
+That full set is 38 selected keel tables and 105 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent` | 41 |
-| … plus agent principals, delegation, and scoped configuration | `+ agent_authorization`, `configuration` | 46 |
-| … plus compiled execution graphs | `+ execution_graph` | 50 |
-| … plus governed tools and credential bindings | `+ tool` | 55 |
-| … plus durable human approvals | `+ approval` | 57 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 66 |
-| … plus the durable turn runtime | `+ runtime` | 80 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 107 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 43 |
+| … plus agent principals and delegation | `+ agent_authorization` | 45 |
+| … plus compiled execution graphs | `+ execution_graph` | 49 |
+| … plus governed tools and credential bindings | `+ tool` | 54 |
+| … plus durable human approvals | `+ approval` | 56 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 65 |
+| … plus the durable turn runtime | `+ runtime` | 79 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 105 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
 The explicit input order respects keel's declaration that `tenant_management` depends on `core` and `geo`. Run both commands in CI for whichever profile you ship. The compiler validates table order, foreign-key targets, primary keys, sequences, indexes, and duplicate constraint names before producing DDL. Never commit a dialect-specific SQL file as another schema source.
 
-The seed YAML is authoritative: `catalog` seeds currencies and the lifecycle catalogs, `prompt` the platform prompt sections and language codes, `model` the stock providers and capability constants, `agent` the Studio authorization verbs, roles, menu entry, config flags and REST metadata, `execution_graph` the execution-step kinds, `runtime` and `model` their foreign-key lookup rows, and `release` the ordered `rollout_stage` catalog. Each constant domain maps its consuming column through `constant_lookup`. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
+The seed YAML is authoritative: `catalog` seeds currencies and the lifecycle catalogs, `prompt` the platform prompt sections and language codes, `model` the stock providers and capability constants, `agent` the Studio authorization verbs, roles, menu entry, config flags, guardrail constants and REST metadata, `execution_graph` the execution-step kinds, `runtime` and `model` their foreign-key lookup rows, and `release` the ordered `rollout_stage` catalog. Each constant domain maps its consuming column through `constant_lookup`. The pinned keel seed emitter currently produces PostgreSQL `ON CONFLICT` syntax, so the MySQL command validates DDL without appending seed DML; revisit seed emission if MySQL becomes a deployment target.
 
 ### Persistence rules
 
@@ -671,11 +668,11 @@ Use a fixed partition pool rather than one physical queue per tenant. Determinis
 
 The queue supplies durability and backpressure. Fairness belongs in `FairTurnScheduler`, not in an assumption about broker behavior. Dedicated tenants may receive isolated partitions and worker pools without changing the contract.
 
-`dataplane.QueueTurnDispatcher` accepts an admitted turn into `turn_queue`: the tenant is shuffle-sharded over a fixed partition subset, the partition is keyed on tenant and conversation so a conversation's turns stay ordered, and the request ID deduplicates redeliveries — identical input is a no-op, different input is `domain.ErrConflict`. `dataplane.QueueTurnScheduler` leases from that queue: expired leases are reclaimed, tenants are ordered by leased work per `contract.TenantWeightPolicy` weight and capped by their concurrency ceiling, and every claim carries a lease token that fences `Extend`, `Ack`, and `Nack`. Retry exhaustion marks the row `dead` and publishes to `TableDeadLetterQueue` in one transaction, including when the exhausted entry is found through an expired lease rather than an explicit `Nack`.
+`dataplane.QueueTurnDispatcher` accepts an admitted turn into `turn_queue`: the tenant is shuffle-sharded over a fixed partition subset, the partition is keyed on tenant and conversation so a conversation's turns stay ordered, and the request ID deduplicates redeliveries — identical input is a no-op, different input is `domain.ErrConflict`. `dataplane.QueueTurnScheduler` leases from that queue: expired leases are reclaimed, tenants are ordered by leased work per `contract.TenantWeightPolicy` weight and capped by their concurrency ceiling, a principal at its own `PrincipalCeiling` is passed over while the tenant's other principals keep running (`turn_queue.principal_kind`/`principal_id`), and every claim carries a lease token that fences `Extend`, `Ack`, and `Nack`. Retry exhaustion marks the row `dead` and publishes to `TableDeadLetterQueue` in one transaction, including when the exhausted entry is found through an expired lease rather than an explicit `Nack`.
 
 `dataplane.TurnIngress` admits a turn in the only safe order — rate limit, durable turn record, budget reservation, reply subscription, durable dispatch — and refunds the reservation, fails the record, and closes the subscription if dispatch fails. A client that disconnects only ends delivery: usage is metered from provider-confirmed results, never from frames delivered. `dataplane.TurnRuntime` executes one delivery: per step it claims or replays the idempotency result, executes, commits, guards, checkpoints, then publishes the frame; after the last step it settles the reservation, writes one usage event, persists the terminal result, and only then publishes the final frame. A crash after terminal persistence replays that frame at the same sequence and never re-executes. A failed or cancelled turn settles the work already performed rather than refunding it — only a hold with no usage behind it is released — so provider work is never given away because the turn ended badly.
 
-Reference adapters ship for in-process use (`dataplane.NewMemoryTurnQueue`, `MemoryReplyHub`), and vendor adapters prove themselves with the same conformance suites Scout runs: `dataplanetest.RunDispatcherSuite`, `RunSchedulerSuite`, `RunIdempotencySuite`, and `RunReplySuite`.
+Reference adapters ship for in-process use (`dataplane.NewMemoryTurnQueue`, `MemoryReplyHub`) and for a runtime that runs in a worker process (`CacheReplyHub`, `TableTurnCanceller`, below), and vendor adapters prove themselves with the same conformance suites Scout runs: `dataplanetest.RunDispatcherSuite`, `RunSchedulerSuite`, `RunIdempotencySuite`, and `RunReplySuite`.
 
 ```go
 // runtime-worker: a keel LeasedQueueWorker driving the scheduler and the runtime.
@@ -704,7 +701,7 @@ Build the query set with `dataplane.TurnQueueWorkerQueries(workerID, leaseDurati
 
 Limiters with a known retry time return keel `limiter.LimitError`, which preserves Scout's domain sentinel and implements keel's `port.RetryAfterError` and `handler.HeaderCarrier`, so `Retry-After` reaches the client. Hard budget denials do not invent a reset time. Streaming and retrieval use internal stage wrappers; durable fleet attribution belongs in structured observations rather than behavior in the value-only `domain/` package.
 
-`isolation.BudgetLedger` implements attempt-aware reserve-then-settle. A live attempt replays idempotently; a nonterminal turn may replace an expired attempt after fencing it. `Commit` records actual usage, including overruns, and `Expire` reclaims dead holds. Cost-breaker tracking capacity rejects in `Allow`; `Record` preserves completed work and counts records with an untracked scope. `isolation.NewTenantRateLimiter` builds the shared process limiter used by turn, tool, and model gateways; `modelgateway.NewFairCapacityScheduler` builds the tenant-fair model capacity pool.
+`isolation.BudgetLedger` implements attempt-aware reserve-then-settle. A live attempt replays idempotently; a nonterminal turn may replace an expired attempt after fencing it. `Commit` records actual usage, including overruns, and `Expire` reclaims dead holds. A `domain.BudgetRequest` names the principal that spends; with a `PrincipalBudgetPolicy` a bounded principal reserves inside its own window as well as the tenant's, in the tenant's currency, and both must hold. A delegated hop settles for itself: `dataplane.TurnAgentInvoker` runs the delegate as its own turn, under its own principal and the authority chain of its delegator, holding no more cost than the budget passed down, and the delegating step reports no usage of its own. Cost-breaker tracking capacity rejects in `Allow`; `Record` preserves completed work and counts records with an untracked scope. `isolation.NewTenantRateLimiter` builds the shared process limiter used by turn, tool, and model gateways; `modelgateway.NewFairCapacityScheduler` builds the tenant-fair model capacity pool.
 
 ### Distributed admission and latency budgets
 
@@ -725,6 +722,13 @@ Every limit in both services is a validated constructor input; [doc/configuratio
 ### Streaming, cancellation, and reconnect
 
 `dataplane.StreamPump` guards every emitted payload, cancels generation after publication failure, and stops after the observed output budget. Non-publication failures get one bounded terminal-publish attempt. `dataplane.MemoryReplyHub` disconnects slow subscribers and supports retained replay through `SubscribeFrom`; a retained sequence retries only when its content matches, while divergent or trimmed retries fail. A publisher treats `ErrReplayExpired` from an older sequence retry as success-equivalent because the stream has advanced beyond verification. `MemoryTurnCanceller.Watch` lets cancellation stop a turn without ending its conversation.
+
+When the runtime runs in a worker process, replies and cancellation cross processes:
+
+- `dataplane.CacheReplyHub` is the same publisher and replaying subscriber over the shared keel cache, so any ingress process serves any reconnect. Frames are a delivery buffer that expires after `Retention` (10m), never the record of a turn: a cursor behind an expired frame is `ErrReplayExpired`, and for a request the cache holds nothing for, `Records` supplies the final frame of a turn that already ended, so losing the cache never loses an answer. A wake-up travels over one cache pub/sub channel per process and `PollInterval` (500ms) covers a lost one. A suspended turn's final frame ends that delivery only; the resumed turn continues the stream at the same sequence.
+- `dataplane.TableTurnCanceller` records a cancellation on `conversation_turn` (`cancel_requested_at`, `cancel_reason`), so it cannot be lost and also stops a turn that is queued or picked up later. `TurnRuntime.Cancels` (`contract.TurnCancelWatcher`) derives the turn's context from it; the worker polls the flag every `PollInterval` (1s), an optional `Cache` wake-up makes it immediate, and a flag that cannot be read three times in a row stops the turn with that error. Cancelling a suspended turn returns it to the queue in the same transaction; the worker that picks it up runs no step, ends it `cancelled`, and releases the reservation the suspension held.
+- `turn_queue.acting_context` carries who a turn acts as — principal with its authority chain, `OnBehalfOf`, delegation bounds, work item, and tenant context; references and bounds, never a credential — so a delegated turn crosses the queue intact. A row whose context names another tenant is `ErrForbidden`. `QueueTurnDispatcher.Enqueue` of an already acknowledged delivery requeues it while its turn is live again, which is how a resumed turn reaches a worker.
+- A runtime turn's history row is completed with it: `DurableSessionStore.Complete` writes `result_kind` and `result_payload` (`json` verbatim, `text` wrapped, `reference` above 64 KiB) and `TableTurnRecordStore.Fail` writes `error_text`, each in the statement that ends the turn.
 
 ### Checkpoint and replay
 
@@ -801,7 +805,7 @@ The model never calls a destination directly. A governed tool path resolves the 
 
 ### Running tools in process
 
-`toolgateway.InProcessTransport` serves tools implemented in the same binary: register one `InProcessHandler` per tool id and register the tool with `InProcessEndpoint(toolID)` (`inprocess://<tool id>`). The handler receives the `ToolCall` the gateway authenticated, so the tenant and principal come from the call and never from model-supplied arguments; other endpoints go to `Next`. `InProcessCredentials` answers those tools with no secret under the principal's own authority and delegates the rest. `TableEgressPolicy` admits an in-process endpoint without a rule and any network endpoint only when the tenant holds a `tool_egress_rule` for its exact protocol, host, and port. A tool's registered `Timeout` and `MaxAttempts` win over the gateway defaults.
+`toolgateway.InProcessTransport` serves tools implemented in the same binary: register one `InProcessHandler` per tool id and register the tool with `InProcessEndpoint(toolID)` (`inprocess://<tool id>`). The handler receives the `ToolCall` the gateway authenticated, so the tenant and principal come from the call and never from model-supplied arguments; other endpoints go to `Next`. `InProcessCredentials` answers those tools with no secret under the principal's own authority and delegates the rest. `TableEgressPolicy` admits an in-process endpoint without a rule and any network endpoint only when the tenant holds a `tool_egress_rule` for its exact protocol, host, and port. A tool's registered `Timeout` and `MaxAttempts` win over the gateway defaults. `ToolCall.OnBehalfOf` names the human the turn acts for — recovered from the conversation for a queue-delivered turn — so a handler can authorize per user without a query.
 
 ```go
 transport := &toolgateway.InProcessTransport{}
@@ -809,6 +813,20 @@ _ = transport.Register("site_audit", auditHandler)
 gateway.Transport, gateway.Egress = transport, &toolgateway.TableEgressPolicy{DB: db}
 gateway.Credentials = &toolgateway.InProcessCredentials{Transport: transport, Next: boundCredentials}
 ```
+
+### Verified effects
+
+A provider accepting a mutation is not the mutation having landed. A tool registered with `ToolDefinition.VerifyEffect` succeeds only once `GovernedGateway.Effects`, a `contract.ToolEffectVerifier`, reads its postcondition back; without a verifier the call is refused before the transport. The verifier never mutates, stores what it saw as immutable `ObjectRef` evidence, and returns a `domain.EffectObservation`.
+
+| Observation | Outcome |
+|---|---|
+| satisfied before the mutation | the effect already landed: the transport is not invoked and the verifier's `Output` is the result (`Reconciled`) |
+| violated before the mutation | the mutation runs |
+| satisfied after it | the call succeeds with `ToolResult.Effect` |
+| violated after it | `ErrEffectViolated`; sent again under the same idempotency key, within the attempt ceiling, only when the tool declares `RetryWhenEffectAbsent` |
+| failed, unrecognized, or without evidence | `ErrEffectUnknown`: never success, and no blind mutation |
+
+The gateway observes before every attempt, so a retry or a redelivered call reconciles instead of repeating the effect. The tool loop journals the observation with the call and emits it as the typed `effect` event, so replay keeps the evidence without a second call and the model sees only the `effect_violated` or `effect_unknown` class. How a product reads a field back, compares business state, or remediates a mismatch stays downstream. `charter.Runtime.Observer` is the matching injection point for Charter postconditions.
 
 ### Tool registry
 
@@ -822,9 +840,9 @@ Every model decision and every observation is appended to a `contract.LoopJourna
 
 `domain.ToolLoopLimits` bounds iterations, tool calls, tokens, cost, identical repeated calls, and wall-clock time, and the delegated budget in `StepInput.Bounds` bounds cost as well. Each fails closed with `ErrExecutionLimit`, `ErrBudgetExceeded`, or `ErrLoopDetected`; a step's `ToolLoopConfig` may narrow every limit, never widen one, and unknown configuration keys are rejected. A cost limit or a delegated budget requires a `Pricer` and a matching currency, or the step fails closed with `ErrDegraded`. A failed loop reports what it already spent through `LoopError`, and the runtime settles that usage instead of refunding it. `LoopTrajectory` projects a journal onto `domain.TrajectoryEvent`s for `evaluation.TrajectoryScorer`.
 
-A release becomes executable at publication. `AgentPublishRequest.Tools` and `ToolLoop` are frozen into the definition (and its digest), and `StudioService.ReleaseWriters` run inside the publish and restore transaction: `TableToolRegistry` writes the bindings and `controlplane.TableExecutionGraphRepository` compiles and stores the graph (`ToolLoopGraphCompiler` yields the one-step `tool_loop` graph), so a release, its tools, and its graph commit together or not at all. Publishing a definition that declares either without a writer composed is `ErrNotReady`.
+A release becomes executable at publication. `AgentPublishRequest.Tools` and `ToolLoop` — or, when the request gives neither, the ones its `AgentTypeDescriptor` declares, so a republish cannot drop a type's tools — are frozen into the definition (and its digest), and `StudioService.ReleaseWriters` run inside the publish and restore transaction: `TableToolRegistry` writes the bindings and `controlplane.TableExecutionGraphRepository` compiles and stores the graph (`ToolLoopGraphCompiler` yields the one-step `tool_loop` graph), so a release, its tools, and its graph commit together or not at all. Publishing a definition that declares either without a writer composed is `ErrNotReady`.
 
-The remaining collaborators have table-backed or default implementations: `controlplane.TableTenantPolicyRepository`, `TableGuardrailConfigRepository`, and `TableAgentDefinitionReader`; `observability.TableSafetyEventSink` over `safety_event`; `dataplane.ReleaseLoopRequestBuilder`, which renders the pinned release's prompt around `StepInput.Input` with a `Task` hook for product context; `dataplane.LoopBudgetEstimator`, which reserves the loop's ceilings; `ScoutConfig.ToolLoopLimits()`; and `modelgateway.PinnedModelRouter`, which routes to the model the release pins through the tenant's catalog without capacity snapshots. `dataplane.RuntimeWorker` is the keel leased queue worker that drains `turn_queue` into the runtime.
+The remaining collaborators have table-backed or default implementations: `controlplane.TableTenantPolicyRepository`, which also publishes an immutable policy version and moves the tenant's current pointer in one transaction (`PublishRuntimePolicy`), `TableGuardrailConfigRepository`, and `TableAgentDefinitionReader`; `observability.TableSafetyEventSink` over `safety_event`; `dataplane.ReleaseLoopRequestBuilder`, which renders the pinned release's prompt around `StepInput.Input` with a `Task` hook for product context; `dataplane.LoopBudgetEstimator`, which reserves the loop's ceilings; `ScoutConfig.ToolLoopLimits()`; `modelgateway.PinnedModelRouter`, which routes to the model the release pins through the tenant's catalog without capacity snapshots; and `modelgateway.FactoryProviderRegistry`, the `ModelProviderRegistry` that builds adapters on first use from an `AgentProviderFactory` and rebuilds them after `TTL`. `dataplane.RuntimeWorker` is the keel leased queue worker that drains `turn_queue` into the runtime.
 
 ```go
 loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
@@ -837,7 +855,7 @@ _ = executors.Register(domain.StepKindToolLoop, loop)
 
 ### Typed turn events and evidence
 
-`domain.TurnEvent` is the versioned event vocabulary — `text_delta`, `tool_proposal`, `tool_result`, `approval_pending`, `approval_resolved`, `evidence`, `progress`, `result`, and a typed, versioned `extension` for product payloads. A step returns events in `StepResult.Events` and the runtime publishes them on that step's `TurnReply.Events`, after the step is committed and its guardrails passed, so they inherit the frame's sequence, deduplication, and replay; `Payload` stays the opaque view. When an output guardrail rewrites the step's state, the rewritten state is what is checkpointed, returned, published, and carried as the `result` event's text. A tool result becomes an event only after the gateway validated it and applied the tool guardrails.
+`domain.TurnEvent` is the versioned event vocabulary — `text_delta`, `tool_proposal`, `tool_result`, `approval_pending`, `approval_resolved`, `evidence`, `effect`, `progress`, `result`, and a typed, versioned `extension` for product payloads. A step returns events in `StepResult.Events` and the runtime publishes them on that step's `TurnReply.Events`, after the step is committed and its guardrails passed, so they inherit the frame's sequence, deduplication, and replay; `Payload` stays the opaque view. When an output guardrail rewrites the step's state, the rewritten state is what is checkpointed, returned, published, and carried as the `result` event's text. A tool result becomes an event only after the gateway validated it and applied the tool guardrails.
 
 `domain.EvidencedAnswer` is the optional result shape for agents that make factual claims: each `Claim` cites `EvidenceRef`s. `guardrail.EvidenceValidator` accepts evidence only as an object whose digest verifies, a tool result of the same turn, or a resource link such a tool returned (`ToolResult.Evidence`); a URL the model supplies verifies as nothing. The `EvidenceReport` names each unsupported claim and keeps the supported ones, so a caller can return the safe part. A `tool_loop` step with `require_evidence` fails with `ErrUnsupportedClaim` instead.
 
@@ -859,7 +877,7 @@ An allow may carry obligations — `require_approval`, `redact`, `cap_spend`, `r
 
 `ToolCredentialProvider` is keyed on the principal, not the tenant. `tool_credential_binding` maps `(tenant, principal, tool, purpose)` to a reference into keel's secret or OAuth-connection store — never secret material — and `BoundCredentialProvider` resolves it just in time, after policy, guardrails, egress, and admission. Two agents on one tool version therefore resolve different identities, and the returned `AuthorityRef` records whose authority was exercised while the secret is recorded nowhere.
 
-`domain.DecisionRecord` replaces the opaque audit event: principal, authority, scope, action, resource, release, policy, outcome, obligations, reason, and a reference to redacted evidence. `observability.TableAuditSink` is both sides — `Record` writes, `Decisions` reads exactly one tenant, or with `TenantID` zero only the platform-wide records that name no tenant. Reading across tenants is not expressible. Evidence is not telemetry and never derives from it. `usage_event` carries the principal and scope that spent it, so cost is reportable per agent and per organizational unit. See [doc/governance.md](doc/governance.md).
+`domain.DecisionRecord` replaces the opaque audit event: principal, authority, scope, action, resource, release, policy, outcome, obligations, reason, and a reference to redacted evidence. `observability.TableAuditSink` is both sides — `Record` writes, `Decisions` reads exactly one tenant, or with `TenantID` zero only the platform-wide records that name no tenant. Reading across tenants is not expressible. Evidence is not telemetry and never derives from it. A decision is recorded once: `domain.WithDecisionScope` marks the replay-stable position it is made at — the turn, the step, the loop iteration, the tool call — `DecisionKeyFor` derives `audit_event.decision_key` from it, and the sink keeps the first record of a key, so a redelivered turn cannot write a second row. A turn's chain opens with `turn_admitted` at ingress, carries `tool_invoke` for every governed call, and closes with one terminal state; a failed audit write fails the delivery and the terminal replay offers the record again. `observability.VerifyTurnChain` checks a request's records for exactly that, and `MemoryAuditSink` is the in-process sink with the same semantics. `usage_event` carries the principal and scope that spent it, so cost is reportable per agent and per organizational unit. See [doc/governance.md](doc/governance.md).
 
 ## Agent types, lifecycle, and delegation
 

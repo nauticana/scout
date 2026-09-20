@@ -60,7 +60,7 @@ func (fake *toolTableFake) Query(_ context.Context, name string, args ...any) (*
 	key := func(n int) string { return fmt.Sprint(args[:n]...) }
 	versionRow := func(versionKey string) []any {
 		row := tables.versions[versionKey]
-		return []any{row[1], row[2], tables.profiles[fmt.Sprint(row[0], row[1])], row[3], row[4], row[5], row[6], row[7]}
+		return []any{row[1], row[2], tables.profiles[fmt.Sprint(row[0], row[1])], row[3], row[4], row[5], row[6], row[7], row[8], row[9]}
 	}
 	switch name {
 	case qToolProfileEnsure:
@@ -153,6 +153,16 @@ func TestRegisterIsIdempotentAndRejectsChangedContent(t *testing.T) {
 	changed.Endpoint = "https://elsewhere.example/alpha"
 	if err := registry.Register(ctx, 1, changed); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("want ErrConflict for changed content, got %v", err)
+	}
+	verified := searchTool("alpha", "1")
+	verified.VerifyEffect = true
+	if err := registry.Register(ctx, 1, verified); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("effect verification is part of the contract, got %v", err)
+	}
+	unverified := searchTool("gamma", "1")
+	unverified.RetryWhenEffectAbsent = true
+	if err := registry.Register(ctx, 1, unverified); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("resending an absent effect requires verification, got %v", err)
 	}
 	renamed := searchTool("alpha", "2")
 	renamed.DisplayName = "renamed"

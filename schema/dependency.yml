@@ -33,7 +33,7 @@ groups:
   - name: agent
     path: agent
     seed: seed/agent/agent.yml
-    depends_on: [tenancy, prompt, model]
+    depends_on: [tenancy, model]
     seed_depends_on: [core]
 
   - name: tool

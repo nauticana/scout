@@ -91,6 +91,13 @@ type TurnCanceller interface {
 	Cancel(ctx context.Context, tenantID int64, requestID, reason string) error
 }
 
+// TurnCancelWatcher lets the process executing a turn observe a cancellation requested anywhere.
+type TurnCancelWatcher interface {
+	// Watch derives the turn's context; a cancellation fails it with domain.ErrTurnCanceled
+	// as its cause. release must be called when the turn ends.
+	Watch(ctx context.Context, tenantID int64, requestID string) (turnCtx context.Context, release func(), err error)
+}
+
 // TurnReplySubscription receives ordered response frames for one request.
 type TurnReplySubscription interface {
 	// Route returns the opaque worker reply destination for this subscription.
@@ -154,11 +161,16 @@ type DeadLetterQueue interface {
 	Publish(ctx context.Context, message domain.QueueMessage, reason string) error
 }
 
-// TenantWeightPolicy supplies each tenant's fair-scheduling weight and its
-// concurrent-turn ceiling; a nil policy means weight 1 and no ceiling.
+// TenantWeightPolicy supplies each tenant's fair-scheduling weight and the
+// concurrent-turn ceilings of the tenant and of each principal acting inside it;
+// a nil policy means weight 1 and no ceiling. Ceilings gate selection, so racing
+// workers may overshoot one by the number of workers claiming at once.
 type TenantWeightPolicy interface {
 	// SchedulingWeight returns the relative share (>= 1) and the maximum leased turns (0 = unlimited).
 	SchedulingWeight(ctx context.Context, tenantID int64) (weight int, maxConcurrent int, err error)
+	// PrincipalCeiling returns the maximum leased turns one principal may hold (0 = unlimited).
+	// A principal at its ceiling is passed over; the tenant's other principals keep running.
+	PrincipalCeiling(ctx context.Context, tenantID int64, principal domain.PrincipalRef) (maxConcurrent int, err error)
 }
 
 // TurnBudgetEstimator quotes the tokens and cost to reserve for a turn before it

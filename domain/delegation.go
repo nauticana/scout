@@ -67,9 +67,9 @@ type DelegationAuthorization struct {
 // DelegationBounds are the narrowing constraints one hop passes to the next.
 // Every field may only shrink as the chain deepens.
 type DelegationBounds struct {
-	RemainingDepth   int
-	BudgetMinorUnits int64
-	Currency         string
-	ScopeID          string
-	ApprovalRequired bool
+	RemainingDepth   int    `json:"remaining_depth"`
+	BudgetMinorUnits int64  `json:"budget_minor_units"`
+	Currency         string `json:"currency,omitempty"`
+	ScopeID          string `json:"scope_id,omitempty"`
+	ApprovalRequired bool   `json:"approval_required"`
 }

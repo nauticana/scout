@@ -1,11 +1,35 @@
 comment: Agent Studio config flags, authorization, menu, and REST metadata
 order: 25
 seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [guardrail_stage, Guardrail Stage]
+      - [guardrail_layer, Guardrail Layer]
+      - [guardrail_action, Guardrail Action]
+      - [guardrail_severity, Guardrail Severity]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [guardrail_stage, input, Turn Input]
+      - [guardrail_stage, output, Model Output]
+      - [guardrail_stage, tool_input, Tool Arguments]
+      - [guardrail_stage, tool_output, Tool Result]
+      - [guardrail_stage, retrieval, Retrieved Content]
+      - [guardrail_layer, baseline, Release-Independent Baseline]
+      - [guardrail_layer, release, Release-Specific Policy]
+      - [guardrail_action, block, Blocked]
+      - [guardrail_action, redact, Redacted]
+      - [guardrail_action, flag, Flagged]
+      - [guardrail_severity, hard, Hard]
+      - [guardrail_severity, soft, Soft]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
-      - [language_code, tenant_prompt_default, language_code]
-      - [language_code, agent_prompt_override, language_code]
+      - [guardrail_stage, safety_event, stage_code]
+      - [guardrail_layer, safety_event, layer_code]
+      - [guardrail_action, safety_event, action_code]
+      - [guardrail_severity, safety_event, severity_code]
   - table: application_config_flag
     columns: [id, data_type, needs_restart, default_value, description]
     rows:
@@ -68,8 +92,6 @@ seeds:
       - [agent_profiles, S, "*"]
       - [agent_drafts, S, "*"]
       - [agent_aliases, D, display_name]
-      - [tenant_prompt_defaults, S, "*"]
-      - [agent_prompt_overrides, S, "*"]
       - [agent_versions, S, "*"]
       - [agent_deployments, S, "*"]
       - [agent_studio_events, S, "*"]
@@ -97,8 +119,8 @@ seeds:
       - [AGENT_ADMIN, TABLE, SELECT, tenant_model_access]
       - [AGENT_ADMIN, TABLE, SELECT, prompt_section]
       - [AGENT_ADMIN, TABLE, SELECT, prompt_baseline]
-      - [AGENT_ADMIN, TABLE, SELECT, tenant_prompt_default]
-      - [AGENT_ADMIN, TABLE, SELECT, agent_prompt_override]
+      - [AGENT_ADMIN, TABLE, SELECT, config_scope]
+      - [AGENT_ADMIN, TABLE, SELECT, config_scope_binding]
       - [AGENT_ADMIN, TABLE, SELECT, agent_version]
       - [AGENT_ADMIN, TABLE, SELECT, agent_deployment]
       - [AGENT_ADMIN, TABLE, SELECT, agent_studio_event]
@@ -114,8 +136,8 @@ seeds:
       - [AGENT_OPER, TABLE, SELECT, tenant_model_access]
       - [AGENT_OPER, TABLE, SELECT, prompt_section]
       - [AGENT_OPER, TABLE, SELECT, prompt_baseline]
-      - [AGENT_OPER, TABLE, SELECT, tenant_prompt_default]
-      - [AGENT_OPER, TABLE, SELECT, agent_prompt_override]
+      - [AGENT_OPER, TABLE, SELECT, config_scope]
+      - [AGENT_OPER, TABLE, SELECT, config_scope_binding]
       - [AGENT_OPER, TABLE, SELECT, agent_version]
       - [AGENT_OPER, TABLE, SELECT, agent_deployment]
       - [AGENT_OPER, TABLE, SELECT, agent_studio_event]

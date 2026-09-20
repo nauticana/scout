@@ -7,73 +7,86 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-func promptRow(sectionID, order int64, level domain.PromptSourceLevel, overwrite bool, instruction, output string) domain.PromptSourceRow {
-	return domain.PromptSourceRow{
-		PromptSectionID: sectionID,
-		Caption:         "task",
-		Description:     "Task instructions",
-		DisplayOrder:    order,
-		SourceLevel:     level,
-		Overwrite:       overwrite,
-		Instruction:     instruction,
-		Output:          output,
-	}
+// layered builds one section from its layers, widest first.
+func layered(sectionID, order int64, layers ...domain.PromptLayer) domain.PromptSectionSource {
+	return domain.PromptSectionSource{PromptSectionID: sectionID, Caption: "task", Description: "Task instructions", DisplayOrder: order, Layers: layers}
+}
+
+func baseLayer(instruction, output string) domain.PromptLayer {
+	return domain.PromptLayer{ScopeID: "global", ScopeKind: domain.ScopeKindPlatform, MergeMode: domain.MergeReplace, Instruction: instruction, Output: output}
+}
+
+func typeLayer(mode domain.MergeMode, instruction, output string) domain.PromptLayer {
+	return domain.PromptLayer{ScopeID: "t:writer", ScopeKind: "agent_type", MergeMode: mode, Editable: true, Instruction: instruction, Output: output}
+}
+
+func agentLayer(mode domain.MergeMode, instruction, output string) domain.PromptLayer {
+	return domain.PromptLayer{ScopeID: "a:writer-a", ScopeKind: "agent", MergeMode: mode, Editable: true, Instruction: instruction, Output: output}
 }
 
 func modelReference(providerID, modelID string) *domain.ModelReference {
 	return &domain.ModelReference{ProviderID: providerID, ModelID: modelID}
 }
 
-func TestPromptCompilerMergeTruthTable(t *testing.T) {
-	cases := []struct {
-		name       string
-		rows       []domain.PromptSourceRow
-		wantText   string
-		wantOutput string
+func TestPromptCompilerFoldsLayersWithScopeEngineSemantics(t *testing.T) {
+	const add, swap = domain.MergeAppend, domain.MergeReplace
+	tests := []struct {
+		name        string
+		layers      []domain.PromptLayer
+		instruction string
+		output      string
 	}{
-		{"baseline only", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "o1")}, "base", "o1"},
-		{"tenant only", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", "")}, "tenant", ""},
-		{"agent only", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceAgentOverride, true, "agent", "")}, "agent", ""},
-		{"baseline and tenant", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", ""), promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", "")}, "base\n\ntenant", ""},
-		{"baseline and agent overwrite", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, true, "agent", "")}, "base\n\nagent", ""},
-		{"baseline and agent append", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, false, "agent", "")}, "base\n\nagent", ""},
-		{"tenant and agent overwrite", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, true, "agent", "")}, "agent", ""},
-		{"tenant and agent append", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, false, "agent", "")}, "tenant\n\nagent", ""},
-		{"all overwrite", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", ""), promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, true, "agent", "")}, "base\n\nagent", ""},
-		{"all append", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", ""), promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, false, "agent", "")}, "base\n\ntenant\n\nagent", ""},
-		{"specific output wins", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "o1"), promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", "o2"), promptRow(1, 1, domain.PromptSourceAgentOverride, false, "agent", "o3")}, "base\n\ntenant\n\nagent", "o3"},
-		{"empty output inherits", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "o1"), promptRow(1, 1, domain.PromptSourceTenantDefault, false, "tenant", ""), promptRow(1, 1, domain.PromptSourceAgentOverride, true, "agent", "")}, "base\n\nagent", "o1"},
+		{"baseline only", []domain.PromptLayer{baseLayer("base", "o1")}, "base", "o1"},
+		{"type only", []domain.PromptLayer{typeLayer(add, "tenant", "")}, "tenant", ""},
+		{"baseline and type append", []domain.PromptLayer{baseLayer("base", ""), typeLayer(add, "tenant", "")}, "base\n\ntenant", ""},
+		{"agent append", []domain.PromptLayer{baseLayer("base", ""), agentLayer(add, "agent", "")}, "base\n\nagent", ""},
+		{"replace drops everything inherited", []domain.PromptLayer{baseLayer("base", "o1"), typeLayer(add, "tenant", ""), agentLayer(swap, "agent", "")}, "agent", ""},
+		{"all append", []domain.PromptLayer{baseLayer("base", ""), typeLayer(add, "tenant", ""), agentLayer(add, "agent", "")}, "base\n\ntenant\n\nagent", ""},
+		{"appended outputs join", []domain.PromptLayer{baseLayer("base", "o1"), typeLayer(add, "tenant", "o2")}, "base\n\ntenant", "o1\n\no2"},
+		{"empty output inherits", []domain.PromptLayer{baseLayer("base", "o1"), agentLayer(add, "agent", "")}, "base\n\nagent", "o1"},
+		{"a layer may add an output contract alone", []domain.PromptLayer{baseLayer("base", ""), agentLayer(add, "", "object")}, "base", "object"},
 	}
 	compiler := &PromptCompiler{}
-	for _, tc := range cases {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := compiler.Compile("en-US", tc.rows)
+			compiled, err := compiler.Compile("en-US", []domain.PromptSectionSource{layered(1, 1, tc.layers...)})
 			if err != nil {
 				t.Fatalf("Compile: %v", err)
 			}
-			if len(got.Sections) != 1 {
-				t.Fatalf("sections = %d, want 1", len(got.Sections))
+			section := compiled.Sections[0]
+			if section.Instruction != tc.instruction || section.Output != tc.output {
+				t.Fatalf("section = %q / %q, want %q / %q", section.Instruction, section.Output, tc.instruction, tc.output)
 			}
-			if got.Sections[0].Instruction != tc.wantText {
-				t.Errorf("instruction = %q, want %q", got.Sections[0].Instruction, tc.wantText)
-			}
-			if got.Sections[0].Output != tc.wantOutput {
-				t.Errorf("output = %q, want %q", got.Sections[0].Output, tc.wantOutput)
+			last := tc.layers[len(tc.layers)-1]
+			if section.Source.ScopeID != last.ScopeID || section.Source.ScopeKind != last.ScopeKind || section.Source.ResourceID != "1/en-US" {
+				t.Fatalf("source = %+v, want the deciding layer %q", section.Source, last.ScopeID)
 			}
 		})
 	}
 }
 
-func TestPromptCompilerOrdersSectionsAndUsesSpecificMetadata(t *testing.T) {
-	rows := []domain.PromptSourceRow{
-		promptRow(9, 9, domain.PromptSourceBaseline, false, "location", ""),
-		promptRow(2, 2, domain.PromptSourceAgentOverride, true, "tone", ""),
-		promptRow(1, 1, domain.PromptSourceBaseline, false, "task", ""),
-		promptRow(7, 2, domain.PromptSourceTenantDefault, false, "structure", ""),
-		promptRow(2, 2, domain.PromptSourceBaseline, false, "base tone", ""),
+// Sealing is set by the wider scope, so the narrower one cannot opt out of it.
+func TestPromptCompilerRefusesALayerUnderASealedOne(t *testing.T) {
+	sealed := typeLayer(domain.MergeAppend, "never promise a refund", "")
+	sealed.Sealed = true
+	compiler := &PromptCompiler{}
+	if _, err := compiler.Compile("en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""), sealed, agentLayer(domain.MergeReplace, "agent", ""))}); !errors.Is(err, domain.ErrSealed) {
+		t.Fatalf("want ErrSealed, got %v", err)
 	}
-	rows[1].Caption = "specific tone"
-	got, err := (&PromptCompiler{}).Compile("en-US", rows)
+	compiled, err := compiler.Compile("en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""), sealed)})
+	if err != nil || !compiled.Sections[0].Source.Sealed {
+		t.Fatalf("a sealed last layer compiles and says so: %+v, %v", compiled.Sections, err)
+	}
+}
+
+func TestPromptCompilerOrdersSectionsByDisplayOrderThenID(t *testing.T) {
+	sections := []domain.PromptSectionSource{
+		layered(9, 9, baseLayer("location", "")),
+		layered(2, 2, baseLayer("base tone", ""), agentLayer(domain.MergeReplace, "tone", "")),
+		layered(1, 1, baseLayer("task", "")),
+		layered(7, 2, typeLayer(domain.MergeAppend, "structure", "")),
+	}
+	got, err := (&PromptCompiler{}).Compile("en-US", sections)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -83,29 +96,28 @@ func TestPromptCompilerOrdersSectionsAndUsesSpecificMetadata(t *testing.T) {
 			t.Fatalf("section %d = %+v", i, got.Sections[i])
 		}
 	}
-	if got.Sections[1].Caption != "specific tone" {
-		t.Fatalf("caption = %q", got.Sections[1].Caption)
-	}
 }
 
 func TestPromptCompilerRejectsInvalidSources(t *testing.T) {
 	compiler := &PromptCompiler{}
+	one := []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""))}
 	tests := []struct {
 		name     string
 		language string
-		rows     []domain.PromptSourceRow
+		sections []domain.PromptSectionSource
 		want     error
 	}{
-		{"missing language", " ", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "")}, domain.ErrValidation},
+		{"missing language", " ", one, domain.ErrValidation},
 		{"missing prompts", "en-US", nil, domain.ErrNoPrompts},
-		{"missing section id", "en-US", []domain.PromptSourceRow{promptRow(0, 1, domain.PromptSourceBaseline, false, "base", "")}, domain.ErrValidation},
-		{"invalid level", "en-US", []domain.PromptSourceRow{promptRow(1, 1, 0, false, "base", "")}, domain.ErrValidation},
-		{"duplicate level", "en-US", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "a", ""), promptRow(1, 1, domain.PromptSourceBaseline, false, "b", "")}, domain.ErrValidation},
-		{"inconsistent order", "en-US", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "a", ""), promptRow(1, 2, domain.PromptSourceTenantDefault, false, "b", "")}, domain.ErrValidation},
+		{"missing section id", "en-US", []domain.PromptSectionSource{layered(0, 1, baseLayer("base", ""))}, domain.ErrValidation},
+		{"repeated section", "en-US", append(one, one...), domain.ErrValidation},
+		{"section without a layer", "en-US", []domain.PromptSectionSource{layered(1, 1)}, domain.ErrValidation},
+		{"replace without an instruction", "en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""), agentLayer(domain.MergeReplace, "", "object"))}, domain.ErrValidation},
+		{"unsupported merge mode", "en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""), agentLayer(domain.MergeIntersect, "agent", ""))}, domain.ErrValidation},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := compiler.Compile(tc.language, tc.rows)
+			_, err := compiler.Compile(tc.language, tc.sections)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
@@ -115,9 +127,10 @@ func TestPromptCompilerRejectsInvalidSources(t *testing.T) {
 
 func TestPromptCompilerDigestIsStable(t *testing.T) {
 	compiler := &PromptCompiler{}
-	language, err := compiler.Compile("en-US", []domain.PromptSourceRow{
-		promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "object"),
-		promptRow(2, 2, domain.PromptSourceTenantDefault, false, "tone", ""),
+	// Provenance is not part of the digest, so a prompt whose text did not change keeps it.
+	language, err := compiler.Compile("en-US", []domain.PromptSectionSource{
+		layered(1, 1, baseLayer("base", "object")),
+		layered(2, 2, typeLayer(domain.MergeAppend, "tone", "")),
 	})
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -130,8 +143,8 @@ func TestPromptCompilerDigestIsStable(t *testing.T) {
 
 func TestPromptCompilerDefinitionDigestIsCanonical(t *testing.T) {
 	compiler := &PromptCompiler{}
-	english, _ := compiler.Compile("en-US", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "")})
-	german, _ := compiler.Compile("de-DE", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "basis", "")})
+	english, _ := compiler.Compile("en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""))})
+	german, _ := compiler.Compile("de-DE", []domain.PromptSectionSource{layered(1, 1, baseLayer("basis", ""))})
 	definition := domain.AgentDefinition{
 		AgentTypeID:    "assistant",
 		Enabled:        true,
@@ -170,7 +183,7 @@ func TestPromptCompilerDefinitionDigestIsCanonical(t *testing.T) {
 
 func TestPromptCompilerDefinitionDigestRejectsInvalidInput(t *testing.T) {
 	compiler := &PromptCompiler{}
-	language, _ := compiler.Compile("en-US", []domain.PromptSourceRow{promptRow(1, 1, domain.PromptSourceBaseline, false, "base", "")})
+	language, _ := compiler.Compile("en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""))})
 	tests := []struct {
 		name       string
 		definition domain.AgentDefinition

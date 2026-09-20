@@ -7,51 +7,34 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// PromptDraftAssembler builds an editable prompt view from resolved source rows.
+// PromptDraftAssembler pairs each section's layers with the text the compiler makes of them.
 type PromptDraftAssembler struct {
 	Compiler contract.PromptCompiler
 }
 
-// Assemble combines source-level values with compiled effective content.
-func (assembler *PromptDraftAssembler) Assemble(resolved domain.ResolvedPrompts) (domain.AgentLanguageDraft, error) {
-	if assembler.Compiler == nil {
-		return domain.AgentLanguageDraft{}, fmt.Errorf("prompt draft assembler: compiler is required")
+// Assemble returns sections in compiled order; the effective values are always the compiler's.
+func (a *PromptDraftAssembler) Assemble(resolved domain.ResolvedPrompts) (domain.AgentLanguageDraft, error) {
+	if a.Compiler == nil {
+		return domain.AgentLanguageDraft{}, domain.ErrNotReady
 	}
-	compiled, err := assembler.Compiler.Compile(resolved.LanguageCode, resolved.Rows)
+	compiled, err := a.Compiler.Compile(resolved.LanguageCode, resolved.Sections)
 	if err != nil {
 		return domain.AgentLanguageDraft{}, err
 	}
-	bySection := make(map[int64]*domain.AgentPromptSection, len(compiled.Sections))
-	for i := range resolved.Rows {
-		row := resolved.Rows[i]
-		section := bySection[row.PromptSectionID]
-		if section == nil {
-			section = &domain.AgentPromptSection{PromptSectionID: row.PromptSectionID}
-			bySection[row.PromptSectionID] = section
-		}
-		switch row.SourceLevel {
-		case domain.PromptSourceBaseline:
-			section.Baseline = domain.PromptValue{Instruction: row.Instruction, Output: row.Output}
-		case domain.PromptSourceTenantDefault:
-			section.TenantDefault = &domain.PromptValue{Instruction: row.Instruction, Output: row.Output}
-		case domain.PromptSourceAgentOverride:
-			section.AgentOverride = &domain.PromptOverride{
-				PromptValue: domain.PromptValue{Instruction: row.Instruction, Output: row.Output},
-				Overwrite:   row.Overwrite,
-			}
-		}
+	layers := make(map[int64][]domain.PromptLayer, len(resolved.Sections))
+	for _, section := range resolved.Sections {
+		layers[section.PromptSectionID] = section.Layers
 	}
-
-	draft := domain.AgentLanguageDraft{LanguageCode: resolved.LanguageCode}
-	for _, effective := range compiled.Sections {
-		section := bySection[effective.PromptSectionID]
-		if section == nil {
-			return domain.AgentLanguageDraft{}, fmt.Errorf("%w: compiled prompt section %d has no source row", domain.ErrValidation, effective.PromptSectionID)
+	draft := domain.AgentLanguageDraft{LanguageCode: resolved.LanguageCode, Sections: make([]domain.AgentPromptSection, 0, len(compiled.Sections))}
+	for _, section := range compiled.Sections {
+		sources, ok := layers[section.PromptSectionID]
+		if !ok {
+			return domain.AgentLanguageDraft{}, fmt.Errorf("%w: compiled section %d has no source", domain.ErrValidation, section.PromptSectionID)
 		}
-		section.Caption = effective.Caption
-		section.Description = effective.Description
-		section.Effective = domain.PromptValue{Instruction: effective.Instruction, Output: effective.Output}
-		draft.Sections = append(draft.Sections, *section)
+		draft.Sections = append(draft.Sections, domain.AgentPromptSection{
+			PromptSectionID: section.PromptSectionID, Caption: section.Caption, Description: section.Description,
+			Layers: sources, Effective: domain.PromptValue{Instruction: section.Instruction, Output: section.Output},
+		})
 	}
 	return draft, nil
 }

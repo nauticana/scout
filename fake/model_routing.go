@@ -128,14 +128,14 @@ func (exporter *ServingSignalExporter) Export(_ context.Context, signal domain.S
 
 // TenantBudgetManager contains configurable reservation callbacks.
 type TenantBudgetManager struct {
-	ReserveFunc func(context.Context, int64, string, int64, int64, string) (domain.BudgetReservation, error)
+	ReserveFunc func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error)
 	CommitFunc  func(context.Context, domain.BudgetReservation, domain.Usage) error
 	ReleaseFunc func(context.Context, domain.BudgetReservation) error
 }
 
 // Reserve invokes ReserveFunc.
-func (manager *TenantBudgetManager) Reserve(ctx context.Context, tenantID int64, requestID string, tokens, costMinorUnits int64, currency string) (domain.BudgetReservation, error) {
-	return manager.ReserveFunc(ctx, tenantID, requestID, tokens, costMinorUnits, currency)
+func (manager *TenantBudgetManager) Reserve(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
+	return manager.ReserveFunc(ctx, request)
 }
 
 // Commit invokes CommitFunc.

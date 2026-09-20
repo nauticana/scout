@@ -52,7 +52,7 @@ is only ever done on compatible sketches. The sketch never underestimates; its a
 
 ## Audit trail
 
-`AuditingObservationRecorder` wraps any recorder and writes a `domain.AuditEvent` for every `rejected` or
+`AuditingObservationRecorder` wraps any recorder and writes a `domain.DecisionRecord` for every `rejected` or
 `error` observation. The payload is the redacted subset — stage, component, versions, provider/model, region,
 tier, outcome, error class, duration, token counts, and the already-redacted trace id — with no tenant id in
 the body, no request or conversation id, and no prompt or response bytes. Audit write failures go to the

@@ -95,14 +95,14 @@ func TestDurableSessionStoreLoadHydratesAndVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := &persistenceQueryFake{rows: map[string][][]any{
-		qSessionLoad: {{"v3", int64(4), int64(2), ref.URI, ref.Digest, int64(9), "plan"}},
+		qSessionLoad: {{"v3", int64(4), int64(2), ref.URI, ref.Digest, int64(9), "plan", "42"}},
 	}}
 	store := newDurableSessionStore(query, storage)
 	snapshot, err := store.Load(context.Background(), 7, "conv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := domain.SessionSnapshot{ConversationID: "conv", AgentVersion: "v3", LatestTurnNo: 4, LatestStepNo: 2,
+	want := domain.SessionSnapshot{ConversationID: "conv", AgentVersion: "v3", EndUserRef: "42", LatestTurnNo: 4, LatestStepNo: 2,
 		LastCompletedStepID: "plan", State: []byte(`{"memory":"x"}`), StateRef: ref, Revision: 9}
 	if !reflect.DeepEqual(snapshot, want) {
 		t.Fatalf("snapshot = %+v, want %+v", snapshot, want)
@@ -119,7 +119,7 @@ func TestDurableSessionStoreLoadHydratesAndVerifies(t *testing.T) {
 
 func TestDurableSessionStoreLoadFreshAndMissingConversations(t *testing.T) {
 	fresh := newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{
-		qSessionLoad: {{"v1", nil, nil, nil, nil, nil, nil}},
+		qSessionLoad: {{"v1", nil, nil, nil, nil, nil, nil, nil}},
 	}}, &fake.ObjectStorage{})
 	snapshot, err := fresh.Load(context.Background(), 7, "conv")
 	if err != nil || snapshot.Revision != 0 || snapshot.AgentVersion != "v1" || snapshot.State != nil || snapshot.ConversationID != "conv" {
@@ -265,7 +265,7 @@ func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	if args := query.lastArgs(qSessionActiveTurn); !reflect.DeepEqual(args, []any{int64(7), "conv"}) {
 		t.Fatalf("active turn args = %v", args)
 	}
-	if args := query.lastArgs(qSessionCompleteTurn); !reflect.DeepEqual(args, []any{uri, digest, int64(7), "conv", int64(4), int64(6)}) {
+	if args := query.lastArgs(qSessionCompleteTurn); !reflect.DeepEqual(args, []any{uri, digest, int64(7), "conv", int64(4), int64(6), "json", string(response)}) {
 		t.Fatalf("complete args = %v", args)
 	}
 
@@ -287,5 +287,21 @@ func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	err = newDurableSessionStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Complete(context.Background(), 7, "conv", 0, domain.TurnResult{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("no turn = %v", err)
+	}
+}
+
+func TestResultCardKeepsJSONWrapsTextAndReferencesWhatIsTooLarge(t *testing.T) {
+	ref := domain.ObjectRef{URI: "scout://r", Digest: "d"}
+	for name, tc := range map[string]struct {
+		response   []byte
+		kind, card string
+	}{
+		"json":      {[]byte(`{"a":1}`), "json", `{"a":1}`},
+		"text":      {[]byte("hello"), "text", `{"text":"hello"}`},
+		"too large": {make([]byte, maxResultCard+1), "reference", `{"response_digest":"d","response_uri":"scout://r"}`},
+	} {
+		if kind, card := resultCard(tc.response, ref); kind != tc.kind || card != tc.card {
+			t.Errorf("%s: %s %s", name, kind, card)
+		}
 	}
 }

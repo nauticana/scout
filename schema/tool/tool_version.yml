@@ -17,6 +17,12 @@ columns:
     type: INTEGER
   - name: max_attempts
     type: SMALLINT
+  - name: verify_effect
+    type: BOOLEAN
+    default: FALSE
+  - name: retry_effect_absent
+    type: BOOLEAN
+    default: FALSE
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -35,3 +41,5 @@ checks:
     expression: timeout_ms > 0
   - name: tool_version_attempts_ck
     expression: max_attempts BETWEEN 1 AND 10
+  - name: tool_version_effect_retry_ck
+    expression: verify_effect OR NOT retry_effect_absent

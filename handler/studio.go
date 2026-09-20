@@ -18,7 +18,7 @@ import (
 	"github.com/nauticana/scout/service/controlplane"
 )
 
-// StudioHandler maps authenticated studio-v1 HTTP calls to one backend method.
+// StudioHandler maps authenticated studio-v2 HTTP calls to one backend method.
 type StudioHandler struct {
 	keelhandler.AbstractHandler
 	DB            keelport.DatabaseRepository
@@ -311,6 +311,10 @@ func (h *StudioHandler) releaseSections(w http.ResponseWriter, r *http.Request) 
 				LanguageCode: section.LanguageCode, PromptHeaderID: section.PromptSectionID,
 				Caption: section.Caption, Description: section.Description, Instruction: section.Instruction,
 				Output: section.Output, Sequence: section.Sequence,
+				Source: api.AgentPromptSource{
+					ScopeID: section.Source.ScopeID, ScopeKind: section.Source.ScopeKind,
+					MergeMode: string(section.Source.MergeMode), Sealed: section.Source.Sealed,
+				},
 			})
 		}
 		return items, nil
@@ -398,7 +402,7 @@ func mapStudioError(result any, err error) (any, error) {
 		return nil, keelhandler.NewAPIError(http.StatusForbidden, err.Error())
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, keelhandler.NewAPIError(http.StatusNotFound, err.Error())
-	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict):
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict), errors.Is(err, domain.ErrSealed):
 		return nil, keelhandler.NewAPIError(http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrRateLimited), errors.Is(err, domain.ErrBudgetExceeded):
 		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error()), err)
@@ -425,17 +429,13 @@ func domainDraft(value api.AgentDraft) domain.AgentDraft {
 		for _, section := range language.PromptSections {
 			mapped := domain.AgentPromptSection{
 				PromptSectionID: section.PromptHeaderID, Caption: section.Caption, Description: section.Description,
-				Baseline:  domain.PromptValue{Instruction: section.BusinessText, Output: section.BusinessOutput},
 				Effective: domain.PromptValue{Instruction: section.EffectiveText, Output: section.EffectiveOutput},
 			}
-			if section.DefaultText != nil {
-				mapped.TenantDefault = &domain.PromptValue{Instruction: *section.DefaultText, Output: dereference(section.DefaultOutput)}
-			}
-			if section.OverrideText != nil {
-				mapped.AgentOverride = &domain.PromptOverride{
-					PromptValue: domain.PromptValue{Instruction: *section.OverrideText, Output: dereference(section.OverrideOutput)},
-					Overwrite:   section.Overwrite,
-				}
+			for _, layer := range section.Layers {
+				mapped.Layers = append(mapped.Layers, domain.PromptLayer{
+					ScopeID: layer.ScopeID, ScopeKind: layer.ScopeKind, MergeMode: domain.MergeMode(layer.MergeMode),
+					Sealed: layer.Sealed, Instruction: layer.Instruction, Output: layer.Output,
+				})
 			}
 			item.Sections = append(item.Sections, mapped)
 		}
@@ -452,6 +452,8 @@ func apiDraft(value domain.AgentDraft) api.AgentDraft {
 		Models:                       api.AgentModelSelection{TextModel: referenceID(value.Models.Text), ImageModel: referenceID(value.Models.Image), VideoModel: referenceID(value.Models.Video)},
 		ExpectedAgentRevision:        value.ExpectedDraftRevision,
 		ExpectedTypeDefaultsRevision: value.ExpectedPromptProfileRevision,
+		AgentScopeID:                 value.PromptScopes.AgentScopeID,
+		TypeScopeID:                  value.PromptScopes.TypeScopeID,
 	}
 	if value.Drift != nil {
 		version, _ := strconv.ParseInt(value.Drift.ActiveVersion, 10, 64)
@@ -462,17 +464,14 @@ func apiDraft(value domain.AgentDraft) api.AgentDraft {
 		for _, section := range language.Sections {
 			mapped := api.AgentPromptSection{
 				PromptHeaderID: section.PromptSectionID, Caption: section.Caption, Description: section.Description,
-				BusinessText: section.Baseline.Instruction, BusinessOutput: section.Baseline.Output,
 				EffectiveText: section.Effective.Instruction, EffectiveOutput: section.Effective.Output,
+				Layers: make([]api.AgentPromptLayer, 0, len(section.Layers)),
 			}
-			if section.TenantDefault != nil {
-				mapped.DefaultText = pointer(section.TenantDefault.Instruction)
-				mapped.DefaultOutput = optionalPointer(section.TenantDefault.Output)
-			}
-			if section.AgentOverride != nil {
-				mapped.OverrideText = pointer(section.AgentOverride.Instruction)
-				mapped.OverrideOutput = optionalPointer(section.AgentOverride.Output)
-				mapped.Overwrite = section.AgentOverride.Overwrite
+			for _, layer := range section.Layers {
+				mapped.Layers = append(mapped.Layers, api.AgentPromptLayer{
+					ScopeID: layer.ScopeID, ScopeKind: layer.ScopeKind, MergeMode: string(layer.MergeMode),
+					Sealed: layer.Sealed, Editable: layer.Editable, Instruction: layer.Instruction, Output: layer.Output,
+				})
 			}
 			item.PromptSections = append(item.PromptSections, mapped)
 		}
@@ -495,7 +494,7 @@ func apiSummary(value domain.AgentSummary) api.AgentSummary {
 func apiRelease(value domain.AgentRelease) (api.AgentRelease, error) {
 	version, err := strconv.ParseInt(value.Version, 10, 64)
 	if err != nil {
-		return api.AgentRelease{}, keelhandler.NewAPIError(http.StatusInternalServerError, "release version is not studio-v1 compatible")
+		return api.AgentRelease{}, keelhandler.NewAPIError(http.StatusInternalServerError, "release version is not studio-v2 compatible")
 	}
 	publishedBy := int64(0)
 	if value.PublishedBy != nil {
@@ -548,22 +547,6 @@ func referenceID(value *domain.ModelReference) string {
 		return ""
 	}
 	return value.ModelID
-}
-
-func pointer(value string) *string { return &value }
-
-func optionalPointer(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return &value
-}
-
-func dereference(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func modelType(capabilities []string) string {

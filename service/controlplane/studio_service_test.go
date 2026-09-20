@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/fake"
 )
 
 type studioQueryFake struct {
@@ -99,12 +100,80 @@ func TestStudioSetEnabledIsTargeted(t *testing.T) {
 	}
 }
 
-func TestPromptDefaultsEqualIgnoresDraftWithoutDefaults(t *testing.T) {
+// An agent-only save must not look like a type-level edit, or it would bump the shared profile revision.
+func TestDesiredPromptBindingsAreReadPerScope(t *testing.T) {
 	draft := domain.AgentDraft{Languages: []domain.AgentLanguageDraft{{LanguageCode: "en-US", Sections: []domain.AgentPromptSection{{
-		PromptSectionID: 1, AgentOverride: &domain.PromptOverride{PromptValue: domain.PromptValue{Instruction: "agent"}},
+		PromptSectionID: 1, Layers: []domain.PromptLayer{baseLayer("base", ""), agentLayer("", "agent", "")},
 	}}}}}
-	if !promptDefaultsEqual(desiredPromptDefaults(draft), map[promptDefaultKey]domain.PromptValue{}) {
-		t.Fatal("agent overrides must not be treated as tenant defaults")
+	if !promptBindingsEqual(desiredPromptBindings(draft, "t:writer"), map[promptBindingKey]promptBinding{}) {
+		t.Fatal("an agent layer must not be treated as a tenant default")
+	}
+	agent := desiredPromptBindings(draft, "a:writer-a")
+	if got := agent[promptBindingKey{1, "en-US"}]; got.mode != domain.MergeAppend || got.value.Instruction != "agent" {
+		t.Fatalf("a Studio layer appends unless it says otherwise: %+v", agent)
+	}
+}
+
+// Bindings are temporal: an edit ends the open row and binds a new one; an unchanged one is left alone.
+func TestSyncPromptBindingsEndsWhatChangedAndBindsTheNewValue(t *testing.T) {
+	query := &studioQueryFake{rows: map[string][][]any{}, args: map[string][]any{}}
+	kept := promptBinding{mode: domain.MergeAppend, value: promptBindingValue{Instruction: "same"}}
+	persisted := map[promptBindingKey]promptBinding{
+		{1, "en-US"}: kept,
+		{2, "en-US"}: {mode: domain.MergeAppend, value: promptBindingValue{Instruction: "old"}},
+		{3, "en-US"}: {mode: domain.MergeAppend, value: promptBindingValue{Instruction: "removed"}},
+	}
+	desired := map[promptBindingKey]promptBinding{
+		{1, "en-US"}: kept,
+		{2, "en-US"}: {mode: domain.MergeReplace, sealed: true, value: promptBindingValue{Instruction: "new"}},
+	}
+	if err := syncPromptBindings(context.Background(), query, domain.StudioActor{TenantID: 8, ActorID: 9}, "a:writer-a", desired, persisted); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, name := range query.queries {
+		counts[name]++
+	}
+	if counts[qStudioEndBinding] != 2 || counts[qStudioDropBinding] != 2 || counts[qStudioInsertBinding] != 1 {
+		t.Fatalf("queries = %v", query.queries)
+	}
+	bound := query.args[qStudioInsertBinding]
+	if bound[1] != "a:writer-a" || bound[2] != "2/en-US" || bound[4] != "replace" || bound[5] != true || bound[6] != `{"instruction":"new"}` || bound[8] != int64(9) {
+		t.Fatalf("insert args = %v", bound)
+	}
+}
+
+func TestStudioRefusesALayerUnderASealedOne(t *testing.T) {
+	company := domain.PromptLayer{ScopeID: "company", ScopeKind: "company", MergeMode: domain.MergeAppend, Sealed: true, Instruction: "never promise a refund"}
+	service := &StudioService{Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
+		LanguageCode: "en-US", Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""), company)},
+	}}}
+	scopes := domain.PromptScopes{AgentScopeID: "a:writer-a", TypeScopeID: "t:writer"}
+	draft := func(layers ...domain.PromptLayer) domain.AgentDraft {
+		return domain.AgentDraft{AgentID: "writer-a", Languages: []domain.AgentLanguageDraft{{LanguageCode: "en-US", Sections: []domain.AgentPromptSection{{PromptSectionID: 1, Layers: layers}}}}}
+	}
+	if err := service.checkSealedLayers(context.Background(), 8, draft(agentLayer(domain.MergeAppend, "but do", "")), scopes); !errors.Is(err, domain.ErrSealed) {
+		t.Fatalf("a scope Studio does not edit seals the section, got %v", err)
+	}
+	// The client cannot unseal it by sending the layer back unsealed: the stored layer is the authority.
+	company.Sealed = false
+	if err := service.checkSealedLayers(context.Background(), 8, draft(company, agentLayer(domain.MergeAppend, "but do", "")), scopes); !errors.Is(err, domain.ErrSealed) {
+		t.Fatalf("want ErrSealed, got %v", err)
+	}
+	if err := service.checkSealedLayers(context.Background(), 8, draft(company), scopes); err != nil {
+		t.Fatalf("a save that writes no layer of the section is fine: %v", err)
+	}
+
+	open := &StudioService{Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
+		LanguageCode: "en-US", Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""))},
+	}}}
+	sealedType := typeLayer(domain.MergeAppend, "tenant rule", "")
+	sealedType.Sealed = true
+	if err := open.checkSealedLayers(context.Background(), 8, draft(sealedType, agentLayer(domain.MergeAppend, "agent", "")), scopes); !errors.Is(err, domain.ErrSealed) {
+		t.Fatalf("a sealed tenant default refuses the agent layer, got %v", err)
+	}
+	if err := open.checkSealedLayers(context.Background(), 8, draft(sealedType), scopes); err != nil {
+		t.Fatalf("sealing the tenant default itself is allowed: %v", err)
 	}
 }
 
@@ -117,10 +186,7 @@ func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 	}, args: map[string][]any{}}
 	sources := studioSourcesFake{resolved: domain.ResolvedPrompts{
 		AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
-		Rows: []domain.PromptSourceRow{{
-			PromptSectionID: 1, Caption: "task", DisplayOrder: 1,
-			SourceLevel: domain.PromptSourceBaseline, SourceKey: "global", Instruction: "write",
-		}},
+		Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))},
 	}}
 	service := &StudioService{
 		DB: studioDBFake{qs: query}, Sources: sources,
@@ -169,7 +235,7 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 		}, args: map[string][]any{}}
 		sources := studioSourcesFake{resolved: domain.ResolvedPrompts{
 			AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
-			Rows: []domain.PromptSourceRow{{PromptSectionID: 1, Caption: "task", DisplayOrder: 1, SourceLevel: domain.PromptSourceBaseline, SourceKey: "global", Instruction: "write"}},
+			Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))},
 		}}
 		return &StudioService{
 			DB: studioDBFake{qs: query}, Sources: sources, ReleaseWriters: writers,
@@ -203,6 +269,19 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 	}
 	if encoded := query.args[qStudioInsertVersion][3].(string); !strings.Contains(encoded, `"tools":[{"tool_id":"search","version":"1"}]`) || !strings.Contains(encoded, `"tool_loop":{"max_iterations":4}`) {
 		t.Fatalf("definition JSON lacks the frozen tools: %s", encoded)
+	}
+
+	// A republish that names no tools keeps the ones its agent type declares; an explicit request still wins.
+	typed := &releaseWriterRecorder{}
+	typedService, _ := newService(typed)
+	typedService.Kinds = fake.KindCatalog{GetFunc: func(_ context.Context, kind string) (domain.AgentTypeDescriptor, error) {
+		return domain.AgentTypeDescriptor{AgentTypeID: kind, Tools: []domain.ToolReference{{ToolID: "crawl", Version: "2"}}}, nil
+	}}
+	if _, err = typedService.Publish(context.Background(), actor, plainRequest); err != nil || typed.definitions[0].Tools[0].ToolID != "crawl" {
+		t.Fatalf("type tools were not frozen: %+v, %v", typed.definitions, err)
+	}
+	if _, err = typedService.Publish(context.Background(), actor, request); err != nil || typed.definitions[1].Tools[0].ToolID != "search" {
+		t.Fatalf("request tools must win: %+v, %v", typed.definitions, err)
 	}
 
 	unwired, _ := newService()

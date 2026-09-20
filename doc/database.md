@@ -25,7 +25,6 @@ flowchart BT
     tenancy --> tenant_management
     tenancy --> catalog
     model --> tenancy
-    agent --> prompt
     agent --> model
     tool --> agent
     tool --> agent_authorization_module
@@ -140,8 +139,6 @@ flowchart RL
         agent_draft["agent_draft"]
         agent_alias["agent_alias"]
         agent_studio_event["agent_studio_event"]
-        agent_prompt_override["agent_prompt_override"]
-        tenant_prompt_default["tenant_prompt_default"]
         agent_version["agent_version"]
         agent_deployment["agent_deployment"]
     end
@@ -154,9 +151,7 @@ flowchart RL
     agent_studio_event --> agent_profile
     agent_alias --> agent_profile
     agent_draft --> agent_profile
-    tenant_prompt_default --> agent_alias
     agent_deployment --> agent_version
-    agent_prompt_override --> agent_draft
     guardrail_config --> agent_profile
 
     subgraph agent_authorization_module["Agent Authorization"]
@@ -423,6 +418,8 @@ erDiagram
         varchar provider_id PK
         text endpoint_uri
         text credential_ref
+        boolean verify_effect
+        boolean retry_effect_absent
     }
     model_definition {
         varchar provider_id PK,FK
@@ -583,11 +580,7 @@ Agent, guardrail, and tool versions are immutable. `agent_deployment` holds stab
 erDiagram
     agent_profile ||--o| agent_draft : agent_drafts
     agent_profile ||--o{ agent_alias : agent_aliases
-    agent_draft ||--o{ agent_prompt_override : agent_prompt_overrides
-    agent_alias ||--o{ tenant_prompt_default : tenant_prompt_defaults
     prompt_baseline }o--|| prompt_section : prompt_baselines
-    tenant_prompt_default }o--|| prompt_section : section_tenant_prompt_defaults
-    agent_prompt_override }o--|| prompt_section : section_agent_prompt_overrides
     agent_profile ||--o{ agent_studio_event : agent_studio_events
     user_account ||--o{ agent_studio_event : actor_agent_studio_events
 
@@ -634,19 +627,6 @@ erDiagram
         varchar agent_kind PK
         bigint prompt_section_id PK,FK
         varchar language_code PK
-    }
-    tenant_prompt_default {
-        bigint tenant_id PK,FK
-        varchar agent_kind PK,FK
-        bigint prompt_section_id PK,FK
-        varchar language_code PK
-    }
-    agent_prompt_override {
-        bigint tenant_id PK,FK
-        varchar agent_id PK,FK
-        bigint prompt_section_id PK,FK
-        varchar language_code PK
-        boolean overwrite
     }
 ```
 
@@ -1127,6 +1107,7 @@ erDiagram
         varchar status_code FK
         text input_uri
         text response_uri
+        timestamp cancel_requested_at
     }
     turn_status {
         varchar code PK
@@ -1223,6 +1204,7 @@ erDiagram
         text reply_route
         text input_uri
         char input_digest
+        text acting_context
         int attempt
         varchar status_code
         varchar lease_token
@@ -1248,7 +1230,7 @@ erDiagram
 
 Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry.
 
-`turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
+`turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. `acting_context` carries who the turn acts as — principal, authority chain, delegation bounds, work item — as references and bounds, never a credential. An acknowledged delivery is requeued only while its turn is live again, which is how a resumed turn returns to a worker. `conversation_turn.cancel_requested_at` is the durable cancellation request a worker polls. `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
 
 ## Platform release safety and audit
 
@@ -1604,13 +1586,13 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
-| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_prompt_override`, `tenant_prompt_default`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
+| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
-| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event`, `safety_event` |
+| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `configuration`, `config_scope_binding`, `effective_agent_release` |
@@ -1622,4 +1604,5 @@ is seeded the same way: ids 1-9 are the platform sections (`task`, `tone_of_voic
 `brand_guidelines`, `target_audience`, `language_style`, `location`,
 `sensitive_topics`, `prohibited_content`, `escalation_policy`) and ids up to 100
 are reserved, so `prompt_section_seq` starts at 101. Those ids are referenced by
-`prompt_baseline` data across every downstream — never renumber them.
+`prompt_baseline` data and by the resource ids of `prompt_section` bindings
+(`<section id>/<language>`) — never renumber them.

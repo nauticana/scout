@@ -18,6 +18,8 @@ type GovernedGatewayConfig struct {
 	Egress      contract.ToolEgressPolicy
 	Transport   contract.ToolTransport
 	Validator   contract.ToolResultValidator
+	// Effects is required by any tool that declares VerifyEffect.
+	Effects contract.ToolEffectVerifier
 	// Circuit overrides the breaker built from Breaker; injection stays explicit.
 	Circuit contract.ToolCircuitBreaker
 	Breaker CircuitBreakerConfig
@@ -65,7 +67,7 @@ func NewGovernedGateway(config GovernedGatewayConfig) (*GovernedGateway, error) 
 	gateway := &GovernedGateway{
 		Registry: config.Registry, RateLimiter: config.RateLimiter, Authorizer: config.Authorizer,
 		Credentials: config.Credentials, Egress: config.Egress, Circuit: circuit,
-		Transport: config.Transport, Retry: retry, Validator: config.Validator,
+		Transport: config.Transport, Retry: retry, Validator: config.Validator, Effects: config.Effects,
 		Guardrails: config.Guardrails, GuardrailConfigs: config.GuardrailConfigs,
 		Classifier: config.Classifier, Timeout: config.Timeout,
 	}

@@ -37,6 +37,30 @@ func hash64(value string) uint64 {
 	return hash.Sum64()
 }
 
+// principalLoad is how many turns one principal with ready work already holds leased.
+type principalLoad struct {
+	principal domain.PrincipalRef
+	leased    int
+}
+
+// saturatedPrincipals returns the principals at their ceiling, which a claim passes over.
+func saturatedPrincipals(ctx context.Context, policy contract.TenantWeightPolicy, tenantID int64, loads []principalLoad) ([]domain.PrincipalRef, error) {
+	var saturated []domain.PrincipalRef
+	for _, load := range loads {
+		if policy == nil || load.leased == 0 {
+			continue
+		}
+		ceiling, err := policy.PrincipalCeiling(ctx, tenantID, load.principal)
+		if err != nil {
+			return nil, fmt.Errorf("concurrency ceiling of %s %q: %w", load.principal.Kind, load.principal.ID, err)
+		}
+		if ceiling > 0 && load.leased >= ceiling {
+			saturated = append(saturated, load.principal)
+		}
+	}
+	return saturated, nil
+}
+
 // tenantCandidate is one tenant with ready work, as seen by the fair picker.
 type tenantCandidate struct {
 	tenantID int64

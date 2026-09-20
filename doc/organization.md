@@ -93,6 +93,6 @@ two compiled releases of one agent, classifying each resource as added, removed,
 
 ## What is not here yet
 
-Tracked in [TODO.md](../TODO.md): the A2A adapter behind `AgentInvoker` (D5), and the
-prompt retrofit onto `config_scope_binding` (C5), which is the last item keeping two inheritance
-mechanisms in the tree.
+Tracked in [TODO.md](../TODO.md): the A2A adapter behind `AgentInvoker` (D5). In process,
+`dataplane.TurnAgentInvoker` runs a delegated call as the delegate's own turn, so each hop is
+admitted, reserved, and settled under its own principal within the budget passed down.

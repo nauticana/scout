@@ -82,6 +82,12 @@ type TenantPolicyRepository interface {
 	GetRuntimePolicy(ctx context.Context, tenantID int64) (domain.TenantRuntimePolicy, error)
 }
 
+// TenantPolicyPublisher stores an immutable runtime policy version and makes it the tenant's current one.
+// Republishing a version with different limits is ErrConflict.
+type TenantPolicyPublisher interface {
+	PublishRuntimePolicy(ctx context.Context, tenantID int64, version domain.RuntimePolicyVersion) error
+}
+
 // AgentVersionTrafficManager controls tenant agent canaries and rollback.
 type AgentVersionTrafficManager interface {
 	// ResolveVersion selects an agent version using the tenant's traffic policy.

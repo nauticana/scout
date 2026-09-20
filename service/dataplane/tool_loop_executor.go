@@ -267,6 +267,7 @@ func (executor *ToolLoopExecutor) decide(ctx context.Context, run *loopRun, iter
 		}
 		return *entry.Model, run.account(entry.Usage)
 	}
+	ctx = domain.WithDecisionScope(ctx, "iteration/", iteration)
 	selection, err := executor.Router.Select(ctx, run.request)
 	if err != nil {
 		return domain.ModelResult{}, stage.At(domain.StageModel, err)
@@ -324,14 +325,14 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		if entry.Observation == nil || entry.Observation.CallID != call.CallID {
 			return domain.ModelToolObservation{}, fmt.Errorf("%w: loop journal entry %d does not match call %q", domain.ErrConflict, entry.EntryNo, call.CallID)
 		}
-		run.recordCall(call, reference, *entry.Observation, wasPending)
+		run.recordCall(call, reference, entry, wasPending)
 		return *entry.Observation, run.account(entry.Usage)
 	}
 	if err := run.admitCall(call); err != nil {
 		return domain.ModelToolObservation{}, err
 	}
-	result, err := executor.Tools.Invoke(ctx, domain.ToolCall{
-		TenantContext: run.request.TenantContext, Principal: run.input.Principal,
+	result, err := executor.Tools.Invoke(domain.WithDecisionScope(ctx, "iteration/", iteration, "/call/", call.CallID), domain.ToolCall{
+		TenantContext: run.request.TenantContext, Principal: run.input.Principal, OnBehalfOf: run.input.OnBehalfOf,
 		RequestID: run.input.RequestID, ConversationID: run.request.ConversationID,
 		ToolID: tool.ToolID, ToolVersion: tool.ToolVersion, Arguments: call.Arguments,
 		IdempotencyKey: callIdempotencyKey(run.key, call),
@@ -359,12 +360,12 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 	usage.ToolCalls = max(usage.ToolCalls, 1)
 	entry, err := executor.append(ctx, run, domain.LoopEntry{
 		Kind: domain.LoopEntryObservation, Iteration: iteration, Tool: reference, Observation: &observation, Usage: usage,
-		ResourceURIs: resourceURIs(result.Evidence),
+		ResourceURIs: resourceURIs(result.Evidence), Effect: result.Effect,
 	})
 	if err != nil {
 		return domain.ModelToolObservation{}, errors.Join(err, run.account(usage))
 	}
-	run.recordCall(call, reference, *entry.Observation, wasPending)
+	run.recordCall(call, reference, entry, wasPending)
 	return *entry.Observation, run.account(entry.Usage)
 }
 
@@ -493,7 +494,8 @@ func (run *loopRun) account(usage domain.Usage) error {
 }
 
 // recordCall counts the call toward loop detection and emits its typed events.
-func (run *loopRun) recordCall(call domain.ModelToolCall, tool domain.ToolReference, observation domain.ModelToolObservation, wasPending bool) {
+func (run *loopRun) recordCall(call domain.ModelToolCall, tool domain.ToolReference, entry domain.LoopEntry, wasPending bool) {
+	observation := *entry.Observation
 	run.repeats[callFingerprint(call)]++
 	event := func(kind domain.TurnEventKind) domain.TurnEvent {
 		return domain.TurnEvent{Version: domain.TurnEventVersion, Kind: kind}
@@ -507,6 +509,11 @@ func (run *loopRun) recordCall(call domain.ModelToolCall, tool domain.ToolRefere
 	proposal.Tool = &domain.TurnToolEvent{CallID: call.CallID, ToolID: tool.ToolID, ToolVersion: tool.Version, Arguments: rawJSON(call.Arguments)}
 	result.Tool = &domain.TurnToolEvent{CallID: call.CallID, ToolID: tool.ToolID, ToolVersion: tool.Version, Output: rawJSON(observation.Output), IsError: observation.IsError}
 	run.events = append(run.events, proposal, result)
+	if entry.Effect != nil {
+		effect := event(domain.TurnEventEffect)
+		effect.Effect = &domain.TurnEffectEvent{CallID: call.CallID, ToolID: tool.ToolID, ToolVersion: tool.Version, Observation: *entry.Effect}
+		run.events = append(run.events, effect)
+	}
 }
 
 func approvalOutcome(observation domain.ModelToolObservation) string {

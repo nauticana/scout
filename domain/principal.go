@@ -21,18 +21,18 @@ type PrincipalRef struct {
 // Principal is the acting subject of one governed operation. The zero value is
 // never authorized; every enforcement point rejects it.
 type Principal struct {
-	Kind PrincipalKind
-	ID   string
+	Kind PrincipalKind `json:"kind"`
+	ID   string        `json:"id"`
 	// TenantID is the owning tenant; a principal never crosses it.
-	TenantID int64
+	TenantID int64 `json:"tenant_id"`
 	// ScopeID places the principal in the tenant's scope tree; empty means the tenant root.
-	ScopeID string
+	ScopeID string `json:"scope_id,omitempty"`
 	// Release is the effective release an agent principal is pinned to.
-	Release string
+	Release string `json:"release,omitempty"`
 	// EntitlementsDigest binds the principal to the entitlement set frozen into Release.
-	EntitlementsDigest string
+	EntitlementsDigest string `json:"entitlements_digest,omitempty"`
 	// Authority is empty when the principal acts on its own behalf.
-	Authority AuthorityChain
+	Authority AuthorityChain `json:"authority,omitempty"`
 }
 
 // AuthorityChain is the delegation path in the shape of the RFC 8693 act claim:

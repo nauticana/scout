@@ -358,11 +358,11 @@ func TestRuntimeComposition(t *testing.T) {
 		"no transport": {Documents: c},
 		"partial rbac": {Documents: c, Transport: transport, Keel: nil, Identities: charterkeel.BaseClaimIdentityMap{}},
 	} {
-		if _, err := r.Compose(context.Background(), nil, nil); err == nil {
+		if _, err := r.Compose(context.Background(), nil, validate.External{}); err == nil {
 			t.Errorf("%s: expected a composition error", name)
 		}
 	}
-	if _, err := (Runtime{Documents: c, Transport: transport}).Compose(context.Background(), nil, nil); err != nil {
+	if _, err := (Runtime{Documents: c, Transport: transport}).Compose(context.Background(), nil, validate.External{}); err != nil {
 		t.Fatalf("minimal composition: %v", err)
 	}
 	if _, err := (Runtime{Documents: c}).Events(); err == nil {

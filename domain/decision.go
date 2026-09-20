@@ -79,6 +79,9 @@ type DecisionRecord struct {
 	RequestID      string
 	ConversationID string
 	OccurredAt     time.Time
+	// DecisionKey makes the record idempotent: a sink keeps the first record of a key. Empty
+	// derives it from the context's DecisionScope; see DecisionKeyFor.
+	DecisionKey string
 }
 
 // Decision categories name the governed boundary that produced a record.

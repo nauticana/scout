@@ -24,6 +24,7 @@ const (
 	qSchedExhausted  = "scout_turn_queue_exhausted"
 	qSchedCandidates = "scout_turn_queue_candidates"
 	qSchedClaim      = "scout_turn_queue_claim"
+	qSchedPrincipals = "scout_turn_queue_principals"
 	qSchedExtend     = "scout_turn_queue_extend"
 	qSchedAck        = "scout_turn_queue_ack"
 	qSchedLockLeased = "scout_turn_queue_lock_leased"
@@ -32,7 +33,7 @@ const (
 )
 
 const queueRowColumns = `id, tenant_id, request_id, conversation_id, agent_id, reply_route,
-       input_uri, input_digest, attempt, enqueued_at, lease_token, lease_until`
+       input_uri, input_digest, attempt, enqueued_at, lease_token, lease_until, acting_context`
 
 var turnSchedulerQueries = map[string]string{
 	qSchedReclaim: `
@@ -62,6 +63,14 @@ HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 
 
 	// Head-of-line per conversation: nothing is claimable while an older
 	// message of the same conversation is queued (even if backed off) or leased.
+	// Leased turns per principal of one tenant that still has ready work.
+	qSchedPrincipals: `
+SELECT principal_kind, principal_id, SUM(CASE WHEN status_code = 'leased' THEN 1 ELSE 0 END)
+  FROM turn_queue
+ WHERE tenant_id = ? AND status_code IN ('queued', 'leased') AND partition_no BETWEEN ? AND ?
+ GROUP BY principal_kind, principal_id
+HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
+
 	qSchedClaim: `
 UPDATE turn_queue
    SET status_code = 'leased', lease_token = ?, lease_until = ?, worker_id = ?, attempt = attempt + 1
@@ -69,6 +78,7 @@ UPDATE turn_queue
                FROM turn_queue q
               WHERE q.tenant_id = ? AND q.status_code = 'queued' AND q.available_at <= ?
                 AND q.partition_no BETWEEN ? AND ? AND q.attempt < ?
+                AND (q.principal_kind || ':' || q.principal_id) <> ALL(string_to_array(?, chr(31)))
                 AND NOT EXISTS (SELECT 1
                                   FROM turn_queue o
                                  WHERE o.tenant_id = q.tenant_id AND o.conversation_id = q.conversation_id
@@ -220,9 +230,13 @@ func (scheduler *QueueTurnScheduler) Claim(ctx context.Context, workerID string,
 	token := scheduler.queries(ctx).GenID()
 	deadline := now.Add(leaseDuration)
 	for _, candidate := range ordered {
+		passedOver, err := scheduler.saturated(ctx, candidate.tenantID, now, from, to)
+		if err != nil {
+			return domain.QueueLease{}, err
+		}
 		claimed, err := scheduler.queries(ctx).Query(ctx, qSchedClaim,
 			token, deadline, workerID,
-			candidate.tenantID, now, from, to, scheduler.MaxAttempts)
+			candidate.tenantID, now, from, to, scheduler.MaxAttempts, passedOver)
 		if err != nil {
 			return domain.QueueLease{}, fmt.Errorf("claim turn: %w", err)
 		}
@@ -236,6 +250,33 @@ func (scheduler *QueueTurnScheduler) Claim(ctx context.Context, workerID string,
 		return domain.QueueLease{Message: message, Deadline: deadline}, nil
 	}
 	return domain.QueueLease{}, ErrNoReadyTurn
+}
+
+// saturated encodes the principals a claim passes over; without a policy the load is not read.
+func (scheduler *QueueTurnScheduler) saturated(ctx context.Context, tenantID int64, now time.Time, from, to int) (string, error) {
+	if scheduler.Weights == nil {
+		return "", nil
+	}
+	result, err := scheduler.queries(ctx).Query(ctx, qSchedPrincipals, tenantID, from, to, now)
+	if err != nil {
+		return "", fmt.Errorf("read principal load: %w", err)
+	}
+	loads := make([]principalLoad, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		loads = append(loads, principalLoad{
+			principal: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[0])), ID: common.AsString(row[1])},
+			leased:    int(common.AsInt64(row[2])),
+		})
+	}
+	principals, err := saturatedPrincipals(ctx, scheduler.Weights, tenantID, loads)
+	if err != nil {
+		return "", err
+	}
+	keys := make([]string, 0, len(principals))
+	for _, principal := range principals {
+		keys = append(keys, string(principal.Kind)+":"+principal.ID)
+	}
+	return strings.Join(keys, "\x1f"), nil
 }
 
 func (scheduler *QueueTurnScheduler) reclaim(ctx context.Context, now time.Time, from, to int) error {
@@ -416,8 +457,8 @@ func (scheduler *QueueTurnScheduler) deadLetterTx(ctx context.Context, tx port.T
 
 // decodeMessage builds a hydrated queue message from a queueRowColumns row.
 func (scheduler *QueueTurnScheduler) decodeMessage(ctx context.Context, row []any) (domain.QueueMessage, error) {
-	if len(row) < 12 {
-		return domain.QueueMessage{}, fmt.Errorf("decode queue row: expected 12 columns, got %d", len(row))
+	if len(row) < 13 {
+		return domain.QueueMessage{}, fmt.Errorf("decode queue row: expected 13 columns, got %d", len(row))
 	}
 	ref := domain.ObjectRef{URI: common.AsString(row[6]), Digest: common.AsString(row[7])}
 	input, err := scheduler.Objects.Hydrate(ctx, ref)
@@ -440,6 +481,9 @@ func (scheduler *QueueTurnScheduler) decodeMessage(ctx context.Context, row []an
 	}
 	if enqueuedAt, ok := common.AsTimeOK(row[9]); ok {
 		message.Dispatch.EnqueuedAt = enqueuedAt
+	}
+	if err = decodeActingContext(common.AsString(row[12]), &message.Dispatch.Turn); err != nil {
+		return domain.QueueMessage{}, err
 	}
 	return message, nil
 }

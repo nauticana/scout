@@ -84,12 +84,21 @@ UPDATE conversation_turn
  WHERE tenant_id = ? AND request_id = ? AND status_code IN ('suspended', 'queued')
 RETURNING turn_no`,
 
+	// The history row, when the turn has one, carries the same error in the same statement.
 	qRecordFail: `
+WITH failed AS (
 UPDATE conversation_turn
    SET status_code = ?, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
  WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
-RETURNING turn_no`,
+RETURNING tenant_id, conversation_id, turn_no),
+mirrored AS (
+UPDATE conversation_turn_detail detail
+   SET error_text = ?
+  FROM failed
+ WHERE detail.tenant_id = failed.tenant_id AND detail.conversation_id = failed.conversation_id AND detail.turn_no = failed.turn_no
+RETURNING detail.turn_no)
+SELECT turn_no FROM failed`,
 }
 
 // TableTurnRecordStore is the TurnRecordStore over conversation_turn: the
@@ -285,7 +294,7 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, req
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	failed, err := store.queries(ctx).Query(ctx, qRecordFail, status, ref.URI, ref.Digest, tenantID, requestID)
+	failed, err := store.queries(ctx).Query(ctx, qRecordFail, status, ref.URI, ref.Digest, tenantID, requestID, errorCode)
 	if err != nil {
 		return fmt.Errorf("fail turn: %w", err)
 	}

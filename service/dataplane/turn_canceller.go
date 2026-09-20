@@ -18,7 +18,10 @@ type MemoryTurnCanceller struct {
 	watches map[streamKey]context.CancelCauseFunc
 }
 
-var _ contract.TurnCanceller = (*MemoryTurnCanceller)(nil)
+var (
+	_ contract.TurnCanceller     = (*MemoryTurnCanceller)(nil)
+	_ contract.TurnCancelWatcher = (*MemoryTurnCanceller)(nil)
+)
 
 // Watch derives a cancelable turn context; the release func must be deferred.
 func (canceller *MemoryTurnCanceller) Watch(ctx context.Context, tenantID int64, requestID string) (context.Context, func(), error) {

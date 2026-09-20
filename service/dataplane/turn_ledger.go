@@ -722,8 +722,10 @@ func (l *TurnLedger) PrepareBudgeted(ctx context.Context, tenantID int64, endUse
 		}
 		return TurnExecution{}, nil, false, err
 	}
-	reservation, err := l.Budget.Reserve(ctx, tenantID, requestID,
-		quote.InputTokens+quote.OutputTokens, quote.CostMinorUnits, quote.Currency)
+	reservation, err := l.Budget.Reserve(ctx, domain.BudgetRequest{
+		TenantID: tenantID, RequestID: requestID, Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: release.AgentID},
+		Tokens: quote.InputTokens + quote.OutputTokens, CostMinorUnits: quote.CostMinorUnits, Currency: quote.Currency,
+	})
 	if err != nil {
 		if errors.Is(err, domain.ErrBudgetExceeded) && state.ResultPayload == "" {
 			if failErr := l.FailUnreserved(ctx, state, err); failErr != nil && !errors.Is(failErr, ErrTurnFenced) {

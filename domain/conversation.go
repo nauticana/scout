@@ -51,8 +51,10 @@ type TurnReply struct {
 // SessionSnapshot contains the latest durable conversation state. State is
 // hydrated from StateRef by the durable store, which verifies the digest first.
 type SessionSnapshot struct {
-	ConversationID      string
-	AgentVersion        string
+	ConversationID string
+	AgentVersion   string
+	// EndUserRef is the human the conversation was opened for; empty when it has none.
+	EndUserRef          string
 	LatestTurnNo        int64
 	LatestStepNo        int
 	LastCompletedStepID string

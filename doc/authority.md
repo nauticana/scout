@@ -108,8 +108,9 @@ hierarchy fails loudly instead of looping.
 
 ## What is not here yet
 
-The compiler is the generic half. Still open, tracked in [TODO.md](../TODO.md): prompt
-inheritance still uses its own three tables rather than `config_scope_binding` (C5). Everything that
+The compiler is the generic half. Prompt inheritance runs on it too: tenant defaults and agent
+prompts are `prompt_section` bindings, folded by `controlplane.PromptCompiler` over the product's
+baseline, so `sealed` governs a prompt clause exactly as it governs a policy. Everything that
 consumes these primitives — the policy decision point, durable approvals, credential bindings,
 scope-keyed budgets, delegation — is in [doc/governance.md](governance.md) and
 [doc/organization.md](organization.md).

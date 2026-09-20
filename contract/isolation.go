@@ -21,10 +21,17 @@ type TenantBudgetPolicy interface {
 	BudgetFor(ctx context.Context, tenantID int64) (domain.BudgetLimits, error)
 }
 
+// PrincipalBudgetPolicy supplies the rolling-window budget of one principal inside its
+// tenant's. bounded false leaves the principal to the tenant envelope alone. The
+// limits share the tenant's currency and may only narrow it: both must hold.
+type PrincipalBudgetPolicy interface {
+	PrincipalBudgetFor(ctx context.Context, tenantID int64, principal domain.PrincipalRef) (limits domain.BudgetLimits, bounded bool, err error)
+}
+
 // TenantBudgetManager reserves and settles tenant token and cost budgets.
 type TenantBudgetManager interface {
 	// Reserve returns the live attempt or replaces an expired attempt for a nonterminal turn.
-	Reserve(ctx context.Context, tenantID int64, requestID string, tokens, costMinorUnits int64, currency string) (domain.BudgetReservation, error)
+	Reserve(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error)
 	// Commit settles a reservation against actual usage.
 	Commit(ctx context.Context, reservation domain.BudgetReservation, usage domain.Usage) error
 	// Release returns an unused reservation to the tenant budget.
