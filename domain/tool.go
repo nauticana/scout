@@ -16,8 +16,8 @@ type ToolDefinition struct {
 
 // ToolReference names one registered tool version.
 type ToolReference struct {
-	ToolID  string
-	Version string
+	ToolID  string `json:"tool_id"`
+	Version string `json:"version"`
 }
 
 // ToolCall contains one governed tenant tool invocation. Principal is the agent

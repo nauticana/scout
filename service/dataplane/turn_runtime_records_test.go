@@ -18,15 +18,22 @@ func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 }
 
 func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
-	query := &queueQueryFake{rows: map[string][][]any{qRecordOpen: {{int64(4)}}}}
+	query := &queueQueryFake{rows: map[string][][]any{
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordOpen:        {{int64(4)}},
+	}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
 	turnNo, err := store.Open(context.Background(), ingressRequest(), input)
 	if err != nil || turnNo != 4 {
 		t.Fatalf("turn = %d, error = %v", turnNo, err)
 	}
-	if len(query.calls) < 2 || query.calls[0] != qRecordLock || query.calls[1] != qRecordOpen {
+	// The conversation is pinned under the same lock, before its first turn row exists.
+	if len(query.calls) < 4 || query.calls[0] != qRecordLock || query.calls[1] != qRecordConversation || query.calls[2] != qRecordPinnedAgent || query.calls[3] != qRecordOpen {
 		t.Fatalf("calls = %v", query.calls)
+	}
+	if pin := query.firstArgs(qRecordConversation); pin[0] != "conversation-1" || pin[2] != int64(7) || pin[3] != ingressRequest().AgentID {
+		t.Fatalf("conversation pin args = %v", pin)
 	}
 	args := query.firstArgs(qRecordOpen)
 	want := []any{int64(7), "conversation-1", "request-1", input.URI, input.Digest, int64(7), "conversation-1"}
@@ -42,8 +49,9 @@ func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
 
 func TestTableTurnRecordStoreDetectsReusedRequestID(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordOpen: nil,
-		qRecordFind: {{int64(4), "conversation-1", "queued", testDigest("other"), nil, nil}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordOpen:        nil,
+		qRecordFind:        {{int64(4), "conversation-1", "queued", testDigest("other"), nil, nil}},
 	}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
@@ -104,3 +112,42 @@ func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 }
 
 func testDigest(payload string) string { return DigestBytes([]byte(payload)) }
+
+func TestTableTurnRecordStoreWritesTheHistoryRowForANewTurn(t *testing.T) {
+	query := &queueQueryFake{rows: map[string][][]any{
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordOpen:        {{int64(4)}},
+	}}
+	store := newTestRecordStore(query)
+	store.TaskKind = "agent_turn"
+	request := ingressRequest()
+	request.Input = []byte("audit the homepage")
+	if _, err := store.Open(context.Background(), request, domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	detail := query.firstArgs(qRecordDetail)
+	if len(detail) != 5 || detail[0] != int64(4) || detail[1] != "agent_turn" || detail[2] != "audit the homepage" {
+		t.Fatalf("history row args = %v", detail)
+	}
+}
+
+func TestTableTurnRecordStoreRejectsConversationPinnedToAnotherAgent(t *testing.T) {
+	query := &queueQueryFake{rows: map[string][][]any{qRecordPinnedAgent: {{"other-agent", "v1"}}}}
+	store := newTestRecordStore(query)
+	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
+	if _, err := store.Open(context.Background(), ingressRequest(), input); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("error = %v, want conflict", err)
+	}
+	if query.firstArgs(qRecordOpen) != nil {
+		t.Fatal("a turn must not be opened against another agent's conversation")
+	}
+}
+
+func TestTableTurnRecordStoreRequiresADeployedVersionForANewConversation(t *testing.T) {
+	query := &queueQueryFake{rows: map[string][][]any{qRecordPinnedAgent: nil}}
+	store := newTestRecordStore(query)
+	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
+	if _, err := store.Open(context.Background(), ingressRequest(), input); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("error = %v, want not ready", err)
+	}
+}

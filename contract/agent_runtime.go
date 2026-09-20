@@ -28,6 +28,13 @@ type AgentProviderFactory interface {
 	Build(ctx context.Context, reference domain.ModelReference) (ModelProvider, MediaProvider, error)
 }
 
+// SamplingSupport says whether a model accepts sampling parameters such as
+// temperature. Several model families reject any non-default value, so a
+// parameter is sent only on a yes.
+type SamplingSupport interface {
+	AcceptsSampling(ctx context.Context, reference domain.ModelReference) (bool, error)
+}
+
 // AgentExecutor binds one compiled prompt and model reference to provider
 // adapters. Product runtimes can embed it and add concerns such as pricing or
 // quota accounting without reimplementing prompt and media execution.

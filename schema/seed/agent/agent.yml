@@ -10,7 +10,7 @@ seeds:
     columns: [id, data_type, needs_restart, default_value, description]
     rows:
       - [agent_max_tokens, int, false, "8192", Max output tokens per agent model completion]
-      - [agent_temperature, float, false, "0.7", "Agent model sampling temperature; 0.0-2.0"]
+      - [agent_temperature, float, false, "", "Sampling temperature 0.0-2.0 sent to models with the sampling capability; empty sends none"]
       - [agent_run_retention_days, int, false, "0", "Days to retain agent run activity; 0 retains it forever"]
       - [agent_turn_rate, float, false, "2", Per-tenant admitted turns per second]
       - [agent_turn_burst, int, false, "10", Per-tenant turn burst]

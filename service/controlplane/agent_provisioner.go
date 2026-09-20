@@ -17,6 +17,7 @@ const (
 	qProvisionProfile = "scout_provision_profile"
 	qProvisionDraft   = "scout_provision_draft"
 	qProvisionAlias   = "scout_provision_alias"
+	qProvisionAccess  = "scout_provision_model_access"
 )
 
 // Every statement is idempotent, so a repeated provision run is a no-op.
@@ -39,6 +40,10 @@ INSERT INTO agent_draft (tenant_id, agent_id, enabled, require_approval,
        video_model_provider, video_model_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, agent_id) DO NOTHING`,
+	qProvisionAccess: `
+INSERT INTO tenant_model_access (tenant_id, provider_id, model_id, priority_class_code)
+VALUES (?, ?, ?, 'standard')
+ON CONFLICT (tenant_id, provider_id, model_id) DO NOTHING`,
 	qProvisionAlias: `
 INSERT INTO agent_alias (tenant_id, alias_id, agent_type_id, agent_id)
 VALUES (?, ?, ?, ?)
@@ -91,6 +96,12 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 			modelProvider(seed.Models.Video), modelID(seed.Models.Video)); err != nil {
 			return fmt.Errorf("seed agent draft %q: %w", seed.AgentID, err)
 		}
+		// Routing reads tenant_model_access, so a model a definition names must be granted with it.
+		for _, reference := range selectedModels(seed.Models) {
+			if _, err = tx.Query(ctx, qProvisionAccess, tenantID, reference.ProviderID, reference.ModelID); err != nil {
+				return fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
+			}
+		}
 		if seed.AliasID == "" {
 			continue
 		}
@@ -103,6 +114,16 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 	}
 	committed = true
 	return nil
+}
+
+func selectedModels(models domain.AgentModelSelection) []domain.ModelReference {
+	var selected []domain.ModelReference
+	for _, reference := range []*domain.ModelReference{models.Text, models.Image, models.Video} {
+		if reference != nil && reference.ProviderID != "" && reference.ModelID != "" {
+			selected = append(selected, *reference)
+		}
+	}
+	return selected
 }
 
 func validateSeed(seed domain.AgentSeed) error {

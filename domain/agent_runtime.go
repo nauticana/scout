@@ -18,6 +18,8 @@ type AgentTask struct {
 	InputData       string
 	OutputFormat    string
 	PastPerformance string
+	// Output constrains the answer natively; the prompt renderer ignores it.
+	Output OutputConstraint
 }
 
 // ImageRequest bounds one image generation call.

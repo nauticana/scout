@@ -65,15 +65,6 @@ func TestRequestDefaults(t *testing.T) {
 	if got := maxOutputTokens(domain.ModelRequest{MaxOutputTokens: 512}); got != 512 {
 		t.Errorf("maxOutputTokens override = %d", got)
 	}
-	if got := temperature(0, false); got != DefaultTemperature {
-		t.Errorf("temperature default = %v", got)
-	}
-	if got := temperature(0.2, false); got != 0.2 {
-		t.Errorf("temperature override = %v", got)
-	}
-	if got := temperature(0, true); got != 0 {
-		t.Errorf("explicit zero temperature = %v", got)
-	}
 	if got := atLeastOne(0); got != 1 {
 		t.Errorf("atLeastOne(0) = %d", got)
 	}

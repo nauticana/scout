@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ type studioQueryFake struct {
 	rows    map[string][][]any
 	queries []string
 	args    map[string][]any
+	commits int
 }
 
 func (f *studioQueryFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
@@ -25,7 +27,7 @@ func (f *studioQueryFake) Query(_ context.Context, name string, args ...any) (*k
 }
 
 func (*studioQueryFake) GenID() int64                   { return 0 }
-func (*studioQueryFake) Commit(context.Context) error   { return nil }
+func (f *studioQueryFake) Commit(context.Context) error { f.commits++; return nil }
 func (*studioQueryFake) Rollback(context.Context) error { return nil }
 
 type studioDBFake struct {
@@ -134,7 +136,7 @@ func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 	if release.Version != "1" || !release.Active || len(release.Languages) != 1 {
 		t.Fatalf("unexpected release: %+v", release)
 	}
-	for _, name := range []string{qStudioInsertVersion, qStudioDeployVersion, qStudioAudit} {
+	for _, name := range []string{qStudioInsertVersion, qStudioGrantModel, qStudioDeployVersion, qStudioAudit} {
 		if _, ok := query.args[name]; !ok {
 			t.Fatalf("publish did not execute %s: %v", name, query.queries)
 		}
@@ -142,5 +144,73 @@ func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 	encoded := query.args[qStudioInsertVersion][3].(string)
 	if !strings.Contains(encoded, `"agent_id":"writer-a"`) || strings.Contains(encoded, `"AgentID"`) {
 		t.Fatalf("definition JSON is not canonical snake case: %s", encoded)
+	}
+}
+
+type releaseWriterRecorder struct {
+	definitions []domain.AgentDefinition
+	err         error
+}
+
+func (recorder *releaseWriterRecorder) WriteRelease(_ context.Context, _ keelport.TxQueryService, _ int64, definition domain.AgentDefinition) error {
+	recorder.definitions = append(recorder.definitions, definition)
+	return recorder.err
+}
+
+// A release that names tools must bind them in the publish transaction; without
+// a writer it would be published with no tools and every call would be denied.
+func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testing.T) {
+	newService := func(writers ...ReleaseWriter) (*StudioService, *studioQueryFake) {
+		query := &studioQueryFake{rows: map[string][][]any{
+			qStudioGetDraft:    {{"writer", "Writer", true, true, false, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+			qStudioLockDraft:   {{int64(4), "writer"}},
+			qStudioLockAlias:   {{"writer-a", int64(2)}},
+			qStudioNextVersion: {{int64(1)}},
+		}, args: map[string][]any{}}
+		sources := studioSourcesFake{resolved: domain.ResolvedPrompts{
+			AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
+			Rows: []domain.PromptSourceRow{{PromptSectionID: 1, Caption: "task", DisplayOrder: 1, SourceLevel: domain.PromptSourceBaseline, SourceKey: "global", Instruction: "write"}},
+		}}
+		return &StudioService{
+			DB: studioDBFake{qs: query}, Sources: sources, ReleaseWriters: writers,
+			Assembler: &PromptDraftAssembler{Compiler: &PromptCompiler{}}, Compiler: &PromptCompiler{}, Catalog: studioModelCatalogFake{},
+		}, query
+	}
+	request := domain.AgentPublishRequest{
+		AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2,
+		Tools: []domain.ToolReference{{ToolID: "search", Version: "1"}}, ToolLoop: &domain.ToolLoopConfig{MaxIterations: 4},
+	}
+	actor := domain.StudioActor{TenantID: 8, ActorID: 9}
+
+	recorder := &releaseWriterRecorder{}
+	service, query := newService(recorder)
+	plain, _ := newService()
+	plainRequest := request
+	plainRequest.Tools, plainRequest.ToolLoop = nil, nil
+	baseline, err := plain.Publish(context.Background(), actor, plainRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := service.Publish(context.Background(), actor, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.definitions) != 1 || recorder.definitions[0].Version != "1" || len(recorder.definitions[0].Tools) != 1 {
+		t.Fatalf("writer saw %+v", recorder.definitions)
+	}
+	if release.DefinitionDigest == baseline.DefinitionDigest {
+		t.Fatal("tools and the tool loop are part of the release and must change its digest")
+	}
+	if encoded := query.args[qStudioInsertVersion][3].(string); !strings.Contains(encoded, `"tools":[{"tool_id":"search","version":"1"}]`) || !strings.Contains(encoded, `"tool_loop":{"max_iterations":4}`) {
+		t.Fatalf("definition JSON lacks the frozen tools: %s", encoded)
+	}
+
+	unwired, _ := newService()
+	if _, err := unwired.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("want ErrNotReady without a release writer, got %v", err)
+	}
+	failing, failed := newService(&releaseWriterRecorder{err: domain.ErrNotFound})
+	if _, err := failing.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotFound) || failed.commits != 0 {
+		t.Fatalf("a failed binding must fail the publish before commit: %v, commits %d", err, failed.commits)
 	}
 }

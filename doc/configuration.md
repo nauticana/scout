@@ -14,7 +14,7 @@ catalog and `ScoutConfig` cannot drift.
 | Flag | Default | Meaning |
 |---|---:|---|
 | `agent_max_tokens` | 8192 | Max output tokens per agent model completion |
-| `agent_temperature` | 0.7 | Agent model sampling temperature, 0.0–2.0 |
+| `agent_temperature` | — | Sampling temperature, 0.0–2.0, sent only to models whose catalog entry has the `sampling` capability; empty sends none |
 | `agent_run_retention_days` | 0 | Days to keep agent run activity; 0 keeps it forever |
 | `agent_turn_rate` / `agent_turn_burst` | 2 / 10 | Per-tenant admitted turns per second and burst |
 | `agent_tool_rate` / `agent_tool_burst` | 10 / 20 | Per-tenant tool calls per second and burst |

@@ -16,6 +16,11 @@ type AgentVersionRepository interface {
 	List(ctx context.Context, tenantID int64, agentID string) ([]domain.AgentDefinition, error)
 }
 
+// AgentDefinitionReader reads one immutable definition; AgentVersionRepository satisfies it.
+type AgentDefinitionReader interface {
+	Get(ctx context.Context, tenantID int64, agentID, version string) (domain.AgentDefinition, error)
+}
+
 // AgentPublicationStore atomically persists an immutable definition and compiled graph.
 type AgentPublicationStore interface {
 	// Publish stores the definition and graph in one transaction.

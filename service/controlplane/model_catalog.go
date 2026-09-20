@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -162,6 +163,18 @@ func (c *ModelCatalog) validate(ctx context.Context, fields *[]domain.AgentField
 	}
 	*fields = append(*fields, domain.AgentFieldError{Field: field, Message: "model " + reference.ModelID + " cannot generate " + capability})
 	return nil
+}
+
+// AcceptsSampling reports whether the catalog lists the sampling capability for a model.
+func (c *ModelCatalog) AcceptsSampling(ctx context.Context, reference domain.ModelReference) (bool, error) {
+	if err := c.init(ctx); err != nil {
+		return false, err
+	}
+	capabilities, err := c.capabilities(ctx)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(capabilities[reference], domain.CapabilitySampling), nil
 }
 
 func (c *ModelCatalog) capabilities(ctx context.Context) (map[domain.ModelReference][]string, error) {

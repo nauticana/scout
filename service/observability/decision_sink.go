@@ -44,7 +44,7 @@ SELECT id, category, principal_kind, principal_id, grant_id, grantor_kind, grant
    AND (? = '' OR category = ?)
    AND (? = '' OR principal_kind = ?)
    AND (? = '' OR principal_id = ?)
-   AND (? = '' OR resource = ?)
+   AND (? = '' OR resource_ref = ?)
    AND (? = '' OR request_id = ?)
    AND (? = '' OR conversation_id = ?)
    AND (? = '' OR outcome_code = ?)

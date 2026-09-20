@@ -18,6 +18,7 @@ const (
 	qStudioLockDraft        = "scout_studio_lock_draft"
 	qStudioNextVersion      = "scout_studio_next_version"
 	qStudioInsertVersion    = "scout_studio_insert_version"
+	qStudioGrantModel       = "scout_studio_grant_model_access"
 	qStudioDeployVersion    = "scout_studio_deploy_version"
 	qStudioGetVersion       = "scout_studio_get_version"
 	qStudioHistory          = "scout_studio_history"
@@ -99,6 +100,10 @@ SELECT d.draft_revision, p.agent_type_id
 	qStudioNextVersion: `
 SELECT COALESCE(MAX(CASE WHEN agent_version ~ '^[0-9]+$' THEN CAST(agent_version AS BIGINT) END), 0) + 1
   FROM agent_version WHERE tenant_id = ? AND agent_id = ?`,
+	qStudioGrantModel: `
+INSERT INTO tenant_model_access (tenant_id, provider_id, model_id, priority_class_code)
+VALUES (?, ?, ?, 'standard')
+ON CONFLICT (tenant_id, provider_id, model_id) DO NOTHING`,
 	qStudioInsertVersion: `
 INSERT INTO agent_version
        (tenant_id, agent_id, agent_version, definition, definition_digest, draft_revision,

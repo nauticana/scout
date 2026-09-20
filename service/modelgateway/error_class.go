@@ -26,12 +26,17 @@ const (
 	ErrorClassNotReady    = "not_ready"
 	ErrorClassCircuitOpen = "circuit_open"
 	ErrorClassProvider    = "provider"
+	// ErrorClassInvalidOutput is a completed call whose answer failed its schema; resending it is not a retry.
+	ErrorClassInvalidOutput = "invalid_output"
+	ErrorClassCapability    = "capability_unsupported"
 )
 
 var errorClasses = []struct {
 	target error
 	class  string
 }{
+	{domain.ErrInvalidModelOutput, ErrorClassInvalidOutput},
+	{domain.ErrCapabilityUnsupported, ErrorClassCapability},
 	{domain.ErrValidation, ErrorClassValidation},
 	{domain.ErrRateLimited, ErrorClassRateLimited},
 	{domain.ErrBudgetExceeded, ErrorClassBudget},

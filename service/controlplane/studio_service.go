@@ -38,10 +38,31 @@ type StudioService struct {
 	Kinds      contract.AgentTypeCatalog
 	Catalog    contract.StudioModelCatalog
 	Activity   contract.AgentActivityReporter
-	Now        func() time.Time
+	// ReleaseWriters run inside the publish and restore transaction, after the
+	// version row exists: tool bindings and the compiled execution graph commit
+	// with the release or not at all.
+	ReleaseWriters []ReleaseWriter
+	Now            func() time.Time
 
 	once sync.Once
 	qs   keelport.QueryService
+}
+
+// ReleaseWriter persists what an immutable definition implies beyond its own row.
+type ReleaseWriter interface {
+	WriteRelease(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error
+}
+
+func (s *StudioService) writeRelease(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
+	if (len(definition.Tools) > 0 || definition.ToolLoop != nil) && len(s.ReleaseWriters) == 0 {
+		return fmt.Errorf("%w: definition %q declares tools or a tool loop but no release writer is composed", domain.ErrNotReady, definition.AgentID)
+	}
+	for _, writer := range s.ReleaseWriters {
+		if err := writer.WriteRelease(ctx, tx, tenantID, definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *StudioService) now() time.Time {
@@ -387,6 +408,12 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
+	if len(request.Tools) > 0 || request.ToolLoop != nil {
+		definition.Tools, definition.ToolLoop = request.Tools, request.ToolLoop
+		if definition.DefinitionDigest, err = s.Compiler.DefinitionDigest(definition); err != nil {
+			return domain.AgentRelease{}, err
+		}
+	}
 	definition.ChangeSummary = request.ChangeSummary
 	definition.DraftRevision = request.ExpectedDraftRevision
 	definition.PromptProfileRevision = request.ExpectedPromptProfileRevision
@@ -439,6 +466,14 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
 		nullableString(definition.ChangeSummary), actor.ActorID, nil); err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("insert agent version: %w", err)
+	}
+	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
+		return domain.AgentRelease{}, err
+	}
+	for _, reference := range selectedModels(definition.Models) {
+		if _, err = tx.Query(ctx, qStudioGrantModel, actor.TenantID, reference.ProviderID, reference.ModelID); err != nil {
+			return domain.AgentRelease{}, fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
+		}
 	}
 	if active {
 		if _, err = tx.Query(ctx, qStudioDeployVersion, actor.TenantID, request.AgentID, version); err != nil {
@@ -513,6 +548,9 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
 		definition.ChangeSummary, actor.ActorID, request.Version); err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("insert restored version: %w", err)
+	}
+	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
+		return domain.AgentRelease{}, err
 	}
 	active := len(alias.Rows) > 0 && common.AsString(alias.Rows[0][0]) == request.AgentID
 	if active {

@@ -16,9 +16,10 @@ import (
 // output. Text only: image and video are served by providers that implement
 // contract.MediaProvider.
 type Anthropic struct {
-	APIKey                string
-	Temperature           float64
-	TemperatureConfigured bool
+	APIKey string
+	// Temperature is sent only when set; nil leaves sampling to the model, which is
+	// the only form models without sampling support accept.
+	Temperature *float64
 }
 
 var _ contract.ModelProvider = (*Anthropic)(nil)
@@ -44,9 +45,11 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 		return anthropic.MessageNewParams{}, err
 	}
 	params := anthropic.MessageNewParams{
-		Model:       anthropic.Model(selection.Model),
-		MaxTokens:   maxOutputTokens(request),
-		Temperature: anthropic.Float(temperature(p.Temperature, p.TemperatureConfigured)),
+		Model:     anthropic.Model(selection.Model),
+		MaxTokens: maxOutputTokens(request),
+	}
+	if p.Temperature != nil {
+		params.Temperature = anthropic.Float(*p.Temperature)
 	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, anthropicMessage(message))
@@ -77,7 +80,9 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
-		params.OutputConfig = anthropic.OutputConfigParam{Format: anthropic.JSONOutputFormatParam{Schema: schema}}
+		params.OutputConfig = anthropic.OutputConfigParam{Format: anthropic.JSONOutputFormatParam{
+			Schema: projectSchema(schema, anthropicUnsupportedKeywords),
+		}}
 	}
 	return params, nil
 }

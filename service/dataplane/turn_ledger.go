@@ -29,25 +29,27 @@ var (
 )
 
 const (
-	qLedgerFindTurn           = "scout_ledger_find_turn"
-	qLedgerEnsureConversation = "scout_ledger_ensure_conversation"
-	qLedgerGetConversation    = "scout_ledger_get_conversation"
-	qLedgerLock               = "scout_ledger_lock"
-	qLedgerInsertTurn         = "scout_ledger_insert_turn"
-	qLedgerInsertDetail       = "scout_ledger_insert_detail"
-	qLedgerAttachJob          = "scout_ledger_attach_job"
-	qLedgerActivate           = "scout_ledger_activate"
-	qLedgerStageSuccess       = "scout_ledger_stage_success"
-	qLedgerStageFailure       = "scout_ledger_stage_failure"
-	qLedgerFinishSuccess      = "scout_ledger_finish_success"
-	qLedgerFinishFailure      = "scout_ledger_finish_failure"
-	qLedgerFailUnreserved     = "scout_ledger_fail_unreserved"
-	qLedgerInsertUsageEvent   = "scout_ledger_insert_usage_event"
-	qLedgerSetJobStatus       = "scout_ledger_set_job_status"
-	qLedgerActivateJob        = "scout_ledger_activate_job"
-	qLedgerStageJobUsage      = "scout_ledger_stage_job_usage"
-	qLedgerAttachJobArtifact  = "scout_ledger_attach_job_artifact"
-	qLedgerCompleteJobTurn    = "scout_ledger_complete_job_turn"
+	qLedgerFindTurn            = "scout_ledger_find_turn"
+	qLedgerEnsureConversation  = "scout_ledger_ensure_conversation"
+	qLedgerGetConversation     = "scout_ledger_get_conversation"
+	qLedgerLock                = "scout_ledger_lock"
+	qLedgerInsertTurn          = "scout_ledger_insert_turn"
+	qLedgerInsertDetail        = "scout_ledger_insert_detail"
+	qLedgerAttachJob           = "scout_ledger_attach_job"
+	qLedgerActivate            = "scout_ledger_activate"
+	qLedgerStageSuccess        = "scout_ledger_stage_success"
+	qLedgerStageFailure        = "scout_ledger_stage_failure"
+	qLedgerFinishSuccess       = "scout_ledger_finish_success"
+	qLedgerFinishFailure       = "scout_ledger_finish_failure"
+	qLedgerStageBilledFailure  = "scout_ledger_stage_billed_failure"
+	qLedgerFinishBilledFailure = "scout_ledger_finish_billed_failure"
+	qLedgerFailUnreserved      = "scout_ledger_fail_unreserved"
+	qLedgerInsertUsageEvent    = "scout_ledger_insert_usage_event"
+	qLedgerSetJobStatus        = "scout_ledger_set_job_status"
+	qLedgerActivateJob         = "scout_ledger_activate_job"
+	qLedgerStageJobUsage       = "scout_ledger_stage_job_usage"
+	qLedgerAttachJobArtifact   = "scout_ledger_attach_job_artifact"
+	qLedgerCompleteJobTurn     = "scout_ledger_complete_job_turn"
 )
 
 var turnLedgerQueries = map[string]string{
@@ -178,6 +180,45 @@ UPDATE conversation_turn_detail detail
                   AND reservation.status_code = 'held'
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.turn_no`,
+
+	qLedgerStageBilledFailure: `
+UPDATE conversation_turn_detail detail
+   SET error_text = ?,
+       staged_input_tokens = ?, staged_output_tokens = ?,
+       staged_cost_minor_units = ?, staged_currency_code = ?
+  FROM conversation_turn runtime
+ WHERE detail.tenant_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
+   AND runtime.tenant_id = detail.tenant_id
+   AND runtime.conversation_id = detail.conversation_id
+   AND runtime.turn_no = detail.turn_no
+   AND runtime.status_code IN ('running', 'streaming')
+   AND detail.active_reservation_id = ?
+   AND detail.result_payload IS NULL
+   AND EXISTS (SELECT 1 FROM budget_reservation reservation
+                WHERE reservation.tenant_id = detail.tenant_id
+                  AND reservation.reservation_id = detail.active_reservation_id
+                  AND reservation.status_code = 'held'
+                  AND reservation.expires_at > CURRENT_TIMESTAMP)
+RETURNING detail.turn_no`,
+
+	qLedgerFinishBilledFailure: `
+UPDATE conversation_turn runtime
+   SET status_code = 'failed', completed_at = CURRENT_TIMESTAMP
+  FROM conversation_turn_detail detail
+ WHERE runtime.tenant_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
+   AND detail.tenant_id = runtime.tenant_id
+   AND detail.conversation_id = runtime.conversation_id
+   AND detail.turn_no = runtime.turn_no
+   AND runtime.status_code IN ('running', 'streaming')
+   AND detail.active_reservation_id = ?
+   AND detail.error_text IS NOT NULL
+   AND EXISTS (SELECT 1 FROM budget_reservation reservation
+                WHERE reservation.tenant_id = runtime.tenant_id
+                  AND reservation.reservation_id = detail.active_reservation_id
+                  AND reservation.status_code = 'settled'
+                  AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
+                  AND reservation.settled_cost_minor_units = detail.staged_cost_minor_units)
+RETURNING runtime.turn_no`,
 
 	qLedgerFinishSuccess: `
 UPDATE conversation_turn runtime
@@ -541,6 +582,12 @@ func (l *TurnLedger) Inspect(ctx context.Context, tenantID int64, requestID, tas
 		}
 		return state, json.RawMessage(state.ResultPayload), true, nil
 	}
+	if state.ErrorText != "" && state.ReservationStatus == "settled" {
+		if err := l.finishBilledFailure(ctx, state, state.ActiveReservation); err != nil {
+			return state, nil, false, err
+		}
+		return state, nil, true, storedTurnError(state)
+	}
 	if state.ErrorText != "" && state.ReservationStatus == "released" {
 		if err := l.finishFailed(ctx, state, state.ActiveReservation); err != nil {
 			return state, nil, false, err
@@ -840,11 +887,17 @@ func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, rese
 	return nil
 }
 
-// Complete stages the result, settles the reservation, and finalizes the turn.
+// Complete stages the result, settles the reservation, and finalizes the turn. A
+// staging failure fails the turn billed at usage.
 func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resultKind string, payload any, usage domain.Usage, persist func(context.Context, port.QueryService) error) error {
 	state, err := l.stageSuccessful(ctx, execution, resultKind, payload, usage, persist)
-	if err != nil {
+	if errors.Is(err, ErrTurnFenced) {
 		return err
+	}
+	if err != nil {
+		// Staging rolled back, but the work was done: fail the turn at its real
+		// usage instead of leaving it running on a held reservation.
+		return l.FailWithUsage(ctx, execution, err, usage)
 	}
 	if err = l.Budget.Commit(context.WithoutCancel(ctx), execution.Reservation, usage); err != nil {
 		if errors.Is(err, domain.ErrConflict) {
@@ -910,6 +963,92 @@ func (l *TurnLedger) finishFailed(ctx context.Context, state TurnState, reservat
 			return ErrTurnFenced
 		}
 	}
+	return nil
+}
+
+// FailWithUsage fails a turn whose model call completed but whose answer is
+// unusable: the error and the real usage are staged, the reservation is settled
+// at that usage, and the turn finishes failed with its usage event and settle
+// hook in one transaction. It returns the cause.
+func (l *TurnLedger) FailWithUsage(ctx context.Context, execution TurnExecution, cause error, usage domain.Usage) error {
+	if cause == nil {
+		return fmt.Errorf("%w: failure cause is required", domain.ErrValidation)
+	}
+	if !hasUsage(usage) {
+		return l.Fail(ctx, execution, cause)
+	}
+	settleCtx := context.WithoutCancel(ctx)
+	errText := common.TruncateRunes(common.RedactForStorage(cause.Error()), 400)
+	staged, err := l.queries(ctx).Query(settleCtx, qLedgerStageBilledFailure,
+		errText, usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
+		execution.Turn.TenantID, execution.Turn.ConversationID, execution.Turn.TurnNo, execution.Reservation.ReservationID)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("stage billed failure: %w", err))
+	}
+	if len(staged.Rows) == 0 {
+		return ErrTurnFenced
+	}
+	if err = l.Budget.Commit(settleCtx, execution.Reservation, usage); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			return ErrTurnFenced
+		}
+		return errors.Join(cause, fmt.Errorf("settle budget: %w", err))
+	}
+	state := execution.Turn
+	state.ErrorText = errText
+	state.InputTokens, state.OutputTokens = usage.InputTokens, usage.OutputTokens
+	state.CostMinorUnits, state.Currency = usage.CostMinorUnits, usage.Currency
+	if err = l.finishBilledFailure(ctx, state, execution.Reservation.ReservationID); err != nil {
+		return errors.Join(cause, err)
+	}
+	l.Metrics.RecordTurn(ctx, state.TaskKind, "failed", execution.Model, state.AgentVersion, turnLatency(state), usage)
+	return cause
+}
+
+func (l *TurnLedger) finishBilledFailure(ctx context.Context, state TurnState, reservationID string) error {
+	ctx = context.WithoutCancel(ctx)
+	tx, err := l.DB.BeginTx(ctx, l.queryMap())
+	if err != nil {
+		return fmt.Errorf("begin billed failure: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	finished, err := tx.Query(ctx, qLedgerFinishBilledFailure, state.TenantID, state.ConversationID, state.TurnNo, reservationID)
+	if err != nil {
+		return fmt.Errorf("finish billed failure: %w", err)
+	}
+	if len(finished.Rows) == 0 {
+		current, found, findErr := l.findTurn(ctx, state.TenantID, state.RequestID)
+		if findErr != nil {
+			return findErr
+		}
+		if !found || current.Status != "failed" {
+			return ErrTurnFenced
+		}
+		return nil
+	}
+	usage := domain.Usage{
+		InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
+		CostMinorUnits: state.CostMinorUnits, Currency: state.Currency,
+	}
+	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, state.AgentID+"@"+state.AgentVersion,
+		domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
+	if err != nil {
+		return err
+	}
+	if inserted && l.OnSettled != nil {
+		if err = l.OnSettled(ctx, tx, state, usage); err != nil {
+			return fmt.Errorf("settle hook: %w", err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit billed failure: %w", err)
+	}
+	committed = true
 	return nil
 }
 

@@ -1,0 +1,53 @@
+table: safety_event
+comment: One guardrail intervention, attributed to the principal, release, and policy version; never the inspected content
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: principal_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: principal_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: stage_code
+    type: VARCHAR(30)
+  - name: layer_code
+    type: VARCHAR(30)
+  - name: action_code
+    type: VARCHAR(30)
+  - name: severity_code
+    type: VARCHAR(30)
+  - name: rule_ids
+    type: TEXT
+  - name: release_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: policy_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: duration_ms
+    type: BIGINT
+    default: 0
+  - name: occurred_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: safety_event_seq
+  column: id
+foreign_keys:
+  - name: safety_events
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+indexes:
+  - name: safety_event_tenant_time_ix
+    columns: [tenant_id, occurred_at]
+  - name: safety_event_release_ix
+    columns: [tenant_id, release_version, severity_code]
+checks:
+  - name: safety_event_duration_ck
+    expression: duration_ms >= 0

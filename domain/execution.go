@@ -46,6 +46,8 @@ type StepInput struct {
 	WorkItemID    int64
 	WorkItemDepth int
 	RequestID     string
+	// Input is the turn's input, so a step can build its prompt from what was asked.
+	Input []byte
 }
 
 // StepResult contains state, routing, and usage produced by a step.

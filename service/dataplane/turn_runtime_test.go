@@ -467,3 +467,29 @@ func TestTurnRuntimeSuspensionFrameCarriesTheApprovalPendingEvent(t *testing.T) 
 		t.Fatalf("suspension frame = %+v, committed %d", last, recorder.committed)
 	}
 }
+
+func TestTurnRuntimeRunsTheSettledHookOnSuccessAndOnABilledFailure(t *testing.T) {
+	for name, fails := range map[string]bool{"completed": false, "billed failure": true} {
+		recorder := &runtimeRecorder{}
+		runtime := newTestRuntime(t, recorder)
+		var settled []domain.Usage
+		runtime.OnSettled = func(_ context.Context, turn domain.TurnRequest, turnNo int64, agentVersion string, usage domain.Usage) error {
+			if turn.RequestID != "request-1" || agentVersion != "v1" {
+				t.Fatalf("%s: hook saw %s@%s", name, turn.RequestID, agentVersion)
+			}
+			settled = append(settled, usage)
+			return nil
+		}
+		if fails {
+			runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+				return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+					return domain.StepResult{}, &LoopError{Err: domain.ErrInvalidModelOutput, Usage: domain.Usage{InputTokens: 40, Currency: "USD"}}
+				}), nil
+			})
+		}
+		_, _ = runtime.HandleTurn(context.Background(), runtimeDispatch())
+		if len(settled) != 1 || settled[0].InputTokens+settled[0].OutputTokens == 0 {
+			t.Fatalf("%s: settled = %+v", name, settled)
+		}
+	}
+}

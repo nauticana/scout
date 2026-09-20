@@ -13,6 +13,7 @@ seeds:
       - [model_capability, video, Video Generation]
       - [model_capability, tools, Tool Calling]
       - [model_capability, structured_output, Schema-Constrained Output]
+      - [model_capability, sampling, Accepts Sampling Parameters]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

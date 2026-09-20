@@ -35,9 +35,10 @@ func (agent *PricedAgent) GenerateText(ctx context.Context, task domain.AgentTas
 	if agent == nil || agent.AgentExecutor == nil {
 		return "", -1, -1, fmt.Errorf("%w: agent executor is required", domain.ErrValidation)
 	}
+	// Usage is returned with the error: an answer that fails its schema was still paid for.
 	result, err := agent.Generate(ctx, task)
 	if err != nil {
-		return "", -1, -1, err
+		return "", result.Usage.InputTokens, result.Usage.OutputTokens, err
 	}
 	return string(result.Output), result.Usage.InputTokens, result.Usage.OutputTokens, nil
 }

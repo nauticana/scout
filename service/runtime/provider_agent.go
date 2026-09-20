@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/jsonschema"
 )
 
 // ProviderAgent binds one compiled agent prompt and model reference to provider
@@ -85,8 +86,14 @@ func (agent *ProviderAgent) Generate(ctx context.Context, task domain.AgentTask)
 	if err != nil {
 		return domain.ModelResult{}, err
 	}
+	var schema *jsonschema.Schema
+	if task.Output.Mode != domain.OutputModeText {
+		if schema, err = jsonschema.Compile(task.Output.Schema); err != nil {
+			return domain.ModelResult{}, fmt.Errorf("%w: output schema: %w", domain.ErrValidation, err)
+		}
+	}
 	prompt := agent.renderer.Render(agent.agentID, agent.sections, task)
-	return agent.provider.Generate(ctx, domain.ModelSelection{
+	result, err := agent.provider.Generate(ctx, domain.ModelSelection{
 		Provider: agent.reference.ProviderID,
 		Model:    agent.reference.ModelID,
 	}, domain.ModelRequest{
@@ -95,7 +102,17 @@ func (agent *ProviderAgent) Generate(ctx context.Context, task domain.AgentTask)
 		ConversationID:  agent.conversationID,
 		Prompt:          []byte(prompt),
 		MaxOutputTokens: agent.maxOutputTokens,
+		Output:          task.Output,
 	})
+	if err != nil || schema == nil {
+		return result, err
+	}
+	// The provider may be a bare adapter, so the constraint is held here too;
+	// the result keeps its usage because the tokens were spent.
+	if err := schema.ValidateJSON(result.Output); err != nil {
+		return result, fmt.Errorf("%w: constrained output: %w", domain.ErrInvalidModelOutput, err)
+	}
+	return result, nil
 }
 
 func (agent *ProviderAgent) modelRequestID(ctx context.Context) (string, error) {

@@ -28,7 +28,7 @@ func TestProvisionSeedsTenantProfileDraftAndAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	want := []string{qProvisionTenant, qProvisionType, qProvisionProfile, qProvisionDraft, qProvisionAlias}
+	want := []string{qProvisionTenant, qProvisionType, qProvisionProfile, qProvisionDraft, qProvisionAccess, qProvisionAlias}
 	if len(qs.queries) != len(want) {
 		t.Fatalf("queries = %v, want %v", qs.queries, want)
 	}
@@ -36,6 +36,9 @@ func TestProvisionSeedsTenantProfileDraftAndAlias(t *testing.T) {
 		if qs.queries[i] != name {
 			t.Fatalf("query[%d] = %s, want %s", i, qs.queries[i], name)
 		}
+	}
+	if access := qs.args[qProvisionAccess]; access[1] != "p" || access[2] != "m" {
+		t.Fatalf("routing reads tenant_model_access, so the seed's model must be granted; args = %v", access)
 	}
 	if qs.args[qProvisionAlias][1] != "BL" || qs.args[qProvisionAlias][3] != "Writer" {
 		t.Fatalf("alias args = %v", qs.args[qProvisionAlias])

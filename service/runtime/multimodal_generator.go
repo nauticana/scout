@@ -44,7 +44,7 @@ func (g MultimodalGenerator) Generate(ctx context.Context, task domain.Multimoda
 
 	generated, err := g.Text.Generate(ctx, task.AgentTask)
 	if err != nil {
-		return domain.MultimodalResult{}, err
+		return domain.MultimodalResult{Usage: generated.Usage}, err
 	}
 	result := domain.MultimodalResult{Text: string(generated.Output), Usage: generated.Usage}
 

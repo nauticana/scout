@@ -22,7 +22,7 @@ const (
 
 var credentialQueries = map[string]string{
 	qCredentialBinding: `
-SELECT b.credential_ref, b.delegated_from_user_id, b.grant_id, b.scopes, b.max_ttl_seconds,
+SELECT b.credential_ref, b.delegated_from_user_id, b.grant_id, b.config_scopes, b.max_ttl_seconds,
        b.begda, b.endda, b.revoked_at
   FROM tool_credential_binding b
   LEFT JOIN delegation_grant g ON g.tenant_id = b.tenant_id AND g.grant_id = b.grant_id

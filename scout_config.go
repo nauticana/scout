@@ -3,9 +3,12 @@ package scout
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	keelconfig "github.com/nauticana/keel/config"
 	"github.com/nauticana/keel/port"
+
+	"github.com/nauticana/scout/domain"
 )
 
 const (
@@ -75,42 +78,55 @@ func LoadConfig(ctx context.Context, db port.DatabaseRepository, nodeID int) err
 type ScoutConfig struct {
 	keelconfig.AbstractConfig
 
-	AgentMaxTokens         int     // agent_max_tokens          8192                          Max output tokens per agent model completion
-	AgentTemperature       float64 // agent_temperature         0.7                           Agent model sampling temperature; 0.0-2.0
-	AgentRunRetentionDays  int     // agent_run_retention_days   0                             Days to keep agent run activity; 0 keeps it forever
-	AgentTurnRate          float64 // agent_turn_rate            2                             Per-tenant admitted turns per second
-	AgentTurnBurst         int     // agent_turn_burst           10                            Per-tenant turn burst
-	AgentToolRate          float64 // agent_tool_rate            10                            Per-tenant tool calls per second
-	AgentToolBurst         int     // agent_tool_burst           20                            Per-tenant tool-call burst
-	AgentModelRate         float64 // agent_model_rate           2                             Per-tenant model calls per second
-	AgentModelBurst        int     // agent_model_burst          5                             Per-tenant model-call burst
-	AgentFleetTurnRate     float64 // agent_fleet_turn_rate      100                           Process-wide admitted turns per second
-	AgentFleetTurnBurst    int     // agent_fleet_turn_burst     200                           Process-wide turn burst
-	AgentFleetToolRate     float64 // agent_fleet_tool_rate      500                           Process-wide tool calls per second
-	AgentFleetToolBurst    int     // agent_fleet_tool_burst     1000                          Process-wide tool-call burst
-	AgentFleetModelRate    float64 // agent_fleet_model_rate     100                           Process-wide model calls per second
-	AgentFleetModelBurst   int     // agent_fleet_model_burst    200                           Process-wide model-call burst
-	AgentMaxTenants        int     // agent_max_tenants          4096                          Maximum in-memory tenant limiter entries
-	AgentModelCapacityPool string  // agent_model_capacity_pool  shared                        Shared model capacity pool name
-	AgentModelCapacity     int     // agent_model_capacity       32                            Concurrent model capacity slots
-	AgentModelMaxWaiters   int     // agent_model_max_waiters    4096                          Maximum queued model requests
-	AgentMaxScopeDepth     int     // agent_max_scope_depth      8                             Maximum scope-chain depth a release may compile over
-	AgentMaxDelegationHops int     // agent_max_delegation_hops  4                             Maximum delegation hops in an authority chain
-	AgentApprovalDeadline  int     // agent_approval_deadline    3600                          Seconds a reviewer has before escalation; 0 leaves a request open
-	AgentCredentialTTL     int     // agent_credential_ttl       300                           Default lifetime in seconds of a just-in-time tool credential
-	AgentAuditPageSize     int     // agent_audit_page_size      100                           Decision records returned per audit query page
-	AgentLoopMaxIterations int     // agent_loop_max_iterations 12 Model decisions one tool loop step may make
-	AgentLoopMaxToolCalls  int     // agent_loop_max_tool_calls 24 Governed tool calls one tool loop step may make
-	AgentLoopMaxTokens     int     // agent_loop_max_tokens 200000 Input plus output tokens one tool loop step may spend
-	AgentLoopMaxCost       int     // agent_loop_max_cost 0 Minor-unit cost one tool loop step may spend; 0 leaves cost to the turn budget
-	AgentLoopMaxRepeats    int     // agent_loop_max_repeats 3 Identical calls of one tool before a loop is declared
-	AgentLoopDeadline      int     // agent_loop_deadline 300 Wall-clock seconds one tool loop step may run
+	AgentMaxTokens         int      // agent_max_tokens          8192                          Max output tokens per agent model completion
+	AgentTemperature       *float64 // agent_temperature        (none)                        Sampling temperature 0.0-2.0 for models with the sampling capability; nil sends none
+	AgentRunRetentionDays  int      // agent_run_retention_days   0                             Days to keep agent run activity; 0 keeps it forever
+	AgentTurnRate          float64  // agent_turn_rate            2                             Per-tenant admitted turns per second
+	AgentTurnBurst         int      // agent_turn_burst           10                            Per-tenant turn burst
+	AgentToolRate          float64  // agent_tool_rate            10                            Per-tenant tool calls per second
+	AgentToolBurst         int      // agent_tool_burst           20                            Per-tenant tool-call burst
+	AgentModelRate         float64  // agent_model_rate           2                             Per-tenant model calls per second
+	AgentModelBurst        int      // agent_model_burst          5                             Per-tenant model-call burst
+	AgentFleetTurnRate     float64  // agent_fleet_turn_rate      100                           Process-wide admitted turns per second
+	AgentFleetTurnBurst    int      // agent_fleet_turn_burst     200                           Process-wide turn burst
+	AgentFleetToolRate     float64  // agent_fleet_tool_rate      500                           Process-wide tool calls per second
+	AgentFleetToolBurst    int      // agent_fleet_tool_burst     1000                          Process-wide tool-call burst
+	AgentFleetModelRate    float64  // agent_fleet_model_rate     100                           Process-wide model calls per second
+	AgentFleetModelBurst   int      // agent_fleet_model_burst    200                           Process-wide model-call burst
+	AgentMaxTenants        int      // agent_max_tenants          4096                          Maximum in-memory tenant limiter entries
+	AgentModelCapacityPool string   // agent_model_capacity_pool  shared                        Shared model capacity pool name
+	AgentModelCapacity     int      // agent_model_capacity       32                            Concurrent model capacity slots
+	AgentModelMaxWaiters   int      // agent_model_max_waiters    4096                          Maximum queued model requests
+	AgentMaxScopeDepth     int      // agent_max_scope_depth      8                             Maximum scope-chain depth a release may compile over
+	AgentMaxDelegationHops int      // agent_max_delegation_hops  4                             Maximum delegation hops in an authority chain
+	AgentApprovalDeadline  int      // agent_approval_deadline    3600                          Seconds a reviewer has before escalation; 0 leaves a request open
+	AgentCredentialTTL     int      // agent_credential_ttl       300                           Default lifetime in seconds of a just-in-time tool credential
+	AgentAuditPageSize     int      // agent_audit_page_size      100                           Decision records returned per audit query page
+	AgentLoopMaxIterations int      // agent_loop_max_iterations 12 Model decisions one tool loop step may make
+	AgentLoopMaxToolCalls  int      // agent_loop_max_tool_calls 24 Governed tool calls one tool loop step may make
+	AgentLoopMaxTokens     int      // agent_loop_max_tokens 200000 Input plus output tokens one tool loop step may spend
+	AgentLoopMaxCost       int      // agent_loop_max_cost 0 Minor-unit cost one tool loop step may spend; 0 leaves cost to the turn budget
+	AgentLoopMaxRepeats    int      // agent_loop_max_repeats 3 Identical calls of one tool before a loop is declared
+	AgentLoopDeadline      int      // agent_loop_deadline 300 Wall-clock seconds one tool loop step may run
+}
+
+// ToolLoopLimits is the executor-level ceiling the agent_loop_* flags configure.
+func (c *ScoutConfig) ToolLoopLimits() domain.ToolLoopLimits {
+	return domain.ToolLoopLimits{
+		MaxIterations: c.AgentLoopMaxIterations, MaxToolCalls: c.AgentLoopMaxToolCalls,
+		MaxTokens: int64(c.AgentLoopMaxTokens), MaxCostMinorUnits: int64(c.AgentLoopMaxCost),
+		MaxRepeatedCalls: c.AgentLoopMaxRepeats, Deadline: time.Duration(c.AgentLoopDeadline) * time.Second,
+	}
 }
 
 // Apply parses Scout's section of the shared application configuration.
 func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentMaxTokens = c.Int(rows, agent_max_tokens)
-	c.AgentTemperature = c.Float(rows, agent_temperature)
+	c.AgentTemperature = nil
+	if c.String(rows, agent_temperature) != "" {
+		temperature := c.Float(rows, agent_temperature)
+		c.AgentTemperature = &temperature
+	}
 	c.AgentRunRetentionDays = c.Int(rows, agent_run_retention_days)
 	c.AgentTurnRate = c.Float(rows, agent_turn_rate)
 	c.AgentTurnBurst = c.Int(rows, agent_turn_burst)

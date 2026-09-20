@@ -202,6 +202,32 @@ func (registry *TableToolRegistry) Bind(ctx context.Context, tenantID int64, age
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
+	if err = bindTools(ctx, tx, tenantID, agentID, agentVersion, tools); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tool binding: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+const toolRegistryCatalogID = "scout.toolgateway.registry"
+
+// WriteRelease binds the tools a definition names inside the caller's publish
+// transaction, so a release and its bindings commit or roll back together.
+func (registry *TableToolRegistry) WriteRelease(ctx context.Context, tx port.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
+	if len(definition.Tools) == 0 {
+		return nil
+	}
+	catalog, ok := tx.(port.TxQueryCatalog)
+	if !ok {
+		return fmt.Errorf("%w: the publish transaction cannot bind another query catalog", domain.ErrNotReady)
+	}
+	return bindTools(ctx, catalog.QueryService(toolRegistryCatalogID, toolRegistryQueries), tenantID, definition.AgentID, definition.Version, definition.Tools)
+}
+
+func bindTools(ctx context.Context, tx port.QueryService, tenantID int64, agentID, agentVersion string, tools []domain.ToolReference) error {
 	for _, tool := range tools {
 		version, err := tx.Query(ctx, qToolVersionGet, tenantID, tool.ToolID, tool.Version)
 		if err != nil {
@@ -231,10 +257,6 @@ func (registry *TableToolRegistry) Bind(ctx context.Context, tenantID int64, age
 			return fmt.Errorf("%w: %s@%s concurrently bound tool %s at another version", domain.ErrConflict, agentID, agentVersion, tool.ToolID)
 		}
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tool binding: %w", err)
-	}
-	committed = true
 	return nil
 }
 

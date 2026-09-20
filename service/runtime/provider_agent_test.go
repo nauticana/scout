@@ -144,3 +144,30 @@ func (provider *mediaProviderRecorder) GenerateVideo(_ context.Context, model st
 var _ contract.PromptRenderer = (*rendererRecorder)(nil)
 var _ contract.ModelProvider = (*modelProviderRecorder)(nil)
 var _ contract.MediaProvider = (*mediaProviderRecorder)(nil)
+
+func TestProviderAgentHoldsAConstrainedAnswerToItsSchemaAndKeepsItsUsage(t *testing.T) {
+	constraint := domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, SchemaName: "post",
+		Schema: []byte(`{"type":"object","required":["title"],"properties":{"title":{"type":"string"}}}`)}
+	for output, valid := range map[string]bool{`{"title":"ok"}`: true, "Here you go: ok": false} {
+		provider := &modelProviderRecorder{result: domain.ModelResult{Output: []byte(output), Usage: domain.Usage{InputTokens: 7, OutputTokens: 3}}}
+		agent, err := NewProviderAgent("writer", domain.ModelReference{ProviderID: "provider", ModelID: "model"}, nil, 900,
+			&rendererRecorder{rendered: "prompt"}, provider, nil)
+		if err != nil {
+			t.Fatalf("NewProviderAgent: %v", err)
+		}
+		result, err := agent.Generate(context.Background(), domain.AgentTask{Task: "Write", Output: constraint})
+		if provider.request.Output.Mode != domain.OutputModeJSONSchema {
+			t.Fatalf("the constraint must reach the provider, got %+v", provider.request.Output)
+		}
+		if valid != (err == nil) || !valid && !errors.Is(err, domain.ErrInvalidModelOutput) {
+			t.Fatalf("%s: err = %v", output, err)
+		}
+		if result.Usage.InputTokens != 7 {
+			t.Fatalf("%s: spent tokens must be reported even when the answer is unusable, got %+v", output, result.Usage)
+		}
+		priced := &PricedAgent{AgentExecutor: agent}
+		if _, input, out, _ := priced.GenerateText(context.Background(), domain.AgentTask{Task: "Write", Output: constraint}); input != 7 || out != 3 {
+			t.Fatalf("%s: GenerateText usage = %d/%d", output, input, out)
+		}
+	}
+}

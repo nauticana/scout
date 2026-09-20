@@ -16,9 +16,9 @@ import (
 // OpenAI invokes Chat Completions for text and the Images API for image
 // generation. Video generation is not wired.
 type OpenAI struct {
-	APIKey                string
-	Temperature           float64
-	TemperatureConfigured bool
+	APIKey string
+	// Temperature is sent only when set; nil leaves sampling to the model.
+	Temperature *float64
 }
 
 var (
@@ -47,9 +47,11 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		return openai.ChatCompletionNewParams{}, err
 	}
 	params := openai.ChatCompletionNewParams{
-		Model:       selection.Model,
-		Temperature: openai.Float(temperature(p.Temperature, p.TemperatureConfigured)),
-		MaxTokens:   openai.Int(maxOutputTokens(request)),
+		Model:     selection.Model,
+		MaxTokens: openai.Int(maxOutputTokens(request)),
+	}
+	if p.Temperature != nil {
+		params.Temperature = openai.Float(*p.Temperature)
 	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, openAIMessages(message)...)
@@ -72,7 +74,7 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		}
 		params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
 			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-				Name: schemaName(request.Output), Schema: schema, Strict: openai.Bool(true),
+				Name: schemaName(request.Output), Schema: schema, Strict: openai.Bool(strictCompatible(schema)),
 			}},
 		}
 	}

@@ -216,6 +216,9 @@ type AgentPublishRequest struct {
 	ChangeSummary                 string
 	ExpectedDraftRevision         int64
 	ExpectedPromptProfileRevision int64
+	// Tools and ToolLoop are frozen into the definition; both are optional.
+	Tools    []ToolReference
+	ToolLoop *ToolLoopConfig
 }
 
 // AgentRestoreRequest identifies the immutable version copied into a new release.

@@ -23,8 +23,6 @@ const (
 
 	// DefaultMaxOutputTokens bounds provider calls whose request omits a limit.
 	DefaultMaxOutputTokens int64 = 8192
-	// DefaultTemperature is used when an adapter has no positive configured value.
-	DefaultTemperature = 0.7
 )
 
 func maxOutputTokens(request domain.ModelRequest) int64 {
@@ -32,16 +30,6 @@ func maxOutputTokens(request domain.ModelRequest) int64 {
 		return request.MaxOutputTokens
 	}
 	return DefaultMaxOutputTokens
-}
-
-func temperature(configured float64, explicitlyConfigured bool) float64 {
-	if explicitlyConfigured {
-		return configured
-	}
-	if configured > 0 {
-		return configured
-	}
-	return DefaultTemperature
 }
 
 func mediaPrompt(prompt, styleHint string) string {

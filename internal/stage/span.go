@@ -26,6 +26,8 @@ var errorClasses = []struct {
 	{domain.ErrCircuitOpen, "circuit_open"},
 	{domain.ErrRevisionConflict, "revision_conflict"},
 	{domain.ErrContractFailed, "contract_failed"},
+	{domain.ErrInvalidModelOutput, "invalid_output"},
+	{domain.ErrCapabilityUnsupported, "capability_unsupported"},
 	{domain.ErrValidation, "validation"},
 	{domain.ErrNotFound, "not_found"},
 	{domain.ErrConflict, "conflict"},

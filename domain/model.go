@@ -21,6 +21,8 @@ type ModelRequest struct {
 	Idempotent bool
 	// ExcludedRouteIDs are routes a hedge or retry must avoid; the router treats them as ineligible.
 	ExcludedRouteIDs []string
+	// Model, when set, restricts routing to the model a release pins.
+	Model ModelReference
 	// Messages continue the conversation after Prompt: earlier model turns with
 	// their tool calls, and the observations answering them.
 	Messages []ModelMessage
@@ -35,7 +37,9 @@ type ModelRequest struct {
 // Route capabilities a request can require. Tools and a constrained Output imply
 // theirs, so a caller cannot forget to ask.
 const (
-	CapabilityTools            = "tools"
+	CapabilityTools = "tools"
+	// CapabilitySampling marks a model that accepts sampling parameters.
+	CapabilitySampling         = "sampling"
 	CapabilityStructuredOutput = "structured_output"
 )
 

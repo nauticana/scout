@@ -39,6 +39,10 @@ type TurnRuntime struct {
 	Audit contract.AuditSink
 	// Observations records per-step stage observations; nil skips them.
 	Observations contract.ObservationRecorder
+	// OnSettled runs after a turn's usage event is recorded, on success and on a
+	// billed failure, for product-side usage mirrors. It is not transactional
+	// with the event; an error fails the turn's settlement so redelivery retries it.
+	OnSettled func(ctx context.Context, turn domain.TurnRequest, turnNo int64, agentVersion string, usage domain.Usage) error
 	// MaxSteps bounds one turn independently of the tenant policy; required.
 	MaxSteps int
 	Now      func() time.Time
@@ -281,7 +285,8 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		}
 		input := domain.StepInput{
 			Step: step, Snapshot: execution.snapshot, RequestID: execution.dispatch.Turn.RequestID,
-			Principal: execution.dispatch.Turn.Principal, Bounds: execution.bounds,
+			Input:     execution.dispatch.Turn.Input,
+			Principal: pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion), Bounds: execution.bounds,
 			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth,
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {
@@ -389,6 +394,9 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 	if err := runtime.Records.RecordUsage(settleCtx, tenantID, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
 		return err
 	}
+	if err := runtime.settled(settleCtx, execution); err != nil {
+		return err
+	}
 	if err := runtime.Sessions.Complete(settleCtx, tenantID, turn.ConversationID, execution.revision, *result); err != nil {
 		return err
 	}
@@ -423,6 +431,8 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	if hasUsage(execution.usage) {
 		subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
 		if err := runtime.Records.RecordUsage(failCtx, tenantID, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
+			errs = append(errs, err)
+		} else if err := runtime.settled(failCtx, execution); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -483,6 +493,35 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 		return nil
 	}
 	return failure
+}
+
+// pinnedPrincipal resolves the acting principal and pins the turn's own agent to the conversation's agent version,
+// so its tool bindings and its execution graph come from the same release even
+// when a newer one was deployed mid-conversation.
+func pinnedPrincipal(turn domain.TurnRequest, agentVersion string) domain.Principal {
+	principal := turn.Principal
+	if principal.Kind == "" {
+		// The durable queue carries the agent id, not the principal; a turn
+		// delivered from it acts as that agent on its own authority.
+		principal = domain.Principal{
+			Kind: domain.PrincipalAgent, ID: turn.AgentID,
+			TenantID: turn.TenantContext.TenantID, ScopeID: turn.TenantContext.ScopeID,
+		}
+	}
+	if principal.Kind == domain.PrincipalAgent && principal.ID == turn.AgentID {
+		principal.Release = agentVersion
+	}
+	return principal
+}
+
+func (runtime *TurnRuntime) settled(ctx context.Context, execution *turnExecution) error {
+	if runtime.OnSettled == nil {
+		return nil
+	}
+	if err := runtime.OnSettled(ctx, execution.dispatch.Turn, execution.turnNo, execution.snapshot.AgentVersion, execution.usage); err != nil {
+		return fmt.Errorf("settle hook: %w", err)
+	}
+	return nil
 }
 
 // spentUsage is what a failed step reports it already consumed, so the turn

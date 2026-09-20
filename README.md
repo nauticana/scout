@@ -247,10 +247,14 @@ Credentials, endpoints, and sampling defaults are injected at construction; an a
 renderer := runtime.PromptRenderer{}
 prompt := renderer.Render(definition.AgentID, compiled.Sections, domain.AgentTask{Task: task, InputData: input})
 
-adapter := &provider.Anthropic{APIKey: key, Temperature: provider.DefaultTemperature}
+adapter := &provider.Anthropic{APIKey: key} // no sampling parameters unless Temperature is set
 result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: provider.AnthropicProviderID, Model: definition.Models.Text.ModelID},
     domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: provider.DefaultMaxOutputTokens})
 ```
+
+Adapters send no sampling parameter by default: several model families reject any non-default `temperature`, and a rejected parameter fails every call. `provider.Factory` forwards `FactoryConfig.Temperature` only to models its `Sampling` lookup accepts — `controlplane.ModelCatalog` answers from the `sampling` capability code — and to none when no lookup is composed. `agent_temperature` has no default.
+
+`domain.AgentTask.Output` carries a JSON Schema constraint through `ProviderAgent` and `MultimodalGenerator` to the provider; the prompt renderer ignores it. `ProviderAgent` validates the answer against the schema itself, because its provider may be a bare adapter, and returns `ErrInvalidModelOutput` together with the result's usage. `PricedAgent.GenerateText` likewise returns token counts with an error, so an unusable answer can still be billed — `TurnLedger.FailWithUsage` settles the reservation at that usage, finishes the turn `failed`, and writes the usage event and `OnSettled` in one transaction. Adapters project a schema onto what their vendor's structured-output mode accepts (Anthropic drops numeric and length bounds; OpenAI uses strict mode only for schemas that close and require every property) while Scout keeps validating the full schema.
 
 `runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. Its `Purge` accepts the app-loaded `agent_run_retention_days` value and deletes in bounded batches, so a periodic worker can drain a backlog across ticks instead of one long delete; zero retains activity forever. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
 
@@ -495,7 +499,7 @@ Run `mcp/mcptest` manifest and tool-text conformance checks before publishing a 
 
 ## Database schema
 
-Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 41 Scout tables rather than all 106.
+Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 41 Scout tables rather than all 107.
 
 The schema uses portable types supported by keel's PostgreSQL and MySQL dialects. Structured definitions are canonical JSON stored as `TEXT` and validated at service or compilation boundaries. Timestamps use `TIMESTAMP`; large data stays outside the relational database behind URI and digest columns.
 
@@ -519,7 +523,7 @@ Scout's schema is fifteen modules so a downstream installs only what its product
 | `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
 | `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
-| `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
+| `release` | 17 | Guardrail safety events, platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
 | `configuration` | 3 | Configuration hierarchy, scoped bindings, compiled effective releases | `catalog`, `tenancy`, `agent` |
@@ -543,7 +547,7 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 38 selected keel tables and 106 Scout tables. Drop the modules the product does not use:
+That full set is 38 selected keel tables and 107 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
@@ -554,7 +558,7 @@ That full set is 38 selected keel tables and 106 Scout tables. Drop the modules 
 | … plus durable human approvals | `+ approval` | 57 |
 | … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 66 |
 | … plus the durable turn runtime | `+ runtime` | 80 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 106 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 107 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -795,6 +799,17 @@ cached, err := knowledge.NewCachedRetriever(hybrid, keyer, knowledge.CachedRetri
 
 The model never calls a destination directly. A governed tool path resolves the registered immutable version, validates the arguments against its input schema, authorizes tenant and agent access, retrieves scoped credentials, validates egress, applies timeout/retry/circuit-breaker policy, validates output, and records a redacted audit event.
 
+### Running tools in process
+
+`toolgateway.InProcessTransport` serves tools implemented in the same binary: register one `InProcessHandler` per tool id and register the tool with `InProcessEndpoint(toolID)` (`inprocess://<tool id>`). The handler receives the `ToolCall` the gateway authenticated, so the tenant and principal come from the call and never from model-supplied arguments; other endpoints go to `Next`. `InProcessCredentials` answers those tools with no secret under the principal's own authority and delegates the rest. `TableEgressPolicy` admits an in-process endpoint without a rule and any network endpoint only when the tenant holds a `tool_egress_rule` for its exact protocol, host, and port. A tool's registered `Timeout` and `MaxAttempts` win over the gateway defaults.
+
+```go
+transport := &toolgateway.InProcessTransport{}
+_ = transport.Register("site_audit", auditHandler)
+gateway.Transport, gateway.Egress = transport, &toolgateway.TableEgressPolicy{DB: db}
+gateway.Credentials = &toolgateway.InProcessCredentials{Transport: transport, Next: boundCredentials}
+```
+
 ### Tool registry
 
 `toolgateway.TableToolRegistry` is the `ToolRegistry` and `ToolBinder` over `tool_profile`, `tool_version`, and `agent_tool_binding`. `Register` compiles and canonicalizes both JSON Schemas — a schema using a keyword Scout cannot enforce (`pattern`, `format`, `oneOf`, `$ref`, …) is rejected, never half-enforced — and writes the profile and its version in one transaction; registering identical content again is a no-op in any formatting, and different content under the same `(tenant, tool, version)`, or a different display name for an existing profile, is `ErrConflict`. `Get` is tenant-scoped and answers another tenant's tool with `ErrNotFound`. `Bind` pins registered versions to one agent version all-or-nothing, and `List` returns only what that pinned agent version binds — which is what `BindingAuthorizer` enforces at invoke time. `SchemaResultValidator` is the matching `ToolResultValidator`.
@@ -806,6 +821,10 @@ The model never calls a destination directly. A governed tool path resolves the 
 Every model decision and every observation is appended to a `contract.LoopJournal` (`TableLoopJournal` over `step_loop_entry`, first writer wins) before the loop moves on. A redelivered step replays the journal, so a decision is never re-asked and a committed tool effect never repeats. A call that needs approval returns `ErrApprovalPending`, which suspends the turn; on resume the journaled proposal is presented again unchanged, so the digest the reviewer approved still matches. A recoverable tool failure is returned to the model as an error observation carrying only its error class; limits, identity, and authority failures end the loop.
 
 `domain.ToolLoopLimits` bounds iterations, tool calls, tokens, cost, identical repeated calls, and wall-clock time, and the delegated budget in `StepInput.Bounds` bounds cost as well. Each fails closed with `ErrExecutionLimit`, `ErrBudgetExceeded`, or `ErrLoopDetected`; a step's `ToolLoopConfig` may narrow every limit, never widen one, and unknown configuration keys are rejected. A cost limit or a delegated budget requires a `Pricer` and a matching currency, or the step fails closed with `ErrDegraded`. A failed loop reports what it already spent through `LoopError`, and the runtime settles that usage instead of refunding it. `LoopTrajectory` projects a journal onto `domain.TrajectoryEvent`s for `evaluation.TrajectoryScorer`.
+
+A release becomes executable at publication. `AgentPublishRequest.Tools` and `ToolLoop` are frozen into the definition (and its digest), and `StudioService.ReleaseWriters` run inside the publish and restore transaction: `TableToolRegistry` writes the bindings and `controlplane.TableExecutionGraphRepository` compiles and stores the graph (`ToolLoopGraphCompiler` yields the one-step `tool_loop` graph), so a release, its tools, and its graph commit together or not at all. Publishing a definition that declares either without a writer composed is `ErrNotReady`.
+
+The remaining collaborators have table-backed or default implementations: `controlplane.TableTenantPolicyRepository`, `TableGuardrailConfigRepository`, and `TableAgentDefinitionReader`; `observability.TableSafetyEventSink` over `safety_event`; `dataplane.ReleaseLoopRequestBuilder`, which renders the pinned release's prompt around `StepInput.Input` with a `Task` hook for product context; `dataplane.LoopBudgetEstimator`, which reserves the loop's ceilings; `ScoutConfig.ToolLoopLimits()`; and `modelgateway.PinnedModelRouter`, which routes to the model the release pins through the tenant's catalog without capacity snapshots. `dataplane.RuntimeWorker` is the keel leased queue worker that drains `turn_queue` into the runtime.
 
 ```go
 loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{

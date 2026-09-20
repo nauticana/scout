@@ -22,6 +22,7 @@ const AuditCategoryModelRoute = domain.DecisionCategoryModelRoute
 // Bounded rejection labels reported in the routing audit payload.
 const (
 	rejectExcluded     = "excluded"
+	rejectPinned       = "not_pinned_model"
 	rejectCapability   = "capability"
 	rejectContextLimit = "context_limit"
 	rejectRegion       = "region"
@@ -217,6 +218,9 @@ func (router *PolicyRouter) score(ctx context.Context, candidate domain.ModelCan
 	scored := scoredCandidate{candidate: candidate}
 	if _, excluded := inputs.excluded[candidate.RouteID]; excluded && candidate.RouteID != "" {
 		return scored, rejectExcluded, nil
+	}
+	if pinned := inputs.request.Model; pinned.ModelID != "" && (candidate.Provider != pinned.ProviderID || candidate.Model != pinned.ModelID) {
+		return scored, rejectPinned, nil
 	}
 	for _, required := range RequiredCapabilities(inputs.request) {
 		if !slices.Contains(candidate.Capabilities, required) {

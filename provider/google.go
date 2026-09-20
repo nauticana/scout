@@ -20,10 +20,8 @@ type Google struct {
 	Location     string
 	UseGeminiAPI bool
 	APIKey       string
-	Temperature  float64
-	// TemperatureConfigured distinguishes an intentional zero from the
-	// adapter's zero-value default.
-	TemperatureConfigured bool
+	// Temperature is sent only when set; nil leaves sampling to the model.
+	Temperature *float64
 	// VideoPollInterval paces the long-running video operation; zero uses one second.
 	VideoPollInterval time.Duration
 }
@@ -60,9 +58,9 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 	if err := checkOutputMode(GoogleProviderID, request.Output); err != nil {
 		return nil, nil, err
 	}
-	config := &genai.GenerateContentConfig{
-		Temperature:     genai.Ptr(float32(temperature(p.Temperature, p.TemperatureConfigured))),
-		MaxOutputTokens: int32(maxOutputTokens(request)),
+	config := &genai.GenerateContentConfig{MaxOutputTokens: int32(maxOutputTokens(request))}
+	if p.Temperature != nil {
+		config.Temperature = genai.Ptr(float32(*p.Temperature))
 	}
 	if len(request.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0, len(request.Tools))

@@ -14,13 +14,16 @@ import (
 )
 
 const (
-	qRecordLock    = "scout_turn_record_lock"
-	qRecordFind    = "scout_turn_record_find"
-	qRecordOpen    = "scout_turn_record_open"
-	qRecordStart   = "scout_turn_record_start"
-	qRecordFail    = "scout_turn_record_fail"
-	qRecordSuspend = "scout_turn_record_suspend"
-	qRecordResume  = "scout_turn_record_resume"
+	qRecordLock         = "scout_turn_record_lock"
+	qRecordFind         = "scout_turn_record_find"
+	qRecordOpen         = "scout_turn_record_open"
+	qRecordStart        = "scout_turn_record_start"
+	qRecordConversation = "scout_turn_record_ensure_conversation"
+	qRecordPinnedAgent  = "scout_turn_record_pinned_agent"
+	qRecordDetail       = "scout_turn_record_detail"
+	qRecordFail         = "scout_turn_record_fail"
+	qRecordSuspend      = "scout_turn_record_suspend"
+	qRecordResume       = "scout_turn_record_resume"
 )
 
 var turnRecordQueries = map[string]string{
@@ -30,6 +33,27 @@ var turnRecordQueries = map[string]string{
 SELECT turn_no, conversation_id, status_code, input_digest, response_uri, response_digest
   FROM conversation_turn
  WHERE tenant_id = ? AND request_id = ?`,
+
+	// A new conversation pins the agent's deployed stable version; an existing one keeps its pin.
+	qRecordConversation: `
+INSERT INTO agent_conversation (tenant_id, conversation_id, agent_id, agent_version, end_user_ref)
+SELECT dep.tenant_id, ?, dep.agent_id, dep.stable_version, ?
+  FROM agent_deployment dep
+ WHERE dep.tenant_id = ? AND dep.agent_id = ?
+ON CONFLICT (tenant_id, conversation_id) DO NOTHING`,
+	qRecordPinnedAgent: `
+SELECT agent_id, agent_version
+  FROM agent_conversation
+ WHERE tenant_id = ? AND conversation_id = ?`,
+
+	// The same history row TurnLedger writes, so turn listings include runtime turns.
+	qRecordDetail: `
+INSERT INTO conversation_turn_detail (tenant_id, conversation_id, turn_no, task_kind, input_summary, release_digest)
+SELECT c.tenant_id, c.conversation_id, ?, ?, ?, v.definition_digest
+  FROM agent_conversation c
+  JOIN agent_version v ON v.tenant_id = c.tenant_id AND v.agent_id = c.agent_id AND v.agent_version = c.agent_version
+ WHERE c.tenant_id = ? AND c.conversation_id = ?
+ON CONFLICT (tenant_id, conversation_id, turn_no) DO NOTHING`,
 
 	qRecordOpen: `
 INSERT INTO conversation_turn
@@ -77,6 +101,8 @@ type TableTurnRecordStore struct {
 	Objects ObjectStateCodec
 	// UsageCategory labels the usage event written per settled turn.
 	UsageCategory string
+	// TaskKind labels runtime turns in conversation_turn_detail; empty skips the history row.
+	TaskKind string
 
 	once sync.Once
 	qs   port.QueryService
@@ -152,11 +178,35 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 	if _, err = tx.Query(ctx, qRecordLock, fmt.Sprintf("%d:%s", tenantID, request.ConversationID)); err != nil {
 		return 0, fmt.Errorf("open turn: lock conversation: %w", err)
 	}
+	if strings.TrimSpace(request.AgentID) != "" {
+		if _, err = tx.Query(ctx, qRecordConversation, request.ConversationID, endUserRef(request), tenantID, request.AgentID); err != nil {
+			return 0, fmt.Errorf("open turn: pin conversation: %w", err)
+		}
+		pinned, pinErr := tx.Query(ctx, qRecordPinnedAgent, tenantID, request.ConversationID)
+		if pinErr != nil {
+			return 0, fmt.Errorf("open turn: read conversation pin: %w", pinErr)
+		}
+		if len(pinned.Rows) == 0 {
+			return 0, fmt.Errorf("%w: agent %q has no deployed version to pin", domain.ErrNotReady, request.AgentID)
+		}
+		if pinnedAgent := common.AsString(pinned.Rows[0][0]); pinnedAgent != request.AgentID {
+			return 0, fmt.Errorf("%w: conversation %q is pinned to agent %q, not %q", domain.ErrConflict, request.ConversationID, pinnedAgent, request.AgentID)
+		}
+		if strings.TrimSpace(common.AsString(pinned.Rows[0][1])) == "" {
+			return 0, fmt.Errorf("%w: conversation %q has no pinned agent version", domain.ErrNotReady, request.ConversationID)
+		}
+	}
 	inserted, err := tx.Query(ctx, qRecordOpen,
 		tenantID, request.ConversationID, request.RequestID, input.URI, input.Digest,
 		tenantID, request.ConversationID)
 	if err != nil {
 		return 0, fmt.Errorf("open turn: insert: %w", err)
+	}
+	if len(inserted.Rows) > 0 && store.TaskKind != "" && strings.TrimSpace(request.AgentID) != "" {
+		summary := common.TruncateRunes(common.RedactForStorage(string(request.Input)), 400)
+		if _, err = tx.Query(ctx, qRecordDetail, common.AsInt64(inserted.Rows[0][0]), store.TaskKind, summary, tenantID, request.ConversationID); err != nil {
+			return 0, fmt.Errorf("open turn: history row: %w", err)
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("open turn: commit: %w", err)
@@ -310,4 +360,12 @@ func turnFailureName(tenantID int64, requestID string) string {
 
 func isTerminalTurnStatus(status string) bool {
 	return status == "completed" || status == "failed" || status == "cancelled"
+}
+
+// endUserRef names the human a turn acts for, when there is one.
+func endUserRef(request domain.TurnRequest) any {
+	if request.OnBehalfOf.Kind != domain.PrincipalHuman || request.OnBehalfOf.ID == "" {
+		return nil
+	}
+	return request.OnBehalfOf.ID
 }

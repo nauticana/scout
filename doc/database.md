@@ -56,7 +56,7 @@ flowchart BT
     knowledge["Knowledge<br/>8 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
     runtime["Runtime<br/>14 tables"]
-    release["Release<br/>16 tables"]
+    release["Release<br/>17 tables"]
     evaluation["Evaluation<br/>10 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>3 tables"]
@@ -65,7 +65,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 106. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 107. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module.
 
@@ -1610,7 +1610,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
-| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event` |
+| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event`, `safety_event` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `configuration`, `config_scope_binding`, `effective_agent_release` |

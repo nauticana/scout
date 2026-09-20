@@ -101,7 +101,7 @@ func TestOpenAIRoundTripsParallelToolCallsAndConstrainsOutput(t *testing.T) {
 	}
 	requireAll(t, encoded(t, params),
 		`"tools":[{"function":{`, `"tool_calls":[{"id":"call-a"`, `"tool_call_id":"call-a"`, `"tool_call_id":"call-b"`,
-		`"response_format":{"json_schema":{`, `"name":"answer"`, `"strict":true`)
+		`"response_format":{"json_schema":{`, `"name":"answer"`, `"strict":false`)
 
 	var completion openai.ChatCompletion
 	if err := json.Unmarshal([]byte(`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[
@@ -179,4 +179,45 @@ func TestSingleFrameStreamCarriesToolCalls(t *testing.T) {
 	if err != nil || len(chunk.ToolCalls) != 1 || chunk.FinishReason != domain.FinishReasonToolCalls {
 		t.Fatalf("chunk = %+v, %v", chunk, err)
 	}
+}
+
+func TestOpenAIUsesStrictModeOnlyForSchemasItAccepts(t *testing.T) {
+	request := toolRequest()
+	request.Output.Schema = []byte(`{"type":"object","additionalProperties":false,"required":["answer"],"properties":{"answer":{"type":"string"}}}`)
+	params, err := (&OpenAI{}).completionParams(domain.ModelSelection{Model: "m"}, request)
+	if err != nil {
+		t.Fatalf("completionParams: %v", err)
+	}
+	requireAll(t, encoded(t, params), `"strict":true`)
+}
+
+// Anthropic rejects numeric and length bounds in structured output; the gateway
+// still validates them, so the adapter sends the schema without them.
+func TestAnthropicDropsConstraintKeywordsItsStructuredOutputRejects(t *testing.T) {
+	request := toolRequest()
+	request.Output.Schema = []byte(`{"type":"object","required":["title"],"properties":{"title":{"type":"string","maxLength":60},"score":{"type":"integer","minimum":0,"maximum":10},"tags":{"anyOf":[{"type":"array","minItems":2,"items":{"type":"string","minLength":2}}]}}}`)
+	params, err := (&Anthropic{}).messageParams(domain.ModelSelection{Model: "m"}, request)
+	if err != nil {
+		t.Fatalf("messageParams: %v", err)
+	}
+	payload := encoded(t, params)
+	requireAll(t, payload, `"title":{"type":"string"}`, `"score":{"type":"integer"}`, `"required":["title"]`)
+	for _, keyword := range []string{"maxLength", "minimum", "maximum", "minItems", "minLength"} {
+		if strings.Contains(payload, keyword) {
+			t.Fatalf("%s must not reach Anthropic: %s", keyword, payload)
+		}
+	}
+}
+
+// Property names are data, not keywords: a field called "minimum" must survive
+// the projection, and literal values under enum or default are never rewritten.
+func TestSchemaProjectionLeavesPropertyNamesAndLiteralValuesAlone(t *testing.T) {
+	schema, err := schemaObject([]byte(`{"type":"object","required":["minimum","range"],"properties":{
+		"minimum":{"type":"number","minimum":0},
+		"range":{"type":"object","enum":[{"maxLength":5}],"default":{"maximum":9}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := encoded(t, projectSchema(schema, anthropicUnsupportedKeywords))
+	requireAll(t, payload, `"minimum":{"type":"number"}`, `"enum":[{"maxLength":5}]`, `"default":{"maximum":9}`)
 }

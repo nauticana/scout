@@ -36,6 +36,12 @@ func TestScoutConfigApply(t *testing.T) {
 	rows[agent_max_tokens] = keelconfig.ConfigRow{Value: "16384", Default: "8192"}
 	rows[agent_model_capacity_pool] = keelconfig.ConfigRow{Value: " dedicated ", Default: "shared"}
 
+	unset := &ScoutConfig{}
+	if err := unset.Apply(rows); err != nil || unset.AgentTemperature != nil {
+		t.Fatalf("an unconfigured temperature must stay nil, got %v (%v)", unset.AgentTemperature, err)
+	}
+	rows[agent_temperature] = keelconfig.ConfigRow{Value: "0.7"}
+
 	cfg := &ScoutConfig{}
 	if err := cfg.Apply(rows); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -43,7 +49,7 @@ func TestScoutConfigApply(t *testing.T) {
 	if cfg.AgentMaxTokens != 16384 {
 		t.Fatalf("AgentMaxTokens = %d, want 16384", cfg.AgentMaxTokens)
 	}
-	if cfg.AgentTemperature != 0.7 {
+	if cfg.AgentTemperature == nil || *cfg.AgentTemperature != 0.7 {
 		t.Fatalf("AgentTemperature = %v, want 0.7", cfg.AgentTemperature)
 	}
 	if cfg.AgentModelCapacityPool != "dedicated" {
@@ -142,7 +148,7 @@ func TestLoadConfigFailurePublishesNeitherSection(t *testing.T) {
 func scoutConfigRows() keelconfig.ConfigRows {
 	defaults := map[string]string{
 		agent_max_tokens:          "8192",
-		agent_temperature:         "0.7",
+		agent_temperature:         "",
 		agent_run_retention_days:  "0",
 		agent_turn_rate:           "2",
 		agent_turn_burst:          "10",

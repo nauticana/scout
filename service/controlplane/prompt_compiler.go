@@ -142,6 +142,21 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 		writeDigestField(&payload, language.Digest)
 		payload.WriteByte(0x1e)
 	}
+	// Written only when present, so a definition without tools keeps its v1 digest.
+	if len(definition.Tools) > 0 || definition.ToolLoop != nil {
+		tools := append([]domain.ToolReference(nil), definition.Tools...)
+		sort.Slice(tools, func(i, j int) bool { return tools[i].ToolID < tools[j].ToolID })
+		for _, tool := range tools {
+			writeDigestField(&payload, tool.ToolID)
+			writeDigestField(&payload, tool.Version)
+		}
+		payload.WriteByte(0x1e)
+		loop, err := json.Marshal(definition.ToolLoop)
+		if err != nil {
+			return "", fmt.Errorf("%w: invalid tool loop configuration: %v", domain.ErrValidation, err)
+		}
+		writeDigestField(&payload, string(loop))
+	}
 	return sha256Hex(payload.String()), nil
 }
 

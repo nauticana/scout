@@ -93,8 +93,13 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 		return domain.ToolResult{}, err
 	}
 
+	// The registered contract's own timeout and attempt ceiling win over the gateway defaults.
+	timeout := gateway.Timeout
+	if definition.Timeout > 0 {
+		timeout = definition.Timeout
+	}
 	for attempt := 1; ; attempt++ {
-		result, callErr := gateway.Transport.Invoke(ctx, call, definition, credential, gateway.Timeout)
+		result, callErr := gateway.Transport.Invoke(ctx, call, definition, credential, timeout)
 		if callErr == nil {
 			if err := gateway.Validator.Validate(ctx, definition, result); err != nil {
 				callErr = fmt.Errorf("%w: %w", ErrInvalidToolOutput, err)
@@ -129,7 +134,7 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 			return result, errors.Join(callErr, err)
 		}
 		delay, retry := gateway.Retry.NextDelay(ctx, call, result, callErr, attempt)
-		if !retry {
+		if !retry || definition.MaxAttempts > 0 && attempt >= definition.MaxAttempts {
 			return result, callErr
 		}
 		if err := gateway.waitForRetry(ctx, delay); err != nil {
