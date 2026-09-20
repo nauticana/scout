@@ -520,10 +520,10 @@ Scout's schema is fifteen modules so a downstream installs only what its product
 | `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
 | `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
-| `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results, governed decision records | `catalog`, `tenancy`, `agent`, `runtime`, `configuration` |
+| `release` | 15 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results | `catalog`, `tenancy`, `agent`, `runtime` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
-| `configuration` | 3 | Configuration hierarchy, scoped bindings, compiled effective releases | `catalog`, `tenancy`, `agent` |
+| `configuration` | 4 | Configuration hierarchy, scoped bindings, compiled effective releases, governed decision records | `catalog`, `tenancy`, `agent` |
 | `approval` | 2 | Durable approval requests and their verdicts | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization` |
 
 `schema/dependency.yml` declares those modules, their dependencies, and their seed files; [doc/database.md](doc/database.md#module-dependency-graph) draws the graph. `agent` is the common core every other module reaches through; `catalog` and `tenancy` sit under it. Module boundaries follow the `contract/` and `service/` boundaries, so a downstream picks modules by the Scout packages it actually constructs.
@@ -548,13 +548,13 @@ That full set is 38 selected keel tables and 105 Scout tables. Drop the modules 
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 43 |
-| … plus agent principals and delegation | `+ agent_authorization` | 45 |
-| … plus compiled execution graphs | `+ execution_graph` | 49 |
-| … plus governed tools and credential bindings | `+ tool` | 54 |
-| … plus durable human approvals | `+ approval` | 56 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 65 |
-| … plus the durable turn runtime | `+ runtime` | 79 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 44 |
+| … plus agent principals and delegation | `+ agent_authorization` | 46 |
+| … plus compiled execution graphs | `+ execution_graph` | 50 |
+| … plus governed tools and credential bindings | `+ tool` | 55 |
+| … plus durable human approvals | `+ approval` | 57 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 66 |
+| … plus the durable turn runtime | `+ runtime` | 80 |
 | Everything, including rollout and evaluation | `+ release`, `evaluation` | 105 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
@@ -697,6 +697,33 @@ func (w *RuntimeWorker) HandleJob(ctx context.Context, journal logger.Applicatio
 
 Build the query set with `dataplane.TurnQueueWorkerQueries(workerID, leaseDuration, batch, maxAttempts)`. Call `Scheduler.Claim` directly instead of the keel loop when weighted fairness, not just priority and age, must decide the order.
 
+### Composing the data plane
+
+`dataplane.BaseDataPlane` is the whole table-backed wiring behind `contract.DataPlane` (`Runtime`, `Scheduler`, `Ingress`, `Replies`, `Canceller`): object state, turn records, durable sessions behind a memory cache, the graph resolver, the execution governor, step idempotency, the layered enforcer over `DefaultBaseline`, the audit and safety sinks, `CacheReplyHub`, `TableTurnCanceller`, the queue scheduler with its dead-letter queue, the dispatcher, `TurnIngress`, and a `ToolLoopExecutor` over `FactoryProviderRegistry`, `PinnedModelRouter`, `TableToolRegistry`, the governed gateway, `TableLoopJournal`, and `EvidenceValidator`. A product injects what is its own — database, cache, object storage, provider factory, tool transport, budget manager, pricer, metrics, currency, usage category — and `Compose` builds the rest.
+
+Every default is an exported field that `Compose` fills only while it is nil. Assign another implementation before `Compose` to replace one collaborator; embed `BaseDataPlane` to extend the whole. A refused composition leaves the plane untouched.
+
+```go
+controls := scout.ActiveControls()
+plane := &dataplane.BaseDataPlane{
+    DB: db, Cache: shared, Storage: objects, Providers: factory, Transport: transport,
+    Budget: budgets, Pricer: catalog, Metrics: metrics,
+    RateLimiter: controls.RateLimiter, Capacity: controls.Capacity,
+    Settings: scout.Config().DataPlaneSettings(), Limits: scout.Config().ToolLoopLimits(),
+    Currency: "USD", UsageCategory: "agent", TaskKind: "ask",
+    MaxOutputTokens: int64(scout.Config().AgentMaxTokens), OnSettled: mirrorUsage,
+}
+if err := plane.Compose(); err != nil {
+    return err
+}
+defer plane.Close()
+worker, err := plane.Worker(workerID, lease, batch) // set its AbstractWorker fields, then Run
+```
+
+`agent_state_bucket` has no default and an empty value is `ErrNotReady`: turn input and conversation state must never land in a bucket a product serves publicly. `agent_step_claim_lease` must outlast `agent_loop_deadline`, or composition is refused. A tool transport other than `InProcessTransport` needs `Credentials` set. The default cost breaker has no limits and only records spend; assign `Governor` to enforce one.
+
+`scout.NewControlSet(cfg)` builds the tenant rate limiter and model capacity scheduler from the `agent_*_rate`, `agent_*_burst`, `agent_max_tenants`, and `agent_model_capacity*` flags. `scout.ActiveControls()` is the same pair following the active configuration: it is rebuilt when `SetConfig` publishes a new one, and a configuration it cannot be built from fails every admission. Share one set per process — a second one doubles every limit.
+
 ### Limits, retry advice, and stage attribution
 
 Limiters with a known retry time return keel `limiter.LimitError`, which preserves Scout's domain sentinel and implements keel's `port.RetryAfterError` and `handler.HeaderCarrier`, so `Retry-After` reaches the client. Hard budget denials do not invent a reset time. Streaming and retrieval use internal stage wrappers; durable fleet attribution belongs in structured observations rather than behavior in the value-only `domain/` package.
@@ -770,6 +797,10 @@ gateway, err := toolgateway.NewGovernedGateway(toolgateway.GovernedGatewayConfig
     RetryAttempts: 3, RetryBaseDelay: 50 * time.Millisecond, Timeout: 5 * time.Second,
 })
 ```
+
+`toolgateway.ReleaseGuardrailConfigs` is the `ToolGuardrailConfigResolver` over a `GuardrailConfigRepository`: it reads the policy of the release the calling agent principal is pinned to, which the runtime pins to the conversation's version, so tool-stage guardrails enforce the release's rules and not the baseline alone. An agent principal with no release is refused; a principal that is not an agent runs no release and gets the baseline.
+
+`guardrail.MarkUntrusted(label, content)` fences externally authored text with the enforcer's own marker for callers that build a prompt outside the runtime, such as a one-shot `ProviderAgent` call; `guardrail.UntrustedContentNotice` states the rule once per prompt. The closing marker is removed from the content in any letter case, including one that only forms after an inner occurrence is removed.
 
 ### Tenant controls
 

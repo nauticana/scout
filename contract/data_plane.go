@@ -204,3 +204,13 @@ type TurnRecordStore interface {
 	// principal and scope that spent it; a repeat is a no-op.
 	RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error
 }
+
+// DataPlane is the composed turn runtime a product depends on: the API process admits and
+// cancels turns and reads replies, the worker process leases and executes them.
+type DataPlane interface {
+	Runtime() ConversationRuntime
+	Scheduler() FairTurnScheduler
+	Ingress() ConversationIngress
+	Replies() ReplayTurnReplySubscriber
+	Canceller() TurnCanceller
+}

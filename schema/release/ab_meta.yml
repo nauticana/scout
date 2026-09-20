@@ -14,4 +14,3 @@ tables:
   - agent_version_pin
   - experiment_cohort
   - conversation_release
-  - audit_event

@@ -15,7 +15,7 @@ Scout's schema is fifteen selectable modules declared in `schema/dependency.yml`
 - Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. `schema/dependency.yml` keeps the complete list.
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
-- `approval` holds the durable human-in-the-loop record, and `release` reaches `configuration` because every decision record is attributable to a scope.
+- `approval` holds the durable human-in-the-loop record. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 30, "rankSpacing": 55, "diagramPadding": 12}, "themeVariables": {"fontSize": "12px"}}}%%
@@ -37,7 +37,6 @@ flowchart BT
     runtime --> agent_authorization_module
     runtime --> configuration_module
     release --> runtime
-    release --> configuration_module
     evaluation --> knowledge
     evaluation --> release
     approval --> configuration_module
@@ -49,16 +48,16 @@ flowchart BT
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
     model["Model<br/>6 tables"]
-    agent["Agent<br/>14 tables"]
+    agent["Agent<br/>13 tables"]
     tool["Tool<br/>5 tables"]
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>8 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
     runtime["Runtime<br/>14 tables"]
-    release["Release<br/>17 tables"]
+    release["Release<br/>15 tables"]
     evaluation["Evaluation<br/>10 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
-    configuration_module["Configuration<br/>3 tables"]
+    configuration_module["Configuration<br/>4 tables"]
     approval["Approval<br/>2 tables"]
 ```
 
@@ -167,10 +166,12 @@ flowchart RL
         scope["scope"]
         config_scope_binding["config_scope_binding"]
         effective_agent_release["effective_agent_release"]
+        audit_event["audit_event"]
     end
     config_scope_binding --> scope
     effective_agent_release --> scope
     effective_agent_release --> agent_version
+    audit_event --> scope
 
     subgraph approval["Approval"]
         direction BT
@@ -278,7 +279,6 @@ flowchart RL
         agent_version_pin["agent_version_pin"]
         experiment_cohort["experiment_cohort"]
         conversation_release["conversation_release"]
-        audit_event["audit_event"]
     end
     contract_test_run --> platform_release
     conversation_release --> platform_release
@@ -1592,10 +1592,10 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
-| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release`, `audit_event` |
+| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
-| `configuration` | `configuration`, `config_scope_binding`, `effective_agent_release` |
+| `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event` |
 | `approval` | `approval_request`, `approval_decision` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them

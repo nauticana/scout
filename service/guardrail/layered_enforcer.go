@@ -490,13 +490,28 @@ func redact(content []byte, spans []domain.ContentSpan) ([]byte, int) {
 	return out, redacted
 }
 
-// markUntrusted fences content and neutralizes embedded closing markers so it cannot escape the fence.
+// markUntrusted fences content so it cannot escape the fence.
 func markUntrusted(content, open, closing []byte) []byte {
-	body := bytes.ReplaceAll(content, closing, nil)
-	out := make([]byte, 0, len(open)+len(body)+len(closing))
+	out := make([]byte, 0, len(open)+len(content)+len(closing))
 	out = append(out, open...)
-	out = append(out, body...)
+	out = appendWithoutMarker(out, content, closing)
 	return append(out, closing...)
+}
+
+// appendWithoutMarker drops every spelling of marker in any letter case, including one
+// that only forms once an inner occurrence is removed.
+func appendWithoutMarker(out, content, marker []byte) []byte {
+	if len(marker) == 0 {
+		return append(out, content...)
+	}
+	floor := len(out)
+	for _, b := range content {
+		out = append(out, b)
+		if start := len(out) - len(marker); start >= floor && bytes.EqualFold(out[start:], marker) {
+			out = out[:start]
+		}
+	}
+	return out
 }
 
 var urlPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>\\]+`)

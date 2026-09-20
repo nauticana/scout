@@ -63,7 +63,7 @@ groups:
   - name: release
     path: release
     seed: seed/release/release.yml
-    depends_on: [catalog, tenancy, agent, runtime, configuration]
+    depends_on: [catalog, tenancy, agent, runtime]
     seed_depends_on: [core]
 
   - name: evaluation

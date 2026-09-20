@@ -37,6 +37,21 @@ catalog and `ScoutConfig` cannot drift.
 | `agent_loop_max_cost` | 0 | Minor-unit cost one tool loop step may spend; 0 leaves cost to the turn budget |
 | `agent_loop_max_repeats` | 3 | Identical calls of one tool before a loop is declared |
 | `agent_loop_deadline` | 300 | Wall-clock seconds one tool loop step may run |
+| `agent_state_bucket` | (none) | Private bucket for turn input and conversation state; empty refuses to compose the data plane |
+| `agent_state_max_bytes` | 4194304 | Largest single state or input payload in bytes |
+| `agent_queue_partitions` | 64 | Fixed turn-queue partition pool; changing it reshuffles tenants |
+| `agent_queue_shards` | 4 | Partitions one tenant spreads over; at most agent_queue_partitions |
+| `agent_queue_max_attempts` | 5 | Deliveries of one turn before it is dead-lettered |
+| `agent_session_cache_size` | 4096 | Conversations held in the in-memory session cache |
+| `agent_session_cache_ttl` | 300 | Seconds an in-memory session snapshot lives |
+| `agent_graph_cache_size` | 1024 | Execution graphs held in the in-memory graph cache |
+| `agent_graph_cache_ttl` | 3600 | Seconds an in-memory execution graph lives |
+| `agent_step_claim_lease` | 360 | Seconds a step claim blocks other workers; keep it above agent_loop_deadline |
+| `agent_turn_max_steps` | 16 | Graph steps one turn may execute |
+| `agent_tool_timeout` | 30 | Seconds one governed tool call may run when the tool registers none |
+| `agent_tool_max_attempts` | 3 | Deliveries of one tool call when the tool registers none |
+| `agent_guardrail_max_input_bytes` | 262144 | Baseline byte ceiling on turn input, tool arguments, and retrieved content |
+| `agent_guardrail_max_output_bytes` | 1048576 | Baseline byte ceiling on model and tool output |
 
 ## Admission (`service/isolation`)
 
@@ -95,6 +110,7 @@ catalog and `ScoutConfig` cannot drift.
 | `observability.TableAuditSink` page size | `agent_audit_page_size` | positive; clamped to `MaxDecisionPageSize` (1000) |
 | `dataplane.ToolLoopExecutor.Limits` | `agent_loop_max_iterations`, `agent_loop_max_tool_calls`, `agent_loop_max_tokens`, `agent_loop_max_repeats`, `agent_loop_deadline` | all positive, or construction fails; a step's configuration may only narrow them |
 | `dataplane.ToolLoopExecutor.Limits.MaxCostMinorUnits` | `agent_loop_max_cost` | non-negative minor units; zero leaves cost to the turn budget and the delegated bound |
+| `dataplane.BaseDataPlane.Settings` | `agent_state_*`, `agent_queue_*`, `agent_session_cache_*`, `agent_graph_cache_*`, `agent_step_claim_lease`, `agent_turn_max_steps`, `agent_tool_timeout`, `agent_tool_max_attempts`, `agent_guardrail_max_*_bytes` | all positive; an empty `agent_state_bucket` is `ErrNotReady`; shards at most partitions; the claim lease above `agent_loop_deadline` |
 
 Both are configuration-time ceilings, not runtime hints: exceeding either is a typed error, never a
 truncation.

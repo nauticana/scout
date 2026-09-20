@@ -2,3 +2,4 @@ tables:
   - config_scope
   - config_scope_binding
   - effective_agent_release
+  - audit_event
