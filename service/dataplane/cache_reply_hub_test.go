@@ -144,4 +144,19 @@ func TestCacheReplyHubNeverHidesAGapAndFallsBackToTheTurnRecord(t *testing.T) {
 	if frame, err := failed.Receive(ctx); err != nil || !frame.Final || frame.ErrorCode != "budget_exceeded" || frame.Payload != nil {
 		t.Fatalf("failed frame = %+v, %v", frame, err)
 	}
+	stored, err := hub.StoredReply(ctx, 7, "settled", 9)
+	if err != nil || stored.Sequence != 9 || !stored.Final || string(stored.Payload) != "answer" {
+		t.Fatalf("stored frame = %+v, %v", stored, err)
+	}
+	stored, err = hub.StoredReply(ctx, 7, "failed", 10)
+	if err != nil || stored.Sequence != 10 || stored.ErrorCode != "budget_exceeded" {
+		t.Fatalf("stored failed frame = %+v, %v", stored, err)
+	}
+	hub.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
+		return 1, "cancelled", nil, nil
+	}}
+	stored, err = hub.StoredReply(ctx, 7, "cancelled", 11)
+	if err != nil || stored.ErrorCode != "canceled" {
+		t.Fatalf("stored canceled frame = %+v, %v", stored, err)
+	}
 }

@@ -38,6 +38,13 @@ type FairTurnScheduler interface {
 	Nack(ctx context.Context, messageID, workerID, reason string) error
 }
 
+// ClaimedTurnScheduler hydrates the row returned by keel's leased queue loop.
+// It is the worker-facing extension of the transport-neutral fair scheduler.
+type ClaimedTurnScheduler interface {
+	FairTurnScheduler
+	LeaseFromClaimRow(ctx context.Context, row []any) (domain.QueueLease, error)
+}
+
 // DurableSessionStore is the authoritative store for recoverable session state.
 type DurableSessionStore interface {
 	// Load returns the latest durable conversation snapshot.
@@ -83,6 +90,12 @@ type TurnReplySubscriber interface {
 // ReplayTurnReplySubscriber can resume a reply stream from a retained sequence.
 type ReplayTurnReplySubscriber interface {
 	SubscribeFrom(ctx context.Context, tenantID int64, requestID string, fromSequence int64) (TurnReplySubscription, error)
+}
+
+// StoredTurnReplyReader rebuilds the terminal frame from the durable turn record
+// after the short-lived reply buffer can no longer satisfy a replay cursor.
+type StoredTurnReplyReader interface {
+	StoredReply(ctx context.Context, tenantID int64, requestID string, sequence int64) (domain.TurnReply, error)
 }
 
 // TurnCanceller stops a running turn without ending its conversation.
@@ -208,9 +221,11 @@ type TurnRecordStore interface {
 // DataPlane is the composed turn runtime a product depends on: the API process admits and
 // cancels turns and reads replies, the worker process leases and executes them.
 type DataPlane interface {
+	StoredTurnReplyReader
 	Runtime() ConversationRuntime
 	Scheduler() FairTurnScheduler
 	Ingress() ConversationIngress
 	Replies() ReplayTurnReplySubscriber
 	Canceller() TurnCanceller
+	Close() error
 }

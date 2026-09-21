@@ -150,6 +150,7 @@ type QueueTurnScheduler struct {
 }
 
 var _ contract.FairTurnScheduler = (*QueueTurnScheduler)(nil)
+var _ contract.ClaimedTurnScheduler = (*QueueTurnScheduler)(nil)
 
 func (scheduler *QueueTurnScheduler) validate() error {
 	if scheduler.DB == nil || scheduler.Objects == nil || scheduler.DeadLetters == nil {

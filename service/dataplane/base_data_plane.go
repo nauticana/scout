@@ -99,6 +99,14 @@ func (plane *BaseDataPlane) Ingress() contract.ConversationIngress       { retur
 func (plane *BaseDataPlane) Replies() contract.ReplayTurnReplySubscriber { return plane.ReplyHub }
 func (plane *BaseDataPlane) Canceller() contract.TurnCanceller           { return plane.Cancels }
 
+// StoredReply reconstructs the terminal frame after the delivery cache expires.
+func (plane *BaseDataPlane) StoredReply(ctx context.Context, tenantID int64, requestID string, sequence int64) (domain.TurnReply, error) {
+	if plane.ReplyHub == nil {
+		return domain.TurnReply{}, fmt.Errorf("%w: data plane is not composed", domain.ErrNotReady)
+	}
+	return plane.ReplyHub.StoredReply(ctx, tenantID, requestID, sequence)
+}
+
 // Worker is the keel leased queue worker draining the composed scheduler into the composed
 // runtime; the caller sets its AbstractWorker fields and runs it.
 func (plane *BaseDataPlane) Worker(workerID string, lease time.Duration, batch int) (*RuntimeWorker, error) {

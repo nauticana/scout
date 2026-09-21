@@ -717,7 +717,25 @@ if err := plane.Compose(); err != nil {
     return err
 }
 defer plane.Close()
-worker, err := plane.Worker(workerID, lease, batch) // set its AbstractWorker fields, then Run
+worker, err := plane.Worker(workerID, lease, batch) // for an already-composed process
+```
+
+A dedicated runtime-worker process should let keel create its database, secret provider,
+configuration, and object storage before composing the plane. `NewComposingRuntimeWorker`
+does that on its first claimed job and closes the plane when `Run` returns; a failed
+composition fails that job, closes the partial plane, and is retried on the next claim:
+
+```go
+worker, err := dataplane.NewComposingRuntimeWorker(
+    func(ctx context.Context, db port.DatabaseRepository, secrets secret.SecretProvider,
+        objects storage.ObjectStorage) (contract.DataPlane, error) {
+        plane := newProductDataPlane(db, secrets, objects)
+        return plane, plane.Compose()
+    }, workerID, lease, batch, maxAttempts,
+)
+worker.Caption, worker.Interval, worker.HCPort = "agent-runtime", 1, 8105
+worker.LoadConfig = common.LoadConfig
+err = worker.Run(ctx)
 ```
 
 `agent_state_bucket` has no default and an empty value is `ErrNotReady`: turn input and conversation state must never land in a bucket a product serves publicly. `agent_step_claim_lease` must outlast `agent_loop_deadline`, or composition is refused. A tool transport other than `InProcessTransport` needs `Credentials` set. The default cost breaker has no limits and only records spend; assign `Governor` to enforce one.
@@ -747,6 +765,22 @@ query, err = isolation.ApplyBudget(query, budget)
 Every limit in both services is a validated constructor input; [doc/configuration.md](doc/configuration.md) maps each one to the `flag` a downstream binary should declare.
 
 ### Streaming, cancellation, and reconnect
+
+`handler.ConversationHandler` exposes the common HTTP transport over any composed
+`contract.DataPlane`: `POST <base>/turn`, `GET <base>/turn/stream?request_id=&cursor=`
+as SSE, and `POST <base>/turn/cancel`. Inject its `PrincipalResolver` to map the
+authenticated product session to the acting agent and human authority, and set `BasePath`
+when mounting it outside `/api/conversation/`. An expired replay cursor is answered with
+the terminal frame rebuilt from the durable turn record; admission and cancellation errors
+retain their typed 4xx/5xx status and limiter `Retry-After` advice. `cursor` is the next
+sequence wanted (the last rendered sequence plus one; sequences start at 0). Frames are
+`event: turn`; a failure after the stream opened is one `event: error` carrying
+`api.ConversationStreamError` (the status it would have had, 410 for a cursor that expired
+under a turn still running) before the stream closes. Like regular HTTP errors, 5xx stream
+errors expose only a correlation request id; their real detail is logged server-side. A turn
+suspended for approval ends its delivery with a frame that is `final`, carries an
+`error_code`, and whose last event is `approval_pending`; the resumed turn reuses that
+frame's sequence, so a client keeps its cursor on it and reconnects once the approval is decided.
 
 `dataplane.StreamPump` guards every emitted payload, cancels generation after publication failure, and stops after the observed output budget. Non-publication failures get one bounded terminal-publish attempt. `dataplane.MemoryReplyHub` disconnects slow subscribers and supports retained replay through `SubscribeFrom`; a retained sequence retries only when its content matches, while divergent or trimmed retries fail. A publisher treats `ErrReplayExpired` from an older sequence retry as success-equivalent because the stream has advanced beyond verification. `MemoryTurnCanceller.Watch` lets cancellation stop a turn without ending its conversation.
 

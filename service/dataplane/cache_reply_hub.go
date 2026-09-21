@@ -48,6 +48,7 @@ var (
 	_ contract.TurnReplyPublisher        = (*CacheReplyHub)(nil)
 	_ contract.TurnReplySubscriber       = (*CacheReplyHub)(nil)
 	_ contract.ReplayTurnReplySubscriber = (*CacheReplyHub)(nil)
+	_ contract.StoredTurnReplyReader     = (*CacheReplyHub)(nil)
 )
 
 type replyHead struct {
@@ -186,6 +187,33 @@ func (hub *CacheReplyHub) SubscribeFrom(ctx context.Context, tenantID int64, req
 	}, nil
 }
 
+// StoredReply rebuilds a terminal reply from the durable turn record.
+func (hub *CacheReplyHub) StoredReply(ctx context.Context, tenantID int64, requestID string, sequence int64) (domain.TurnReply, error) {
+	if hub.Records == nil {
+		return domain.TurnReply{}, fmt.Errorf("%w: durable turn records are unavailable", domain.ErrNotReady)
+	}
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || sequence < 0 {
+		return domain.TurnReply{}, fmt.Errorf("%w: tenant, request, and cursor are required", domain.ErrValidation)
+	}
+	_, status, payload, err := hub.Records.Find(ctx, tenantID, requestID)
+	if err != nil {
+		return domain.TurnReply{}, err
+	}
+	if !isTerminalTurnStatus(status) {
+		return domain.TurnReply{}, fmt.Errorf("%w: turn %q is not terminal", domain.ErrConflict, requestID)
+	}
+	reply := domain.TurnReply{
+		TenantID: tenantID, RequestID: requestID, ReplyRoute: replyTerminalRouteLabel,
+		Sequence: sequence, Final: true,
+	}
+	if status == "completed" {
+		reply.Payload = payload
+	} else {
+		reply.ErrorCode = terminalTurnErrorCode(status, payload)
+	}
+	return reply, nil
+}
+
 type cacheReplySubscription struct {
 	hub       *CacheReplyHub
 	tenantID  int64
@@ -280,10 +308,20 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 	}
 	if status == "completed" {
 		reply.Payload = payload
-	} else if reply.ErrorCode = string(payload); reply.ErrorCode == "" {
-		reply.ErrorCode = status
+	} else {
+		reply.ErrorCode = terminalTurnErrorCode(status, payload)
 	}
 	return reply, true, nil
+}
+
+func terminalTurnErrorCode(status string, payload []byte) string {
+	if len(payload) > 0 {
+		return string(payload)
+	}
+	if status == "cancelled" {
+		return "canceled"
+	}
+	return status
 }
 
 func (subscription *cacheReplySubscription) Close() error {
