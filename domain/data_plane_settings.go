@@ -11,6 +11,9 @@ type DataPlaneSettings struct {
 	QueuePartitions  int
 	QueueShards      int
 	QueueMaxAttempts int
+	// QueueLease is how long one claimed turn stays leased; it must outlast the loop deadline.
+	QueueLease       time.Duration
+	QueueBatch       int
 	SessionCacheSize int
 	SessionCacheTTL  time.Duration
 	GraphCacheSize   int
@@ -23,4 +26,6 @@ type DataPlaneSettings struct {
 	ToolMaxAttempts         int
 	GuardrailMaxInputBytes  int
 	GuardrailMaxOutputBytes int
+	// ModelRegion stamps a candidate model with no route row of its own; empty leaves it unknown.
+	ModelRegion string
 }

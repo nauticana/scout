@@ -42,6 +42,8 @@ catalog and `ScoutConfig` cannot drift.
 | `agent_queue_partitions` | 64 | Fixed turn-queue partition pool; changing it reshuffles tenants |
 | `agent_queue_shards` | 4 | Partitions one tenant spreads over; at most agent_queue_partitions |
 | `agent_queue_max_attempts` | 5 | Deliveries of one turn before it is dead-lettered |
+| `agent_queue_lease` | 900 | Seconds one claimed turn stays leased to its worker; keep it above `agent_loop_deadline` |
+| `agent_queue_batch` | 8 | Turns one worker tick claims |
 | `agent_session_cache_size` | 4096 | Conversations held in the in-memory session cache |
 | `agent_session_cache_ttl` | 300 | Seconds an in-memory session snapshot lives |
 | `agent_graph_cache_size` | 1024 | Execution graphs held in the in-memory graph cache |
@@ -52,6 +54,7 @@ catalog and `ScoutConfig` cannot drift.
 | `agent_tool_max_attempts` | 3 | Deliveries of one tool call when the tool registers none |
 | `agent_guardrail_max_input_bytes` | 262144 | Baseline byte ceiling on turn input, tool arguments, and retrieved content |
 | `agent_guardrail_max_output_bytes` | 1048576 | Baseline byte ceiling on model and tool output |
+| `agent_model_region` | (none) | Residency region stamped on a candidate model with no route row; empty leaves it unknown |
 
 ## Admission (`service/isolation`)
 

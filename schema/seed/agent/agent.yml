@@ -68,6 +68,8 @@ seeds:
       - [agent_queue_partitions, int, true, "64", "Fixed turn-queue partition pool; changing it reshuffles tenants"]
       - [agent_queue_shards, int, true, "4", "Partitions one tenant spreads over; at most agent_queue_partitions"]
       - [agent_queue_max_attempts, int, true, "5", "Deliveries of one turn before it is dead-lettered"]
+      - [agent_queue_lease, int, true, "900", "Seconds one claimed turn stays leased to its worker; keep it above agent_loop_deadline"]
+      - [agent_queue_batch, int, true, "8", "Turns one worker tick claims"]
       - [agent_session_cache_size, int, true, "4096", "Conversations held in the in-memory session cache"]
       - [agent_session_cache_ttl, int, true, "300", "Seconds an in-memory session snapshot lives"]
       - [agent_graph_cache_size, int, true, "1024", "Execution graphs held in the in-memory graph cache"]
@@ -78,6 +80,7 @@ seeds:
       - [agent_tool_max_attempts, int, true, "3", "Deliveries of one tool call when the tool registers none"]
       - [agent_guardrail_max_input_bytes, int, true, "262144", "Baseline byte ceiling on turn input, tool arguments, and retrieved content"]
       - [agent_guardrail_max_output_bytes, int, true, "1048576", "Baseline byte ceiling on model and tool output"]
+      - [agent_model_region, string, true, "", "Residency region stamped on a candidate model with no route row; empty leaves it unknown"]
   - table: authorization_object
     columns: [id, caption]
     rows:

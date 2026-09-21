@@ -79,6 +79,7 @@ type BaseDataPlane struct {
 	Credentials      contract.ToolCredentialProvider
 	Egress           contract.ToolEgressPolicy
 	ToolGateway      contract.GovernedToolGateway
+	Catalog          contract.ModelCandidateCatalog
 	Router           contract.ModelRouter
 	Models           contract.ModelGateway
 	Requests         contract.ToolLoopRequestBuilder
@@ -99,6 +100,9 @@ func (plane *BaseDataPlane) Ingress() contract.ConversationIngress       { retur
 func (plane *BaseDataPlane) Replies() contract.ReplayTurnReplySubscriber { return plane.ReplyHub }
 func (plane *BaseDataPlane) Canceller() contract.TurnCanceller           { return plane.Cancels }
 
+// LoopDeadline is the longest one step may run; a queue lease must outlast it.
+func (plane *BaseDataPlane) LoopDeadline() time.Duration { return plane.Limits.Deadline }
+
 // StoredReply reconstructs the terminal frame after the delivery cache expires.
 func (plane *BaseDataPlane) StoredReply(ctx context.Context, tenantID int64, requestID string, sequence int64) (domain.TurnReply, error) {
 	if plane.ReplyHub == nil {
@@ -108,12 +112,21 @@ func (plane *BaseDataPlane) StoredReply(ctx context.Context, tenantID int64, req
 }
 
 // Worker is the keel leased queue worker draining the composed scheduler into the composed
-// runtime; the caller sets its AbstractWorker fields and runs it.
+// runtime; the caller sets its AbstractWorker fields and runs it. A non-positive lease or
+// batch is taken from the settings, so the worker's SQL and the scheduler stay in step.
 func (plane *BaseDataPlane) Worker(workerID string, lease time.Duration, batch int) (*RuntimeWorker, error) {
 	if plane.TurnScheduler == nil || plane.TurnRuntime == nil {
 		return nil, fmt.Errorf("%w: data plane is not composed", domain.ErrNotReady)
 	}
-	return NewRuntimeWorker(plane.TurnScheduler, plane.TurnRuntime, workerID, lease, batch, plane.TurnScheduler.MaxAttempts)
+	tuning := QueueTuning{Lease: lease, Batch: batch, MaxAttempts: plane.TurnScheduler.MaxAttempts}
+	if err := tuning.rejectNegative(); err != nil {
+		return nil, err
+	}
+	tuning = tuning.withDefaults(plane.Settings)
+	if tuning.Lease <= plane.LoopDeadline() {
+		return nil, fmt.Errorf("%w: runtime worker lease (%s) must outlast the loop deadline (%s)", domain.ErrValidation, tuning.Lease, plane.LoopDeadline())
+	}
+	return NewRuntimeWorker(plane.TurnScheduler, plane.TurnRuntime, workerID, tuning.Lease, tuning.Batch, tuning.MaxAttempts)
 }
 
 // Close releases the caches and cache subscriptions Compose opened.
@@ -142,6 +155,9 @@ func (plane *BaseDataPlane) validate() error {
 	}
 	if settings.StepClaimLease <= plane.Limits.Deadline {
 		return fmt.Errorf("%w: agent_step_claim_lease (%s) must outlast agent_loop_deadline (%s), or a second worker replays a loop that is still running", domain.ErrValidation, settings.StepClaimLease, plane.Limits.Deadline)
+	}
+	if settings.QueueLease <= plane.Limits.Deadline || settings.QueueBatch <= 0 {
+		return fmt.Errorf("%w: agent_queue_batch must be positive and agent_queue_lease (%s) must outlast agent_loop_deadline (%s), or a turn is re-delivered while it runs", domain.ErrValidation, settings.QueueLease, plane.Limits.Deadline)
 	}
 	if len(plane.Currency) != 3 || strings.TrimSpace(plane.UsageCategory) == "" || plane.MaxOutputTokens <= 0 {
 		return fmt.Errorf("%w: data plane needs a three-letter currency, a usage category, and positive max output tokens", domain.ErrValidation)
@@ -309,14 +325,20 @@ func (plane *BaseDataPlane) composeTools() error {
 }
 
 func (plane *BaseDataPlane) composeLoop() error {
+	// One catalog answers both: routing and the gateway's capability confirmation must
+	// agree, and a request carrying tools is refused outright without it.
+	if plane.Catalog == nil {
+		plane.Catalog = &modelgateway.TableCandidateCatalog{DB: plane.DB, Region: plane.Settings.ModelRegion}
+	}
 	if plane.Router == nil {
-		plane.Router = &modelgateway.PinnedModelRouter{Catalog: &modelgateway.TableCandidateCatalog{DB: plane.DB}}
+		plane.Router = &modelgateway.PinnedModelRouter{Catalog: plane.Catalog}
 	}
 	if plane.Models == nil {
 		gateway, err := modelgateway.NewGateway(plane.RateLimiter, &modelgateway.FactoryProviderRegistry{Factory: plane.Providers}, plane.Capacity)
 		if err != nil {
 			return err
 		}
+		gateway.Catalog = plane.Catalog
 		plane.Models = gateway
 	}
 	if plane.Requests == nil {

@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,10 @@ func (*workerPlane) StoredReply(context.Context, int64, string, int64) (domain.T
 }
 func (plane *workerPlane) Close() error { plane.closed++; return nil }
 
+type deadlinePlane struct{ *workerPlane }
+
+func (deadlinePlane) LoopDeadline() time.Duration { return 5 * time.Minute }
+
 func TestComposingRuntimeWorkerComposesOnceOnFirstJob(t *testing.T) {
 	codec, ref := newSchedulerCodec(t)
 	now := time.Unix(1_700_000_000, 0).UTC()
@@ -56,7 +61,7 @@ func TestComposingRuntimeWorkerComposesOnceOnFirstJob(t *testing.T) {
 	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
 		composeCalls++
 		return plane, nil
-	}, "runtime-1", time.Minute, 10, 3)
+	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 10, MaxAttempts: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +84,7 @@ func TestComposingRuntimeWorkerComposesOnceOnFirstJob(t *testing.T) {
 func TestComposingRuntimeWorkerRetriesAFailedCompositionAndClosesItsPlane(t *testing.T) {
 	boom := errors.New("compose failed")
 	failed := &workerPlane{}
-	composed := &workerPlane{scheduler: &QueueTurnScheduler{}, runtime: workerRuntimeFunc(nil)}
+	composed := &workerPlane{scheduler: &QueueTurnScheduler{MaxAttempts: 3}, runtime: workerRuntimeFunc(nil)}
 	composeCalls := 0
 	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
 		composeCalls++
@@ -87,7 +92,7 @@ func TestComposingRuntimeWorkerRetriesAFailedCompositionAndClosesItsPlane(t *tes
 			return failed, boom
 		}
 		return composed, nil
-	}, "runtime-1", time.Minute, 10, 3)
+	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 10, MaxAttempts: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,5 +104,113 @@ func TestComposingRuntimeWorkerRetriesAFailedCompositionAndClosesItsPlane(t *tes
 	}
 	if err = errors.Join(worker.Close(), worker.Close()); err != nil || composed.closed != 1 {
 		t.Fatalf("close error = %v, calls = %d", err, composed.closed)
+	}
+}
+
+func TestComposingRuntimeWorkerTakesItsQueueTuningFromTheLoadedConfiguration(t *testing.T) {
+	settings := domain.DataPlaneSettings{QueueLease: 15 * time.Minute, QueueBatch: 8, QueueMaxAttempts: 5}
+	reads := 0
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+		return nil, nil
+	}, "runtime-1", QueueTuning{Settings: func() domain.DataPlaneSettings {
+		reads++
+		return settings
+	}, Batch: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads != 0 {
+		t.Fatalf("the settings must not be read before keel loads them, got %d reads", reads)
+	}
+	loaded := false
+	loadConfig := worker.resolveTuningAfter(func(context.Context, port.DatabaseRepository) error {
+		loaded = true
+		return nil
+	})
+	if err = loadConfig(context.Background(), nil); err != nil || !loaded {
+		t.Fatalf("load config = %v, loaded = %t", err, loaded)
+	}
+	queries := worker.GetOLTPQueries()
+	pending, claim, _, _ := worker.QueueQueries()
+	if reads != 1 {
+		t.Fatalf("settings reads = %d, want one after the configuration is loaded", reads)
+	}
+	if !strings.Contains(queries[claim], "INTERVAL '900 seconds'") || !strings.Contains(queries[pending], "attempt < 5") {
+		t.Fatalf("queue SQL must follow the configuration:\n%s\n%s", queries[claim], queries[pending])
+	}
+	if !strings.Contains(queries[pending], "LIMIT 2") {
+		t.Fatalf("an explicit batch must override the configuration: %s", queries[pending])
+	}
+}
+
+func TestComposingRuntimeWorkerRefusesTuningItCannotResolve(t *testing.T) {
+	compose := func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+		return nil, nil
+	}
+	if _, err := NewRuntimeWorker(&QueueTurnScheduler{}, workerRuntimeFunc(nil), "runtime-1", time.Minute, 0, 3); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a runtime worker must reject a non-positive batch, got %v", err)
+	}
+	if _, err := NewComposingRuntimeWorker(compose, "runtime-1", QueueTuning{Lease: time.Minute}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a tuning without a settings source must be complete, got %v", err)
+	}
+	if _, err := NewComposingRuntimeWorker(compose, "runtime-1", QueueTuning{
+		Settings: func() domain.DataPlaneSettings {
+			return domain.DataPlaneSettings{QueueLease: time.Minute, QueueBatch: 4, QueueMaxAttempts: 3}
+		}, Batch: -1,
+	}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a negative override must not fall back to the settings, got %v", err)
+	}
+	worker, err := NewComposingRuntimeWorker(compose, "runtime-1", QueueTuning{Settings: func() domain.DataPlaneSettings {
+		return domain.DataPlaneSettings{}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := false
+	loadConfig := worker.resolveTuningAfter(func(context.Context, port.DatabaseRepository) error {
+		loaded = true
+		return nil
+	})
+	if err = loadConfig(context.Background(), nil); !errors.Is(err, domain.ErrValidation) || !loaded {
+		t.Fatalf("a worker that cannot resolve its tuning must fail to start, got %v", err)
+	}
+	if queries := worker.GetOLTPQueries(); queries != nil {
+		t.Fatalf("unresolved tuning must publish no queue SQL, got %v", queries)
+	}
+	if err = worker.HandleJob(context.Background(), nil, nil, nil, nil, 1, nil); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("HandleJob = %v, want the tuning failure", err)
+	}
+}
+
+func TestComposingRuntimeWorkerAlignsScoutSchedulerAttemptCeiling(t *testing.T) {
+	plane := &workerPlane{scheduler: &QueueTurnScheduler{MaxAttempts: 9}, runtime: workerRuntimeFunc(nil)}
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+		return plane, nil
+	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 4, MaxAttempts: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.buildQueries(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = worker.compose(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if plane.scheduler.(*QueueTurnScheduler).MaxAttempts != 3 {
+		t.Fatalf("scheduler attempts = %d, want the queue SQL ceiling 3", plane.scheduler.(*QueueTurnScheduler).MaxAttempts)
+	}
+}
+
+func TestComposingRuntimeWorkerRefusesALeaseUnderThePlaneLoopDeadline(t *testing.T) {
+	plane := &workerPlane{scheduler: &QueueTurnScheduler{MaxAttempts: 3}, runtime: workerRuntimeFunc(nil)}
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+		return deadlinePlane{plane}, nil
+	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 4, MaxAttempts: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = worker.HandleJob(context.Background(), nil, nil, nil, nil, 1, nil)
+	if !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "loop deadline") || plane.closed != 1 {
+		t.Fatalf("HandleJob = %v, plane closed = %d", err, plane.closed)
 	}
 }

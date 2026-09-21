@@ -182,6 +182,8 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_queue_partitions:           "64",
 		agent_queue_shards:               "4",
 		agent_queue_max_attempts:         "5",
+		agent_queue_lease:                "900",
+		agent_queue_batch:                "8",
 		agent_session_cache_size:         "4096",
 		agent_session_cache_ttl:          "300",
 		agent_graph_cache_size:           "1024",
@@ -192,6 +194,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_tool_max_attempts:          "3",
 		agent_guardrail_max_input_bytes:  "262144",
 		agent_guardrail_max_output_bytes: "1048576",
+		agent_model_region:               "",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

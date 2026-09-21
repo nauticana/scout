@@ -47,6 +47,8 @@ const (
 	agent_queue_partitions           = "agent_queue_partitions"
 	agent_queue_shards               = "agent_queue_shards"
 	agent_queue_max_attempts         = "agent_queue_max_attempts"
+	agent_queue_lease                = "agent_queue_lease"
+	agent_queue_batch                = "agent_queue_batch"
 	agent_session_cache_size         = "agent_session_cache_size"
 	agent_session_cache_ttl          = "agent_session_cache_ttl"
 	agent_graph_cache_size           = "agent_graph_cache_size"
@@ -57,6 +59,7 @@ const (
 	agent_tool_max_attempts          = "agent_tool_max_attempts"
 	agent_guardrail_max_input_bytes  = "agent_guardrail_max_input_bytes"
 	agent_guardrail_max_output_bytes = "agent_guardrail_max_output_bytes"
+	agent_model_region               = "agent_model_region"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -128,6 +131,8 @@ type ScoutConfig struct {
 	AgentQueuePartitions         int      // agent_queue_partitions 64 Fixed turn-queue partition pool; changing it reshuffles tenants
 	AgentQueueShards             int      // agent_queue_shards 4 Partitions one tenant spreads over; at most agent_queue_partitions
 	AgentQueueMaxAttempts        int      // agent_queue_max_attempts 5 Deliveries of one turn before it is dead-lettered
+	AgentQueueLease              int      // agent_queue_lease 900 Seconds one claimed turn stays leased to its worker; keep it above agent_loop_deadline
+	AgentQueueBatch              int      // agent_queue_batch 8 Turns one worker tick claims
 	AgentSessionCacheSize        int      // agent_session_cache_size 4096 Conversations held in the in-memory session cache
 	AgentSessionCacheTTL         int      // agent_session_cache_ttl 300 Seconds an in-memory session snapshot lives
 	AgentGraphCacheSize          int      // agent_graph_cache_size 1024 Execution graphs held in the in-memory graph cache
@@ -138,6 +143,7 @@ type ScoutConfig struct {
 	AgentToolMaxAttempts         int      // agent_tool_max_attempts 3 Deliveries of one tool call when the tool registers none
 	AgentGuardrailMaxInputBytes  int      // agent_guardrail_max_input_bytes 262144 Baseline byte ceiling on turn input, tool arguments, and retrieved content
 	AgentGuardrailMaxOutputBytes int      // agent_guardrail_max_output_bytes 1048576 Baseline byte ceiling on model and tool output
+	AgentModelRegion             string   // agent_model_region (none) Residency region stamped on a candidate model with no route row; empty leaves it unknown
 }
 
 // ToolLoopLimits is the executor-level ceiling the agent_loop_* flags configure.
@@ -155,11 +161,13 @@ func (c *ScoutConfig) DataPlaneSettings() domain.DataPlaneSettings {
 	return domain.DataPlaneSettings{
 		StateBucket: c.AgentStateBucket, StateMaxBytes: int64(c.AgentStateMaxBytes),
 		QueuePartitions: c.AgentQueuePartitions, QueueShards: c.AgentQueueShards, QueueMaxAttempts: c.AgentQueueMaxAttempts,
+		QueueLease: seconds(c.AgentQueueLease), QueueBatch: c.AgentQueueBatch,
 		SessionCacheSize: c.AgentSessionCacheSize, SessionCacheTTL: seconds(c.AgentSessionCacheTTL),
 		GraphCacheSize: c.AgentGraphCacheSize, GraphCacheTTL: seconds(c.AgentGraphCacheTTL),
 		StepClaimLease: seconds(c.AgentStepClaimLease), TurnMaxSteps: c.AgentTurnMaxSteps,
 		ToolTimeout: seconds(c.AgentToolTimeout), ToolMaxAttempts: c.AgentToolMaxAttempts,
 		GuardrailMaxInputBytes: c.AgentGuardrailMaxInputBytes, GuardrailMaxOutputBytes: c.AgentGuardrailMaxOutputBytes,
+		ModelRegion: c.AgentModelRegion,
 	}
 }
 
@@ -204,6 +212,8 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentQueuePartitions = c.Int(rows, agent_queue_partitions)
 	c.AgentQueueShards = c.Int(rows, agent_queue_shards)
 	c.AgentQueueMaxAttempts = c.Int(rows, agent_queue_max_attempts)
+	c.AgentQueueLease = c.Int(rows, agent_queue_lease)
+	c.AgentQueueBatch = c.Int(rows, agent_queue_batch)
 	c.AgentSessionCacheSize = c.Int(rows, agent_session_cache_size)
 	c.AgentSessionCacheTTL = c.Int(rows, agent_session_cache_ttl)
 	c.AgentGraphCacheSize = c.Int(rows, agent_graph_cache_size)
@@ -214,5 +224,6 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentToolMaxAttempts = c.Int(rows, agent_tool_max_attempts)
 	c.AgentGuardrailMaxInputBytes = c.Int(rows, agent_guardrail_max_input_bytes)
 	c.AgentGuardrailMaxOutputBytes = c.Int(rows, agent_guardrail_max_output_bytes)
+	c.AgentModelRegion = c.String(rows, agent_model_region)
 	return c.ParseErr()
 }

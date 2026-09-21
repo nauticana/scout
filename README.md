@@ -717,13 +717,19 @@ if err := plane.Compose(); err != nil {
     return err
 }
 defer plane.Close()
-worker, err := plane.Worker(workerID, lease, batch) // for an already-composed process
+worker, err := plane.Worker(workerID, 0, 0) // for an already-composed process; 0 takes the configured lease and batch
 ```
 
 A dedicated runtime-worker process should let keel create its database, secret provider,
 configuration, and object storage before composing the plane. `NewComposingRuntimeWorker`
 does that on its first claimed job and closes the plane when `Run` returns; a failed
-composition fails that job, closes the partial plane, and is retried on the next claim:
+composition fails that job, closes the partial plane, and is retried on the next claim.
+Its queue SQL is built from `QueueTuning` once keel has loaded the configuration, so
+`agent_queue_lease`, `agent_queue_batch` and `agent_queue_max_attempts` reach it; an
+explicit field overrides the configured one, and a tuning that resolves to nothing fails
+the worker at startup. An explicit attempt ceiling is also applied to Scout's composed
+`QueueTurnScheduler`, keeping its nack path aligned with the queue SQL. A negative override
+is refused, and so is a lease that does not outlast the composed plane's loop deadline:
 
 ```go
 worker, err := dataplane.NewComposingRuntimeWorker(
@@ -731,12 +737,18 @@ worker, err := dataplane.NewComposingRuntimeWorker(
         objects storage.ObjectStorage) (contract.DataPlane, error) {
         plane := newProductDataPlane(db, secrets, objects)
         return plane, plane.Compose()
-    }, workerID, lease, batch, maxAttempts,
+    }, workerID, dataplane.QueueTuning{Settings: func() domain.DataPlaneSettings {
+        return scout.Config().DataPlaneSettings()
+    }},
 )
 worker.Caption, worker.Interval, worker.HCPort = "agent-runtime", 1, 8105
 worker.LoadConfig = common.LoadConfig
 err = worker.Run(ctx)
 ```
+
+The default model gateway and the default router share one `TableCandidateCatalog`, stamped
+with `agent_model_region`: a tool-bearing or schema-constrained request is confirmed against
+the same tenant catalog that routed it. Assign `Catalog` to replace both at once.
 
 `agent_state_bucket` has no default and an empty value is `ErrNotReady`: turn input and conversation state must never land in a bucket a product serves publicly. `agent_step_claim_lease` must outlast `agent_loop_deadline`, or composition is refused. A tool transport other than `InProcessTransport` needs `Credentials` set. The default cost breaker has no limits and only records spend; assign `Governor` to enforce one.
 
