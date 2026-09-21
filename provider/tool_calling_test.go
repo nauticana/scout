@@ -110,7 +110,7 @@ func TestOpenAIRoundTripsParallelToolCallsAndConstrainsOutput(t *testing.T) {
 		"usage":{"prompt_tokens":5,"completion_tokens":7}}`), &completion); err != nil {
 		t.Fatalf("decode completion: %v", err)
 	}
-	result, err := openAIResult(&completion)
+	result, err := openAIResult(&completion, toolRequest())
 	requireParallelCalls(t, result, err, "c1", "c2")
 }
 

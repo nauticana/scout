@@ -32,6 +32,9 @@ type ModelRequest struct {
 	// Output constrains the terminal answer; a set Mode requires CapabilityStructuredOutput
 	// and is never downgraded to free text.
 	Output OutputConstraint
+	// Search asks the provider to answer from its own web search; it requires
+	// CapabilityWebSearch and is never served ungrounded.
+	Search *SearchGrounding
 }
 
 // Route capabilities a request can require. Tools and a constrained Output imply
@@ -41,7 +44,27 @@ const (
 	// CapabilitySampling marks a model that accepts sampling parameters.
 	CapabilitySampling         = "sampling"
 	CapabilityStructuredOutput = "structured_output"
+	// CapabilityWebSearch marks a route that grounds its answer in its own web
+	// search and reports the sources it used.
+	CapabilityWebSearch = "web_search"
 )
+
+// SearchGrounding asks the selected route for provider-native web search.
+type SearchGrounding struct {
+	// MaxSearches bounds the searches one call may run; zero leaves the vendor
+	// default. An adapter whose vendor cannot bound them refuses a request that
+	// sets it rather than running an unbounded, unbudgeted search.
+	MaxSearches int64
+}
+
+// Citation is one source a grounded answer used. Position is its 1-based rank
+// in the provider's own order; Snippet is the cited text where one is reported.
+type Citation struct {
+	URL      string
+	Title    string
+	Snippet  string
+	Position int
+}
 
 // ModelTool is one pinned tool version offered to the model. Name is the
 // provider-safe identifier the model calls it by; InputSchema is JSON Schema.
@@ -130,6 +153,7 @@ type ModelSelection struct {
 type ModelResult struct {
 	Output       []byte
 	ToolCalls    []ModelToolCall
+	Citations    []Citation
 	FinishReason string
 	Usage        Usage
 }
@@ -139,6 +163,7 @@ type ModelChunk struct {
 	Sequence     int64
 	Payload      []byte
 	ToolCalls    []ModelToolCall
+	Citations    []Citation
 	FinishReason string
 	Usage        Usage
 }

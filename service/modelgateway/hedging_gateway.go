@@ -99,7 +99,7 @@ type attempt struct {
 func (gateway *HedgingGateway) start(ctx context.Context, number int, selection domain.ModelSelection, request domain.ModelRequest) (*attempt, error) {
 	tokens := promptTokens(gateway.PromptTokens, request.Prompt) + request.MaxOutputTokens
 	cost, currency, err := gateway.Pricer.Cost(ctx, domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model},
-		domain.ModelUsage{InputTokens: tokens - request.MaxOutputTokens, OutputTokens: request.MaxOutputTokens})
+		domain.ModelUsage{InputTokens: tokens - request.MaxOutputTokens, OutputTokens: request.MaxOutputTokens, SearchQueries: EstimatedSearches(request)})
 	if err != nil {
 		return nil, fmt.Errorf("price attempt %d: %w", number, err)
 	}

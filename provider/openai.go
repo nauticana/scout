@@ -7,6 +7,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 
 	"github.com/nauticana/scout/contract"
@@ -39,7 +40,7 @@ func (p *OpenAI) Generate(ctx context.Context, selection domain.ModelSelection, 
 	if err != nil {
 		return domain.ModelResult{}, fmt.Errorf("openai ChatCompletion: %w", err)
 	}
-	return openAIResult(resp)
+	return openAIResult(resp, request)
 }
 
 func (p *OpenAI) completionParams(selection domain.ModelSelection, request domain.ModelRequest) (openai.ChatCompletionNewParams, error) {
@@ -66,6 +67,14 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 			function.Description = openai.String(tool.Description)
 		}
 		params.Tools = append(params.Tools, openai.ChatCompletionToolParam{Function: function})
+	}
+	if request.Search != nil {
+		if err := checkSearchBound(OpenAIProviderID, request.Search); err != nil {
+			return openai.ChatCompletionNewParams{}, err
+		}
+		// An all-zero option object is omitted from the request body, which would
+		// send the call ungrounded; "medium" is the vendor default.
+		params.WebSearchOptions = openai.ChatCompletionNewParamsWebSearchOptions{SearchContextSize: "medium"}
 	}
 	if request.Output.Mode == domain.OutputModeJSONSchema {
 		schema, err := schemaObject(request.Output.Schema)
@@ -107,7 +116,7 @@ func openAIMessages(message domain.ModelMessage) []openai.ChatCompletionMessageP
 	return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(message.Text))}
 }
 
-func openAIResult(resp *openai.ChatCompletion) (domain.ModelResult, error) {
+func openAIResult(resp *openai.ChatCompletion, request domain.ModelRequest) (domain.ModelResult, error) {
 	if len(resp.Choices) == 0 {
 		return domain.ModelResult{}, fmt.Errorf("openai: no choices returned")
 	}
@@ -119,19 +128,89 @@ func openAIResult(resp *openai.ChatCompletion) (domain.ModelResult, error) {
 	if err := emptyResult(OpenAIProviderID, choice.Message.Content, calls); err != nil {
 		return domain.ModelResult{}, err
 	}
+	usage := domain.Usage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens}
+	if request.Search != nil {
+		// Chat Completions bills the grounded call, not each search it ran.
+		usage.SearchQueries = 1
+	}
 	return domain.ModelResult{
 		Output:       []byte(choice.Message.Content),
 		ToolCalls:    calls,
+		Citations:    openAICitations(choice.Message),
 		FinishReason: finishReason(choice.FinishReason, calls),
-		Usage: domain.Usage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
-		},
+		Usage:        usage,
 	}, nil
 }
 
+// openAICitations maps URL annotations; the cited span of the answer is the
+// only snippet Chat Completions reports.
+func openAICitations(message openai.ChatCompletionMessage) []domain.Citation {
+	var sources citations
+	answer := []rune(message.Content)
+	for _, annotation := range message.Annotations {
+		if annotation.Type != "url_citation" {
+			continue
+		}
+		cited := annotation.URLCitation
+		snippet := ""
+		if cited.StartIndex >= 0 && cited.EndIndex > cited.StartIndex && cited.EndIndex <= int64(len(answer)) {
+			snippet = string(answer[cited.StartIndex:cited.EndIndex])
+		}
+		sources.add(cited.URL, cited.Title, snippet)
+	}
+	return sources.list
+}
+
 func (p *OpenAI) Stream(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {
-	return singleFrameStream(ctx, p, selection, request)
+	if p.APIKey == "" {
+		return nil, fmt.Errorf("%w: openai API key is not set", domain.ErrNotReady)
+	}
+	if request.Search != nil {
+		// Chat Completions reports URL annotations only on the complete message,
+		// so a streamed grounded answer would arrive without its sources.
+		return singleFrameStream(ctx, p, selection, request)
+	}
+	params, err := p.completionParams(selection, request)
+	if err != nil {
+		return nil, err
+	}
+	// Without this the streamed call reports no tokens and would settle as free.
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
+	client := openai.NewClient(option.WithAPIKey(p.APIKey))
+	return openAIStream(client.Chat.Completions.NewStreaming(ctx, params), request), nil
+}
+
+// openAIStream emits each content delta as it arrives and accumulates the same
+// completion a unary call returns, so both paths report the same terminal frame.
+func openAIStream(stream *ssestream.Stream[openai.ChatCompletionChunk], request domain.ModelRequest) contract.ModelStream {
+	accumulated := openai.ChatCompletionAccumulator{}
+	terminal := false
+	return &eventStream{
+		shutdown: stream.Close,
+		advance: func() (domain.ModelChunk, bool, error) {
+			for stream.Next() {
+				chunk := stream.Current()
+				if !accumulated.AddChunk(chunk) {
+					return domain.ModelChunk{}, false, fmt.Errorf("openai stream: frames belong to different completions")
+				}
+				if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+					return domain.ModelChunk{Payload: []byte(chunk.Choices[0].Delta.Content)}, true, nil
+				}
+			}
+			if err := stream.Err(); err != nil {
+				return domain.ModelChunk{}, false, fmt.Errorf("openai stream: %w", err)
+			}
+			if terminal {
+				return domain.ModelChunk{}, false, nil
+			}
+			terminal = true
+			result, err := openAIResult(&accumulated.ChatCompletion, request)
+			if err != nil {
+				return domain.ModelChunk{}, false, err
+			}
+			return terminalFrame(result), true, nil
+		},
+	}
 }
 
 func (p *OpenAI) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {

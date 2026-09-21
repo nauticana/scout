@@ -169,7 +169,7 @@ Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, 
 
 `AgentDraftValidator` receives a `domain.ValidationPhase`: `ValidateDraft` for an ordinary save, `ValidateRelease` before a test or publish. Requirements that only executable state must satisfy — provider credentials, entitlements — belong to the release phase so authoring is never blocked by them.
 
-`controlplane.ModelCatalog` implements `StudioModelCatalog` over `model_definition`, `model_capability`, and `model_price`, so a product only implements that port when it needs tenant scoping or a display scale of its own — decorate the shared catalog rather than replacing it. Modality lives in `model_capability` (one row per modality; a model may serve several) and pricing in `model_price`, which covers tokens, images, and video seconds in currency minor units. Validation rejects a model that is unknown, withdrawn, or does not declare the modality its slot needs.
+`controlplane.ModelCatalog` implements `StudioModelCatalog` over `model_definition`, `model_capability`, and `model_price`, so a product only implements that port when it needs tenant scoping or a display scale of its own — decorate the shared catalog rather than replacing it. Modality lives in `model_capability` (one row per modality; a model may serve several) and pricing in `model_price`, which covers tokens, images, video seconds, and grounding searches in currency minor units. Validation rejects a model that is unknown, withdrawn, or does not declare the modality its slot needs.
 
 `AgentActivityReporter` supplies product-owned last-successful-run times per agent id. `ListAgents` merges them with Scout's own Studio test events and reports the newer of the two. Products report only their own executions; Scout records the `TEST` lifecycle event around `AgentDraftTestExecutor.Execute` itself.
 
@@ -238,7 +238,7 @@ result, err := runtime.MultimodalGenerator{
 | `provider.OpenAI` | Chat Completions | Images API | — |
 | `provider.Google` | Gemini (Vertex ADC or Developer API) | Imagen | Veo |
 
-Credentials, endpoints, and sampling defaults are injected at construction; an adapter never reads configuration and never prices a call — it reports `domain.Usage` in tokens and leaves cost to the product. Adapters without a native streaming path satisfy `ModelProvider.Stream` by delivering the completion as one frame followed by `io.EOF`, so `modelgateway.Gateway` works uniformly without any adapter pretending to emit incremental tokens.
+Credentials, endpoints, and sampling defaults are injected at construction; an adapter never reads configuration and never prices a call — it reports `domain.Usage` in tokens and leaves cost to the product. All three text adapters stream natively: `ModelProvider.Stream` emits one frame per provider text delta and then one terminal frame carrying the tool calls, citations, finish reason, and the usage of the whole call, so a streamed call reports exactly what the unary one does. Where a vendor's frames would drop part of the answer — OpenAI reports web-search annotations only on the complete message — the adapter falls back to one frame followed by `io.EOF` rather than streaming an answer without its sources.
 
 ```go
 renderer := runtime.PromptRenderer{}
@@ -255,7 +255,7 @@ Adapters send no sampling parameter by default: several model families reject an
 
 `runtime.AgentRunStore` records successful executions only after the tenant, agent, version, and digest match `agent_version`, and implements `AgentActivityReporter` for Studio's last-run display. Its `Purge` accepts the app-loaded `agent_run_retention_days` value and deletes in bounded batches, so a periodic worker can drain a backlog across ticks instead of one long delete; zero retains activity forever. `runtime.AgentOpsEventStore` records tenant-scoped operational failures that can happen before an agent profile exists. Products supply open task/event names while Scout owns persistence.
 
-`controlplane.ModelCatalog.Cost` prices a `domain.ModelUsage` — input and output tokens, generated images, whole video seconds — against `model_price`, returning integer minor units and the catalog currency. Token rates are per million and divide last, so rounding error stays below one minor unit; an unpriced model is an error rather than a free one. Never price usage in floating point: these are money amounts, and the currency exponent belongs to the currency, not the caller.
+`controlplane.ModelCatalog.Cost` prices a `domain.ModelUsage` — input and output tokens, generated images, whole video seconds, grounding searches — against `model_price`, returning integer minor units and the catalog currency. Token rates are per million and divide last, so rounding error stays below one minor unit; an unpriced model is an error rather than a free one. Never price usage in floating point: these are money amounts, and the currency exponent belongs to the currency, not the caller.
 
 `runtime.PricedAgent` decorates any `AgentExecutor` with a `ModelPricer` so a task surface can quote work before running it and bill exact usage afterwards, without resolving the catalog itself. Its `GenerateText` returns output text with token counts for callers that do not need the full `ModelResult`, and `Cost` returns minor units with the currency they are denominated in. `PublishedAgentRuntime.ResolvePriced` applies that decoration to all three modalities of a resolved alias at once.
 
@@ -544,7 +544,7 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 38 selected keel tables and 105 Scout tables. Drop the modules the product does not use:
+That full set is 39 selected keel tables and 105 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
@@ -644,6 +644,12 @@ request.Output = domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, Sche
 ```
 
 `TableCandidateCatalog` reads `model_route` when a model has rows there: each active route is one candidate with its own model version, region, and quality class. A model with no routes stays one derived route in the deployment region; a model whose routes are all inactive offers nothing.
+
+### Grounded answers and citations
+
+`domain.ModelRequest.Search` asks the selected route to answer from the provider's own web search — OpenAI web search, Google Search grounding, Anthropic web search — and requires the `web_search` capability, so a route that does not declare it is `ErrCapabilityUnsupported` and never answers ungrounded. `ModelResult.Citations` and `ModelChunk.Citations` carry the sources back provider-neutrally as `domain.Citation{URL, Title, Snippet, Position}`, in the provider's own order; URLs must be unique and positions contiguous from 1 — across every frame of a stream — or the result is `ErrInvalidModelOutput`. `SearchGrounding.MaxSearches` is refused by adapters whose vendor cannot bound its own searches, rather than accepted and ignored.
+
+Searches are priced and metered like tokens: `domain.Usage.SearchQueries` reports what the provider ran, `model_price.search_minor_units` prices it under the `web_search` rate category, `modelgateway.EstimatedSearches` is what the router and the hedge budget reserve before the call, and `usage_event.search_queries` records what was settled.
 
 Scout is not a GPU scheduler. It closes the loop with the serving control plane instead: `ServingSignalCollector` aggregates queued prefill tokens, decode token-seconds, queue-wait percentiles, TTFT and TPOT percentiles, admission rejections, and capacity outcomes per route, and `Flush` hands them to a `ServingSignalExporter` an external autoscaler consumes. A draining route admits nothing new and its running streams end with an explicit partial completion at `DrainDeadline`. See [doc/serving_signals.md](doc/serving_signals.md).
 

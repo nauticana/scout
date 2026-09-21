@@ -43,9 +43,11 @@ type RuntimePolicyVersion struct {
 
 // Usage records model, tool, and cost consumption.
 type Usage struct {
-	InputTokens    int64
-	OutputTokens   int64
-	ToolCalls      int
+	InputTokens  int64
+	OutputTokens int64
+	ToolCalls    int
+	// SearchQueries counts the provider-native web searches a grounded call ran.
+	SearchQueries  int64
 	CostMinorUnits int64
 	Currency       string
 }

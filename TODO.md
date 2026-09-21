@@ -7,7 +7,6 @@ Severity: **MED** = needed before a first customer, **LOW** = adopt on demand.
 | ID | Item | Severity | Blocked on |
 |---|---|---|---|
 | H5 | Reference the notification delivery record from `approval_request`. keel's `outbox_event` is the stable row, but the foreign key makes keel's `outbox` schema module a dependency of `approval`. | MED | decision on that dependency |
-| R5s | Provider-native streaming in the `provider` adapters. They are single-frame today, so `text_delta` events and mid-step frames have nothing to carry; typed events travel on each step's frame. | MED | a consumer rendering partial output |
 | R7 | Versioned skill/procedure artifact: immutable instructions, allowed tool bindings, inputs, eval-set reference, release lifecycle, agent binding. | LOW | two real downstream procedures exposing the same lifecycle |
 | K7 | HANA vector adapter, same contract as `knowledge.PgVectorIndex`. Build when a tenant corpus outgrows one pgvector tier, ingest competes with search, filtered recall stays below target after `iterative_scan`/`ef_search` tuning, the source already lives in HANA under a residency requirement, or a separate PostgreSQL vector tier costs more. | LOW | demand |
 | A3 | OPA or cedar-go evaluator behind `contract.PolicyDecisionPoint`. Policy state stays in Scout; an external engine only evaluates. | LOW | demand |

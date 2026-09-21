@@ -200,11 +200,19 @@ func TestIngestPipelinePublishesInOrderAndCorrelates(t *testing.T) {
 			t.Fatalf("chunk args = %v", call.args)
 		}
 	}
-	// Publish ordering: index before the relational transaction for every document.
-	names := harness.query.names()
-	for i := 1; i < len(names); i++ {
-		if names[i] == qIngestInsertChunk && names[i-1] != qIngestInsertChunk && names[i-1] != qIngestInsertDocument {
-			t.Fatalf("chunk insert outside a document transaction: %v", names)
+	// Documents publish concurrently into one log, so ordering holds per
+	// document: its row is written before any of its chunks.
+	inserted := map[string]bool{}
+	harness.query.mu.Lock()
+	defer harness.query.mu.Unlock()
+	for _, call := range harness.query.calls {
+		switch call.name {
+		case qIngestInsertDocument:
+			inserted[call.args[3].(string)] = true
+		case qIngestInsertChunk:
+			if !inserted[call.args[3].(string)] {
+				t.Fatalf("chunk of %v inserted before its document: %v", call.args[3], harness.query.calls)
+			}
 		}
 	}
 }

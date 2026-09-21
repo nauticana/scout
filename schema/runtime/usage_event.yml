@@ -31,6 +31,9 @@ columns:
   - name: tool_calls
     type: INTEGER
     default: "0"
+  - name: search_queries
+    type: BIGINT
+    default: "0"
   - name: cost_minor_units
     type: BIGINT
     default: "0"
@@ -77,6 +80,8 @@ checks:
     expression: output_tokens >= 0
   - name: usage_event_tool_calls_ck
     expression: tool_calls >= 0
+  - name: usage_event_search_queries_ck
+    expression: search_queries >= 0
   - name: usage_event_cost_ck
     expression: cost_minor_units >= 0
   - name: usage_event_principal_ck

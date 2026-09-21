@@ -7,6 +7,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -44,6 +45,9 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 	if err := checkOutputMode(AnthropicProviderID, request.Output); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
+	if err := validateSearch(request.Search); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(selection.Model),
 		MaxTokens: maxOutputTokens(request),
@@ -74,6 +78,13 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 			param.Description = anthropic.String(tool.Description)
 		}
 		params.Tools = append(params.Tools, anthropic.ToolUnionParam{OfTool: &param})
+	}
+	if request.Search != nil {
+		search := anthropic.WebSearchTool20250305Param{}
+		if request.Search.MaxSearches > 0 {
+			search.MaxUses = anthropic.Int(request.Search.MaxSearches)
+		}
+		params.Tools = append(params.Tools, anthropic.ToolUnionParam{OfWebSearchTool20250305: &search})
 	}
 	if request.Output.Mode == domain.OutputModeJSONSchema {
 		schema, err := schemaObject(request.Output.Schema)
@@ -107,10 +118,16 @@ func anthropicMessage(message domain.ModelMessage) anthropic.MessageParam {
 func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
 	text := ""
 	var calls []domain.ModelToolCall
+	var sources citations
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
 			text += block.Text
+			for _, citation := range block.Citations {
+				if citation.Type == "web_search_result_location" {
+					sources.add(citation.URL, citation.Title, citation.CitedText)
+				}
+			}
 		case "tool_use":
 			calls = append(calls, domain.ModelToolCall{CallID: block.ID, Name: block.Name, Arguments: []byte(block.Input)})
 		}
@@ -121,14 +138,57 @@ func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
 	return domain.ModelResult{
 		Output:       []byte(text),
 		ToolCalls:    calls,
+		Citations:    sources.list,
 		FinishReason: finishReason(string(resp.StopReason), calls),
 		Usage: domain.Usage{
-			InputTokens:  int64(resp.Usage.InputTokens),
-			OutputTokens: int64(resp.Usage.OutputTokens),
+			InputTokens:   int64(resp.Usage.InputTokens),
+			OutputTokens:  int64(resp.Usage.OutputTokens),
+			SearchQueries: resp.Usage.ServerToolUse.WebSearchRequests,
 		},
 	}, nil
 }
 
 func (p *Anthropic) Stream(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {
-	return singleFrameStream(ctx, p, selection, request)
+	if p.APIKey == "" {
+		return nil, fmt.Errorf("%w: anthropic API key is not set", domain.ErrNotReady)
+	}
+	params, err := p.messageParams(selection, request)
+	if err != nil {
+		return nil, err
+	}
+	client := anthropic.NewClient(option.WithAPIKey(p.APIKey))
+	return anthropicStream(client.Messages.NewStreaming(ctx, params)), nil
+}
+
+// anthropicStream emits each text delta as it arrives and accumulates the same
+// message a unary call returns, so both paths report the same terminal frame.
+func anthropicStream(stream *ssestream.Stream[anthropic.MessageStreamEventUnion]) contract.ModelStream {
+	accumulated := anthropic.Message{}
+	terminal := false
+	return &eventStream{
+		shutdown: stream.Close,
+		advance: func() (domain.ModelChunk, bool, error) {
+			for stream.Next() {
+				event := stream.Current()
+				if err := accumulated.Accumulate(event); err != nil {
+					return domain.ModelChunk{}, false, fmt.Errorf("anthropic stream: %w", err)
+				}
+				if text := event.Delta.Text; text != "" {
+					return domain.ModelChunk{Payload: []byte(text)}, true, nil
+				}
+			}
+			if err := stream.Err(); err != nil {
+				return domain.ModelChunk{}, false, fmt.Errorf("anthropic stream: %w", err)
+			}
+			if terminal {
+				return domain.ModelChunk{}, false, nil
+			}
+			terminal = true
+			result, err := anthropicResult(&accumulated)
+			if err != nil {
+				return domain.ModelChunk{}, false, err
+			}
+			return terminalFrame(result), true, nil
+		},
+	}
 }

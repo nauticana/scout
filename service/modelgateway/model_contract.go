@@ -21,7 +21,22 @@ func RequiredCapabilities(request domain.ModelRequest) []string {
 	if request.Output.Mode != domain.OutputModeText && !slices.Contains(required, domain.CapabilityStructuredOutput) {
 		required = append(required, domain.CapabilityStructuredOutput)
 	}
+	if request.Search != nil && !slices.Contains(required, domain.CapabilityWebSearch) {
+		required = append(required, domain.CapabilityWebSearch)
+	}
 	return required
+}
+
+// EstimatedSearches is the number of grounding searches a request may run,
+// priced and budgeted before the call like its output tokens are.
+func EstimatedSearches(request domain.ModelRequest) int64 {
+	switch {
+	case request.Search == nil:
+		return 0
+	case request.Search.MaxSearches > 0:
+		return request.Search.MaxSearches
+	}
+	return 1
 }
 
 // modelContract is the compiled tool and output schemas of one request, held so
@@ -33,6 +48,9 @@ type modelContract struct {
 }
 
 func compileModelContract(request domain.ModelRequest) (*modelContract, error) {
+	if request.Search != nil && request.Search.MaxSearches < 0 {
+		return nil, fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+	}
 	compiled := &modelContract{
 		tools:       make(map[string]*jsonschema.Schema, len(request.Tools)),
 		usedCallIDs: make(map[string]struct{}),
@@ -174,12 +192,39 @@ func (compiled *modelContract) checkTerminal(output []byte, calledTools bool) er
 }
 
 func (compiled *modelContract) checkResult(result domain.ModelResult) error {
-	if result.Usage.InputTokens < 0 || result.Usage.OutputTokens < 0 || result.Usage.ToolCalls < 0 || result.Usage.CostMinorUnits < 0 ||
-		result.Usage.CostMinorUnits > 0 && strings.TrimSpace(result.Usage.Currency) == "" {
+	if result.Usage.InputTokens < 0 || result.Usage.OutputTokens < 0 || result.Usage.ToolCalls < 0 || result.Usage.SearchQueries < 0 ||
+		result.Usage.CostMinorUnits < 0 || result.Usage.CostMinorUnits > 0 && strings.TrimSpace(result.Usage.Currency) == "" {
 		return fmt.Errorf("%w: model returned invalid usage", domain.ErrInvalidModelOutput)
 	}
 	if err := compiled.checkToolCalls(result.ToolCalls); err != nil {
 		return err
 	}
+	if err := new(citationCheck).add(result.Citations); err != nil {
+		return err
+	}
 	return compiled.checkTerminal(result.Output, len(result.ToolCalls) > 0)
+}
+
+// citationCheck holds citations to unique URLs and contiguous positions, across
+// every frame of a stream.
+type citationCheck struct {
+	seen map[string]struct{}
+}
+
+func (check *citationCheck) add(citations []domain.Citation) error {
+	for _, citation := range citations {
+		position := len(check.seen) + 1
+		url := strings.TrimSpace(citation.URL)
+		if url == "" || citation.Position != position {
+			return fmt.Errorf("%w: citation %d has no URL or has an invalid position", domain.ErrInvalidModelOutput, position)
+		}
+		if _, duplicate := check.seen[url]; duplicate {
+			return fmt.Errorf("%w: citation %d repeats URL %q", domain.ErrInvalidModelOutput, position, url)
+		}
+		if check.seen == nil {
+			check.seen = make(map[string]struct{}, len(citations))
+		}
+		check.seen[url] = struct{}{}
+	}
+	return nil
 }

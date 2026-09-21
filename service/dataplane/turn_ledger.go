@@ -276,8 +276,8 @@ RETURNING detail.turn_no`,
 INSERT INTO usage_event
        (id, tenant_id, conversation_id, turn_no, category_code, subject_ref,
         principal_kind, principal_id, scope_id,
-        input_tokens, output_tokens, tool_calls, cost_minor_units, currency_code)
-VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        input_tokens, output_tokens, tool_calls, search_queries, cost_minor_units, currency_code)
+VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, conversation_id, turn_no, category_code) DO NOTHING
 RETURNING id`,
 
@@ -490,13 +490,15 @@ func PriceUsage(ctx context.Context, agent contract.PricedAgent, inputTokens, ou
 
 // PriceModelUsage combines text and optional media pricing.
 func PriceModelUsage(ctx context.Context, text, image, video contract.PricedAgent, usage domain.ModelUsage) (domain.Usage, error) {
-	if text == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.InputTokens > math.MaxInt64-usage.OutputTokens {
+	if text == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.SearchQueries < 0 ||
+		usage.InputTokens > math.MaxInt64-usage.OutputTokens {
 		return domain.Usage{}, fmt.Errorf("%w: priced agents and non-negative usage are required", domain.ErrValidation)
 	}
 	parts := []struct {
 		agent contract.PricedAgent
 		usage domain.ModelUsage
-	}{{text, domain.ModelUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}}, {image, domain.ModelUsage{Images: usage.Images}}, {video, domain.ModelUsage{VideoSeconds: usage.VideoSeconds}}}
+	}{{text, domain.ModelUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries}},
+		{image, domain.ModelUsage{Images: usage.Images}}, {video, domain.ModelUsage{VideoSeconds: usage.VideoSeconds}}}
 	total, currency := int64(0), ""
 	for i, part := range parts {
 		if i > 0 && (i == 1 && usage.Images == 0 || i == 2 && usage.VideoSeconds == 0) {
@@ -518,7 +520,10 @@ func PriceModelUsage(ctx context.Context, text, image, video contract.PricedAgen
 	if total < 1 {
 		total = 1
 	}
-	return domain.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CostMinorUnits: total, Currency: currency}, nil
+	return domain.Usage{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries,
+		CostMinorUnits: total, Currency: currency,
+	}, nil
 }
 
 func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID string) (TurnState, bool, error) {
@@ -1078,7 +1083,7 @@ func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService,
 		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
 		nullableUsageField(string(attribution.Principal.Kind)), nullableUsageField(attribution.Principal.ID),
 		nullableUsageField(attribution.ScopeID),
-		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.CostMinorUnits, usage.Currency)
+		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries, usage.CostMinorUnits, usage.Currency)
 	if err != nil {
 		return false, fmt.Errorf("persist usage event: %w", err)
 	}

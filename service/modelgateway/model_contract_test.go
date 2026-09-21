@@ -62,6 +62,7 @@ func TestGatewayRejectsARouteWithoutTheRequiredCapabilityBeforeTheProvider(t *te
 		"structured output": func(r *domain.ModelRequest) {
 			r.Output = domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, Schema: []byte(`{"type":"object"}`)}
 		},
+		"web search": func(r *domain.ModelRequest) { r.Search = &domain.SearchGrounding{} },
 	} {
 		gateway, invoked := contractGateway(t, []string{"vision"}, domain.ModelResult{})
 		request := validModelRequest()
@@ -180,6 +181,91 @@ func TestGatewayValidatesConstrainedOutputAndNeverAcceptsFreeText(t *testing.T) 
 		if !valid && (!errors.Is(unaryErr, domain.ErrInvalidModelOutput) || !errors.Is(streamErr, domain.ErrInvalidModelOutput)) {
 			t.Fatalf("%s: want ErrInvalidModelOutput from both paths, got %v and %v", output, unaryErr, streamErr)
 		}
+	}
+}
+
+func TestGatewayValidatesCitationsOfAGroundedAnswer(t *testing.T) {
+	for name, citations := range map[string][]domain.Citation{
+		"valid":                {{URL: "https://a.example/p", Position: 1}},
+		"no URL":               {{Title: "A", Position: 1}},
+		"wrong position":       {{URL: "https://a.example/p", Position: 2}},
+		"duplicate source URL": {{URL: "https://a.example/p", Position: 1}, {URL: "https://a.example/p", Position: 2}},
+	} {
+		gateway, _ := contractGateway(t, []string{domain.CapabilityWebSearch},
+			domain.ModelResult{Output: []byte("grounded"), Citations: citations, FinishReason: "stop"})
+		request := validModelRequest()
+		request.Search = &domain.SearchGrounding{MaxSearches: 3}
+		_, err := gateway.Generate(context.Background(), contractSelection, request)
+		if name == "valid" {
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			continue
+		}
+		if !errors.Is(err, domain.ErrInvalidModelOutput) {
+			t.Fatalf("%s: want ErrInvalidModelOutput, got %v", name, err)
+		}
+	}
+}
+
+func TestEstimatedSearchesPricesAGroundedRequestBeforeItRuns(t *testing.T) {
+	request := validModelRequest()
+	if got := EstimatedSearches(request); got != 0 {
+		t.Fatalf("ungrounded estimate = %d", got)
+	}
+	request.Search = &domain.SearchGrounding{}
+	if got := EstimatedSearches(request); got != 1 {
+		t.Fatalf("unbounded estimate = %d, want one search", got)
+	}
+	request.Search = &domain.SearchGrounding{MaxSearches: 4}
+	if got := EstimatedSearches(request); got != 4 {
+		t.Fatalf("bounded estimate = %d, want the ceiling", got)
+	}
+}
+
+func TestStreamHoldsCitationsUniqueAndContiguousAcrossFrames(t *testing.T) {
+	for name, test := range map[string]struct {
+		second domain.Citation
+		valid  bool
+	}{
+		"continued position":  {second: domain.Citation{URL: "https://b.example/p", Position: 2}, valid: true},
+		"restarted position":  {second: domain.Citation{URL: "https://b.example/p", Position: 1}},
+		"URL of an old frame": {second: domain.Citation{URL: "https://a.example/p", Position: 2}},
+	} {
+		frames := []domain.ModelChunk{
+			{Sequence: 1, Citations: []domain.Citation{{URL: "https://a.example/p", Position: 1}}},
+			{Sequence: 2, Citations: []domain.Citation{test.second}},
+		}
+		compiled, err := compileModelContract(validModelRequest())
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		stream := &contractStream{contract: compiled, stream: &fake.ModelStream{
+			ReceiveFunc: func(context.Context) (domain.ModelChunk, error) {
+				frame := frames[0]
+				frames = frames[1:]
+				return frame, nil
+			},
+			CloseFunc: func() error { return nil },
+		}}
+		if _, err := stream.Receive(context.Background()); err != nil {
+			t.Fatalf("%s: first frame: %v", name, err)
+		}
+		if _, err := stream.Receive(context.Background()); test.valid != (err == nil) || !test.valid && !errors.Is(err, domain.ErrInvalidModelOutput) {
+			t.Fatalf("%s: second frame error = %v", name, err)
+		}
+	}
+}
+
+func TestGatewayRejectsInvalidSearchBounds(t *testing.T) {
+	gateway, invoked := contractGateway(t, []string{domain.CapabilityWebSearch}, domain.ModelResult{})
+	request := validModelRequest()
+	request.Search = &domain.SearchGrounding{MaxSearches: -1}
+	if _, err := gateway.Generate(context.Background(), contractSelection, request); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("want ErrValidation, got %v", err)
+	}
+	if *invoked != 0 {
+		t.Fatal("provider was invoked for an invalid search bound")
 	}
 }
 

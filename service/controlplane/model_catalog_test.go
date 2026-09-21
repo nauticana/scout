@@ -23,8 +23,8 @@ func TestListJoinsCapabilitiesAndRates(t *testing.T) {
 			{"google", "gemini-3.1-flash-image", "text"},
 		},
 		qCatalogPrices: {
-			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0)},
-			{"google", "gemini-3.1-flash-image", "CRD", int64(0), int64(0), int64(120000), int64(0)},
+			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000)},
+			{"google", "gemini-3.1-flash-image", "CRD", int64(0), int64(0), int64(120000), int64(0), int64(0)},
 		},
 	})
 	models, err := catalog.List(context.Background(), 8)
@@ -37,7 +37,7 @@ func TestListJoinsCapabilitiesAndRates(t *testing.T) {
 	if models[0].DisplayName != "Claude Opus 5" || models[0].ContextTokenLimit != 1000000 {
 		t.Fatalf("model = %+v", models[0])
 	}
-	if len(models[0].Rates) != 2 || models[0].Rates[0].UsageCategory != RateInputPerMillion {
+	if len(models[0].Rates) != 3 || models[0].Rates[0].UsageCategory != RateInputPerMillion || models[0].Rates[2].UsageCategory != RateWebSearch {
 		t.Fatalf("rates = %+v", models[0].Rates)
 	}
 	// Zero-amount rates are omitted rather than reported as free.
@@ -95,8 +95,8 @@ func TestValidateSkipsUnsetSlots(t *testing.T) {
 func TestCostPricesUsageInIntegerMinorUnits(t *testing.T) {
 	catalog := catalogFake(map[string][][]any{
 		qCatalogPrices: {
-			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0)},
-			{"google", "videogeneration@001", "CRD", int64(0), int64(0), int64(0), int64(1400000)},
+			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000)},
+			{"google", "videogeneration@001", "CRD", int64(0), int64(0), int64(0), int64(1400000), int64(0)},
 		},
 	})
 	opus := domain.ModelReference{ProviderID: "anthropic", ModelID: "claude-opus-5"}
@@ -120,6 +120,12 @@ func TestCostPricesUsageInIntegerMinorUnits(t *testing.T) {
 		domain.ModelReference{ProviderID: "google", ModelID: "videogeneration@001"},
 		domain.ModelUsage{VideoSeconds: 8}); err != nil || cost != 11200000 {
 		t.Fatalf("video cost = %d err = %v", cost, err)
+	}
+
+	// A grounded call is billed per search, on top of its tokens.
+	if cost, _, err = catalog.Cost(context.Background(), opus,
+		domain.ModelUsage{InputTokens: 1000, SearchQueries: 2}); err != nil || cost != 3020000 {
+		t.Fatalf("grounded cost = %d err = %v, want 3020000", cost, err)
 	}
 
 	if _, _, err = catalog.Cost(context.Background(),

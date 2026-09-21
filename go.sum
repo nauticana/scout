@@ -189,8 +189,8 @@ github.com/mark3labs/mcp-go v0.46.0 h1:8KRibF4wcKejbLsHxCA/QBVUr5fQ9nwz/n8lGqmaA
 github.com/mark3labs/mcp-go v0.46.0/go.mod h1:JKTC7R2LLVagkEWK7Kwu7DbmA6iIvnNAod6yrHiQMag=
 github.com/nauticana/charter v1.2.0 h1:IpHu9N0TGa9MYE2aZS6FcYGSFZQi5zwqtAba84Shfc0=
 github.com/nauticana/charter v1.2.0/go.mod h1:K1/GHaZQvy5O/BLq4MCiZK18W2HKcVcHGijA+qtjgII=
-github.com/nauticana/keel v1.2.69 h1:v9Uq4qC3fXfqqDPz31PkgzWOB9rwZS7eLTPrEv1UlWg=
-github.com/nauticana/keel v1.2.69/go.mod h1:Ie2ssVZx8PQZTi9WYya6Deg/3xn3yvVy+rW47WVydrc=
+github.com/nauticana/keel v1.2.71 h1:1IiVLdBBqCwxWsTvB0PXpl49pR4KthXdBd4PDFkU8eY=
+github.com/nauticana/keel v1.2.71/go.mod h1:Ie2ssVZx8PQZTi9WYya6Deg/3xn3yvVy+rW47WVydrc=
 github.com/nyaruka/phonenumbers v1.7.2 h1:biMUpF5TWuHtYXVzuNE7pSCjlA9tkvd8Vaq8b1CYaaQ=
 github.com/nyaruka/phonenumbers v1.7.2/go.mod h1:fsKPJ70O9JetEA4ggnJadYTFWwtGPvu/lETTXNXq6Cs=
 github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1U0=

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"time"
 
 	"google.golang.org/genai"
@@ -72,6 +73,12 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 			declarations = append(declarations, &genai.FunctionDeclaration{Name: tool.Name, Description: tool.Description, ParametersJsonSchema: schema})
 		}
 		config.Tools = []*genai.Tool{{FunctionDeclarations: declarations}}
+	}
+	if request.Search != nil {
+		if err := checkSearchBound(GoogleProviderID, request.Search); err != nil {
+			return nil, nil, err
+		}
+		config.Tools = append(config.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
 	}
 	if request.Output.Mode == domain.OutputModeJSONSchema {
 		schema, err := schemaObject(request.Output.Schema)
@@ -167,10 +174,15 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 		return domain.ModelResult{}, err
 	}
 	native := ""
+	var grounding *genai.GroundingMetadata
 	if len(resp.Candidates) > 0 {
 		native = string(resp.Candidates[0].FinishReason)
+		grounding = resp.Candidates[0].GroundingMetadata
 	}
 	usage := domain.Usage{}
+	if grounding != nil {
+		usage.SearchQueries = int64(len(grounding.WebSearchQueries))
+	}
 	if resp.UsageMetadata != nil {
 		usage.InputTokens = int64(resp.UsageMetadata.PromptTokenCount)
 		usage.OutputTokens = int64(resp.UsageMetadata.CandidatesTokenCount)
@@ -180,11 +192,143 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 		usage.InputTokens = int64(len(request.Prompt)) / 4
 		usage.OutputTokens = int64(len(text)) / 4
 	}
-	return domain.ModelResult{Output: []byte(text), ToolCalls: calls, FinishReason: finishReason(native, calls), Usage: usage}, nil
+	return domain.ModelResult{
+		Output: []byte(text), ToolCalls: calls, Citations: googleCitations(grounding),
+		FinishReason: finishReason(native, calls), Usage: usage,
+	}, nil
+}
+
+// googleCitations maps each grounding chunk to its source; the snippet is the
+// first answer segment a support attributes to that chunk.
+func googleCitations(grounding *genai.GroundingMetadata) []domain.Citation {
+	if grounding == nil {
+		return nil
+	}
+	snippets := make(map[int32]string, len(grounding.GroundingSupports))
+	for _, support := range grounding.GroundingSupports {
+		if support == nil || support.Segment == nil {
+			continue
+		}
+		for _, index := range support.GroundingChunkIndices {
+			if _, attributed := snippets[index]; !attributed {
+				snippets[index] = support.Segment.Text
+			}
+		}
+	}
+	var sources citations
+	for index, chunk := range grounding.GroundingChunks {
+		if chunk == nil || chunk.Web == nil {
+			continue
+		}
+		sources.add(chunk.Web.URI, chunk.Web.Title, snippets[int32(index)])
+	}
+	return sources.list
 }
 
 func (p *Google) Stream(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {
-	return singleFrameStream(ctx, p, selection, request)
+	client, err := p.newClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("genai.NewClient: %w", err)
+	}
+	contents, config, err := p.contentParams(request)
+	if err != nil {
+		return nil, err
+	}
+	return googleStream(client.Models.GenerateContentStream(ctx, selection.Model, contents, config), request), nil
+}
+
+// googleStream emits each streamed text part and folds every chunk into one
+// response, so the terminal frame reports the calls, citations, and usage a
+// unary call would.
+func googleStream(responses iter.Seq2[*genai.GenerateContentResponse, error], request domain.ModelRequest) contract.ModelStream {
+	next, stop := iter.Pull2(responses)
+	aggregate := &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: &genai.Content{Role: genai.RoleModel}}}}
+	terminal := false
+	return &eventStream{
+		shutdown: func() error { stop(); return nil },
+		advance: func() (domain.ModelChunk, bool, error) {
+			for {
+				response, err, more := next()
+				if err != nil {
+					return domain.ModelChunk{}, false, fmt.Errorf("genai stream: %w", err)
+				}
+				if !more {
+					break
+				}
+				if text := googleFold(aggregate, response); text != "" {
+					return domain.ModelChunk{Payload: []byte(text)}, true, nil
+				}
+			}
+			if terminal {
+				return domain.ModelChunk{}, false, nil
+			}
+			terminal = true
+			result, err := googleResult(aggregate, request)
+			if err != nil {
+				return domain.ModelChunk{}, false, err
+			}
+			return terminalFrame(result), true, nil
+		},
+	}
+}
+
+// googleFold folds one streamed response into the aggregate and returns the
+// answer text it added. Gemini reports usage cumulatively, so the last count wins.
+func googleFold(aggregate, response *genai.GenerateContentResponse) string {
+	if response == nil {
+		return ""
+	}
+	if response.UsageMetadata != nil {
+		aggregate.UsageMetadata = response.UsageMetadata
+	}
+	if len(response.Candidates) == 0 || response.Candidates[0] == nil {
+		return ""
+	}
+	candidate, streamed := aggregate.Candidates[0], response.Candidates[0]
+	if streamed.FinishReason != "" {
+		candidate.FinishReason = streamed.FinishReason
+	}
+	if streamed.GroundingMetadata != nil {
+		if candidate.GroundingMetadata == nil {
+			candidate.GroundingMetadata = &genai.GroundingMetadata{}
+		}
+		grounding := candidate.GroundingMetadata
+		// Supports that arrive with their own chunks index into that response's
+		// list; without chunks they index into what was already streamed.
+		offset := int32(0)
+		if len(streamed.GroundingMetadata.GroundingChunks) > 0 {
+			offset = int32(len(grounding.GroundingChunks))
+		}
+		grounding.GroundingChunks = append(grounding.GroundingChunks, streamed.GroundingMetadata.GroundingChunks...)
+		for _, support := range streamed.GroundingMetadata.GroundingSupports {
+			if support == nil {
+				continue
+			}
+			rebased := *support
+			rebased.GroundingChunkIndices = make([]int32, len(support.GroundingChunkIndices))
+			for i, index := range support.GroundingChunkIndices {
+				rebased.GroundingChunkIndices[i] = index + offset
+			}
+			grounding.GroundingSupports = append(grounding.GroundingSupports, &rebased)
+		}
+		if len(streamed.GroundingMetadata.WebSearchQueries) > 0 {
+			grounding.WebSearchQueries = streamed.GroundingMetadata.WebSearchQueries
+		}
+	}
+	if streamed.Content == nil {
+		return ""
+	}
+	text := ""
+	for _, part := range streamed.Content.Parts {
+		if part == nil {
+			continue
+		}
+		candidate.Content.Parts = append(candidate.Content.Parts, part)
+		if !part.Thought {
+			text += part.Text
+		}
+	}
+	return text
 }
 
 func (p *Google) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {

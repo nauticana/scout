@@ -251,7 +251,7 @@ func (router *PolicyRouter) score(ctx context.Context, candidate domain.ModelCan
 	}
 	if router.Pricer != nil {
 		cost, currency, err := router.Pricer.Cost(ctx, domain.ModelReference{ProviderID: candidate.Provider, ModelID: candidate.Model},
-			domain.ModelUsage{InputTokens: inputs.prompt, OutputTokens: inputs.request.MaxOutputTokens})
+			domain.ModelUsage{InputTokens: inputs.prompt, OutputTokens: inputs.request.MaxOutputTokens, SearchQueries: EstimatedSearches(inputs.request)})
 		if err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return scored, rejectUnpriced, nil

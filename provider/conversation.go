@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -144,4 +145,51 @@ func emptyResult(provider string, text string, calls []domain.ModelToolCall) err
 		return fmt.Errorf("%s: response carried neither text nor tool calls", provider)
 	}
 	return nil
+}
+
+// checkSearchBound refuses a bounded-search request whose vendor cannot bound
+// its own searches, so a grounded call never outruns the searches it was priced for.
+func checkSearchBound(provider string, search *domain.SearchGrounding) error {
+	if err := validateSearch(search); err != nil {
+		return err
+	}
+	if search == nil || search.MaxSearches <= 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s adapter cannot bound grounding searches", domain.ErrCapabilityUnsupported, provider)
+}
+
+func validateSearch(search *domain.SearchGrounding) error {
+	if search != nil && search.MaxSearches < 0 {
+		return fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+	}
+	return nil
+}
+
+// citations collects the sources of a grounded answer in the order the provider
+// reported them, keeping the first title and snippet given for each URL.
+type citations struct {
+	list  []domain.Citation
+	index map[string]int
+}
+
+func (collected *citations) add(url, title, snippet string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	if at, seen := collected.index[url]; seen {
+		if collected.list[at].Title == "" {
+			collected.list[at].Title = title
+		}
+		if collected.list[at].Snippet == "" {
+			collected.list[at].Snippet = snippet
+		}
+		return
+	}
+	if collected.index == nil {
+		collected.index = make(map[string]int)
+	}
+	collected.index[url] = len(collected.list)
+	collected.list = append(collected.list, domain.Citation{URL: url, Title: title, Snippet: snippet, Position: len(collected.list) + 1})
 }

@@ -93,7 +93,7 @@ func TestTurnLedgerFailWithUsageSettlesInsteadOfReleasing(t *testing.T) {
 	if committed != usage || released != 0 || settledHook != 1 || query.commits != 1 {
 		t.Fatalf("committed %+v released %d hook %d commits %d", committed, released, settledHook, query.commits)
 	}
-	if event := query.args[qLedgerInsertUsageEvent]; event[8] != int64(40) || event[11] != int64(3) {
+	if event := query.args[qLedgerInsertUsageEvent]; event[8] != int64(40) || event[12] != int64(3) {
 		t.Fatalf("usage event args = %v", event)
 	}
 

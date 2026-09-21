@@ -451,6 +451,7 @@ erDiagram
         bigint output_minor_units_per_million
         bigint image_minor_units
         bigint video_minor_units_per_second
+        bigint search_minor_units
     }
     tenant_model_access {
         bigint tenant_id PK,FK

@@ -14,6 +14,7 @@ import (
 type contractStream struct {
 	stream      contract.ModelStream
 	contract    *modelContract
+	citations   citationCheck
 	output      []byte
 	calledTools bool
 	checked     bool
@@ -28,6 +29,9 @@ func (stream *contractStream) Receive(ctx context.Context) (domain.ModelChunk, e
 		return chunk, err
 	}
 	if err := stream.contract.checkToolCalls(chunk.ToolCalls); err != nil {
+		return domain.ModelChunk{}, err
+	}
+	if err := stream.citations.add(chunk.Citations); err != nil {
 		return domain.ModelChunk{}, err
 	}
 	stream.calledTools = stream.calledTools || len(chunk.ToolCalls) > 0

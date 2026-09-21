@@ -46,9 +46,9 @@ func atLeastOne(count int32) int32 {
 	return count
 }
 
-// singleFrameStream adapts a non-streaming provider: the whole completion
-// arrives as one frame, then io.EOF. Callers get correct ordering and usage
-// without the adapter pretending to deliver incremental tokens.
+// singleFrameStream falls back to a unary call where a vendor's frames would
+// lose part of the answer: the whole completion arrives as one frame, then
+// io.EOF, without the adapter pretending to deliver incremental tokens.
 func singleFrameStream(ctx context.Context, p contract.ModelProvider, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {
 	result, err := p.Generate(ctx, selection, request)
 	if err != nil {
@@ -76,3 +76,48 @@ func (s *completedStream) Receive(context.Context) (domain.ModelChunk, error) {
 }
 
 func (s *completedStream) Close() error { return nil }
+
+// eventStream turns a vendor event stream into ordered model frames: one frame
+// per text delta, then one terminal frame carrying the tool calls, citations,
+// finish reason, and the usage of the whole call.
+type eventStream struct {
+	// advance returns the next frame; a false second result ends the stream.
+	advance  func() (domain.ModelChunk, bool, error)
+	shutdown func() error
+	sequence int64
+	ended    bool
+	closed   sync.Once
+}
+
+var _ contract.ModelStream = (*eventStream)(nil)
+
+func (s *eventStream) Receive(context.Context) (domain.ModelChunk, error) {
+	if s.ended {
+		return domain.ModelChunk{}, io.EOF
+	}
+	chunk, more, err := s.advance()
+	if err != nil || !more {
+		s.ended = true
+		if err != nil {
+			return domain.ModelChunk{}, err
+		}
+		return domain.ModelChunk{}, io.EOF
+	}
+	s.sequence++
+	chunk.Sequence = s.sequence
+	return chunk, nil
+}
+
+func (s *eventStream) Close() error {
+	var err error
+	s.closed.Do(func() { err = s.shutdown() })
+	return err
+}
+
+// terminalFrame carries what only a complete response can report.
+func terminalFrame(result domain.ModelResult) domain.ModelChunk {
+	return domain.ModelChunk{
+		ToolCalls: result.ToolCalls, Citations: result.Citations,
+		FinishReason: result.FinishReason, Usage: result.Usage,
+	}
+}

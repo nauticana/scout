@@ -23,6 +23,7 @@ const (
 	RateOutputPerMillion = "output_per_million"
 	RateImage            = "image"
 	RateVideoSecond      = "video_second"
+	RateWebSearch        = "web_search"
 )
 
 const (
@@ -43,7 +44,7 @@ SELECT provider_id, model_id, display_name, context_token_limit, output_token_li
 SELECT DISTINCT ON (provider_id, model_id, currency_code)
        provider_id, model_id, currency_code,
        input_minor_units_per_million, output_minor_units_per_million,
-       image_minor_units, video_minor_units_per_second
+       image_minor_units, video_minor_units_per_second, search_minor_units
   FROM model_price
  WHERE effective_at <= CURRENT_TIMESTAMP
  ORDER BY provider_id, model_id, currency_code, effective_at DESC`,
@@ -213,6 +214,7 @@ func (c *ModelCatalog) rates(ctx context.Context) (map[domain.ModelReference][]d
 			{RateOutputPerMillion, common.AsInt64(row[4])},
 			{RateImage, common.AsInt64(row[5])},
 			{RateVideoSecond, common.AsInt64(row[6])},
+			{RateWebSearch, common.AsInt64(row[7])},
 		} {
 			if rate.amount > 0 {
 				rates[reference] = append(rates[reference], domain.ModelRate{
@@ -228,9 +230,10 @@ func (c *ModelCatalog) rates(ctx context.Context) (map[domain.ModelReference][]d
 // Cost prices one model's usage in the catalog currency, in integer minor
 // units. Token rates are per million, so the division happens last to keep the
 // rounding error below one minor unit. Media counts are billed per asset and
-// per whole second. An unpriced model is an error, never a free one.
+// per whole second, grounding searches per search. An unpriced model is an
+// error, never a free one.
 func (c *ModelCatalog) Cost(ctx context.Context, reference domain.ModelReference, usage domain.ModelUsage) (int64, string, error) {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.SearchQueries < 0 {
 		return 0, "", fmt.Errorf("%w: usage counts cannot be negative", domain.ErrValidation)
 	}
 	if err := c.init(ctx); err != nil {
@@ -257,6 +260,8 @@ func (c *ModelCatalog) Cost(ctx context.Context, reference domain.ModelReference
 			total += rate.AmountMinor * usage.Images
 		case RateVideoSecond:
 			total += rate.AmountMinor * usage.VideoSeconds
+		case RateWebSearch:
+			total += rate.AmountMinor * usage.SearchQueries
 		}
 	}
 	return total, currency, nil

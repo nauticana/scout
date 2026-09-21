@@ -60,8 +60,8 @@ func streamCause(err error) error {
 }
 
 func (stream *leasedModelStream) addUsage(usage domain.Usage) error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.CostMinorUnits < 0 ||
-		usage.CostMinorUnits > 0 && strings.TrimSpace(usage.Currency) == "" {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 ||
+		usage.CostMinorUnits < 0 || usage.CostMinorUnits > 0 && strings.TrimSpace(usage.Currency) == "" {
 		return fmt.Errorf("%w: model stream usage is invalid", domain.ErrValidation)
 	}
 	stream.mu.Lock()
@@ -72,6 +72,7 @@ func (stream *leasedModelStream) addUsage(usage domain.Usage) error {
 	stream.usage.InputTokens += usage.InputTokens
 	stream.usage.OutputTokens += usage.OutputTokens
 	stream.usage.ToolCalls += usage.ToolCalls
+	stream.usage.SearchQueries += usage.SearchQueries
 	stream.usage.CostMinorUnits += usage.CostMinorUnits
 	if stream.usage.Currency == "" {
 		stream.usage.Currency = usage.Currency
