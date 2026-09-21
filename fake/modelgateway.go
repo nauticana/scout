@@ -70,6 +70,25 @@ func (stream *ModelStream) Close() error {
 	return stream.CloseFunc()
 }
 
+// EmbeddingProviderFunc adapts a function to contract.EmbeddingProvider.
+type EmbeddingProviderFunc func(context.Context, domain.ModelSelection, domain.EmbeddingRequest) ([]domain.Embedding, error)
+
+// Embed invokes the configured function.
+func (function EmbeddingProviderFunc) Embed(ctx context.Context, selection domain.ModelSelection, request domain.EmbeddingRequest) ([]domain.Embedding, error) {
+	return function(ctx, selection, request)
+}
+
+// EmbeddingProviderRegistry serves one embedding adapter, or an error.
+type EmbeddingProviderRegistry struct {
+	Provider contract.EmbeddingProvider
+	Err      error
+}
+
+// EmbeddingProviderFor returns Provider unless Err is set.
+func (registry *EmbeddingProviderRegistry) EmbeddingProviderFor(context.Context, domain.ModelSelection) (contract.EmbeddingProvider, error) {
+	return registry.Provider, registry.Err
+}
+
 // CapacitySchedulerFunc adapts a function to contract.CapacityScheduler.
 type CapacitySchedulerFunc func(context.Context, domain.ModelRequest, domain.ModelSelection) (contract.CapacityLease, error)
 
@@ -98,4 +117,6 @@ var _ contract.TenantRateLimiter = (*TenantRateLimiter)(nil)
 var _ contract.ModelProvider = (*ModelProvider)(nil)
 var _ contract.ModelStream = (*ModelStream)(nil)
 var _ contract.CapacityScheduler = CapacitySchedulerFunc(nil)
+var _ contract.EmbeddingProvider = EmbeddingProviderFunc(nil)
+var _ contract.EmbeddingProviderRegistry = (*EmbeddingProviderRegistry)(nil)
 var _ contract.CapacityLease = (*CapacityLease)(nil)

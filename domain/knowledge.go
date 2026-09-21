@@ -111,6 +111,45 @@ type Embedding struct {
 	Usage  Usage
 }
 
+// How a bound knowledge version reaches a run.
+const (
+	// KnowledgeModeRetrieval searches the version by similarity.
+	KnowledgeModeRetrieval = "retrieval"
+	// KnowledgeModeWhole reads the bound documents in full on every run, for
+	// standing rules that top-K similarity would silently drop.
+	KnowledgeModeWhole = "whole"
+)
+
+// PinnedKnowledgeRequest asks for the whole-mode bindings of one agent version.
+// The entitlements are the resolved ones retrieval uses; nil fails closed.
+type PinnedKnowledgeRequest struct {
+	TenantContext      TenantContext
+	AgentID            string
+	AgentVersion       string
+	Principal          Principal
+	Entitlements       []byte
+	EntitlementsDigest string
+}
+
+// PinnedDocument is one bound document assembled in full from its authorized,
+// redacted chunks of the pinned knowledge version.
+type PinnedDocument struct {
+	KnowledgeBaseID  string
+	KnowledgeVersion string
+	DocumentID       string
+	SourceURI        string
+	SourceVersion    string
+	Content          []byte
+	TokenCount       int
+}
+
+// PinnedKnowledge is every whole-mode document of one agent version, in
+// binding order, with the tokens they cost the prompt.
+type PinnedKnowledge struct {
+	Documents  []PinnedDocument
+	TokenCount int
+}
+
 // IngestBatch is one bounded ingestion request for a knowledge version.
 type IngestBatch struct {
 	TenantContext    TenantContext

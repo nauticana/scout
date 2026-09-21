@@ -171,3 +171,27 @@ func TestProviderAgentHoldsAConstrainedAnswerToItsSchemaAndKeepsItsUsage(t *test
 		}
 	}
 }
+
+func TestProviderAgentAsksForGroundingAndReturnsItsSources(t *testing.T) {
+	citations := []domain.Citation{{URL: "https://example.test/a", Title: "A", Position: 1}}
+	provider := &modelProviderRecorder{result: domain.ModelResult{Output: []byte("grounded"), Citations: citations}}
+	agent, err := NewProviderAgent("writer", domain.ModelReference{ProviderID: "provider", ModelID: "model"}, nil, 900,
+		&rendererRecorder{rendered: "prompt"}, provider, nil)
+	if err != nil {
+		t.Fatalf("NewProviderAgent: %v", err)
+	}
+	result, err := agent.Generate(context.Background(), domain.AgentTask{Task: "Ask", Search: &domain.SearchGrounding{MaxSearches: 2}})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if provider.request.Search == nil || provider.request.Search.MaxSearches != 2 {
+		t.Fatalf("the grounding request must reach the provider, got %+v", provider.request.Search)
+	}
+	if len(result.Citations) != 1 || result.Citations[0].URL != citations[0].URL {
+		t.Fatalf("the sources must reach the caller, got %+v", result.Citations)
+	}
+	multimodal, err := MultimodalGenerator{Text: agent}.Generate(context.Background(), domain.MultimodalTask{AgentTask: domain.AgentTask{Task: "Ask"}})
+	if err != nil || len(multimodal.Citations) != 1 {
+		t.Fatalf("multimodal result = %+v, %v", multimodal, err)
+	}
+}

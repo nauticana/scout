@@ -28,6 +28,12 @@ type AgentProviderFactory interface {
 	Build(ctx context.Context, reference domain.ModelReference) (ModelProvider, MediaProvider, error)
 }
 
+// EmbeddingProviderFactory is the embedding half of AgentProviderFactory,
+// declared separately because a vendor may adapt one and not the other.
+type EmbeddingProviderFactory interface {
+	BuildEmbedder(ctx context.Context, reference domain.ModelReference) (EmbeddingProvider, error)
+}
+
 // SamplingSupport says whether a model accepts sampling parameters such as
 // temperature. Several model families reject any non-default value, so a
 // parameter is sent only on a yes.

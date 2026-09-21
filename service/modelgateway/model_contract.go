@@ -137,12 +137,19 @@ func checkCapabilities(ctx context.Context, catalog contract.ModelCandidateCatal
 	if len(required) == 0 {
 		return nil
 	}
+	_, err := capableCandidate(ctx, catalog, selection, request.TenantContext, required)
+	return err
+}
+
+// capableCandidate returns the tenant's catalog entry for the selected route,
+// confirming it declares every required capability.
+func capableCandidate(ctx context.Context, catalog contract.ModelCandidateCatalog, selection domain.ModelSelection, tenant domain.TenantContext, required []string) (domain.ModelCandidate, error) {
 	if catalog == nil {
-		return fmt.Errorf("%w: no candidate catalog to confirm %q", domain.ErrCapabilityUnsupported, required)
+		return domain.ModelCandidate{}, fmt.Errorf("%w: no candidate catalog to confirm %q", domain.ErrCapabilityUnsupported, required)
 	}
-	candidates, err := catalog.CandidatesFor(ctx, request.TenantContext)
+	candidates, err := catalog.CandidatesFor(ctx, tenant)
 	if err != nil {
-		return fmt.Errorf("route capabilities for tenant %d: %w", request.TenantContext.TenantID, err)
+		return domain.ModelCandidate{}, fmt.Errorf("route capabilities for tenant %d: %w", tenant.TenantID, err)
 	}
 	for _, candidate := range candidates.Candidates {
 		if candidate.Provider != selection.Provider || candidate.Model != selection.Model ||
@@ -151,12 +158,12 @@ func checkCapabilities(ctx context.Context, catalog contract.ModelCandidateCatal
 		}
 		for _, capability := range required {
 			if !slices.Contains(candidate.Capabilities, capability) {
-				return fmt.Errorf("%w: route %s/%s does not declare %q", domain.ErrCapabilityUnsupported, selection.Provider, selection.Model, capability)
+				return domain.ModelCandidate{}, fmt.Errorf("%w: route %s/%s does not declare %q", domain.ErrCapabilityUnsupported, selection.Provider, selection.Model, capability)
 			}
 		}
-		return nil
+		return candidate, nil
 	}
-	return fmt.Errorf("%w: route %s/%s is not in the tenant catalog", domain.ErrCapabilityUnsupported, selection.Provider, selection.Model)
+	return domain.ModelCandidate{}, fmt.Errorf("%w: route %s/%s is not in the tenant catalog", domain.ErrCapabilityUnsupported, selection.Provider, selection.Model)
 }
 
 func (compiled *modelContract) checkToolCalls(calls []domain.ModelToolCall) error {

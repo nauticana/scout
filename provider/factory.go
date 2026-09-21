@@ -101,24 +101,31 @@ func (factory *Factory) temperatureFor(ctx context.Context, reference domain.Mod
 }
 
 func (factory *Factory) google(ctx context.Context, temperature *float64) (contract.ModelProvider, contract.MediaProvider, error) {
+	adapter, err := factory.googleAdapter(ctx, temperature)
+	if err != nil {
+		return nil, nil, err
+	}
+	return adapter, adapter, nil
+}
+
+func (factory *Factory) googleAdapter(ctx context.Context, temperature *float64) (*Google, error) {
 	apiKey := ""
 	if factory.config.UseGoogleGeminiAPI {
 		var err error
 		apiKey, err = factory.apiKey(ctx, GoogleProviderID)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	} else if strings.TrimSpace(factory.config.GoogleProjectID) == "" || strings.TrimSpace(factory.config.GoogleLocation) == "" {
-		return nil, nil, fmt.Errorf("%w: google Vertex project and location are required", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: google Vertex project and location are required", domain.ErrValidation)
 	}
-	adapter := &Google{
+	return &Google{
 		ProjectID:    strings.TrimSpace(factory.config.GoogleProjectID),
 		Location:     strings.TrimSpace(factory.config.GoogleLocation),
 		UseGeminiAPI: factory.config.UseGoogleGeminiAPI,
 		APIKey:       apiKey,
 		Temperature:  temperature,
-	}
-	return adapter, adapter, nil
+	}, nil
 }
 
 func (factory *Factory) apiKey(ctx context.Context, providerID string) (string, error) {

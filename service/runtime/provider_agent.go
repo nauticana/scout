@@ -103,6 +103,7 @@ func (agent *ProviderAgent) Generate(ctx context.Context, task domain.AgentTask)
 		Prompt:          []byte(prompt),
 		MaxOutputTokens: agent.maxOutputTokens,
 		Output:          task.Output,
+		Search:          task.Search,
 	})
 	if err != nil || schema == nil {
 		return result, err

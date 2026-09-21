@@ -80,6 +80,18 @@ type ModelStream interface {
 	Close() error
 }
 
+// EmbeddingProvider adapts one vendor's embedding endpoint.
+type EmbeddingProvider interface {
+	// Embed returns exactly one vector per input, in input order. Each vector
+	// carries the share of the call's usage attributable to its own input.
+	Embed(ctx context.Context, selection domain.ModelSelection, request domain.EmbeddingRequest) ([]domain.Embedding, error)
+}
+
+// EmbeddingProviderRegistry resolves configured embedding adapters.
+type EmbeddingProviderRegistry interface {
+	EmbeddingProviderFor(ctx context.Context, selection domain.ModelSelection) (EmbeddingProvider, error)
+}
+
 // ModelProviderRegistry resolves configured inference provider adapters.
 type ModelProviderRegistry interface {
 	// ProviderFor returns the configured provider adapter for a model selection.

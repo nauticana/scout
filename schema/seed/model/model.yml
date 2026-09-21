@@ -15,6 +15,7 @@ seeds:
       - [model_capability, structured_output, Schema-Constrained Output]
       - [model_capability, sampling, Accepts Sampling Parameters]
       - [model_capability, web_search, Web Search Grounding]
+      - [model_capability, embeddings, Text Embeddings]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

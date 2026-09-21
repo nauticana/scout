@@ -9,7 +9,8 @@ versioning services `ManifestStore`, `VersionAliaser`, `TableSourceChangeSource`
 
 `IngestBatch` is a bounded synchronous executor over three stages connected by buffered channels of
 `QueueDepth` (0 = rendezvous): **prepare** (load → verify SHA-256 against `ContentDigest` → decode → chunk →
-redact), **embed** (`EmbeddingGateway`, `EmbedFanOut` chunks of one document at a time), **publish**
+redact), **embed** (`EmbeddingGateway` — `knowledge.BatchingEmbedder` over
+`modelgateway.GovernedEmbedder`, `EmbedFanOut` chunks of one document at a time), **publish**
 (chunk store → vector index → relational transaction → manifest activation). Each stage has its own worker
 count; a slow index blocks publish, which fills the handoff channel and stops the loaders — real backpressure,
 no unbounded queue. Every stage closes its output channel only after all of its workers have exited, so the

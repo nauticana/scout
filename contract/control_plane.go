@@ -88,6 +88,15 @@ type TenantPolicyPublisher interface {
 	PublishRuntimePolicy(ctx context.Context, tenantID int64, version domain.RuntimePolicyVersion) error
 }
 
+// ModelAccessWriter grants and revokes a tenant's access to one model.
+// Routing reads the granted set, so a model a product uses outside an agent
+// definition — a probe, an embedder, a classifier — is only routable once it is
+// granted. Grant is idempotent; a repeated grant only updates the priority class.
+type ModelAccessWriter interface {
+	Grant(ctx context.Context, tenantID int64, reference domain.ModelReference, priorityClass string) error
+	Revoke(ctx context.Context, tenantID int64, reference domain.ModelReference) error
+}
+
 // AgentVersionTrafficManager controls tenant agent canaries and rollback.
 type AgentVersionTrafficManager interface {
 	// ResolveVersion selects an agent version using the tenant's traffic policy.

@@ -15,6 +15,9 @@ columns:
   - name: quality_class
     type: SMALLINT
     default: 0
+  - name: embedding_dimensions
+    type: INTEGER
+    nullable: true
   - name: is_active
     type: BOOLEAN
     default: TRUE
@@ -28,3 +31,5 @@ foreign_keys:
 checks:
   - name: model_route_quality_ck
     expression: quality_class >= 0
+  - name: model_route_embedding_dimensions_ck
+    expression: embedding_dimensions IS NULL OR embedding_dimensions > 0

@@ -67,6 +67,7 @@ seeds:
       - [tool, Governed tool invocation]
       - [knowledge, Knowledge retrieval]
       - [web_search, Provider web-search grounding]
+      - [embedding, Embedding vectors generated]
   # Configuration scope and binding catalogs. Scout owns the tenant root scope
   # kind; a product seeds the levels below it. narrowing_rule names the
   # comparator service/scope applies when a child overrides a parent binding.

@@ -129,12 +129,12 @@ The `contract` package remains flat so consumers use one stable import path. Con
 
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
-| `service/controlplane` | `control_plane.go`, `studio*.go`, `agent_type.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `AgentProvisioner`, `AgentTypeStore` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
+| `service/controlplane` | `control_plane.go`, `studio*.go`, `agent_type.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `ModelAccess`, `AgentProvisioner`, `AgentTypeStore` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
 | `service/dataplane` | `data_plane.go` | `TurnRuntime`, `ToolLoopExecutor`, `TableLoopJournal`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `AgentStepExecutor`, `TableWorkItemStore`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
 | `service/charter` | `runtime.go` | `Runtime`, `Admission`, `Directory`, `Transport`, `TriggerHandler`, `Adapter`, `Claim` | Charter governed runtime over Scout tools and keel: admission, capability invocation, evidence, event delivery, conformance |
 | `service/isolation` | `isolation.go` | `ExecutionGovernor`, keel-backed rate-limiter factories, `DistributedTenantRateLimiter`, `LatencyBudgetAllocator`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector`, `ReleaseLimits` | Keel database and cache, admission policy, budget policy, stage latency model, loop detection, and cost circuit breaking |
-| `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever`, `ReleaseEntitlements` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
-| `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
+| `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever`, `TablePinnedKnowledge`, `ReleaseEntitlements` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
+| `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `BudgetedGateway`, `GovernedEmbedder`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
 | `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, `EvidenceValidator`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
 | `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
 | `service/evaluation` | `evaluation.go` | `Runner`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
@@ -169,7 +169,7 @@ Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, 
 
 `AgentDraftValidator` receives a `domain.ValidationPhase`: `ValidateDraft` for an ordinary save, `ValidateRelease` before a test or publish. Requirements that only executable state must satisfy — provider credentials, entitlements — belong to the release phase so authoring is never blocked by them.
 
-`controlplane.ModelCatalog` implements `StudioModelCatalog` over `model_definition`, `model_capability`, and `model_price`, so a product only implements that port when it needs tenant scoping or a display scale of its own — decorate the shared catalog rather than replacing it. Modality lives in `model_capability` (one row per modality; a model may serve several) and pricing in `model_price`, which covers tokens, images, video seconds, and grounding searches in currency minor units. Validation rejects a model that is unknown, withdrawn, or does not declare the modality its slot needs.
+`controlplane.ModelCatalog` implements `StudioModelCatalog` over `model_definition`, `model_capability`, and `model_price`, so a product only implements that port when it needs tenant scoping or a display scale of its own — decorate the shared catalog rather than replacing it. Modality lives in `model_capability` (one row per modality; a model may serve several) and pricing in `model_price`, which covers tokens, images, video seconds, and grounding searches in currency minor units. Validation rejects a model that is unknown, withdrawn, or does not declare the modality its slot needs. Routing reads `tenant_model_access`, which `AgentProvisioner` and publishing write for the models an agent definition names; `controlplane.ModelAccess.Grant`/`Revoke` writes it for a model a product chooses itself — an embedder, a probe engine, a classifier — idempotently and under a scheduling class.
 
 `AgentActivityReporter` supplies product-owned last-successful-run times per agent id. `ListAgents` merges them with Scout's own Studio test events and reports the newer of the two. Products report only their own executions; Scout records the `TEST` lifecycle event around `AgentDraftTestExecutor.Execute` itself.
 
@@ -517,7 +517,7 @@ Scout's schema is fifteen modules so a downstream installs only what its product
 | `agent` | 13 | Types and type versions, capability packages, profiles, drafts, aliases, guardrail config and safety events, published versions, deployments, version quarantine, Studio audit | `tenancy`, `model` |
 | `tool` | 5 | Tool profiles, immutable versions, egress rules, agent bindings, principal credential bindings | `tenancy`, `agent`, `agent_authorization` |
 | `execution_graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
-| `knowledge` | 8 | Knowledge bases, versions, documents, chunks, agent bindings, manifests, aliases, source events | `tenancy`, `agent` |
+| `knowledge` | 9 | Knowledge bases, versions, documents, chunks, agent bindings and their whole-read documents, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
 | `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
 | `release` | 15 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results | `catalog`, `tenancy`, `agent`, `runtime` |
@@ -544,7 +544,7 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 39 selected keel tables and 105 Scout tables. Drop the modules the product does not use:
+That full set is 39 selected keel tables and 106 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
@@ -553,9 +553,9 @@ That full set is 39 selected keel tables and 105 Scout tables. Drop the modules 
 | … plus compiled execution graphs | `+ execution_graph` | 50 |
 | … plus governed tools and credential bindings | `+ tool` | 55 |
 | … plus durable human approvals | `+ approval` | 57 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 66 |
-| … plus the durable turn runtime | `+ runtime` | 80 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 105 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 67 |
+| … plus the durable turn runtime | `+ runtime` | 81 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 106 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -619,7 +619,7 @@ Typical provider concerns include model inference, embeddings, vector search, du
 
 `modelgateway.PolicyRouter` is the reference `ModelRouter`. It decides from immutable injected evidence only: a `ModelCandidateCatalog` of the routes a tenant may use, a `CapacitySnapshotSource` carrying health, drain state, predicted queue delay, and freshness, and the tenant's `RoutingPolicy`. Candidates are filtered by required capabilities, prompt and output size against the model's limits, `AllowedRegions`, and capacity — an unhealthy, draining, stale, or unknown route is ineligible — then ranked by quality class, session affinity, warmth, locality against `TenantContext.Region`, estimated minor-unit cost from `ModelPricer`, and predicted latency, with deadline-infeasible routes dropping out first. Degradation is never implicit: when no preferred route is feasible the router walks `RoutingPolicy.Fallbacks` in order and otherwise returns `domain.ErrNoRoute`. Every selection carries `ModelVersion`, `Region`, `RouteID`, a `RoutingGeneration` folded deterministically from the catalog and snapshot generations, and an auditable `Reason`; an `AuditSink` records the same with both raw generations.
 
-`modelgateway.ResilientGateway` decorates any `ModelGateway` with three independent streaming budgets — time to first token, idle-token gap, and total — each surfacing as a typed `StreamDeadlineError` attributed to `StageModel`. A bounded, jittered retry runs only *before* the first token; once a token has been delivered, an interrupted stream ends with `FinishReason` `interrupted` and a partial completion, never a restart or spliced output. `SnapshotCache` keeps the last good candidate set, routing policy, and quota policy under an HMAC signature and a TTL, so routing survives a control-plane outage and then fails closed with `domain.ErrStaleEvidence`. `HedgingGateway` adds one delayed second attempt on a different route for idempotent requests only, behind a per-tenant hedge budget and a kill switch; every started attempt holds its own fenced reservation and settles against provider-confirmed usage, because a cancelled loser is still billable.
+`modelgateway.ResilientGateway` decorates any `ModelGateway` with three independent streaming budgets — time to first token, idle-token gap, and total — each surfacing as a typed `StreamDeadlineError` attributed to `StageModel`. A bounded, jittered retry runs only *before* the first token; once a token has been delivered, an interrupted stream ends with `FinishReason` `interrupted` and a partial completion, never a restart or spliced output. `SnapshotCache` keeps the last good candidate set, routing policy, and quota policy under an HMAC signature and a TTL, so routing survives a control-plane outage and then fails closed with `domain.ErrStaleEvidence`. `HedgingGateway` adds one delayed second attempt on a different route for idempotent requests only, behind a per-tenant hedge budget and a kill switch; every started attempt holds its own fenced reservation and settles against provider-confirmed usage, because a cancelled loser is still billable. `BudgetedGateway` is that reservation on its own: a caller whose work is not a conversation turn — a probe, a classifier, a batch job — composes it to estimate, reserve, settle, and release without starting a duplicate attempt to get a budget.
 
 ```go
 router, _ := modelgateway.NewPolicyRouter(catalog, snapshots, policies, 30*time.Second)
@@ -649,9 +649,22 @@ request.Output = domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, Sche
 
 `domain.ModelRequest.Search` asks the selected route to answer from the provider's own web search — OpenAI web search, Google Search grounding, Anthropic web search — and requires the `web_search` capability, so a route that does not declare it is `ErrCapabilityUnsupported` and never answers ungrounded. `ModelResult.Citations` and `ModelChunk.Citations` carry the sources back provider-neutrally as `domain.Citation{URL, Title, Snippet, Position}`, in the provider's own order; URLs must be unique and positions contiguous from 1 — across every frame of a stream — or the result is `ErrInvalidModelOutput`. `SearchGrounding.MaxSearches` is refused by adapters whose vendor cannot bound its own searches, rather than accepted and ignored.
 
+A published agent asks for grounding through `domain.AgentTask.Search`, which `ProviderAgent` passes to the request exactly as it passes `Output`; the sources come back on `ModelResult.Citations`, and `MultimodalResult.Citations` carries them through the multimodal generator.
+
 Searches are priced and metered like tokens: `domain.Usage.SearchQueries` reports what the provider ran, `model_price.search_minor_units` prices it under the `web_search` rate category, `modelgateway.EstimatedSearches` is what the router and the hedge budget reserve before the call, and `usage_event.search_queries` records what was settled.
 
 Scout is not a GPU scheduler. It closes the loop with the serving control plane instead: `ServingSignalCollector` aggregates queued prefill tokens, decode token-seconds, queue-wait percentiles, TTFT and TPOT percentiles, admission rejections, and capacity outcomes per route, and `Flush` hands them to a `ServingSignalExporter` an external autoscaler consumes. A draining route admits nothing new and its running streams end with an explicit partial completion at `DrainDeadline`. See [doc/serving_signals.md](doc/serving_signals.md).
+
+### Embeddings
+
+`modelgateway.GovernedEmbedder` is the `contract.BatchEmbedder` behind knowledge ingestion and retrieval: one batch on one pinned route, under the controls a text call passes — the `embeddings` capability confirmed against the tenant's catalog, the tenant rate limit, a capacity lease, a budget reservation, and settlement from confirmed usage. The route's own `model_route.embedding_dimensions` is the width it asks the vendor for and the width it holds the answer to, so a vector of another width can never reach an index built at the first. A vendor that reports no token count of its own is settled at the estimate rather than billed as free, and vectors that arrived but failed validation are settled too, because the provider ran the call either way. `knowledge.BatchingEmbedder` wraps it into the `EmbeddingGateway` the pipeline consumes.
+
+`provider.Factory.BuildEmbedder` builds the adapters, and `FactoryProviderRegistry` serves them on first use beside the text ones. OpenAI reports the batch's prompt tokens, which the adapter attributes across the inputs in proportion to their length so a caller summing per-vector usage reproduces the call's total; Gemini reports none. Anthropic publishes no embedding endpoint, so it has no adapter and is `ErrCapabilityUnsupported`. An embedding model is priced through `model_price.input_minor_units_per_million` — its usage is input tokens — and granted to a tenant like any other model.
+
+```go
+embedder, _ := modelgateway.NewGovernedEmbedder(route, registry, rateLimiter, capacity, budgets, pricer, catalog)
+gateway := &knowledge.BatchingEmbedder{Batcher: embedder}
+```
 
 ## Observability
 
@@ -873,6 +886,8 @@ Immutability is enforced by versioning services rather than in-place edits. `Man
 `knowledge.PgVectorIndex` is the reference `KnowledgeVectorIndex` over `knowledge_chunk_vector`. It compiles the whole visibility scope into the query — tenant partition, immutable knowledge version, entitlement labels, and an existence check that the chunk's version is still the document manifest's active, untombstoned version — so a forbidden or superseded chunk is never a nearest neighbor the application has to discard afterwards. A document with no manifest row is invisible rather than unfiltered. Chunks carry a JSON array of grant labels, a `KnowledgeQuery` carries the labels its principal holds plus `EntitlementsDigest`, and the index fails closed with `domain.ErrForbidden` when either is missing, malformed, or stale. Deployment installs the `vector` extension and calls `EnsureIndexes(ctx, dimensions)` once per embedding width; `PgVectorRetriever` and `PgTextRetriever` are the cosine and `tsvector` legs a `HybridRetriever` fuses.
 
 `NewCachedRetriever` decorates any retriever with a bounded LRU keyed by tenant, knowledge base and version, TopK, entitlements digest, query digest, and the `RetrievalCacheKeyer` scope of embedding model version, index generation, and policy version; call `Invalidate` after an entitlement or index-generation change. `NewShardedRetriever` fans one query out to shard retrievers under a concurrency bound and k-way merges their sorted results with score-bound early termination.
+
+Not every document is a corpus to search. `knowledge.TablePinnedKnowledge` resolves the bindings an agent version marks `mode_code = whole` — standing rules, a compliance pack, a client-memory section — into full, version-pinned documents, reassembled from the same authorized, redacted chunks retrieval searches, under the same tenant, manifest, tombstone, and entitlement predicate. `agent_knowledge_document` names which documents a binding reads whole; naming none reads every document of the bound version, in binding order. A binding above its `max_whole_tokens` ceiling is `domain.ErrExecutionLimit` and a bound document with no authorized chunk left is `domain.ErrNotFound` — neither is silently truncated or skipped. Similarity retrieval stays the default for everything else.
 
 ```go
 index := &knowledge.PgVectorIndex{DB: db, Embedder: embedder}

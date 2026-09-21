@@ -43,8 +43,8 @@ func (db catalogDBFake) GetQueryService(context.Context, map[string]string) keel
 func TestTableCandidateCatalogDerivesRoutes(t *testing.T) {
 	query := &catalogQueryFake{rows: map[string][][]any{
 		qCandidateModels: {
-			{"anthropic", "sonnet", int64(200_000), int64(8_000), nil, nil, nil, nil, nil},
-			{"openai", "gpt", int64(128_000), int64(16_000), nil, nil, nil, nil, nil},
+			{"anthropic", "sonnet", int64(200_000), int64(8_000), nil, nil, nil, nil, nil, nil},
+			{"openai", "gpt", int64(128_000), int64(16_000), nil, nil, nil, nil, nil, nil},
 		},
 		qCandidateCapabilities: {
 			{"anthropic", "sonnet", "text"},
@@ -89,9 +89,9 @@ func TestTableCandidateCatalogDerivesRoutes(t *testing.T) {
 func TestTableCandidateCatalogOffersOneCandidatePerActiveRoute(t *testing.T) {
 	query := &catalogQueryFake{rows: map[string][][]any{
 		qCandidateModels: {
-			{"anthropic", "sonnet", int64(200_000), int64(8_000), "eu-1", "2026-05", "eu-west", int64(2), true},
-			{"anthropic", "sonnet", int64(200_000), int64(8_000), "us-1", "2026-03", "us-east", int64(1), true},
-			{"openai", "gpt", int64(128_000), int64(16_000), "retired", "1", "eu-west", int64(1), false},
+			{"anthropic", "sonnet", int64(200_000), int64(8_000), "eu-1", "2026-05", "eu-west", int64(2), true, nil},
+			{"anthropic", "sonnet", int64(200_000), int64(8_000), "us-1", "2026-03", "us-east", int64(1), true, nil},
+			{"openai", "gpt", int64(128_000), int64(16_000), "retired", "1", "eu-west", int64(1), false, nil},
 		},
 	}}
 	catalog := &TableCandidateCatalog{DB: catalogDBFake{query: query}, Region: "deployment-default"}

@@ -20,6 +20,10 @@ type AgentTask struct {
 	PastPerformance string
 	// Output constrains the answer natively; the prompt renderer ignores it.
 	Output OutputConstraint
+	// Search asks the bound route to answer from the provider's own web search
+	// and report its sources on ModelResult.Citations; the prompt renderer
+	// ignores it. It requires CapabilityWebSearch of the route.
+	Search *SearchGrounding
 }
 
 // ImageRequest bounds one image generation call.
@@ -69,7 +73,9 @@ type MultimodalTask struct {
 // MultimodalResult carries the text, its usage, and every produced asset.
 // ImageCount and VideoSeconds are the billable media quantities.
 type MultimodalResult struct {
-	Text         string
+	Text string
+	// Citations are the sources of a grounded answer, in the provider's order.
+	Citations    []Citation
 	Usage        Usage
 	Media        []NamedMedia
 	ImageCount   int

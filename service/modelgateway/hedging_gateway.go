@@ -95,20 +95,17 @@ type attempt struct {
 	settled     atomic.Bool
 }
 
+// budget is the shared reservation policy, so a hedged attempt is estimated and
+// settled exactly as a directly budgeted call is.
+func (gateway *HedgingGateway) budget() modelBudget {
+	return modelBudget{budgets: gateway.Budgets, pricer: gateway.Pricer, promptTokens: gateway.PromptTokens}
+}
+
 // start reserves the attempt's budget and binds its context to the caller and gateway lifetime.
 func (gateway *HedgingGateway) start(ctx context.Context, number int, selection domain.ModelSelection, request domain.ModelRequest) (*attempt, error) {
-	tokens := promptTokens(gateway.PromptTokens, request.Prompt) + request.MaxOutputTokens
-	cost, currency, err := gateway.Pricer.Cost(ctx, domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model},
-		domain.ModelUsage{InputTokens: tokens - request.MaxOutputTokens, OutputTokens: request.MaxOutputTokens, SearchQueries: EstimatedSearches(request)})
+	reservation, err := gateway.budget().reserve(ctx, AttemptRequestID(request.RequestID, number), selection, request)
 	if err != nil {
-		return nil, fmt.Errorf("price attempt %d: %w", number, err)
-	}
-	reservation, err := gateway.Budgets.Reserve(ctx, domain.BudgetRequest{
-		TenantID: request.TenantContext.TenantID, RequestID: AttemptRequestID(request.RequestID, number),
-		Principal: request.Principal, Tokens: tokens, CostMinorUnits: cost, Currency: currency,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("reserve attempt %d: %w", number, err)
+		return nil, fmt.Errorf("attempt %d: %w", number, err)
 	}
 	attemptCtx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(gateway.lifetime, cancel)
@@ -121,11 +118,7 @@ func (gateway *HedgingGateway) settle(ctx context.Context, attempt *attempt, usa
 		return nil
 	}
 	defer attempt.cancel()
-	ctx = context.WithoutCancel(ctx)
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.CostMinorUnits > 0 {
-		return gateway.Budgets.Commit(ctx, attempt.reservation, usage)
-	}
-	return gateway.Budgets.Release(ctx, attempt.reservation)
+	return gateway.budget().settle(ctx, attempt.reservation, selectionReference(attempt.selection), usage)
 }
 
 func (gateway *HedgingGateway) hedgeable(request domain.ModelRequest) bool {

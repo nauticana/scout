@@ -47,7 +47,21 @@ const (
 	// CapabilityWebSearch marks a route that grounds its answer in its own web
 	// search and reports the sources it used.
 	CapabilityWebSearch = "web_search"
+	// CapabilityEmbeddings marks a route that turns content into vectors.
+	CapabilityEmbeddings = "embeddings"
 )
+
+// EmbeddingRequest is one bounded batch embedded on one route. Inputs are
+// embedded in order and the result holds exactly one vector per input.
+type EmbeddingRequest struct {
+	TenantContext TenantContext
+	RequestID     string
+	Inputs        [][]byte
+	// Dimensions is the width the route's index is built at; zero leaves the
+	// model's own width. An adapter whose vendor cannot reduce the width
+	// refuses a request that sets it, rather than returning a mismatched vector.
+	Dimensions int
+}
 
 // SearchGrounding asks the selected route for provider-native web search.
 type SearchGrounding struct {
@@ -179,6 +193,9 @@ type ModelCandidate struct {
 	Capabilities     []string
 	MaxContextTokens int64
 	MaxOutputTokens  int64
+	// EmbeddingDimensions is the vector width this route is served at; zero
+	// leaves the model's own width. An index is built against it.
+	EmbeddingDimensions int
 }
 
 // ModelCandidateSet is an immutable catalog view stamped with its generation.

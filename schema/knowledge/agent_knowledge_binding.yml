@@ -1,5 +1,5 @@
 table: agent_knowledge_binding
-comment: Knowledge versions authorized for an agent version
+comment: Knowledge versions authorized for an agent version, retrieved by similarity or read whole
 columns:
   - name: tenant_id
     type: BIGINT
@@ -11,6 +11,14 @@ columns:
     type: VARCHAR(80)
   - name: knowledge_version
     type: VARCHAR(80)
+  - name: mode_code
+    type: VARCHAR(20)
+    default: retrieval
+    comment: retrieval searches the version by similarity; whole reads the bound documents in full on every run
+  - name: max_whole_tokens
+    type: BIGINT
+    nullable: true
+    comment: Token ceiling for mode whole; resolution fails rather than truncating
 primary_key: [tenant_id, agent_id, agent_version, knowledge_base_id]
 foreign_keys:
   - name: agent_knowledge_bindings
@@ -23,3 +31,8 @@ foreign_keys:
     references:
       table: knowledge_base_version
       columns: [tenant_id, knowledge_base_id, knowledge_version]
+checks:
+  - name: agent_knowledge_binding_mode_ck
+    expression: mode_code IN ('retrieval', 'whole')
+  - name: agent_knowledge_binding_whole_tokens_ck
+    expression: max_whole_tokens IS NULL OR max_whole_tokens > 0

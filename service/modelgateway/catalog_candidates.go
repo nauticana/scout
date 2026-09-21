@@ -24,7 +24,7 @@ const (
 var candidateCatalogQueries = map[string]string{
 	qCandidateModels: `
 SELECT d.provider_id, d.model_id, d.context_token_limit, d.output_token_limit,
-       r.route_id, r.model_version, r.region, r.quality_class, r.is_active
+       r.route_id, r.model_version, r.region, r.quality_class, r.is_active, r.embedding_dimensions
   FROM tenant_model_access a
   JOIN model_definition d ON d.provider_id = a.provider_id AND d.model_id = a.model_id
   JOIN model_provider p ON p.provider_id = d.provider_id
@@ -109,9 +109,11 @@ func (catalog *TableCandidateCatalog) CandidatesFor(ctx context.Context, tenant 
 			candidate.ModelVersion = strings.TrimSpace(common.AsString(row[5]))
 			candidate.Region = strings.TrimSpace(common.AsString(row[6]))
 			candidate.QualityClass = int(common.AsInt64(row[7]))
+			// A route with no embedding width reads as -1; zero means the model's own.
+			candidate.EmbeddingDimensions = int(max(0, common.AsInt64(row[9])))
 		}
 		set.Candidates = append(set.Candidates, candidate)
-		_, _ = hash.Write([]byte(candidate.RouteID + "|" + candidate.ModelVersion + "|" + candidate.Region + "|" + strconv.Itoa(candidate.QualityClass) + "|" + strconv.FormatInt(candidate.MaxContextTokens, 10) + "|" +
+		_, _ = hash.Write([]byte(candidate.RouteID + "|" + candidate.ModelVersion + "|" + candidate.Region + "|" + strconv.Itoa(candidate.QualityClass) + "|" + strconv.Itoa(candidate.EmbeddingDimensions) + "|" + strconv.FormatInt(candidate.MaxContextTokens, 10) + "|" +
 			strconv.FormatInt(candidate.MaxOutputTokens, 10) + "|" + strings.Join(candidate.Capabilities, ",") + "\n"))
 	}
 	set.Generation = int64(hash.Sum64() & math.MaxInt64)

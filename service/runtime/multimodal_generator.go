@@ -46,7 +46,7 @@ func (g MultimodalGenerator) Generate(ctx context.Context, task domain.Multimoda
 	if err != nil {
 		return domain.MultimodalResult{Usage: generated.Usage}, err
 	}
-	result := domain.MultimodalResult{Text: string(generated.Output), Usage: generated.Usage}
+	result := domain.MultimodalResult{Text: string(generated.Output), Citations: generated.Citations, Usage: generated.Usage}
 
 	styleHint := StyleHint(g.Text.PromptSections())
 	if task.Video != nil {

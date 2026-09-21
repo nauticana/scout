@@ -72,6 +72,13 @@ type BatchEmbedder interface {
 	EmbedBatch(ctx context.Context, tenant domain.TenantContext, contents [][]byte) ([]domain.Embedding, error)
 }
 
+// PinnedKnowledgeResolver resolves the documents an agent version binds whole,
+// in full and version-pinned, for the runtime's knowledge step. Similarity
+// retrieval stays the default; this is the standing material every run needs.
+type PinnedKnowledgeResolver interface {
+	PinnedKnowledge(ctx context.Context, request domain.PinnedKnowledgeRequest) (domain.PinnedKnowledge, error)
+}
+
 // KnowledgeVectorIndex stores and searches tenant-partitioned chunk embeddings.
 type KnowledgeVectorIndex interface {
 	// Index stores chunk embeddings under an immutable knowledge version; a batch is all-or-nothing.

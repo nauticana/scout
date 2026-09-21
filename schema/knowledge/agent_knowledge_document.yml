@@ -1,0 +1,27 @@
+table: agent_knowledge_document
+comment: The documents of a whole-mode binding; an empty set reads every document of the bound version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: knowledge_base_id
+    type: VARCHAR(80)
+  - name: document_id
+    type: VARCHAR(120)
+  - name: ordinal
+    type: INTEGER
+    default: "0"
+    comment: Order the documents reach the model in
+primary_key: [tenant_id, agent_id, agent_version, knowledge_base_id, document_id]
+foreign_keys:
+  - name: agent_knowledge_binding_documents
+    columns: [tenant_id, agent_id, agent_version, knowledge_base_id]
+    references:
+      table: agent_knowledge_binding
+      columns: [tenant_id, agent_id, agent_version, knowledge_base_id]
+checks:
+  - name: agent_knowledge_document_ordinal_ck
+    expression: ordinal >= 0

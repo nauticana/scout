@@ -4,6 +4,7 @@ tables:
   - knowledge_document
   - knowledge_chunk
   - agent_knowledge_binding
+  - agent_knowledge_document
   - knowledge_document_manifest
   - knowledge_base_alias
   - knowledge_source_event

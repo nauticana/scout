@@ -51,7 +51,7 @@ flowchart BT
     agent["Agent<br/>13 tables"]
     tool["Tool<br/>5 tables"]
     execution_graph_module["Execution Graph<br/>4 tables"]
-    knowledge["Knowledge<br/>8 tables"]
+    knowledge["Knowledge<br/>9 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
     runtime["Runtime<br/>14 tables"]
     release["Release<br/>15 tables"]
@@ -63,7 +63,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 107. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 106. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module.
 
@@ -214,6 +214,7 @@ flowchart RL
         knowledge_document["knowledge_document"]
         knowledge_chunk["knowledge_chunk"]
         agent_knowledge_binding["agent_knowledge_binding"]
+        agent_knowledge_document["agent_knowledge_document"]
         knowledge_document_manifest["knowledge_document_manifest"]
         knowledge_base_alias["knowledge_base_alias"]
         knowledge_source_event["knowledge_source_event"]
@@ -225,6 +226,7 @@ flowchart RL
     knowledge_document_manifest --> knowledge_document
     knowledge_chunk --> knowledge_document
     agent_knowledge_binding --> knowledge_base_version
+    agent_knowledge_document --> agent_knowledge_binding
 
     subgraph knowledge_vector["Knowledge Vector"]
         direction BT
@@ -910,6 +912,7 @@ erDiagram
     knowledge_chunk ||--o| knowledge_chunk_vector : knowledge_chunk_vectors
     agent_version ||--o{ agent_knowledge_binding : agent_knowledge_bindings
     knowledge_base_version ||--o{ agent_knowledge_binding : knowledge_base_agent_bindings
+    agent_knowledge_binding ||--o{ agent_knowledge_document : agent_knowledge_binding_documents
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -967,10 +970,20 @@ erDiagram
         varchar agent_version PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version FK
+        varchar mode_code
+        bigint max_whole_tokens
+    }
+    agent_knowledge_document {
+        bigint tenant_id PK,FK
+        varchar agent_id PK,FK
+        varchar agent_version PK,FK
+        varchar knowledge_base_id PK,FK
+        varchar document_id PK
+        int ordinal
     }
 ```
 
-Relational rows prove tenant and version ownership. Document and chunk content remain external by URI and digest, while `vector_ref` points to the tenant-partitioned vector index.
+Relational rows prove tenant and version ownership. Document and chunk content remain external by URI and digest, while `vector_ref` points to the tenant-partitioned vector index. `agent_knowledge_binding.mode_code` selects how a bound version reaches a run: `retrieval` searches it by similarity, `whole` reads the documents `agent_knowledge_document` names — every document of the version when it names none — in full on every run, bounded by `max_whole_tokens`.
 
 `knowledge_chunk_vector` is the optional PostgreSQL-resident index behind `knowledge.PgVectorIndex`: one row per chunk carrying its embedding, `tsvector`, entitlement labels, source version, and offsets, so entitlement predicates and nearest-neighbor ranking run inside one query instead of post-filtering a candidate set. Search joins `knowledge_document_manifest` and keeps only chunks whose knowledge version is still that document's active, untombstoned version, so a superseded generation stops being retrievable the moment the manifest pointer moves — before its rows are collected. It is the only Scout table using `VECTOR` and `TSVECTOR`; deployments on MySQL leave it out and inject a different `contract.KnowledgeVectorIndex`.
 
@@ -1590,7 +1603,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
-| `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
+| `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release` |
