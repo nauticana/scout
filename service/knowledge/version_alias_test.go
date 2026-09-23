@@ -19,7 +19,7 @@ func TestVersionAliaserSwapIsCompareAndSet(t *testing.T) {
 		t.Fatalf("insert args = %v", insert)
 	}
 	repoint := query.named(qAliasRepointManifest)
-	if len(repoint) != 1 || repoint[0].args[0] != "g1" || repoint[0].args[1] != int64(7) || repoint[0].args[2] != "kb" || repoint[0].args[3] != "g1" || repoint[0].args[4] != "g1" {
+	if len(repoint) != 1 || repoint[0].args[0] != "g1" || repoint[0].args[1] != int64(7) || repoint[0].args[2] != "kb" || repoint[0].args[3] != "g1" || repoint[0].args[4] != "g1" || repoint[0].args[5] != "g1" {
 		t.Fatalf("repoint args = %v", repoint)
 	}
 	if query.commits != 1 {

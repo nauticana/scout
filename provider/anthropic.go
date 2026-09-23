@@ -52,8 +52,8 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 		Model:     anthropic.Model(selection.Model),
 		MaxTokens: maxOutputTokens(request),
 	}
-	if p.Temperature != nil {
-		params.Temperature = anthropic.Float(*p.Temperature)
+	if temperature := sampling(p.Temperature, request); temperature != nil {
+		params.Temperature = anthropic.Float(*temperature)
 	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, anthropicMessage(message))

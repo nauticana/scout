@@ -65,7 +65,7 @@ Every module that ships reference data also writes seed rows into keel `core` ta
 
 Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 106. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
-`knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module.
+`knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
 ## Module contents
 
@@ -950,6 +950,7 @@ erDiagram
         int chunk_no PK
         text content_uri
         text vector_ref
+        text entitlements
     }
     knowledge_chunk_vector {
         bigint tenant_id PK,FK
@@ -985,7 +986,7 @@ erDiagram
 
 Relational rows prove tenant and version ownership. Document and chunk content remain external by URI and digest, while `vector_ref` points to the tenant-partitioned vector index. `agent_knowledge_binding.mode_code` selects how a bound version reaches a run: `retrieval` searches it by similarity, `whole` reads the documents `agent_knowledge_document` names — every document of the version when it names none — in full on every run, bounded by `max_whole_tokens`.
 
-`knowledge_chunk_vector` is the optional PostgreSQL-resident index behind `knowledge.PgVectorIndex`: one row per chunk carrying its embedding, `tsvector`, entitlement labels, source version, and offsets, so entitlement predicates and nearest-neighbor ranking run inside one query instead of post-filtering a candidate set. Search joins `knowledge_document_manifest` and keeps only chunks whose knowledge version is still that document's active, untombstoned version, so a superseded generation stops being retrievable the moment the manifest pointer moves — before its rows are collected. It is the only Scout table using `VECTOR` and `TSVECTOR`; deployments on MySQL leave it out and inject a different `contract.KnowledgeVectorIndex`.
+`knowledge_chunk` carries each chunk's source version, offsets, and entitlement labels, which is all a whole read needs. `knowledge_chunk_vector` is the optional PostgreSQL-resident index behind `knowledge.PgVectorIndex`: one row per chunk carrying its embedding, `tsvector`, and a copy of the chunk's entitlement labels — a deliberate denormalization, so entitlement predicates and nearest-neighbor ranking run inside one index scan instead of post-filtering a candidate set. Search joins `knowledge_document_manifest` and keeps only chunks whose knowledge version is still that document's active, untombstoned version, so a superseded generation stops being retrievable the moment the manifest pointer moves — before its rows are collected. It is the only Scout table using `VECTOR` and `TSVECTOR`; deployments on MySQL leave it out and inject a different `contract.KnowledgeVectorIndex`.
 
 ### Knowledge versioning and ingestion state
 

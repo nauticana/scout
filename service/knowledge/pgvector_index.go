@@ -38,10 +38,13 @@ const pgVectorMaxDimensions = 2000
 const pgVectorDimensionsToken = "{dims}"
 
 const pgVectorMatchSelect = `
-SELECT v.document_id, v.chunk_no, v.chunk_id, d.source_uri, v.source_version, v.start_offset, v.end_offset,`
+SELECT v.document_id, v.chunk_no, v.chunk_id, d.source_uri, c.source_version, c.start_offset, c.end_offset,`
 
 const pgVectorMatchFrom = `
   FROM knowledge_chunk_vector v
+  JOIN knowledge_chunk c
+    ON c.tenant_id = v.tenant_id AND c.knowledge_base_id = v.knowledge_base_id
+   AND c.knowledge_version = v.knowledge_version AND c.document_id = v.document_id AND c.chunk_no = v.chunk_no
   JOIN knowledge_document d
     ON d.tenant_id = v.tenant_id AND d.knowledge_base_id = v.knowledge_base_id
    AND d.knowledge_version = v.knowledge_version AND d.document_id = v.document_id`
@@ -63,13 +66,11 @@ const pgVectorScope = `
 var pgVectorQueries = map[string]string{
 	qPgVectorUpsertChunk: `
 INSERT INTO knowledge_chunk_vector (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no,
-                                    chunk_id, embedding, dimensions, content_tsv, entitlements,
-                                    source_version, start_offset, end_offset, tombstoned)
-VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, to_tsvector(?::regconfig, ?), ?::jsonb, ?, ?, ?, FALSE)
+                                    chunk_id, embedding, dimensions, content_tsv, entitlements, tombstoned)
+VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, to_tsvector(?::regconfig, ?), ?::jsonb, FALSE)
 ON CONFLICT (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no) DO UPDATE
    SET embedding = EXCLUDED.embedding, dimensions = EXCLUDED.dimensions, content_tsv = EXCLUDED.content_tsv,
-       entitlements = EXCLUDED.entitlements, source_version = EXCLUDED.source_version,
-       start_offset = EXCLUDED.start_offset, end_offset = EXCLUDED.end_offset
+       entitlements = EXCLUDED.entitlements
  WHERE knowledge_chunk_vector.chunk_id = EXCLUDED.chunk_id
 RETURNING chunk_id`,
 	qPgVectorRemoveDocument: `
@@ -269,17 +270,7 @@ func upsertArgs(item domain.ChunkEmbedding, textSearchConfig string) ([]any, err
 	if chunk.ChunkNo < 0 || len(chunk.ChunkID) != 64 {
 		return nil, fmt.Errorf("%w: chunk requires a non-negative number and a 64-hex chunk id", domain.ErrValidation)
 	}
-	if chunk.StartOffset < 0 || chunk.EndOffset < chunk.StartOffset {
-		return nil, fmt.Errorf("%w: chunk offsets are invalid", domain.ErrValidation)
-	}
-	if strings.TrimSpace(chunk.SourceVersion) == "" {
-		return nil, fmt.Errorf("%w: chunk source version is required", domain.ErrValidation)
-	}
-	labels, err := ParseEntitlements(chunk.Entitlements)
-	if err != nil {
-		return nil, fmt.Errorf("%w: chunk entitlements: %v", domain.ErrValidation, err)
-	}
-	entitlements, err := EncodeEntitlements(labels)
+	entitlements, err := canonicalEntitlements(chunk.Entitlements)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +284,6 @@ func upsertArgs(item domain.ChunkEmbedding, textSearchConfig string) ([]any, err
 	return []any{
 		chunk.TenantContext.TenantID, chunk.KnowledgeBaseID, chunk.KnowledgeVersion, chunk.DocumentID, chunk.ChunkNo,
 		chunk.ChunkID, vector, len(item.Embedding.Values), textSearchConfig, string(chunk.Content), string(entitlements),
-		chunk.SourceVersion, chunk.StartOffset, chunk.EndOffset,
 	}, nil
 }
 

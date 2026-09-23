@@ -51,8 +51,8 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		Model:     selection.Model,
 		MaxTokens: openai.Int(maxOutputTokens(request)),
 	}
-	if p.Temperature != nil {
-		params.Temperature = openai.Float(*p.Temperature)
+	if temperature := sampling(p.Temperature, request); temperature != nil {
+		params.Temperature = openai.Float(*temperature)
 	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, openAIMessages(message)...)

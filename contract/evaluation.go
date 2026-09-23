@@ -71,6 +71,18 @@ type CaseExecutor interface {
 	Execute(ctx context.Context, subject domain.EvaluationSubject, example domain.GoldenExample, preservedRetrieval []domain.KnowledgeMatch) (domain.EvaluationCase, error)
 }
 
+// CaseRetriever supplies the knowledge a replayed example is answered from: it
+// retrieves, or reuses preserved when non-nil, and returns the turn input
+// carrying the matches.
+type CaseRetriever interface {
+	Retrieve(ctx context.Context, subject domain.EvaluationSubject, example domain.GoldenExample, input []byte, preserved []domain.KnowledgeMatch) (grounded []byte, matches []domain.KnowledgeMatch, err error)
+}
+
+// ObjectReader reads the content an object reference names; the caller verifies its digest.
+type ObjectReader interface {
+	Read(ctx context.Context, ref domain.ObjectRef) ([]byte, error)
+}
+
 // EvaluationRunner replays baseline and candidate over identical examples and returns paired evidence.
 type EvaluationRunner interface {
 	Run(ctx context.Context, manifest domain.EvaluationManifest, examples []domain.GoldenExample) (domain.EvaluationSummary, error)

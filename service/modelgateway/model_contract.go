@@ -3,6 +3,7 @@ package modelgateway
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -23,6 +24,9 @@ func RequiredCapabilities(request domain.ModelRequest) []string {
 	}
 	if request.Search != nil && !slices.Contains(required, domain.CapabilityWebSearch) {
 		required = append(required, domain.CapabilityWebSearch)
+	}
+	if request.Temperature != nil && !slices.Contains(required, domain.CapabilitySampling) {
+		required = append(required, domain.CapabilitySampling)
 	}
 	return required
 }
@@ -50,6 +54,9 @@ type modelContract struct {
 func compileModelContract(request domain.ModelRequest) (*modelContract, error) {
 	if request.Search != nil && request.Search.MaxSearches < 0 {
 		return nil, fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+	}
+	if request.Temperature != nil && (math.IsNaN(*request.Temperature) || math.IsInf(*request.Temperature, 0) || *request.Temperature < 0 || *request.Temperature > 2) {
+		return nil, fmt.Errorf("%w: temperature must be between 0 and 2", domain.ErrValidation)
 	}
 	compiled := &modelContract{
 		tools:       make(map[string]*jsonschema.Schema, len(request.Tools)),

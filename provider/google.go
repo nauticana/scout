@@ -60,8 +60,8 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 		return nil, nil, err
 	}
 	config := &genai.GenerateContentConfig{MaxOutputTokens: int32(maxOutputTokens(request))}
-	if p.Temperature != nil {
-		config.Temperature = genai.Ptr(float32(*p.Temperature))
+	if temperature := sampling(p.Temperature, request); temperature != nil {
+		config.Temperature = genai.Ptr(float32(*temperature))
 	}
 	if len(request.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0, len(request.Tools))

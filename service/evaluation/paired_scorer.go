@@ -303,6 +303,7 @@ func addUsage(total, usage domain.Usage) domain.Usage {
 	total.InputTokens += usage.InputTokens
 	total.OutputTokens += usage.OutputTokens
 	total.ToolCalls += usage.ToolCalls
+	total.SearchQueries += usage.SearchQueries
 	total.CostMinorUnits += usage.CostMinorUnits
 	if total.Currency == "" {
 		total.Currency = usage.Currency

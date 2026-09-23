@@ -28,15 +28,15 @@ func pinnedRequest() domain.PinnedKnowledgeRequest {
 
 func chunkRowOf(documentID string, chunkNo int, uri string, tokens int64) []any {
 	start, end := chunkNo*16, chunkNo*16+24
-	return []any{documentID, int64(chunkNo), uri, tokens, "object://src/" + documentID, "s1", int64(start), int64(end)}
+	return []any{documentID, int64(chunkNo), uri, tokens, "object://src/" + documentID, "s1", int64(start), int64(end), `["public"]`}
 }
 
 func TestPinnedKnowledgeKeepsIncidentalPrefixAndSeparatesDisjointChunks(t *testing.T) {
 	query := &ingestQueryFake{rows: map[string][][]any{
 		qPinnedBindings: {{"rules", "kv1", nil, "standing"}},
 		qPinnedChunks: {
-			{"standing", int64(0), "object://c/0", int64(2), "object://src/standing", "s1", int64(0), int64(5)},
-			{"standing", int64(1), "object://c/1", int64(2), "object://src/standing", "s1", int64(6), int64(11)},
+			{"standing", int64(0), "object://c/0", int64(2), "object://src/standing", "s1", int64(0), int64(5), `["public"]`},
+			{"standing", int64(1), "object://c/1", int64(2), "object://src/standing", "s1", int64(6), int64(11), `["public"]`},
 		},
 	}}
 	resolver := &TablePinnedKnowledge{DB: ingestDBFake{query: query}, Content: storedChunks{
@@ -78,8 +78,8 @@ func TestPinnedKnowledgeReadsBoundDocumentsWholeWithoutRepeatingOverlap(t *testi
 	if pinned.TokenCount != 7 || pinned.Documents[0].SourceVersion != "s1" {
 		t.Fatalf("pinned = %+v", pinned)
 	}
-	if args := query.named(qPinnedChunks)[0].args; args[0] != int64(7) || args[3] != `["public"]` {
-		t.Fatalf("the entitlements must scope the scan, args = %v", args)
+	if args := query.named(qPinnedChunks)[0].args; len(args) != 3 || args[0] != int64(7) || args[1] != "rules" || args[2] != "kv1" {
+		t.Fatalf("scan args = %v", args)
 	}
 }
 
@@ -118,6 +118,41 @@ func TestPinnedKnowledgeFailsWhenABoundDocumentIsNotAuthorized(t *testing.T) {
 	resolver := &TablePinnedKnowledge{DB: ingestDBFake{query: query}, Content: storedChunks{}}
 	if _, err := resolver.PinnedKnowledge(context.Background(), pinnedRequest()); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a bound document with no authorized chunk = %v", err)
+	}
+}
+
+func TestPinnedKnowledgeSkipsChunksThePrincipalIsNotEntitledTo(t *testing.T) {
+	secret := chunkRowOf("standing", 1, "object://c/1", 3)
+	secret[8] = `["group:legal"]`
+	query := &ingestQueryFake{rows: map[string][][]any{
+		qPinnedBindings: {{"rules", "kv1", nil, nil}},
+		qPinnedChunks:   {chunkRowOf("standing", 0, "object://c/0", 4), secret},
+	}}
+	resolver := &TablePinnedKnowledge{DB: ingestDBFake{query: query}, Content: storedChunks{"object://c/0": "public rule"}}
+	pinned, err := resolver.PinnedKnowledge(context.Background(), pinnedRequest())
+	if err != nil || string(pinned.Documents[0].Content) != "public rule" || pinned.TokenCount != 4 {
+		t.Fatalf("pinned = %+v, %v", pinned, err)
+	}
+
+	corrupt := chunkRowOf("standing", 0, "object://c/0", 4)
+	corrupt[8] = "not json"
+	query.rows[qPinnedChunks] = [][]any{corrupt}
+	if _, err := resolver.PinnedKnowledge(context.Background(), pinnedRequest()); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("unreadable stored labels = %v", err)
+	}
+}
+
+func TestPinnedKnowledgeIgnoresUnboundDocumentsBeforeReadingTheirLabels(t *testing.T) {
+	unbound := chunkRowOf("other", 0, "object://c/other", 4)
+	unbound[8] = "not json"
+	query := &ingestQueryFake{rows: map[string][][]any{
+		qPinnedBindings: {{"rules", "kv1", nil, "standing"}},
+		qPinnedChunks:   {unbound, chunkRowOf("standing", 0, "object://c/0", 4)},
+	}}
+	resolver := &TablePinnedKnowledge{DB: ingestDBFake{query: query}, Content: storedChunks{"object://c/0": "public rule"}}
+	pinned, err := resolver.PinnedKnowledge(context.Background(), pinnedRequest())
+	if err != nil || len(pinned.Documents) != 1 || pinned.Documents[0].DocumentID != "standing" {
+		t.Fatalf("pinned = %+v, %v", pinned, err)
 	}
 }
 

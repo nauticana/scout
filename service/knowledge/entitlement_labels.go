@@ -57,6 +57,15 @@ func EncodeEntitlements(labels []string) ([]byte, error) {
 	return json.Marshal(canonical)
 }
 
+// canonicalEntitlements validates a chunk's label array and returns its canonical encoding.
+func canonicalEntitlements(raw []byte) ([]byte, error) {
+	labels, err := ParseEntitlements(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: chunk entitlements: %v", domain.ErrValidation, err)
+	}
+	return EncodeEntitlements(labels)
+}
+
 // EntitlementsDigest returns the lowercase SHA-256 hex a KnowledgeQuery must carry for its Entitlements bytes.
 func EntitlementsDigest(raw []byte) string {
 	sum := sha256.Sum256(raw)

@@ -32,6 +32,14 @@ func maxOutputTokens(request domain.ModelRequest) int64 {
 	return DefaultMaxOutputTokens
 }
 
+// sampling is the request's temperature when it sets one, else the adapter's.
+func sampling(configured *float64, request domain.ModelRequest) *float64 {
+	if request.Temperature != nil {
+		return request.Temperature
+	}
+	return configured
+}
+
 func mediaPrompt(prompt, styleHint string) string {
 	if styleHint == "" {
 		return prompt

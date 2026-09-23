@@ -120,7 +120,7 @@ func TestPgVectorIndexIndexUpsertsInOneTransaction(t *testing.T) {
 		t.Fatalf("commits=%d rollbacks=%d upserts=%d", query.committed, query.rolled, len(query.calls[qPgVectorUpsertChunk]))
 	}
 	args := query.calls[qPgVectorUpsertChunk][1]
-	want := []any{int64(7), "kb", "v1", "doc-a", 1, testChunkID, "[0.5,-0.25,1]", 3, "simple", "revenue grew", `["group:finance","user:42"]`, "etag-1", 10, 20}
+	want := []any{int64(7), "kb", "v1", "doc-a", 1, testChunkID, "[0.5,-0.25,1]", 3, "simple", "revenue grew", `["group:finance","user:42"]`}
 	if len(args) != len(want) {
 		t.Fatalf("upsert args = %v", args)
 	}
@@ -171,8 +171,6 @@ func TestPgVectorIndexIndexValidation(t *testing.T) {
 		{"empty entitlements", mutate(func(item *domain.ChunkEmbedding) { item.Chunk.Entitlements = []byte("[]") })},
 		{"short chunk id", mutate(func(item *domain.ChunkEmbedding) { item.Chunk.ChunkID = "abc" })},
 		{"negative chunk", mutate(func(item *domain.ChunkEmbedding) { item.Chunk.ChunkNo = -1 })},
-		{"bad offsets", mutate(func(item *domain.ChunkEmbedding) { item.Chunk.EndOffset = 1 })},
-		{"no source version", mutate(func(item *domain.ChunkEmbedding) { item.Chunk.SourceVersion = " " })},
 		{"empty embedding", mutate(func(item *domain.ChunkEmbedding) { item.Embedding.Values = nil })},
 		{"too wide", mutate(func(item *domain.ChunkEmbedding) { item.Embedding.Values = make([]float32, pgVectorMaxDimensions+1) })},
 		{"non-finite", mutate(func(item *domain.ChunkEmbedding) { item.Embedding.Values[0] = float32(math.NaN()) })},

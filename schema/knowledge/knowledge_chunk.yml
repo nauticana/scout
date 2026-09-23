@@ -1,5 +1,5 @@
 table: knowledge_chunk
-comment: Authorized source chunk and external vector reference
+comment: Authorized, redacted source chunk with its position and the entitlement labels that grant it
 columns:
   - name: tenant_id
     type: BIGINT
@@ -19,6 +19,15 @@ columns:
     type: TEXT
   - name: token_count
     type: INTEGER
+  - name: source_version
+    type: VARCHAR(120)
+  - name: start_offset
+    type: INTEGER
+  - name: end_offset
+    type: INTEGER
+  - name: entitlements
+    type: TEXT
+    comment: canonical JSON array of entitlement labels; a chunk is visible when the principal holds any of them
 primary_key: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
 foreign_keys:
   - name: knowledge_chunks
@@ -33,3 +42,5 @@ checks:
     expression: token_count > 0
   - name: knowledge_chunk_digest_ck
     expression: CHAR_LENGTH(content_digest) = 64
+  - name: knowledge_chunk_offsets_ck
+    expression: start_offset >= 0 AND end_offset >= start_offset

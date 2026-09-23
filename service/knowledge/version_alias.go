@@ -33,7 +33,8 @@ UPDATE knowledge_base_alias
    SET previous_version = active_version, active_version = ?, swapped_at = CURRENT_TIMESTAMP
  WHERE tenant_id = ? AND knowledge_base_id = ? AND active_version = ?
 RETURNING previous_version`,
-	// Documents rebuilt into the new generation follow the alias in the same transaction; the rest keep their pointer.
+	// Documents fully rebuilt into the new generation follow the alias in the same
+	// transaction; one still awaiting its vectors (an unmarked chunk) and the rest keep their pointer.
 	qAliasRepointManifest: `
 UPDATE knowledge_document_manifest manifest
    SET superseded_version = manifest.active_version, gc_pending = TRUE, active_version = ?, activated_at = CURRENT_TIMESTAMP
@@ -41,7 +42,10 @@ UPDATE knowledge_document_manifest manifest
    AND manifest.active_version <> ?
    AND EXISTS (SELECT 1 FROM knowledge_document doc
                 WHERE doc.tenant_id = manifest.tenant_id AND doc.knowledge_base_id = manifest.knowledge_base_id
-                  AND doc.knowledge_version = ? AND doc.document_id = manifest.document_id)`,
+                  AND doc.knowledge_version = ? AND doc.document_id = manifest.document_id)
+   AND NOT EXISTS (SELECT 1 FROM knowledge_chunk chunk
+                    WHERE chunk.tenant_id = manifest.tenant_id AND chunk.knowledge_base_id = manifest.knowledge_base_id
+                      AND chunk.knowledge_version = ? AND chunk.document_id = manifest.document_id AND chunk.vector_ref = '')`,
 }
 
 // VersionAliaser is the KB-level generation pointer over knowledge_base_alias.
@@ -115,7 +119,7 @@ func (aliaser *VersionAliaser) Swap(ctx context.Context, tenantID int64, knowled
 			return fmt.Errorf("%w: knowledge base %q alias changed concurrently", domain.ErrConflict, knowledgeBaseID)
 		}
 	}
-	if _, err = tx.Query(ctx, qAliasRepointManifest, newVersion, tenantID, knowledgeBaseID, newVersion, newVersion); err != nil {
+	if _, err = tx.Query(ctx, qAliasRepointManifest, newVersion, tenantID, knowledgeBaseID, newVersion, newVersion, newVersion); err != nil {
 		return fmt.Errorf("swap alias: repoint manifests: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {

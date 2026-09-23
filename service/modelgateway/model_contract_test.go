@@ -3,6 +3,7 @@ package modelgateway
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -273,5 +274,20 @@ func TestGatewayRejectsInvalidUnaryUsage(t *testing.T) {
 	gateway, _ := contractGateway(t, nil, domain.ModelResult{Output: []byte("ok"), Usage: domain.Usage{InputTokens: -1}})
 	if _, err := gateway.Generate(context.Background(), contractSelection, validModelRequest()); !errors.Is(err, domain.ErrInvalidModelOutput) {
 		t.Fatalf("want ErrInvalidModelOutput, got %v", err)
+	}
+}
+
+func TestARequestTemperatureRequiresTheSamplingCapability(t *testing.T) {
+	temperature := 0.2
+	if required := RequiredCapabilities(domain.ModelRequest{Temperature: &temperature}); len(required) != 1 || required[0] != domain.CapabilitySampling {
+		t.Fatalf("required = %v", required)
+	}
+	outOfRange := 3.0
+	if _, err := compileModelContract(domain.ModelRequest{Temperature: &outOfRange}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("temperature 3 = %v", err)
+	}
+	notANumber := math.NaN()
+	if _, err := compileModelContract(domain.ModelRequest{Temperature: &notANumber}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("temperature NaN = %v", err)
 	}
 }

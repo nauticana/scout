@@ -22,7 +22,15 @@ nor fetch a gate example, and cannot write one either.
 ## Ordering
 
 `Runner` replays baseline and candidate on identical examples through an injected
-`CaseExecutor`. When both arms pin the same knowledge base, index, and index
+`CaseExecutor`. `ReleaseCaseExecutor` is the production one: it resolves the arm's
+published graph and runs its tool-loop steps with the release's prompt, tools and
+limits, a fresh `ToolSandbox` per example as the only tool path, the arm's
+`Decoding` (`temperature`, `max_tokens`; any other key refuses the replay), and the
+release's output guardrails when composed. The example payload is the turn input,
+verified against its digest. An agent that exhausts a limit, loops, or answers
+invalidly ends its trajectory in a failed state instead of failing the run.
+Component versions other than agent and model are labels of what the release pins:
+an ablation arm must name a release that pins its component. When both arms pin the same knowledge base, index, and index
 generation, the candidate is handed the baseline's retrieval so only the changed
 component varies. Examples run with bounded ordered concurrency; the first error
 cancels the rest.

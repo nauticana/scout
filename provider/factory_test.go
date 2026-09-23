@@ -105,3 +105,20 @@ func (provider *secretProviderStub) GetSecret(_ context.Context, reference strin
 	provider.references = append(provider.references, reference)
 	return provider.values[reference], provider.err
 }
+
+func TestRequestTemperatureOverridesTheConfiguredOne(t *testing.T) {
+	configured, requested := 0.7, 0.0
+	request := domain.ModelRequest{Prompt: []byte("hi"), Temperature: &requested}
+	anthropicParams, err := (&Anthropic{Temperature: &configured}).messageParams(domain.ModelSelection{Model: "m"}, request)
+	if err != nil || !strings.Contains(encoded(t, anthropicParams), `"temperature":0`) {
+		t.Fatalf("anthropic params = %s, %v", encoded(t, anthropicParams), err)
+	}
+	openAIParams, err := (&OpenAI{}).completionParams(domain.ModelSelection{Model: "m"}, request)
+	if err != nil || !strings.Contains(encoded(t, openAIParams), `"temperature":0`) {
+		t.Fatalf("openai params = %s, %v", encoded(t, openAIParams), err)
+	}
+	_, config, err := (&Google{}).contentParams(request)
+	if err != nil || config.Temperature == nil || *config.Temperature != 0 {
+		t.Fatalf("google config = %+v, %v", config, err)
+	}
+}

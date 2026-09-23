@@ -94,3 +94,14 @@ func TestGarbageCollectorSkipsChangedManifestAndReportsFailures(t *testing.T) {
 		t.Fatalf("limit = %v", err)
 	}
 }
+
+func TestGarbageCollectorReclaimsRowsWithoutAVectorIndex(t *testing.T) {
+	query := &ingestQueryFake{rows: map[string][][]any{
+		qGCListPending: {gcRow("a", "v2", "v1", false)},
+		qGCGetManifest: {gcRow("a", "v2", "v1", false)},
+	}}
+	collector := &GarbageCollector{DB: ingestDBFake{query: query}}
+	if swept, err := collector.Sweep(context.Background(), 10); err != nil || swept != 1 || len(query.named(qGCDeleteChunks)) != 1 {
+		t.Fatalf("swept = %d, %v", swept, err)
+	}
+}

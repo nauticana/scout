@@ -8,7 +8,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/mark3labs/mcp-go v0.46.0
 	github.com/nauticana/charter v1.2.0
-	github.com/nauticana/keel v1.2.71
+	github.com/nauticana/keel v1.2.74
 	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.67.0
 )

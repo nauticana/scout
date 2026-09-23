@@ -19,10 +19,10 @@ const (
 	qPinnedChunks   = "scout_knowledge_pinned_chunks"
 )
 
-// The chunk scan carries the authorization predicate retrieval uses — tenant
-// partition, pinned version, tombstones from the row and the manifest, and
-// any-of entitlement labels — so a document read whole is authorized exactly
-// as the same content is when it is searched.
+// The chunk scan reads no vector table, so knowledge is read whole without
+// knowledge_vector installed. Version, manifest and tombstone scope the scan;
+// the any-of entitlement rule retrieval compiles into SQL is applied in Go
+// before any content is loaded, which keeps the query dialect-neutral.
 var pinnedKnowledgeQueries = map[string]string{
 	qPinnedBindings: `
 SELECT b.knowledge_base_id, b.knowledge_version, b.max_whole_tokens, d.document_id
@@ -33,24 +33,17 @@ SELECT b.knowledge_base_id, b.knowledge_version, b.max_whole_tokens, d.document_
  WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ? AND b.mode_code = 'whole'
  ORDER BY b.knowledge_base_id, d.ordinal, d.document_id`,
 	qPinnedChunks: `
-SELECT v.document_id, v.chunk_no, c.content_uri, c.token_count, d.source_uri, v.source_version,
-       v.start_offset, v.end_offset
-  FROM knowledge_chunk_vector v
-  JOIN knowledge_chunk c
-    ON c.tenant_id = v.tenant_id AND c.knowledge_base_id = v.knowledge_base_id
-   AND c.knowledge_version = v.knowledge_version AND c.document_id = v.document_id AND c.chunk_no = v.chunk_no
+SELECT c.document_id, c.chunk_no, c.content_uri, c.token_count, d.source_uri, c.source_version,
+       c.start_offset, c.end_offset, c.entitlements
+  FROM knowledge_chunk c
   JOIN knowledge_document d
-    ON d.tenant_id = v.tenant_id AND d.knowledge_base_id = v.knowledge_base_id
-   AND d.knowledge_version = v.knowledge_version AND d.document_id = v.document_id
- WHERE v.tenant_id = ? AND v.knowledge_base_id = ? AND v.knowledge_version = ?
-   AND v.tombstoned = FALSE
-   AND EXISTS (SELECT 1
-                 FROM knowledge_document_manifest m
-                WHERE m.tenant_id = v.tenant_id AND m.knowledge_base_id = v.knowledge_base_id
-                  AND m.document_id = v.document_id AND m.active_version = v.knowledge_version
-                  AND m.tombstoned = FALSE)
-   AND v.entitlements ??| ARRAY(SELECT jsonb_array_elements_text(?::jsonb))
- ORDER BY v.document_id, v.chunk_no`,
+    ON d.tenant_id = c.tenant_id AND d.knowledge_base_id = c.knowledge_base_id
+   AND d.knowledge_version = c.knowledge_version AND d.document_id = c.document_id
+  JOIN knowledge_document_manifest m
+    ON m.tenant_id = c.tenant_id AND m.knowledge_base_id = c.knowledge_base_id
+   AND m.document_id = c.document_id AND m.active_version = c.knowledge_version AND m.tombstoned = FALSE
+ WHERE c.tenant_id = ? AND c.knowledge_base_id = ? AND c.knowledge_version = ?
+ ORDER BY c.document_id, c.chunk_no`,
 }
 
 // maxAssemblyOverlap bounds the repeated context one chunk may carry from the
@@ -100,6 +93,10 @@ func (resolver *TablePinnedKnowledge) PinnedKnowledge(ctx context.Context, reque
 	if len(request.Entitlements) == 0 {
 		return domain.PinnedKnowledge{}, fmt.Errorf("%w: resolved entitlements are required", domain.ErrValidation)
 	}
+	held, err := ParseEntitlements(request.Entitlements)
+	if err != nil {
+		return domain.PinnedKnowledge{}, err
+	}
 	if err := resolver.init(ctx); err != nil {
 		return domain.PinnedKnowledge{}, err
 	}
@@ -109,7 +106,7 @@ func (resolver *TablePinnedKnowledge) PinnedKnowledge(ctx context.Context, reque
 	}
 	var pinned domain.PinnedKnowledge
 	for _, binding := range bindings {
-		documents, err := resolver.documents(ctx, request, binding)
+		documents, err := resolver.documents(ctx, request.TenantContext, held, binding)
 		if err != nil {
 			return domain.PinnedKnowledge{}, err
 		}
@@ -166,16 +163,33 @@ type chunkRow struct {
 }
 
 // documents assembles one binding's documents in the order it names them.
-func (resolver *TablePinnedKnowledge) documents(ctx context.Context, request domain.PinnedKnowledgeRequest, binding wholeBinding) ([]domain.PinnedDocument, error) {
-	res, err := resolver.qs.Query(ctx, qPinnedChunks, request.TenantContext.TenantID, binding.knowledgeBaseID, binding.knowledgeVersion, string(request.Entitlements))
+func (resolver *TablePinnedKnowledge) documents(ctx context.Context, tenant domain.TenantContext, held []string, binding wholeBinding) ([]domain.PinnedDocument, error) {
+	res, err := resolver.qs.Query(ctx, qPinnedChunks, tenant.TenantID, binding.knowledgeBaseID, binding.knowledgeVersion)
 	if err != nil {
 		return nil, fmt.Errorf("read knowledge base %q whole: %w", binding.knowledgeBaseID, err)
 	}
 	chunks := make(map[string][]chunkRow)
 	var order []string
+	wanted := make(map[string]struct{}, len(binding.documents))
+	for _, documentID := range binding.documents {
+		wanted[documentID] = struct{}{}
+	}
 	for _, row := range res.Rows {
+		documentID := strings.TrimSpace(common.AsString(row[0]))
+		if len(wanted) > 0 {
+			if _, ok := wanted[documentID]; !ok {
+				continue
+			}
+		}
+		granted, err := ParseEntitlements([]byte(common.AsString(row[8])))
+		if err != nil {
+			return nil, fmt.Errorf("chunk %v of document %q: %w", row[1], documentID, err)
+		}
+		if !Entitled(granted, held) {
+			continue
+		}
 		chunk := chunkRow{
-			documentID:    strings.TrimSpace(common.AsString(row[0])),
+			documentID:    documentID,
 			contentURI:    strings.TrimSpace(common.AsString(row[2])),
 			tokens:        int(common.AsInt64(row[3])),
 			sourceURI:     strings.TrimSpace(common.AsString(row[4])),
@@ -198,7 +212,7 @@ func (resolver *TablePinnedKnowledge) documents(ctx context.Context, request dom
 			return nil, fmt.Errorf("%w: document %q of knowledge base %q is bound whole but no authorized chunk of version %q remains",
 				domain.ErrNotFound, documentID, binding.knowledgeBaseID, binding.knowledgeVersion)
 		}
-		document, err := resolver.assemble(ctx, request.TenantContext, binding, rows)
+		document, err := resolver.assemble(ctx, tenant, binding, rows)
 		if err != nil {
 			return nil, err
 		}

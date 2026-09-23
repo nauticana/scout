@@ -35,6 +35,9 @@ type ModelRequest struct {
 	// Search asks the provider to answer from its own web search; it requires
 	// CapabilityWebSearch and is never served ungrounded.
 	Search *SearchGrounding
+	// Temperature overrides the adapter's configured sampling for this call; it
+	// requires CapabilitySampling, so a model that rejects sampling is never sent one.
+	Temperature *float64
 }
 
 // Route capabilities a request can require. Tools and a constrained Output imply

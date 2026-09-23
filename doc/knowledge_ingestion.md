@@ -11,7 +11,8 @@ versioning services `ManifestStore`, `VersionAliaser`, `TableSourceChangeSource`
 `QueueDepth` (0 = rendezvous): **prepare** (load → verify SHA-256 against `ContentDigest` → decode → chunk →
 redact), **embed** (`EmbeddingGateway` — `knowledge.BatchingEmbedder` over
 `modelgateway.GovernedEmbedder`, `EmbedFanOut` chunks of one document at a time), **publish**
-(chunk store → vector index → relational transaction → manifest activation). Each stage has its own worker
+(chunk store → relational transaction → vector index → manifest activation). `Embedder` and `Index` are set
+together or not at all; without them a document is ingested for whole reads only. Each stage has its own worker
 count; a slow index blocks publish, which fills the handoff channel and stops the loaders — real backpressure,
 no unbounded queue. Every stage closes its output channel only after all of its workers have exited, so the
 batch returns with no goroutine still running.
@@ -31,12 +32,15 @@ same immutable version → terminal `ErrConflict`. Chunk identity is equally det
 `ChunkID` = SHA-256 over tenant | knowledge base | document | source version | chunker version | chunk number —
 so the same source re-chunked by the same `Chunker.Version()` produces the same ids and object keys.
 
-Publish order is fixed: chunk content to object storage, then `KnowledgeVectorIndex.Index` for the whole
-document, then one transaction inserting `knowledge_document` + all `knowledge_chunk` rows, then manifest
-activation. Rows exist only after the vectors do, so retrieval — which revalidates relationally — can never
-see a chunk it cannot resolve. If the transaction fails, the pipeline calls `Index.Remove` for that document
-version and joins any removal error onto the original: vectors are never left live without their rows. What a
-crash leaves behind is caught by `Reconciler` (orphan chunks) and reclaimed by `GarbageCollector`.
+Publish order is fixed: chunk content to object storage, then one transaction inserting `knowledge_document`
++ all `knowledge_chunk` rows, then `KnowledgeVectorIndex.Index` for the whole document, then manifest
+activation. Rows come first because a vector row references its chunk; neither is visible to retrieval or a
+whole read until the manifest activates the version. If indexing fails, the pipeline deletes the document's
+rows again and joins any deletion error onto the original. `vector_ref` stays empty until indexing finishes
+(a whole-only ingest fills it at insert), so a retry rebuilds rows a crash left behind instead of activating an
+incomplete document, `VersionAliaser.Swap` never repoints a manifest at them, and a pipeline without an index
+refuses them with `ErrNotReady`. What a crash leaves behind is caught by `Reconciler` (orphan chunks) and
+reclaimed by `GarbageCollector`, whose `Index` is optional for the same reason.
 
 ## Reference ports
 

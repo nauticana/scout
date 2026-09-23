@@ -104,7 +104,7 @@ func testDocument(id string, content []byte) domain.KnowledgeDocument {
 	return domain.KnowledgeDocument{
 		TenantContext: domain.TenantContext{TenantID: 7}, KnowledgeBaseID: "kb", KnowledgeVersion: "v1", DocumentID: id,
 		SourceURI: "object://bucket/" + id, SourceVersion: "s1", ContentDigest: sha256Bytes(content), MediaType: "text/plain",
-		Entitlements: []byte(`{"dept":"sales"}`), RedactionPolicyVersion: "",
+		Entitlements: []byte(`["dept:sales"]`), RedactionPolicyVersion: "",
 	}
 }
 
@@ -181,7 +181,7 @@ func TestIngestPipelinePublishesInOrderAndCorrelates(t *testing.T) {
 		t.Fatalf("usage %+v indexed %d activated %d", result.Usage, harness.indexed.Load(), harness.activate.Load())
 	}
 	docs := harness.query.named(qIngestInsertDocument)
-	if len(docs) != 3 || harness.query.commits != 3 {
+	if len(docs) != 3 || harness.query.commits != 6 {
 		t.Fatalf("document inserts = %d commits = %d", len(docs), harness.query.commits)
 	}
 	for _, call := range docs {
@@ -196,9 +196,14 @@ func TestIngestPipelinePublishesInOrderAndCorrelates(t *testing.T) {
 	for _, call := range chunks {
 		documentID, chunkNo := call.args[3].(string), call.args[4].(int)
 		wantID := ChunkID(7, "kb", documentID, "s1", defaultChunkerVersion, chunkNo)
-		if call.args[0] != int64(7) || call.args[5] != "object://chunks/"+wantID || call.args[7] != wantID || call.args[8].(int) <= 0 || len(call.args[6].(string)) != 64 {
+		if call.args[0] != int64(7) || call.args[5] != "object://chunks/"+wantID || call.args[7] != "" || call.args[8].(int) <= 0 || len(call.args[6].(string)) != 64 ||
+			call.args[9] != "s1" || call.args[11].(int) < call.args[10].(int) || call.args[12] != `["dept:sales"]` {
 			t.Fatalf("chunk args = %v", call.args)
 		}
+	}
+	marked := harness.query.named(qIngestMarkIndexed)
+	if len(marked) != len(chunks) {
+		t.Fatalf("indexed markers = %d, chunks = %d", len(marked), len(chunks))
 	}
 	// Documents publish concurrently into one log, so ordering holds per
 	// document: its row is written before any of its chunks.
@@ -252,7 +257,7 @@ func TestIngestPipelineReplaysIdenticalDocument(t *testing.T) {
 	sources := map[string][]byte{"a": []byte("same content")}
 	harness := newPipelineHarness(sources)
 	document := testDocument("a", sources["a"])
-	harness.query.rows = map[string][][]any{qIngestFindDocument: {{document.ContentDigest, int64(4)}}}
+	harness.query.rows = map[string][][]any{qIngestFindDocument: {{document.ContentDigest, int64(4), int64(4)}}}
 	result, err := harness.pipeline.IngestBatch(context.Background(), domain.IngestBatch{TenantContext: document.TenantContext, KnowledgeBaseID: "kb", KnowledgeVersion: "v1", Documents: []domain.KnowledgeDocument{document}})
 	if err != nil || result.Items[0].Failure != "" || result.Items[0].ChunkCount != 4 {
 		t.Fatalf("replay = %+v, %v", result, err)
@@ -265,31 +270,88 @@ func TestIngestPipelineReplaysIdenticalDocument(t *testing.T) {
 		t.Fatalf("find args = %v", find)
 	}
 
-	harness.query.rows[qIngestFindDocument] = [][]any{{testDigest, int64(4)}}
+	harness.query.rows[qIngestFindDocument] = [][]any{{testDigest, int64(4), int64(4)}}
 	result, err = harness.pipeline.IngestBatch(context.Background(), domain.IngestBatch{TenantContext: document.TenantContext, KnowledgeBaseID: "kb", KnowledgeVersion: "v1", Documents: []domain.KnowledgeDocument{document}})
 	if err != nil || !result.Items[0].Terminal || !strings.Contains(result.Items[0].Failure, "different content") {
 		t.Fatalf("conflict = %+v, %v", result, err)
 	}
 }
 
-func TestIngestPipelineReconcilesIndexWhenPublishFails(t *testing.T) {
-	sources := map[string][]byte{"a": []byte("content")}
+func TestIngestPipelineRebuildsRowsLeftBeforeIndexCompletion(t *testing.T) {
+	sources := map[string][]byte{"a": []byte("same content")}
 	harness := newPipelineHarness(sources)
-	harness.query.commitErr = errors.New("commit failed")
-	result, err := harness.pipeline.IngestBatch(context.Background(), domain.IngestBatch{TenantContext: domain.TenantContext{TenantID: 7}, KnowledgeBaseID: "kb", KnowledgeVersion: "v1", Documents: []domain.KnowledgeDocument{testDocument("a", sources["a"])}})
-	if err != nil {
+	document := testDocument("a", sources["a"])
+	harness.query.rows = map[string][][]any{qIngestFindDocument: {{document.ContentDigest, int64(1), int64(0)}}}
+	if err := harness.pipeline.Ingest(context.Background(), document); err != nil {
 		t.Fatal(err)
 	}
-	if result.Items[0].Terminal || !strings.Contains(result.Items[0].Failure, "commit failed") || harness.removed.Load() != 1 || harness.query.rollbacks != 1 || harness.activate.Load() != 0 {
-		t.Fatalf("publish failure = %+v removed %d rollbacks %d", result.Items[0], harness.removed.Load(), harness.query.rollbacks)
+	if harness.removed.Load() != 1 || harness.embeds.Load() != 1 || harness.indexed.Load() != 1 || harness.activate.Load() != 1 {
+		t.Fatalf("removed %d embedded %d indexed %d activated %d", harness.removed.Load(), harness.embeds.Load(), harness.indexed.Load(), harness.activate.Load())
+	}
+}
+
+func TestIngestPipelineWritesRowsBeforeVectorsAndUnpublishesWhenIndexingFails(t *testing.T) {
+	sources := map[string][]byte{"a": []byte("content")}
+	ingest := func(harness *pipelineHarness) domain.IngestItemResult {
+		result, err := harness.pipeline.IngestBatch(context.Background(), domain.IngestBatch{TenantContext: domain.TenantContext{TenantID: 7}, KnowledgeBaseID: "kb", KnowledgeVersion: "v1", Documents: []domain.KnowledgeDocument{testDocument("a", sources["a"])}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Items[0]
+	}
+
+	harness := newPipelineHarness(sources)
+	harness.query.commitErr = errors.New("commit failed")
+	item := ingest(harness)
+	if item.Terminal || !strings.Contains(item.Failure, "commit failed") || harness.indexed.Load() != 0 || harness.query.rollbacks != 1 || harness.activate.Load() != 0 {
+		t.Fatalf("a failed row commit must not index: %+v indexed %d rollbacks %d", item, harness.indexed.Load(), harness.query.rollbacks)
 	}
 
 	harness = newPipelineHarness(sources)
-	harness.query.commitErr = errors.New("commit failed")
-	harness.pipeline.Index.(*fake.KnowledgeVectorIndex).RemoveFunc = func(context.Context, int64, string, string, string) error { return errors.New("remove failed") }
-	result, _ = harness.pipeline.IngestBatch(context.Background(), domain.IngestBatch{TenantContext: domain.TenantContext{TenantID: 7}, KnowledgeBaseID: "kb", KnowledgeVersion: "v1", Documents: []domain.KnowledgeDocument{testDocument("a", sources["a"])}})
-	if !strings.Contains(result.Items[0].Failure, "commit failed") || !strings.Contains(result.Items[0].Failure, "remove failed") {
-		t.Fatalf("joined failure = %q", result.Items[0].Failure)
+	harness.pipeline.Index.(*fake.KnowledgeVectorIndex).IndexFunc = func(context.Context, []domain.ChunkEmbedding) error {
+		if len(harness.query.named(qIngestInsertChunk)) == 0 {
+			t.Error("vectors indexed before their chunk rows")
+		}
+		return errors.New("index failed")
+	}
+	item = ingest(harness)
+	if !strings.Contains(item.Failure, "index failed") || harness.activate.Load() != 0 ||
+		len(harness.query.named(qIngestDeleteChunks)) != 1 || len(harness.query.named(qIngestDeleteDocument)) != 1 || harness.query.commits != 2 || harness.removed.Load() != 1 {
+		t.Fatalf("an index failure must remove partial vectors and rows: %+v commits %d removed %d", item, harness.query.commits, harness.removed.Load())
+	}
+}
+
+func TestIngestPipelineIngestsForWholeReadsWithoutVectors(t *testing.T) {
+	sources := map[string][]byte{"a": []byte("standing rule one\n\nstanding rule two")}
+	harness := newPipelineHarness(sources)
+	harness.pipeline.Embedder, harness.pipeline.Index = nil, nil
+	if err := harness.pipeline.Ingest(context.Background(), testDocument("a", sources["a"])); err != nil {
+		t.Fatal(err)
+	}
+	chunks := harness.query.named(qIngestInsertChunk)
+	if harness.stored.Load() == 0 || len(chunks) == 0 || chunks[0].args[7] == "" || len(harness.query.named(qIngestMarkIndexed)) != 0 || harness.activate.Load() != 1 {
+		t.Fatalf("a whole-only ingest marks its rows complete at insert: stored %d chunks %d activated %d", harness.stored.Load(), len(chunks), harness.activate.Load())
+	}
+
+	harness.query.rows = map[string][][]any{qIngestFindDocument: {{testDocument("a", sources["a"]).ContentDigest, int64(1), int64(0)}}}
+	if err := harness.pipeline.Ingest(context.Background(), testDocument("a", sources["a"])); !errors.Is(err, domain.ErrNotReady) || harness.activate.Load() != 1 {
+		t.Fatalf("rows awaiting vectors must not be activated by a pipeline without an index: %v", err)
+	}
+
+	harness.pipeline.Embedder = &fake.EmbeddingGateway{}
+	if err := harness.pipeline.Ingest(context.Background(), testDocument("a", sources["a"])); err == nil {
+		t.Fatal("an embedder without an index was accepted")
+	}
+}
+
+func TestIngestPipelineRejectsMalformedChunkEntitlements(t *testing.T) {
+	sources := map[string][]byte{"a": []byte("content")}
+	harness := newPipelineHarness(sources)
+	document := testDocument("a", sources["a"])
+	document.Entitlements = []byte(`{"dept":"sales"}`)
+	err := harness.pipeline.Ingest(context.Background(), document)
+	if !errors.Is(err, domain.ErrValidation) || harness.stored.Load() != 0 {
+		t.Fatalf("malformed entitlements = %v, stored %d", err, harness.stored.Load())
 	}
 }
 

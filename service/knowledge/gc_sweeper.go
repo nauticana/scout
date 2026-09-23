@@ -55,7 +55,8 @@ DELETE FROM knowledge_document_manifest
 // document, and manifest rows go in one transaction under the manifest lock,
 // so a concurrent activation can never lose a live chunk set.
 type GarbageCollector struct {
-	DB    keelport.DatabaseRepository
+	DB keelport.DatabaseRepository
+	// Index is nil when the deployment keeps no vectors.
 	Index contract.KnowledgeVectorIndex
 
 	once sync.Once
@@ -95,8 +96,8 @@ func decodeGCManifest(row []any) (gcManifest, error) {
 }
 
 func (collector *GarbageCollector) init(ctx context.Context) error {
-	if collector.DB == nil || collector.Index == nil {
-		return fmt.Errorf("garbage collector: database and index are required")
+	if collector.DB == nil {
+		return fmt.Errorf("garbage collector: database is required")
 	}
 	collector.once.Do(func() { collector.qs = collector.DB.GetQueryService(ctx, gcQueries) })
 	if collector.qs == nil {
@@ -141,10 +142,8 @@ func (collector *GarbageCollector) Sweep(ctx context.Context, limit int) (int, e
 
 func (collector *GarbageCollector) reclaim(ctx context.Context, snapshot gcManifest) (bool, error) {
 	removed := snapshot.versions()
-	for _, version := range removed {
-		if err := collector.Index.Remove(ctx, snapshot.tenantID, snapshot.knowledgeBaseID, version, snapshot.documentID); err != nil {
-			return false, fmt.Errorf("remove version %q from index: %w", version, err)
-		}
+	if err := collector.removeVectors(ctx, snapshot, removed); err != nil {
+		return false, err
 	}
 	tx, err := collector.DB.BeginTx(ctx, gcQueries)
 	if err != nil {
@@ -204,4 +203,16 @@ func (collector *GarbageCollector) reclaim(ctx context.Context, snapshot gcManif
 	}
 	committed = true
 	return reclaimable == len(manifest.versions()), nil
+}
+
+func (collector *GarbageCollector) removeVectors(ctx context.Context, snapshot gcManifest, versions []string) error {
+	if collector.Index == nil {
+		return nil
+	}
+	for _, version := range versions {
+		if err := collector.Index.Remove(ctx, snapshot.tenantID, snapshot.knowledgeBaseID, version, snapshot.documentID); err != nil {
+			return fmt.Errorf("remove version %q from index: %w", version, err)
+		}
+	}
+	return nil
 }

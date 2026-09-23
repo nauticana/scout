@@ -22,6 +22,9 @@ const (
 	qIngestFindDocument   = "scout_knowledge_ingest_find_document"
 	qIngestInsertDocument = "scout_knowledge_ingest_insert_document"
 	qIngestInsertChunk    = "scout_knowledge_ingest_insert_chunk"
+	qIngestMarkIndexed    = "scout_knowledge_ingest_mark_indexed"
+	qIngestDeleteChunks   = "scout_knowledge_ingest_delete_chunks"
+	qIngestDeleteDocument = "scout_knowledge_ingest_delete_document"
 )
 
 var ingestQueries = map[string]string{
@@ -29,20 +32,34 @@ var ingestQueries = map[string]string{
 SELECT content_digest,
        (SELECT COUNT(*) FROM knowledge_chunk chunk
          WHERE chunk.tenant_id = doc.tenant_id AND chunk.knowledge_base_id = doc.knowledge_base_id
-           AND chunk.knowledge_version = doc.knowledge_version AND chunk.document_id = doc.document_id)
+           AND chunk.knowledge_version = doc.knowledge_version AND chunk.document_id = doc.document_id),
+       (SELECT COUNT(*) FROM knowledge_chunk chunk
+         WHERE chunk.tenant_id = doc.tenant_id AND chunk.knowledge_base_id = doc.knowledge_base_id
+           AND chunk.knowledge_version = doc.knowledge_version AND chunk.document_id = doc.document_id
+           AND chunk.vector_ref <> '')
   FROM knowledge_document doc
  WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 	qIngestInsertDocument: `
 INSERT INTO knowledge_document (tenant_id, knowledge_base_id, knowledge_version, document_id, source_uri, content_digest, media_type)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	qIngestInsertChunk: `
-INSERT INTO knowledge_chunk (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no, content_uri, content_digest, vector_ref, token_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO knowledge_chunk (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no, content_uri, content_digest, vector_ref, token_count,
+                             source_version, start_offset, end_offset, entitlements)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	qIngestMarkIndexed: `
+UPDATE knowledge_chunk SET vector_ref = ?
+ WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ? AND chunk_no = ?`,
+	qIngestDeleteChunks: `
+DELETE FROM knowledge_chunk
+ WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+	qIngestDeleteDocument: `
+DELETE FROM knowledge_document
+ WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 }
 
 // IngestPipeline is a bounded synchronous batch executor: prepare (load,
-// verify, decode, chunk, redact) → embed → publish (chunk store, vector
-// index, then relational rows in one transaction, then manifest activation).
+// verify, decode, chunk, redact) → embed → publish (chunk store, relational
+// rows in one transaction, vector index, then manifest activation).
 // Stages hand off through bounded channels so a slow index applies real
 // backpressure; a systemic failure cancels the batch, an isolated bad
 // document only records a terminal item result.
@@ -50,10 +67,11 @@ type IngestPipeline struct {
 	Loader     contract.SourceLoader
 	Decoder    contract.MediaDecoder
 	Chunker    contract.Chunker
-	Embedder   contract.EmbeddingGateway
 	ChunkStore contract.KnowledgeChunkStore
-	Index      contract.KnowledgeVectorIndex
 	DB         keelport.DatabaseRepository
+	// Embedder and Index are set together; leaving both nil ingests for whole reads only.
+	Embedder contract.EmbeddingGateway
+	Index    contract.KnowledgeVectorIndex
 	// Redactor derives the embedded chunk from the source chunk; nil embeds the source chunk.
 	Redactor contract.ChunkRedactor
 	// Manifests switches the document's active pointer after publish; nil leaves activation to the caller (generation rebuilds).
@@ -122,9 +140,10 @@ func (job *ingestJob) fail(err error, terminal bool) {
 
 func (pipeline *IngestPipeline) validate() error {
 	switch {
-	case pipeline.Loader == nil, pipeline.Decoder == nil, pipeline.Chunker == nil, pipeline.Embedder == nil,
-		pipeline.ChunkStore == nil, pipeline.Index == nil, pipeline.DB == nil:
-		return fmt.Errorf("ingest pipeline: loader, decoder, chunker, embedder, chunk store, index, and database are required")
+	case pipeline.Loader == nil, pipeline.Decoder == nil, pipeline.Chunker == nil, pipeline.ChunkStore == nil, pipeline.DB == nil:
+		return fmt.Errorf("ingest pipeline: loader, decoder, chunker, chunk store, and database are required")
+	case (pipeline.Embedder == nil) != (pipeline.Index == nil):
+		return fmt.Errorf("ingest pipeline: embedder and vector index are set together or not at all")
 	case pipeline.PrepareWorkers < 0, pipeline.EmbedWorkers < 0, pipeline.PublishWorkers < 0, pipeline.EmbedFanOut < 0, pipeline.QueueDepth < 0:
 		return fmt.Errorf("%w: ingest pipeline worker counts and queue depth cannot be negative", domain.ErrValidation)
 	}
@@ -290,8 +309,8 @@ func (pipeline *IngestPipeline) validateDocument(batch domain.IngestBatch, docum
 	case document.TenantContext.TenantID != batch.TenantContext.TenantID,
 		document.KnowledgeBaseID != batch.KnowledgeBaseID, document.KnowledgeVersion != batch.KnowledgeVersion:
 		return fmt.Errorf("%w: document does not belong to the batch tenant, knowledge base, and version", domain.ErrValidation)
-	case strings.TrimSpace(document.DocumentID) == "", strings.TrimSpace(document.SourceURI) == "":
-		return fmt.Errorf("%w: document id and source URI are required", domain.ErrValidation)
+	case strings.TrimSpace(document.DocumentID) == "", strings.TrimSpace(document.SourceURI) == "", strings.TrimSpace(document.SourceVersion) == "":
+		return fmt.Errorf("%w: document id, source URI, and source version are required", domain.ErrValidation)
 	case !isSHA256Hex(document.ContentDigest):
 		return fmt.Errorf("%w: content digest must be SHA-256 hex", domain.ErrValidation)
 	case document.Entitlements == nil:
@@ -353,8 +372,23 @@ func (pipeline *IngestPipeline) prepare(ctx context.Context, job *ingestJob) {
 			job.fail(fmt.Errorf("%w: document %q is already published in version %q with different content", domain.ErrConflict, document.DocumentID, document.KnowledgeVersion), true)
 			return
 		}
-		job.replay, job.chunkCount = true, int(common.AsInt64(existing.Rows[0][1]))
-		return
+		chunkCount, indexed := int(common.AsInt64(existing.Rows[0][1])), int(common.AsInt64(existing.Rows[0][2]))
+		if indexed == chunkCount {
+			job.replay, job.chunkCount = true, chunkCount
+			return
+		}
+		if pipeline.Index == nil {
+			job.fail(fmt.Errorf("%w: document %q awaits indexing, which this pipeline cannot finish", domain.ErrNotReady, document.DocumentID), false)
+			return
+		}
+		if err := pipeline.Index.Remove(ctx, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID); err != nil {
+			job.fail(fmt.Errorf("remove incomplete index for document %q: %w", document.DocumentID, err), terminalFailure(err))
+			return
+		}
+		if err := pipeline.unpublish(ctx, document); err != nil {
+			job.fail(err, terminalFailure(err))
+			return
+		}
 	}
 	raw, err := pipeline.Loader.Load(ctx, document)
 	if err != nil {
@@ -400,6 +434,14 @@ func (pipeline *IngestPipeline) prepare(ctx context.Context, job *ingestJob) {
 			redacted.ChunkID, redacted.ChunkNo = chunk.ChunkID, chunk.ChunkNo
 			*chunk = redacted
 		}
+		if chunk.StartOffset < 0 || chunk.EndOffset < chunk.StartOffset {
+			job.fail(fmt.Errorf("%w: chunk %d of document %q has invalid offsets", domain.ErrValidation, i, document.DocumentID), true)
+			return
+		}
+		if chunk.Entitlements, err = canonicalEntitlements(chunk.Entitlements); err != nil {
+			job.fail(fmt.Errorf("chunk %d of document %q: %w", i, document.DocumentID, err), true)
+			return
+		}
 		chunk.ContentDigest = sha256Bytes(chunk.Content)
 		if chunk.TokenCount <= 0 {
 			chunk.TokenCount = 1
@@ -409,7 +451,7 @@ func (pipeline *IngestPipeline) prepare(ctx context.Context, job *ingestJob) {
 }
 
 func (pipeline *IngestPipeline) embed(ctx context.Context, job *ingestJob) {
-	if job.replay {
+	if job.replay || pipeline.Embedder == nil {
 		return
 	}
 	docCtx, cancel := context.WithCancel(ctx)
@@ -463,32 +505,48 @@ func (pipeline *IngestPipeline) embed(ctx context.Context, job *ingestJob) {
 func (pipeline *IngestPipeline) publish(ctx context.Context, job *ingestJob) {
 	document := job.document
 	if !job.replay {
-		refs := make([]domain.ObjectRef, len(job.embeddings))
-		for i, embedding := range job.embeddings {
-			ref, err := pipeline.ChunkStore.PutChunk(ctx, embedding.Chunk)
+		refs := make([]domain.ObjectRef, len(job.chunks))
+		for i, chunk := range job.chunks {
+			ref, err := pipeline.ChunkStore.PutChunk(ctx, chunk)
 			if err != nil {
 				job.fail(fmt.Errorf("store chunk %d: %w", i, err), terminalFailure(err))
 				return
 			}
-			if ref.URI == "" || ref.Digest != embedding.Chunk.ContentDigest {
+			if ref.URI == "" || ref.Digest != chunk.ContentDigest {
 				job.fail(fmt.Errorf("%w: chunk store returned reference %q digest %q for chunk %d", domain.ErrValidation, ref.URI, ref.Digest, i), false)
 				return
 			}
 			refs[i] = ref
 		}
-		if err := pipeline.Index.Index(ctx, job.embeddings); err != nil {
-			job.fail(fmt.Errorf("index document %q: %w", document.DocumentID, err), terminalFailure(err))
-			return
-		}
 		if err := pipeline.persist(ctx, job, refs); err != nil {
-			// The vectors are live without rows: reclaim them so retrieval never sees an unpublished chunk.
-			if removeErr := pipeline.Index.Remove(ctx, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID); removeErr != nil {
-				err = errors.Join(err, fmt.Errorf("reconcile index for document %q: %w", document.DocumentID, removeErr))
-			}
 			job.fail(err, false)
 			return
 		}
-		job.chunkCount = len(job.embeddings)
+		// Rows precede vectors (the vector row references its chunk); neither is visible before activation.
+		if pipeline.Index != nil {
+			if err := pipeline.Index.Index(ctx, job.embeddings); err != nil {
+				err = fmt.Errorf("index document %q: %w", document.DocumentID, err)
+				if removeErr := pipeline.Index.Remove(ctx, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID); removeErr != nil {
+					err = errors.Join(err, fmt.Errorf("remove partial index for document %q: %w", document.DocumentID, removeErr))
+				}
+				if unpublishErr := pipeline.unpublish(ctx, document); unpublishErr != nil {
+					err = errors.Join(err, unpublishErr)
+				}
+				job.fail(err, terminalFailure(err))
+				return
+			}
+			if err := pipeline.markIndexed(ctx, job.chunks); err != nil {
+				if removeErr := pipeline.Index.Remove(ctx, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID); removeErr != nil {
+					err = errors.Join(err, fmt.Errorf("remove index for document %q: %w", document.DocumentID, removeErr))
+				}
+				if unpublishErr := pipeline.unpublish(ctx, document); unpublishErr != nil {
+					err = errors.Join(err, unpublishErr)
+				}
+				job.fail(err, terminalFailure(err))
+				return
+			}
+		}
+		job.chunkCount = len(job.chunks)
 	}
 	if pipeline.Manifests != nil {
 		if _, err := pipeline.Manifests.Activate(ctx, domain.KnowledgeDocumentManifest{
@@ -519,15 +577,68 @@ func (pipeline *IngestPipeline) persist(ctx context.Context, job *ingestJob, ref
 		document.DocumentID, document.SourceURI, document.ContentDigest, document.MediaType); err != nil {
 		return fmt.Errorf("publish document %q: %w", document.DocumentID, err)
 	}
-	for i, embedding := range job.embeddings {
-		chunk := embedding.Chunk
+	// vector_ref stays empty until the vectors are indexed; a whole-only ingest has none to wait for.
+	for i, chunk := range job.chunks {
+		vectorRef := ""
+		if pipeline.Index == nil {
+			vectorRef = chunk.ChunkID
+		}
 		if _, err = tx.Query(ctx, qIngestInsertChunk, chunk.TenantContext.TenantID, chunk.KnowledgeBaseID, chunk.KnowledgeVersion, chunk.DocumentID,
-			chunk.ChunkNo, refs[i].URI, chunk.ContentDigest, chunk.ChunkID, chunk.TokenCount); err != nil {
+			chunk.ChunkNo, refs[i].URI, chunk.ContentDigest, vectorRef, chunk.TokenCount,
+			chunk.SourceVersion, chunk.StartOffset, chunk.EndOffset, string(chunk.Entitlements)); err != nil {
 			return fmt.Errorf("publish chunk %d of document %q: %w", chunk.ChunkNo, document.DocumentID, err)
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("publish document %q: commit: %w", document.DocumentID, err)
+	}
+	committed = true
+	return nil
+}
+
+func (pipeline *IngestPipeline) markIndexed(ctx context.Context, chunks []domain.KnowledgeChunk) error {
+	tx, err := pipeline.DB.BeginTx(ctx, ingestQueries)
+	if err != nil {
+		return fmt.Errorf("mark chunks indexed: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = keeldata.RollbackDetached(tx)
+		}
+	}()
+	for _, chunk := range chunks {
+		if _, err = tx.Query(ctx, qIngestMarkIndexed, chunk.ChunkID, chunk.TenantContext.TenantID, chunk.KnowledgeBaseID,
+			chunk.KnowledgeVersion, chunk.DocumentID, chunk.ChunkNo); err != nil {
+			return fmt.Errorf("mark chunk %d of document %q indexed: %w", chunk.ChunkNo, chunk.DocumentID, err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("mark chunks indexed: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func (pipeline *IngestPipeline) unpublish(ctx context.Context, document domain.KnowledgeDocument) error {
+	tx, err := pipeline.DB.BeginTx(ctx, ingestQueries)
+	if err != nil {
+		return fmt.Errorf("unpublish document %q: begin: %w", document.DocumentID, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = keeldata.RollbackDetached(tx)
+		}
+	}()
+	key := []any{document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID}
+	for _, name := range []string{qIngestDeleteChunks, qIngestDeleteDocument} {
+		if _, err = tx.Query(ctx, name, key...); err != nil {
+			return fmt.Errorf("unpublish document %q: %w", document.DocumentID, err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("unpublish document %q: commit: %w", document.DocumentID, err)
 	}
 	committed = true
 	return nil
