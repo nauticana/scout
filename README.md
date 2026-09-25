@@ -137,7 +137,8 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `BudgetedGateway`, `GovernedEmbedder`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
 | `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, `EvidenceValidator`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
 | `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
-| `service/evaluation` | `evaluation.go` | `Runner`, `ReleaseCaseExecutor`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
+| `service/evaluation` | `evaluation.go` | `Runner`, `ReleaseCaseExecutor`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `SkillSelection`, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
+| `service/skill` | `control_plane.go` | `TableSkillRegistry` (also the release writer that binds skills), `UseSkill`, `UseSkillTool`, `Index` | Procedure content, the tenant's tool catalog, and the selection threshold |
 | `service/observability` | `observability.go` | `BoundedRuntimeMetrics`, `LabelPolicy`, `TenantHeavyHitters`, `AuditingObservationRecorder`, `TableAuditSink`, `KeelMetricSink` | Metric backends, tenant ledger, and audit sink |
 | `service/runtime` | `agent_runtime.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
 | `service/policy` | `policy.go` | `SetEvaluator`, `ReleaseResolver` | Optional external evaluators behind the decision point |
@@ -506,7 +507,7 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 
 ### Schema modules
 
-Scout's schema is fifteen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
+Scout's schema is sixteen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
 
 | Module | Tables | Purpose | Depends on |
 |---|---:|---|---|
@@ -522,6 +523,7 @@ Scout's schema is fifteen modules so a downstream installs only what its product
 | `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
 | `release` | 15 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results | `catalog`, `tenancy`, `agent`, `runtime` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
+| `skill` | 5 | Skill profiles, immutable procedure versions, the tools each uses, selection examples, agent bindings | `tenancy`, `agent`, `tool` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
 | `configuration` | 4 | Configuration hierarchy, scoped bindings, compiled effective releases, governed decision records | `catalog`, `tenancy`, `agent` |
 | `approval` | 2 | Durable approval requests and their verdicts | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization` |
@@ -537,14 +539,14 @@ The Go tool declaration pins keel's compiler. Pass the keel groups first, then t
 ```bash
 keel="$(go list -m -f '{{.Dir}}' github.com/nauticana/keel)/schema"
 keel_in="${keel}/core,${keel}/geo,${keel}/tenant_management"
-scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation"
+scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill"
 scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/execution_graph,schema/seed/runtime,schema/seed/release"
 
 go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_seed}" -out build/scout_pgsql.sql
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 40 selected keel tables and 106 Scout tables. Drop the modules the product does not use:
+That full set is 41 selected keel tables and 111 Scout tables. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
@@ -556,6 +558,7 @@ That full set is 40 selected keel tables and 106 Scout tables. Drop the modules 
 | … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 67 |
 | … plus the durable turn runtime | `+ runtime` | 81 |
 | Everything, including rollout and evaluation | `+ release`, `evaluation` | 106 |
+| … plus versioned skills | `+ skill` | 111 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -938,7 +941,7 @@ Every model decision and every observation is appended to a `contract.LoopJourna
 
 `domain.ToolLoopLimits` bounds iterations, tool calls, tokens, cost, identical repeated calls, and wall-clock time, and the delegated budget in `StepInput.Bounds` bounds cost as well. Each fails closed with `ErrExecutionLimit`, `ErrBudgetExceeded`, or `ErrLoopDetected`; a step's `ToolLoopConfig` may narrow every limit, never widen one, and unknown configuration keys are rejected. A cost limit or a delegated budget requires a `Pricer` and a matching currency, or the step fails closed with `ErrDegraded`. A failed loop reports what it already spent through `LoopError`, and the runtime settles that usage instead of refunding it. `LoopTrajectory` projects a journal onto `domain.TrajectoryEvent`s for `evaluation.TrajectoryScorer`.
 
-A release becomes executable at publication. `AgentPublishRequest.Tools` and `ToolLoop` — or, when the request gives neither, the ones its `AgentTypeDescriptor` declares, so a republish cannot drop a type's tools — are frozen into the definition (and its digest), and `StudioService.ReleaseWriters` run inside the publish and restore transaction: `TableToolRegistry` writes the bindings and `controlplane.TableExecutionGraphRepository` compiles and stores the graph (`ToolLoopGraphCompiler` yields the one-step `tool_loop` graph), so a release, its tools, and its graph commit together or not at all. Publishing a definition that declares either without a writer composed is `ErrNotReady`.
+A release becomes executable at publication. `AgentPublishRequest.Tools` and `ToolLoop`, and separately `Skills` — each falling back to what its `AgentTypeDescriptor` declares when the request leaves it unset, so a republish cannot drop a type's tools or skills — are frozen into the definition (and its digest), and `StudioService.ReleaseWriters` run inside the publish and restore transaction: `TableToolRegistry` writes the bindings and `controlplane.TableExecutionGraphRepository` compiles and stores the graph (`ToolLoopGraphCompiler` yields the one-step `tool_loop` graph), so a release, its tools, and its graph commit together or not at all. Publishing a definition that declares any of them without a writer composed is `ErrNotReady`.
 
 The remaining collaborators have table-backed or default implementations: `controlplane.TableTenantPolicyRepository`, which also publishes an immutable policy version and moves the tenant's current pointer in one transaction (`PublishRuntimePolicy`), `TableGuardrailConfigRepository`, and `TableAgentDefinitionReader`; `observability.TableSafetyEventSink` over `safety_event`; `dataplane.ReleaseLoopRequestBuilder`, which renders the pinned release's prompt around `StepInput.Input` with a `Task` hook for product context; `dataplane.LoopBudgetEstimator`, which reserves the loop's ceilings; `ScoutConfig.ToolLoopLimits()`; `modelgateway.PinnedModelRouter`, which routes to the model the release pins through the tenant's catalog without capacity snapshots; and `modelgateway.FactoryProviderRegistry`, the `ModelProviderRegistry` that builds adapters on first use from an `AgentProviderFactory` and rebuilds them after `TTL`. `dataplane.RuntimeWorker` is the keel leased queue worker that drains `turn_queue` into the runtime.
 
@@ -950,6 +953,16 @@ loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
 })
 _ = executors.Register(domain.StepKindToolLoop, loop)
 ```
+
+### Skills
+
+A skill is an immutable, versioned procedure an agent loads on demand. `skill.TableSkillRegistry` is the `contract.SkillRegistry` over the `skill` module. `Register` stores a `domain.SkillDefinition` — a one-line summary, the procedure, the tool ids it uses, an optional input schema, example requests, and the golden set version that gates it — under the same idempotency and `ErrConflict` rules as tools. A tool the skill names must already have a registered profile. The golden set reference is stored as given: Scout does not verify that the set version exists.
+
+A release binds skills the same way it binds tools: `AgentPublishRequest.Skills` or `AgentTypeDescriptor.Skills` are frozen into the definition and its digest, and `TableSkillRegistry` is the `ReleaseWriter` that binds them. Add it to `StudioService.ReleaseWriters` next to the tool registry. Publication fails with `ErrValidation` when the release does not also bind `use_skill` and every tool the bound skills use.
+
+At run time the model sees only the index. `ReleaseLoopRequestBuilder` appends `skill.Index` of the release's skills to the task context. The model then calls `use_skill`, and `skill.UseSkill` returns the procedure, which it serves only from the caller's pinned release. Each tenant registers `skill.UseSkillTool()`. Given skill ids, it returns a contract whose input schema enumerates them under a version derived from the set, so an agent type with a fixed skill set binds a `use_skill` the model cannot call with an unknown skill; publication refuses a release that binds a skill its `use_skill` does not enumerate. `BaseDataPlane` composes the registry and serves `use_skill` on an in-process transport.
+
+What stays downstream: `evaluation.SkillSelection` turns the skills' examples into golden cases, with a sandbox response for `use_skill`, scores the first skill loaded with `SkillChoiceHeuristic`, and reports `Accuracy` — but Scout does not run that eval at publish or refuse a release on its result. The product decides the threshold, runs the selection cases in its publish pipeline, and treats a skill version's `EvalSet` as the set to run. Scout's own `gate_decision` is consumed at rollout, not at publish.
 
 ### Typed turn events and evidence
 

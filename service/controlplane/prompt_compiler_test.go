@@ -179,6 +179,19 @@ func TestPromptCompilerDefinitionDigestIsCanonical(t *testing.T) {
 	if changed == a {
 		t.Fatal("runtime field change did not change digest")
 	}
+
+	definition.Skills = []domain.SkillReference{{SkillID: "b", Version: "1"}, {SkillID: "a", Version: "2"}}
+	skilled, err := compiler.DefinitionDigest(definition)
+	if err != nil {
+		t.Fatalf("DefinitionDigest with skills: %v", err)
+	}
+	definition.Skills = []domain.SkillReference{definition.Skills[1], definition.Skills[0]}
+	reordered, _ := compiler.DefinitionDigest(definition)
+	definition.Skills[0].Version = "3"
+	bumped, _ := compiler.DefinitionDigest(definition)
+	if skilled == changed || skilled != reordered || bumped == skilled {
+		t.Fatal("the digest must cover bound skill versions and ignore their order")
+	}
 }
 
 func TestPromptCompilerDefinitionDigestRejectsInvalidInput(t *testing.T) {

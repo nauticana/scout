@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
 
@@ -60,6 +61,33 @@ func TestReleaseLoopRequestBuilderRendersThePinnedReleaseAndTheTurnInput(t *test
 	builder.LanguageCode = ""
 	if _, err = builder.Build(context.Background(), input, domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("want ErrValidation without turn input, got %v", err)
+	}
+}
+
+type skillListStub struct {
+	contract.SkillRegistry
+	skills []domain.SkillDefinition
+}
+
+func (stub skillListStub) List(context.Context, int64, string, string) ([]domain.SkillDefinition, error) {
+	return stub.skills, nil
+}
+
+func TestReleaseLoopRequestBuilderIndexesTheReleasesSkills(t *testing.T) {
+	reader := &definitionReaderStub{definition: domain.AgentDefinition{
+		AgentID: "writer", Version: "v3", Skills: []domain.SkillReference{{SkillID: "audit", Version: "1"}},
+		Languages: []domain.CompiledPrompt{{LanguageCode: "en-US", Sections: []domain.CompiledPromptSection{{Instruction: "be brief"}}}},
+	}}
+	builder := &ReleaseLoopRequestBuilder{Definitions: reader, Renderer: taskRenderer{}, MaxOutputTokens: 500}
+	input := loopInput()
+	input.Input = []byte("audit the homepage")
+	if _, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("a release with skills and no registry: want ErrNotReady, got %v", err)
+	}
+	builder.Skills = skillListStub{skills: []domain.SkillDefinition{{SkillID: "audit", Summary: "A page needs an audit."}}}
+	request, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{})
+	if err != nil || !strings.HasSuffix(string(request.Prompt), "use_skill before starting):\n- audit: A page needs an audit.") {
+		t.Fatalf("prompt %q, %v", request.Prompt, err)
 	}
 }
 

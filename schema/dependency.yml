@@ -70,6 +70,10 @@ groups:
     path: evaluation
     depends_on: [catalog, tenancy, agent, knowledge, release]
 
+  - name: skill
+    path: skill
+    depends_on: [tenancy, agent, tool]
+
   - name: configuration
     path: configuration
     depends_on: [catalog, tenancy, agent]

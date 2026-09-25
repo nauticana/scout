@@ -1,0 +1,23 @@
+table: skill_tool
+comment: Tools a skill version's procedure uses; a release binding the skill must bind each
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: tool_id
+    type: VARCHAR(80)
+primary_key: [tenant_id, skill_id, skill_version, tool_id]
+foreign_keys:
+  - name: skill_version_tools
+    columns: [tenant_id, skill_id, skill_version]
+    references:
+      table: skill_version
+      columns: [tenant_id, skill_id, skill_version]
+  - name: tool_skill_uses
+    columns: [tenant_id, tool_id]
+    references:
+      table: tool_profile
+      columns: [tenant_id, tool_id]

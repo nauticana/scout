@@ -7,13 +7,17 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/skill"
 )
 
 // ReleaseLoopRequestBuilder opens a tool loop with the pinned release's compiled
-// prompt and the turn input as the task. Task is the hook for product context.
+// prompt and the turn input as the task. Task is the hook for product context; the
+// index of the release's skills follows it.
 type ReleaseLoopRequestBuilder struct {
 	Definitions contract.AgentDefinitionReader
 	Renderer    contract.PromptRenderer
+	// Skills is required only by a release that binds skills.
+	Skills contract.SkillRegistry
 	// LanguageCode selects the compiled prompt; empty takes the release's only language.
 	LanguageCode    string
 	MaxOutputTokens int64
@@ -44,6 +48,9 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	if strings.TrimSpace(task.Task) == "" {
 		return domain.ModelRequest{}, fmt.Errorf("%w: the turn has no input to act on", domain.ErrValidation)
 	}
+	if task.Context, err = builder.withSkillIndex(ctx, principal.TenantID, definition, task.Context); err != nil {
+		return domain.ModelRequest{}, err
+	}
 	prompt, err := compiledLanguage(definition, languageCode)
 	if err != nil {
 		return domain.ModelRequest{}, err
@@ -58,6 +65,20 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 		AffinityKey:     input.Snapshot.ConversationID,
 		Output:          task.Output,
 	}, nil
+}
+
+func (builder *ReleaseLoopRequestBuilder) withSkillIndex(ctx context.Context, tenantID int64, definition domain.AgentDefinition, taskContext string) (string, error) {
+	if len(definition.Skills) == 0 {
+		return taskContext, nil
+	}
+	if builder.Skills == nil {
+		return "", fmt.Errorf("%w: release %s@%s binds skills but no skill registry is composed", domain.ErrNotReady, definition.AgentID, definition.Version)
+	}
+	skills, err := builder.Skills.List(ctx, tenantID, definition.AgentID, definition.Version)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(taskContext + "\n\n" + skill.Index(skills)), nil
 }
 
 func pinnedTextModel(definition domain.AgentDefinition) domain.ModelReference {

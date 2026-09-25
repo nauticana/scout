@@ -1,0 +1,25 @@
+table: agent_skill_binding
+comment: Skill versions authorized for an agent version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+primary_key: [tenant_id, agent_id, agent_version, skill_id]
+foreign_keys:
+  - name: agent_skill_bindings
+    columns: [tenant_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [tenant_id, agent_id, agent_version]
+  - name: skill_agent_bindings
+    columns: [tenant_id, skill_id, skill_version]
+    references:
+      table: skill_version
+      columns: [tenant_id, skill_id, skill_version]

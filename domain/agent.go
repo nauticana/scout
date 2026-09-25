@@ -18,12 +18,14 @@ type AgentDefinition struct {
 	// Tools are the tool versions this release binds; publication writes the bindings.
 	Tools []ToolReference `json:"tools,omitempty"`
 	// ToolLoop, when set, makes the release executable as one tool_loop step.
-	ToolLoop              *ToolLoopConfig `json:"tool_loop,omitempty"`
-	DefinitionDigest      string          `json:"definition_digest"`
-	DraftRevision         int64           `json:"draft_revision"`
-	PromptProfileRevision int64           `json:"prompt_profile_revision"`
-	ChangeSummary         string          `json:"change_summary,omitempty"`
-	PublishedBy           *int64          `json:"published_by,omitempty"`
-	RestoredFromVersion   string          `json:"restored_from_version,omitempty"`
-	PublishedAt           time.Time       `json:"published_at"`
+	ToolLoop *ToolLoopConfig `json:"tool_loop,omitempty"`
+	// Skills are the skill versions this release binds; publication writes the bindings.
+	Skills                []SkillReference `json:"skills,omitempty"`
+	DefinitionDigest      string           `json:"definition_digest"`
+	DraftRevision         int64            `json:"draft_revision"`
+	PromptProfileRevision int64            `json:"prompt_profile_revision"`
+	ChangeSummary         string           `json:"change_summary,omitempty"`
+	PublishedBy           *int64           `json:"published_by,omitempty"`
+	RestoredFromVersion   string           `json:"restored_from_version,omitempty"`
+	PublishedAt           time.Time        `json:"published_at"`
 }

@@ -42,8 +42,8 @@ type StudioService struct {
 	// Layout places an agent's prompt scopes; nil uses BasePromptScopeLayout. It must be the prompt repository's.
 	Layout contract.PromptScopeLayout
 	// ReleaseWriters run inside the publish and restore transaction, after the
-	// version row exists: tool bindings and the compiled execution graph commit
-	// with the release or not at all.
+	// version row exists: tool and skill bindings and the compiled execution graph
+	// commit with the release or not at all.
 	ReleaseWriters []ReleaseWriter
 	Now            func() time.Time
 
@@ -57,8 +57,8 @@ type ReleaseWriter interface {
 }
 
 func (s *StudioService) writeRelease(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
-	if (len(definition.Tools) > 0 || definition.ToolLoop != nil) && len(s.ReleaseWriters) == 0 {
-		return fmt.Errorf("%w: definition %q declares tools or a tool loop but no release writer is composed", domain.ErrNotReady, definition.AgentID)
+	if (len(definition.Tools) > 0 || definition.ToolLoop != nil || len(definition.Skills) > 0) && len(s.ReleaseWriters) == 0 {
+		return fmt.Errorf("%w: definition %q declares tools, a tool loop, or skills but no release writer is composed", domain.ErrNotReady, definition.AgentID)
 	}
 	for _, writer := range s.ReleaseWriters {
 		if err := writer.WriteRelease(ctx, tx, tenantID, definition); err != nil {
@@ -383,7 +383,7 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	if err = s.freezeTools(ctx, &definition, nil, nil); err != nil {
+	if err = s.freezeBindings(ctx, &definition, domain.AgentPublishRequest{}); err != nil {
 		return domain.AgentTestResult{}, err
 	}
 	result, err := s.Tester.Execute(ctx, actor, request, definition)
@@ -416,7 +416,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	if err = s.freezeTools(ctx, &definition, request.Tools, request.ToolLoop); err != nil {
+	if err = s.freezeBindings(ctx, &definition, request); err != nil {
 		return domain.AgentRelease{}, err
 	}
 	definition.ChangeSummary = request.ChangeSummary
@@ -776,20 +776,26 @@ func (s *StudioService) definition(ctx context.Context, tenantID int64, draft do
 	return definition, nil
 }
 
-// freezeTools takes the given tools and loop, else the ones the agent type declares, so a publish that
-// names none cannot drop a type's tool set.
-func (s *StudioService) freezeTools(ctx context.Context, definition *domain.AgentDefinition, tools []domain.ToolReference, loop *domain.ToolLoopConfig) error {
-	if len(tools) == 0 && loop == nil && s.Kinds != nil {
+// freezeBindings takes the request's tools and loop, and its skills, each falling back to what the
+// agent type declares, so a publish that names none cannot drop a type's tool or skill set.
+func (s *StudioService) freezeBindings(ctx context.Context, definition *domain.AgentDefinition, request domain.AgentPublishRequest) error {
+	tools, loop, skills := request.Tools, request.ToolLoop, request.Skills
+	if s.Kinds != nil && (len(tools) == 0 && loop == nil || len(skills) == 0) {
 		descriptor, err := s.Kinds.Get(ctx, definition.AgentTypeID)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return fmt.Errorf("load agent type %q: %w", definition.AgentTypeID, err)
 		}
-		tools, loop = descriptor.Tools, descriptor.ToolLoop
+		if len(tools) == 0 && loop == nil {
+			tools, loop = descriptor.Tools, descriptor.ToolLoop
+		}
+		if len(skills) == 0 {
+			skills = descriptor.Skills
+		}
 	}
-	if len(tools) == 0 && loop == nil {
+	if len(tools) == 0 && loop == nil && len(skills) == 0 {
 		return nil
 	}
-	definition.Tools, definition.ToolLoop = slices.Clone(tools), loop
+	definition.Tools, definition.ToolLoop, definition.Skills = slices.Clone(tools), loop, slices.Clone(skills)
 	digest, err := s.Compiler.DefinitionDigest(*definition)
 	if err != nil {
 		return err

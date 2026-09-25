@@ -1,0 +1,6 @@
+tables:
+  - skill_profile
+  - skill_version
+  - skill_tool
+  - skill_example
+  - agent_skill_binding

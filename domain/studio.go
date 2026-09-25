@@ -228,9 +228,10 @@ type AgentPublishRequest struct {
 	ChangeSummary                 string
 	ExpectedDraftRevision         int64
 	ExpectedPromptProfileRevision int64
-	// Tools and ToolLoop are frozen into the definition; with neither set the agent type's declaration applies.
+	// Tools and ToolLoop, and Skills, are frozen into the definition; each falls back to the agent type's declaration when unset.
 	Tools    []ToolReference
 	ToolLoop *ToolLoopConfig
+	Skills   []SkillReference
 }
 
 // AgentRestoreRequest identifies the immutable version copied into a new release.
@@ -354,9 +355,10 @@ type AgentTypeDescriptor struct {
 	AgentTypeID string
 	DisplayName string
 	Purpose     string
-	// Tools and ToolLoop are frozen into every release of the type that a publish request gives neither.
+	// Tools and ToolLoop, and Skills, are frozen into every release of the type whose publish request leaves them unset.
 	Tools    []ToolReference
 	ToolLoop *ToolLoopConfig
+	Skills   []SkillReference
 }
 
 // ModelRate is one currency-denominated price for a model usage category.

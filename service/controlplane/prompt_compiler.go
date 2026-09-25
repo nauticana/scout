@@ -160,7 +160,7 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 		writeDigestField(&payload, language.Digest)
 		payload.WriteByte(0x1e)
 	}
-	// Written only when present, so a definition without tools keeps its v1 digest.
+	// Tools and skills are written only when present, so a definition without them keeps its v1 digest.
 	if len(definition.Tools) > 0 || definition.ToolLoop != nil {
 		tools := append([]domain.ToolReference(nil), definition.Tools...)
 		sort.Slice(tools, func(i, j int) bool { return tools[i].ToolID < tools[j].ToolID })
@@ -174,6 +174,15 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 			return "", fmt.Errorf("%w: invalid tool loop configuration: %v", domain.ErrValidation, err)
 		}
 		writeDigestField(&payload, string(loop))
+	}
+	if len(definition.Skills) > 0 {
+		payload.WriteByte(0x1d)
+		skills := append([]domain.SkillReference(nil), definition.Skills...)
+		sort.Slice(skills, func(i, j int) bool { return skills[i].SkillID < skills[j].SkillID })
+		for _, skill := range skills {
+			writeDigestField(&payload, skill.SkillID)
+			writeDigestField(&payload, skill.Version)
+		}
 	}
 	return sha256Hex(payload.String()), nil
 }

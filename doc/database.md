@@ -8,13 +8,14 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 
 ## Module dependency graph
 
-Scout's schema is fifteen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
+Scout's schema is sixteen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
 
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
 - Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. `schema/dependency.yml` keeps the complete list.
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
+- `skill` holds versioned procedures an agent loads on demand. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
 - `approval` holds the durable human-in-the-loop record. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
 
 ```mermaid
@@ -41,6 +42,7 @@ flowchart BT
     evaluation --> release
     approval --> configuration_module
     approval --> agent_authorization_module
+    skill --> tool
 
     core["keel core"]
     tenant_management["keel tenant_management"]
@@ -59,11 +61,12 @@ flowchart BT
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>4 tables"]
     approval["Approval<br/>2 tables"]
+    skill["Skill<br/>5 tables"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 106. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 111. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -320,6 +323,20 @@ flowchart RL
     gate_decision --> evaluation_manifest
     evaluation_run --> evaluation_manifest
 
+    subgraph skill["Skill"]
+        direction BT
+        skill_profile["skill_profile"]
+        skill_version["skill_version"]
+        skill_tool["skill_tool"]
+        skill_example["skill_example"]
+        agent_skill_binding["agent_skill_binding"]
+    end
+    skill_version --> skill_profile
+    skill_tool --> skill_version
+    skill_tool --> tool_profile
+    skill_example --> skill_version
+    agent_skill_binding --> skill_version
+
 ```
 
 ## Storage boundaries
@@ -368,6 +385,8 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `authorization_role` | `permitted_agents` | `agent_permission[]` |
 | `approval_request` | `approval_decisions` | `approval_decision[]` |
 | `tool_profile` | `tool_credential_bindings` | `tool_credential_binding[]` |
+| `skill_version` | `skill_version_tools` | `skill_tool[]` |
+| `skill_version` | `skill_version_examples` | `skill_example[]` |
 
 The YAML foreign-key definitions are the complete relationship-name registry. Any future `foreign_key_lookup` or `rest_api_child` seed must reference those names verbatim. Renaming one is an API compatibility change even when its columns do not change.
 
@@ -576,6 +595,57 @@ erDiagram
 ```
 
 Agent, guardrail, and tool versions are immutable. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
+
+### Skills
+
+```mermaid
+erDiagram
+    agent_tenant ||--o{ skill_profile : skill_profiles
+    skill_profile ||--o{ skill_version : skill_versions
+    tool_profile ||--o{ skill_tool : tool_skill_uses
+    skill_version ||--o{ skill_tool : skill_version_tools
+    skill_version ||--o{ skill_example : skill_version_examples
+    skill_version ||--o{ agent_skill_binding : skill_agent_bindings
+    agent_version ||--o{ agent_skill_binding : agent_skill_bindings
+
+    skill_profile {
+        bigint tenant_id PK,FK
+        varchar skill_id PK
+        varchar display_name
+    }
+    skill_version {
+        bigint tenant_id PK,FK
+        varchar skill_id PK,FK
+        varchar skill_version PK
+        varchar summary
+        text instructions
+        text input_schema
+        varchar golden_set_id
+        bigint golden_set_version
+    }
+    skill_tool {
+        bigint tenant_id PK,FK
+        varchar skill_id PK,FK
+        varchar skill_version PK,FK
+        varchar tool_id PK,FK
+    }
+    skill_example {
+        bigint tenant_id PK,FK
+        varchar skill_id PK,FK
+        varchar skill_version PK,FK
+        int example_no PK
+        text request
+    }
+    agent_skill_binding {
+        bigint tenant_id PK,FK
+        varchar agent_id PK,FK
+        varchar agent_version PK,FK
+        varchar skill_id PK,FK
+        varchar skill_version FK
+    }
+```
+
+A skill version is immutable like a tool version. `skill_tool` names tools by id, not version: the agent release pins the versions, and publication refuses a release that binds a skill without binding every tool it lists and `use_skill`. `summary` is the one line the agent sees in the skill index; `instructions` reach the model only when it calls `use_skill`. `skill_example` rows seed the selection cases of the golden set the version names; Scout stores that reference and builds the cases, and leaves running the selection eval and gating the publish on it to the application.
 
 ## Agent Studio authoring
 
@@ -1251,13 +1321,18 @@ Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enf
 
 ```mermaid
 erDiagram
-    tenant_ring ||--o{ platform_rollout : ring_platform_rollouts
-    platform_release ||--o{ platform_rollout : platform_rollouts
-    platform_release ||--o{ contract_test_run : contract_test_runs
-    contract_test_run ||--|{ contract_test_result : contract_test_results
-    contract_test_result }o--|| contract_test_case : case_test_results
-    contract_test_case }o--|| agent_version : contract_test_cases
-    platform_rollout }o--|| rollout_status : status_platform_rollouts
+    platform_rollout }o--|| tenant_ring : ring_platform_rollouts
+    rollout_status ||--o{ platform_rollout : status_platform_rollouts
+
+    platform_rollout }o--|| platform_release : platform_rollouts
+    contract_test_run }o--|| platform_release : contract_test_runs
+    release_bundle |o--|| platform_release : release_bundles
+    release_bundle }o--|| platform_release : rollback_target_release_bundles
+
+    contract_test_result }|--|| contract_test_run : contract_test_results
+    contract_test_case ||--o{ contract_test_result : case_test_results
+    agent_version ||--o{ contract_test_case : contract_test_cases
+
     tenant_ring ||--o{ tenant_ring_member : ring_members
     tenant_ring_member |o--|| agent_tenant : tenant_ring_members
     agent_tenant ||--o{ audit_event : audit_events
@@ -1266,8 +1341,6 @@ erDiagram
     tenant_ring ||--o{ platform_rollout_state : ring_platform_rollout_states
     platform_rollout_state ||--o{ platform_rollout_transition : platform_rollout_transitions
     platform_rollout_state ||--o{ platform_rollout_bypass : platform_rollout_bypasses
-    platform_release ||--o| release_bundle : release_bundles
-    platform_release ||--o{ release_bundle : rollback_target_release_bundles
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -1462,7 +1535,7 @@ erDiagram
     evaluation_manifest ||--o{ gate_decision : gate_decisions
     gate_decision }o--|| platform_release : platform_gate_decisions
     agent_tenant ||--o{ evaluation_sample : evaluation_samples
-    agent_version ||--o{ evaluation_sample : agent_evaluation_samples
+    evaluation_sample }o--|| agent_version : agent_evaluation_samples
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -1612,6 +1685,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event` |
 | `approval` | `approval_request`, `approval_decision` |
+| `skill` | `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them
 cannot accept a row until they hold values — Scout seeds them all. `prompt_section`

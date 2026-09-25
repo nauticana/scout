@@ -20,6 +20,7 @@ import (
 	"github.com/nauticana/scout/service/modelgateway"
 	"github.com/nauticana/scout/service/observability"
 	agentruntime "github.com/nauticana/scout/service/runtime"
+	"github.com/nauticana/scout/service/skill"
 	"github.com/nauticana/scout/service/toolgateway"
 )
 
@@ -76,6 +77,7 @@ type BaseDataPlane struct {
 	TurnScheduler    *QueueTurnScheduler
 	Dispatcher       contract.TurnDispatcher
 	Tools            contract.ToolRegistry
+	Skills           contract.SkillRegistry
 	Credentials      contract.ToolCredentialProvider
 	Egress           contract.ToolEgressPolicy
 	ToolGateway      contract.GovernedToolGateway
@@ -296,6 +298,15 @@ func (plane *BaseDataPlane) composeTools() error {
 	if plane.Tools == nil {
 		plane.Tools = &toolgateway.TableToolRegistry{DB: plane.DB, DefaultTimeout: settings.ToolTimeout, DefaultMaxAttempts: settings.ToolMaxAttempts}
 	}
+	if plane.Skills == nil {
+		plane.Skills = &skill.TableSkillRegistry{DB: plane.DB}
+	}
+	// A transport that is not in-process serves use_skill itself, through skill.UseSkill.
+	if inProcess, ok := plane.Transport.(*toolgateway.InProcessTransport); ok && !inProcess.Serves(domain.UseSkillToolID) {
+		if err := (&skill.UseSkill{Skills: plane.Skills}).Register(inProcess); err != nil {
+			return err
+		}
+	}
 	if plane.Credentials == nil {
 		inProcess, ok := plane.Transport.(*toolgateway.InProcessTransport)
 		if !ok {
@@ -343,7 +354,7 @@ func (plane *BaseDataPlane) composeLoop() error {
 	}
 	if plane.Requests == nil {
 		plane.Requests = &ReleaseLoopRequestBuilder{
-			Definitions: &controlplane.TableAgentDefinitionReader{DB: plane.DB}, Renderer: &agentruntime.PromptRenderer{},
+			Definitions: &controlplane.TableAgentDefinitionReader{DB: plane.DB}, Renderer: &agentruntime.PromptRenderer{}, Skills: plane.Skills,
 			LanguageCode: plane.LanguageCode, MaxOutputTokens: plane.MaxOutputTokens, Task: plane.Task,
 		}
 	}

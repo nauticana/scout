@@ -1,0 +1,41 @@
+table: skill_version
+comment: Immutable procedure an agent loads on demand through use_skill
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: summary
+    type: VARCHAR(400)
+    comment: The skill index line the agent chooses by
+  - name: instructions
+    type: TEXT
+  - name: input_schema
+    type: TEXT
+    nullable: true
+    comment: JSON Schema of what the procedure needs before it starts
+  - name: golden_set_id
+    type: VARCHAR(80)
+    nullable: true
+    comment: The golden set version whose selection cases gate this skill; the application verifies it exists
+  - name: golden_set_version
+    type: BIGINT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [tenant_id, skill_id, skill_version]
+foreign_keys:
+  - name: skill_versions
+    columns: [tenant_id, skill_id]
+    references:
+      table: skill_profile
+      columns: [tenant_id, skill_id]
+indexes:
+  - name: skill_version_created_ix
+    columns: [tenant_id, skill_id, created_at]
+checks:
+  - name: skill_version_golden_set_ck
+    expression: (golden_set_id IS NULL) = (golden_set_version IS NULL)

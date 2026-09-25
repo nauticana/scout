@@ -187,10 +187,10 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/mark3labs/mcp-go v0.46.0 h1:8KRibF4wcKejbLsHxCA/QBVUr5fQ9nwz/n8lGqmaALo=
 github.com/mark3labs/mcp-go v0.46.0/go.mod h1:JKTC7R2LLVagkEWK7Kwu7DbmA6iIvnNAod6yrHiQMag=
-github.com/nauticana/charter v1.2.0 h1:IpHu9N0TGa9MYE2aZS6FcYGSFZQi5zwqtAba84Shfc0=
-github.com/nauticana/charter v1.2.0/go.mod h1:K1/GHaZQvy5O/BLq4MCiZK18W2HKcVcHGijA+qtjgII=
-github.com/nauticana/keel v1.2.74 h1:vAk17guU1CuRYAFwpaExuBYxSXWVzBBER5Y5b2OZt0Y=
-github.com/nauticana/keel v1.2.74/go.mod h1:Ie2ssVZx8PQZTi9WYya6Deg/3xn3yvVy+rW47WVydrc=
+github.com/nauticana/charter v1.2.1 h1:CC3dDhCeTQekdTR13qo+Nh/6s68AxJFiJ+4qRt5Pkmo=
+github.com/nauticana/charter v1.2.1/go.mod h1:y+kIZbyEWmRualNB1g7Py4rxonj/BFEhbcmpjTpEOm4=
+github.com/nauticana/keel v1.2.75 h1:bGh5b9x4Xi+u0ke7PtRRKXxhWGad4X936O2YO43EZBE=
+github.com/nauticana/keel v1.2.75/go.mod h1:Ie2ssVZx8PQZTi9WYya6Deg/3xn3yvVy+rW47WVydrc=
 github.com/nyaruka/phonenumbers v1.7.2 h1:biMUpF5TWuHtYXVzuNE7pSCjlA9tkvd8Vaq8b1CYaaQ=
 github.com/nyaruka/phonenumbers v1.7.2/go.mod h1:fsKPJ70O9JetEA4ggnJadYTFWwtGPvu/lETTXNXq6Cs=
 github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1U0=

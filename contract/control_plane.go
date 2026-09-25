@@ -68,6 +68,16 @@ type ToolBinder interface {
 	Bind(ctx context.Context, tenantID int64, agentID, agentVersion string, tools []domain.ToolReference) error
 }
 
+// SkillRegistry manages immutable tenant skills; publication binds them to agent versions.
+type SkillRegistry interface {
+	// Register publishes an immutable tenant-scoped skill version.
+	Register(ctx context.Context, tenantID int64, skill domain.SkillDefinition) error
+	// Get returns a tenant-scoped skill by immutable version.
+	Get(ctx context.Context, tenantID int64, skillID, version string) (domain.SkillDefinition, error)
+	// List returns the skills an agent version binds, ordered by skill id.
+	List(ctx context.Context, tenantID int64, agentID, agentVersion string) ([]domain.SkillDefinition, error)
+}
+
 // GuardrailConfigRepository stores versioned tenant guardrail policies.
 type GuardrailConfigRepository interface {
 	// Publish persists a new immutable guardrail configuration.
