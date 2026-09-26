@@ -12,7 +12,7 @@ import (
 func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 	return &TableTurnRecordStore{
 		DB:            queueDBFake{query: query},
-		Objects:       &ObjectStateStore{Storage: &fake.ObjectStorage{}, Bucket: "turns", MaxBytes: 1 << 20},
+		Objects:       &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20},
 		UsageCategory: "model_output",
 	}
 }
@@ -61,8 +61,8 @@ func TestTableTurnRecordStoreDetectsReusedRequestID(t *testing.T) {
 }
 
 func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
-	storage := &fake.ObjectStorage{}
-	codec := &ObjectStateStore{Storage: storage, Bucket: "turns", MaxBytes: 1 << 20}
+	storage := &fake.ObjectStorage{Name: "turns"}
+	codec := &ObjectStateStore{Storage: storage, MaxBytes: 1 << 20}
 	ref, err := codec.Dehydrate(context.Background(), "turn-response/7/request-1", []byte("answer"))
 	if err != nil {
 		t.Fatal(err)

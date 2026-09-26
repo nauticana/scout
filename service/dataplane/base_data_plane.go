@@ -10,6 +10,7 @@ import (
 
 	"github.com/nauticana/keel/cache"
 	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/secret"
 	"github.com/nauticana/keel/storage"
 
 	"github.com/nauticana/scout/contract"
@@ -31,8 +32,9 @@ const costBreakerWindow = time.Hour
 // only while the field is nil, so a product swaps one by assigning its own implementation
 // before Compose, and extends the whole by embedding BaseDataPlane.
 type BaseDataPlane struct {
-	DB          port.DatabaseRepository
-	Cache       cache.CacheService
+	DB    port.DatabaseRepository
+	Cache cache.CacheService
+	// Storage is bound to Settings.StateBucket; see NewStateStorage.
 	Storage     storage.ObjectStorage
 	Providers   contract.AgentProviderFactory
 	Transport   contract.ToolTransport
@@ -58,7 +60,11 @@ type BaseDataPlane struct {
 	// irreversible_tool_approval rule; Weights is optional tenant fairness.
 	Effects   contract.ToolEffectVerifier
 	Approvals contract.ToolApprovalGate
-	Weights   contract.TenantWeightPolicy
+	// Knowledge and Entitlements put the documents a release binds whole into its
+	// turns; nil means no release binds knowledge whole.
+	Knowledge    contract.PinnedKnowledgeResolver
+	Entitlements contract.EntitlementResolver
+	Weights      contract.TenantWeightPolicy
 
 	Objects          ObjectStateCodec
 	Records          contract.TurnRecordStore
@@ -149,6 +155,9 @@ func (plane *BaseDataPlane) validate() error {
 	if strings.TrimSpace(plane.Settings.StateBucket) == "" {
 		return fmt.Errorf("%w: agent_state_bucket is not configured; turn input and conversation state need a private bucket", domain.ErrNotReady)
 	}
+	if bound := plane.Storage.Bucket(); bound != plane.Settings.StateBucket {
+		return fmt.Errorf("%w: data plane storage is bound to bucket %q, not agent_state_bucket %q", domain.ErrValidation, bound, plane.Settings.StateBucket)
+	}
 	settings := plane.Settings
 	if settings.StateMaxBytes <= 0 || settings.QueueMaxAttempts <= 0 || settings.TurnMaxSteps <= 0 ||
 		settings.ToolTimeout <= 0 || settings.ToolMaxAttempts <= 0 ||
@@ -189,7 +198,7 @@ func (plane *BaseDataPlane) Compose() error {
 func (plane *BaseDataPlane) composeState() error {
 	settings := plane.Settings
 	if plane.Objects == nil {
-		plane.Objects = &ObjectStateStore{Storage: plane.Storage, Bucket: settings.StateBucket, MaxBytes: settings.StateMaxBytes}
+		plane.Objects = &ObjectStateStore{Storage: plane.Storage, MaxBytes: settings.StateMaxBytes}
 	}
 	if plane.Records == nil {
 		plane.Records = &TableTurnRecordStore{DB: plane.DB, Objects: plane.Objects, UsageCategory: plane.UsageCategory, TaskKind: plane.TaskKind}
@@ -355,6 +364,7 @@ func (plane *BaseDataPlane) composeLoop() error {
 	if plane.Requests == nil {
 		plane.Requests = &ReleaseLoopRequestBuilder{
 			Definitions: &controlplane.TableAgentDefinitionReader{DB: plane.DB}, Renderer: &agentruntime.PromptRenderer{}, Skills: plane.Skills,
+			Knowledge: plane.Knowledge, Entitlements: plane.Entitlements, KnowledgeMaxBytes: plane.Settings.GuardrailMaxInputBytes,
 			LanguageCode: plane.LanguageCode, MaxOutputTokens: plane.MaxOutputTokens, Task: plane.Task,
 		}
 	}
@@ -413,4 +423,16 @@ func (plane *BaseDataPlane) composeRuntime() error {
 		plane.TurnIngress = ingress
 	}
 	return nil
+}
+
+// NewStateStorage binds object storage to the private agent_state_bucket.
+func NewStateStorage(ctx context.Context, secrets secret.SecretProvider, settings domain.DataPlaneSettings) (storage.ObjectStorage, error) {
+	if strings.TrimSpace(settings.StateBucket) == "" {
+		return nil, fmt.Errorf("%w: agent_state_bucket is not configured; turn input and conversation state need a private bucket", domain.ErrNotReady)
+	}
+	objects, err := storage.NewFromConfig(ctx, secrets, settings.StateBucket)
+	if err != nil {
+		return nil, fmt.Errorf("bind agent_state_bucket %q: %w", settings.StateBucket, err)
+	}
+	return objects, nil
 }

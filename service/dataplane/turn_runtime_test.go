@@ -309,6 +309,43 @@ func TestTurnRuntimeUsesGuardedOutputForStateAndTypedResult(t *testing.T) {
 	}
 }
 
+func TestTurnRuntimeCarriesGuardedCitationsOntoTheResult(t *testing.T) {
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	runtime.Definitions = fake.DefinitionResolverFunc(func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
+		return domain.ExecutionGraph{AgentID: "agent", Version: "v1", EntryStepID: "answer", Steps: []domain.ExecutionStep{
+			{ExecutionStepID: 1, StepID: "answer", Kind: "answer"},
+		}}, nil
+	})
+	sources := []domain.Citation{{URL: "https://a.example", Position: 1}, {URL: "https://b.example", Position: 2}}
+	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{State: []byte("answer"), Citations: sources, Events: []domain.TurnEvent{
+				{Version: domain.TurnEventVersion, Kind: domain.TurnEventResult, Text: "answer"},
+				{Version: domain.TurnEventVersion, Kind: domain.TurnEventCitations, Citations: sources},
+			}}, nil
+		}), nil
+	})
+	result, err := runtime.HandleTurn(context.Background(), runtimeDispatch())
+	if err != nil {
+		t.Fatalf("HandleTurn: %v", err)
+	}
+	if len(result.Citations) != 2 || len(recorder.frames[0].Events) != 2 || len(recorder.frames[0].Events[1].Citations) != 2 {
+		t.Fatalf("result = %+v, frame = %+v", result.Citations, recorder.frames[0].Events)
+	}
+	// A guardrail that strips the sources strips the event with them.
+	runtime.Guardrails = &fake.GuardrailEnforcer{AfterModelChunkFunc: func(_ context.Context, _ domain.GuardrailConfig, _ domain.GuardrailSubject, chunk domain.ModelChunk) (domain.ModelChunk, error) {
+		chunk.Citations = nil
+		return chunk, nil
+	}}
+	recorder.frames = nil
+	dispatch := runtimeDispatch()
+	dispatch.Turn.RequestID = "request-2"
+	if result, err = runtime.HandleTurn(context.Background(), dispatch); err != nil || len(result.Citations) != 0 || len(recorder.frames[0].Events) != 1 {
+		t.Fatalf("stripped citations escaped: %+v, %+v, %v", result.Citations, recorder.frames[0].Events, err)
+	}
+}
+
 func TestTurnRuntimeCancellationRefundsAndMarksCancelled(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)

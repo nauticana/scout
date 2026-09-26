@@ -51,11 +51,14 @@ DELETE FROM knowledge_document_manifest
 }
 
 // GarbageCollector reclaims superseded and tombstoned document versions in
-// bounded batches: vectors are removed first (idempotent), then chunk,
-// document, and manifest rows go in one transaction under the manifest lock,
-// so a concurrent activation can never lose a live chunk set.
+// bounded batches: vectors are removed first (idempotent), then chunk objects,
+// chunk, document, and manifest rows go in one transaction under the manifest
+// lock, so a concurrent activation can never lose a live chunk set and a
+// failed object delete keeps the rows for the next sweep.
 type GarbageCollector struct {
 	DB keelport.DatabaseRepository
+	// Objects is the store the chunks were written to.
+	Objects contract.KnowledgeChunkDeleter
 	// Index is nil when the deployment keeps no vectors.
 	Index contract.KnowledgeVectorIndex
 
@@ -96,8 +99,8 @@ func decodeGCManifest(row []any) (gcManifest, error) {
 }
 
 func (collector *GarbageCollector) init(ctx context.Context) error {
-	if collector.DB == nil {
-		return fmt.Errorf("garbage collector: database is required")
+	if collector.DB == nil || collector.Objects == nil {
+		return fmt.Errorf("garbage collector: database and chunk object deleter are required")
 	}
 	collector.once.Do(func() { collector.qs = collector.DB.GetQueryService(ctx, gcQueries) })
 	if collector.qs == nil {
@@ -177,6 +180,9 @@ func (collector *GarbageCollector) reclaim(ctx context.Context, snapshot gcManif
 			continue
 		}
 		reclaimable++
+		if err = collector.Objects.DeleteChunks(ctx, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
+			return false, fmt.Errorf("delete chunk objects of version %q: %w", version, err)
+		}
 		if _, err = tx.Query(ctx, qGCDeleteChunks, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
 			return false, fmt.Errorf("delete chunks of version %q: %w", version, err)
 		}

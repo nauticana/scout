@@ -111,7 +111,7 @@ func TestDurableSessionStoreLoadHydratesAndVerifies(t *testing.T) {
 		t.Fatalf("load args = %v", args)
 	}
 	// Tampered state fails closed.
-	storage.Overwrite("sessions", objectKeyOf(ref), []byte(`{"memory":"y"}`))
+	storage.Overwrite(objectKeyOf(ref), []byte(`{"memory":"y"}`))
 	if _, err := store.Load(context.Background(), 7, "conv"); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("tampered load = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestDurableSessionStoreCheckpointCreatesThenAdvances(t *testing.T) {
 	if !reflect.DeepEqual(query.calls, []string{qSessionInsertCheckpoint, qSessionCreateSnapshot}) || query.commits != 1 || query.rollbacks != 0 {
 		t.Fatalf("calls = %v, commits = %d, rollbacks = %d", query.calls, query.commits, query.rollbacks)
 	}
-	if _, ok := storage.Payload("sessions", "scout/checkpoint/7/conv/4/2/"+digest); !ok {
+	if _, ok := storage.Payload("scout/checkpoint/7/conv/4/2/" + digest); !ok {
 		t.Fatal("state object missing")
 	}
 
@@ -198,7 +198,7 @@ func TestDurableSessionStoreCheckpointRevisionConflictKeepsSharedObject(t *testi
 func TestDurableSessionStoreCheckpointFailureDeletesUploadAndJoinsErrors(t *testing.T) {
 	dbErr := errors.New("db down")
 	deleteErr := errors.New("bucket unreachable")
-	storage := &fake.ObjectStorage{DeleteFunc: func(context.Context, string, string) error { return deleteErr }}
+	storage := &fake.ObjectStorage{DeleteFunc: func(context.Context, string) error { return deleteErr }}
 	query := &persistenceQueryFake{errs: map[string]error{qSessionInsertCheckpoint: dbErr}}
 	err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), 7, 5, validCheckpoint("x"))
 	if !errors.Is(err, dbErr) || !errors.Is(err, deleteErr) || query.rollbacks != 1 {

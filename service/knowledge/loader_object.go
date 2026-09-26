@@ -13,6 +13,7 @@ import (
 )
 
 // ObjectStorageLoader reads <scheme>://bucket/key objects from keel object storage: knowledge sources and any other object reference.
+// It refuses a URI naming a bucket other than the one Storage is bound to; compose one loader per bucket.
 type ObjectStorageLoader struct {
 	Storage storage.ObjectStorage
 	// Schemes restricts accepted URI schemes; empty accepts any scheme.
@@ -69,7 +70,10 @@ func (loader *ObjectStorageLoader) download(ctx context.Context, uri string) ([]
 	if maxBytes == 0 {
 		maxBytes = defaultMaxSourceBytes
 	}
-	reader, err := loader.Storage.Download(ctx, bucket, key)
+	if bucket != loader.Storage.Bucket() {
+		return nil, fmt.Errorf("%w: object URI %q is outside bucket %q", domain.ErrForbidden, uri, loader.Storage.Bucket())
+	}
+	reader, err := loader.Storage.GetObject(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", uri, err)
 	}

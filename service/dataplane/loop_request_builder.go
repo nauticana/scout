@@ -2,22 +2,29 @@ package dataplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/knowledge"
 	"github.com/nauticana/scout/service/skill"
 )
 
 // ReleaseLoopRequestBuilder opens a tool loop with the pinned release's compiled
 // prompt and the turn input as the task. Task is the hook for product context; the
-// index of the release's skills follows it.
+// documents the release binds whole and the index of its skills follow it.
 type ReleaseLoopRequestBuilder struct {
 	Definitions contract.AgentDefinitionReader
 	Renderer    contract.PromptRenderer
 	// Skills is required only by a release that binds skills.
 	Skills contract.SkillRegistry
+	// Knowledge and Entitlements read the release's whole-mode bindings, pinned to
+	// its version; nil reads none. KnowledgeMaxBytes bounds them, fail closed.
+	Knowledge         contract.PinnedKnowledgeResolver
+	Entitlements      contract.EntitlementResolver
+	KnowledgeMaxBytes int
 	// LanguageCode selects the compiled prompt; empty takes the release's only language.
 	LanguageCode    string
 	MaxOutputTokens int64
@@ -26,7 +33,7 @@ type ReleaseLoopRequestBuilder struct {
 	Task func(ctx context.Context, input domain.StepInput) (task domain.AgentTask, languageCode string, err error)
 }
 
-func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domain.StepInput, _ domain.ToolLoopConfig) (domain.ModelRequest, error) {
+func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, error) {
 	if builder.Definitions == nil || builder.Renderer == nil || builder.MaxOutputTokens <= 0 {
 		return domain.ModelRequest{}, fmt.Errorf("%w: loop request builder needs a definition reader, a renderer, and positive max output tokens", domain.ErrValidation)
 	}
@@ -48,10 +55,17 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	if strings.TrimSpace(task.Task) == "" {
 		return domain.ModelRequest{}, fmt.Errorf("%w: the turn has no input to act on", domain.ErrValidation)
 	}
+	if task.Context, err = builder.withPinnedKnowledge(ctx, principal, task.Context); err != nil {
+		return domain.ModelRequest{}, err
+	}
 	if task.Context, err = builder.withSkillIndex(ctx, principal.TenantID, definition, task.Context); err != nil {
 		return domain.ModelRequest{}, err
 	}
 	prompt, err := compiledLanguage(definition, languageCode)
+	if err != nil {
+		return domain.ModelRequest{}, err
+	}
+	search, err := config.NarrowedSearch(task.Search)
 	if err != nil {
 		return domain.ModelRequest{}, err
 	}
@@ -64,7 +78,36 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 		Model:           pinnedTextModel(definition),
 		AffinityKey:     input.Snapshot.ConversationID,
 		Output:          task.Output,
+		Search:          search,
 	}, nil
+}
+
+// withPinnedKnowledge appends the documents the release binds whole. A release
+// that binds none needs no entitlements; one that does and grants none fails.
+func (builder *ReleaseLoopRequestBuilder) withPinnedKnowledge(ctx context.Context, principal domain.Principal, taskContext string) (string, error) {
+	if builder.Knowledge == nil {
+		return taskContext, nil
+	}
+	if builder.Entitlements == nil {
+		return "", fmt.Errorf("%w: pinned knowledge needs an entitlement resolver", domain.ErrNotReady)
+	}
+	labels, digest, err := builder.Entitlements.Entitlements(ctx, principal)
+	if err != nil && !errors.Is(err, domain.ErrForbidden) {
+		return "", err
+	}
+	pinned, err := builder.Knowledge.PinnedKnowledge(ctx, domain.PinnedKnowledgeRequest{
+		TenantContext: domain.TenantContext{TenantID: principal.TenantID, ScopeID: principal.ScopeID},
+		AgentID:       principal.ID, AgentVersion: principal.Release, Principal: principal,
+		Entitlements: labels, EntitlementsDigest: digest,
+	})
+	if err != nil {
+		return "", err
+	}
+	rendered, err := knowledge.PinnedContext(pinned, builder.KnowledgeMaxBytes)
+	if err != nil || rendered == "" {
+		return taskContext, err
+	}
+	return strings.TrimSpace(taskContext + "\n\n" + rendered), nil
 }
 
 func (builder *ReleaseLoopRequestBuilder) withSkillIndex(ctx context.Context, tenantID int64, definition domain.AgentDefinition, taskContext string) (string, error) {

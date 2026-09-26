@@ -32,7 +32,7 @@ func (planeProviderFactory) Build(context.Context, domain.ModelReference) (contr
 func composablePlane() *BaseDataPlane {
 	return &BaseDataPlane{
 		DB: loopTableDB{table: &loopTableFake{rows: map[string][]any{}}}, Cache: cache.NewMemoryCacheService(),
-		Storage: &fake.ObjectStorage{}, Providers: planeProviderFactory{}, Transport: &toolgateway.InProcessTransport{},
+		Storage: &fake.ObjectStorage{Name: "agent-state"}, Providers: planeProviderFactory{}, Transport: &toolgateway.InProcessTransport{},
 		Budget: &fake.TenantBudgetManager{}, RateLimiter: &fake.TenantRateLimiter{}, Metrics: &fake.RuntimeMetrics{},
 		Pricer: fake.ModelPricerFunc(func(context.Context, domain.ModelReference, domain.ModelUsage) (int64, string, error) {
 			return 0, "USD", nil
@@ -177,12 +177,13 @@ func TestBaseDataPlaneRefusesToCompose(t *testing.T) {
 		want   error
 		text   string
 	}{
-		"no state bucket":         {func(p *BaseDataPlane) { p.Settings.StateBucket = " " }, domain.ErrNotReady, "agent_state_bucket"},
-		"missing collaborator":    {func(p *BaseDataPlane) { p.Budget = nil }, domain.ErrValidation, "budget manager"},
-		"claim lease under loop":  {func(p *BaseDataPlane) { p.Settings.StepClaimLease = time.Second }, domain.ErrValidation, "agent_step_claim_lease"},
-		"queue lease under loop":  {func(p *BaseDataPlane) { p.Settings.QueueLease = time.Second }, domain.ErrValidation, "agent_queue_lease"},
-		"no queue batch":          {func(p *BaseDataPlane) { p.Settings.QueueBatch = 0 }, domain.ErrValidation, "agent_queue_batch"},
-		"shards above partitions": {func(p *BaseDataPlane) { p.Settings.QueueShards = 99 }, domain.ErrValidation, "shards"},
+		"no state bucket":           {func(p *BaseDataPlane) { p.Settings.StateBucket = " " }, domain.ErrNotReady, "agent_state_bucket"},
+		"storage of another bucket": {func(p *BaseDataPlane) { p.Storage = &fake.ObjectStorage{Name: "public-assets"} }, domain.ErrValidation, "agent_state_bucket"},
+		"missing collaborator":      {func(p *BaseDataPlane) { p.Budget = nil }, domain.ErrValidation, "budget manager"},
+		"claim lease under loop":    {func(p *BaseDataPlane) { p.Settings.StepClaimLease = time.Second }, domain.ErrValidation, "agent_step_claim_lease"},
+		"queue lease under loop":    {func(p *BaseDataPlane) { p.Settings.QueueLease = time.Second }, domain.ErrValidation, "agent_queue_lease"},
+		"no queue batch":            {func(p *BaseDataPlane) { p.Settings.QueueBatch = 0 }, domain.ErrValidation, "agent_queue_batch"},
+		"shards above partitions":   {func(p *BaseDataPlane) { p.Settings.QueueShards = 99 }, domain.ErrValidation, "shards"},
 		"foreign transport without credentials": {func(p *BaseDataPlane) {
 			p.Transport = fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
 				return domain.ToolResult{}, nil

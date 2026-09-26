@@ -71,16 +71,16 @@ type SearchGrounding struct {
 	// MaxSearches bounds the searches one call may run; zero leaves the vendor
 	// default. An adapter whose vendor cannot bound them refuses a request that
 	// sets it rather than running an unbounded, unbudgeted search.
-	MaxSearches int64
+	MaxSearches int64 `json:"max_searches,omitempty"`
 }
 
 // Citation is one source a grounded answer used. Position is its 1-based rank
 // in the provider's own order; Snippet is the cited text where one is reported.
 type Citation struct {
-	URL      string
-	Title    string
-	Snippet  string
-	Position int
+	URL      string `json:"url"`
+	Title    string `json:"title,omitempty"`
+	Snippet  string `json:"snippet,omitempty"`
+	Position int    `json:"position"`
 }
 
 // ModelTool is one pinned tool version offered to the model. Name is the

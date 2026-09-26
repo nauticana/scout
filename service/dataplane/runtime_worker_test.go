@@ -9,7 +9,6 @@ import (
 
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
-	"github.com/nauticana/keel/storage"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -58,7 +57,7 @@ func TestComposingRuntimeWorkerComposesOnceOnFirstJob(t *testing.T) {
 		}
 		return domain.TurnResult{}, nil
 	})}
-	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error) {
 		composeCalls++
 		return plane, nil
 	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 10, MaxAttempts: 3})
@@ -86,7 +85,7 @@ func TestComposingRuntimeWorkerRetriesAFailedCompositionAndClosesItsPlane(t *tes
 	failed := &workerPlane{}
 	composed := &workerPlane{scheduler: &QueueTurnScheduler{MaxAttempts: 3}, runtime: workerRuntimeFunc(nil)}
 	composeCalls := 0
-	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error) {
 		composeCalls++
 		if composeCalls == 1 {
 			return failed, boom
@@ -110,7 +109,7 @@ func TestComposingRuntimeWorkerRetriesAFailedCompositionAndClosesItsPlane(t *tes
 func TestComposingRuntimeWorkerTakesItsQueueTuningFromTheLoadedConfiguration(t *testing.T) {
 	settings := domain.DataPlaneSettings{QueueLease: 15 * time.Minute, QueueBatch: 8, QueueMaxAttempts: 5}
 	reads := 0
-	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error) {
 		return nil, nil
 	}, "runtime-1", QueueTuning{Settings: func() domain.DataPlaneSettings {
 		reads++
@@ -144,7 +143,7 @@ func TestComposingRuntimeWorkerTakesItsQueueTuningFromTheLoadedConfiguration(t *
 }
 
 func TestComposingRuntimeWorkerRefusesTuningItCannotResolve(t *testing.T) {
-	compose := func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+	compose := func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error) {
 		return nil, nil
 	}
 	if _, err := NewRuntimeWorker(&QueueTurnScheduler{}, workerRuntimeFunc(nil), "runtime-1", time.Minute, 0, 3); !errors.Is(err, domain.ErrValidation) {
@@ -184,7 +183,7 @@ func TestComposingRuntimeWorkerRefusesTuningItCannotResolve(t *testing.T) {
 
 func TestComposingRuntimeWorkerAlignsScoutSchedulerAttemptCeiling(t *testing.T) {
 	plane := &workerPlane{scheduler: &QueueTurnScheduler{MaxAttempts: 9}, runtime: workerRuntimeFunc(nil)}
-	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error) {
 		return plane, nil
 	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 4, MaxAttempts: 3})
 	if err != nil {
@@ -203,7 +202,7 @@ func TestComposingRuntimeWorkerAlignsScoutSchedulerAttemptCeiling(t *testing.T) 
 
 func TestComposingRuntimeWorkerRefusesALeaseUnderThePlaneLoopDeadline(t *testing.T) {
 	plane := &workerPlane{scheduler: &QueueTurnScheduler{MaxAttempts: 3}, runtime: workerRuntimeFunc(nil)}
-	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error) {
+	worker, err := NewComposingRuntimeWorker(func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error) {
 		return deadlinePlane{plane}, nil
 	}, "runtime-1", QueueTuning{Lease: time.Minute, Batch: 4, MaxAttempts: 3})
 	if err != nil {

@@ -31,7 +31,8 @@ func TestGarbageCollectorSweepsSupersededAndTombstoned(t *testing.T) {
 		return nil, nil
 	}
 	var removed []string
-	collector := &GarbageCollector{DB: ingestDBFake{query: query}, Index: &fake.KnowledgeVectorIndex{
+	objects := &fake.KnowledgeChunkDeleter{}
+	collector := &GarbageCollector{DB: ingestDBFake{query: query}, Objects: objects, Index: &fake.KnowledgeVectorIndex{
 		RemoveFunc: func(_ context.Context, tenantID int64, kb, version, doc string) error {
 			removed = append(removed, doc+"@"+version)
 			return nil
@@ -43,6 +44,9 @@ func TestGarbageCollectorSweepsSupersededAndTombstoned(t *testing.T) {
 	}
 	if len(removed) != 2 || removed[0] != "a@v1" || removed[1] != "b@v3" {
 		t.Fatalf("removed = %v", removed)
+	}
+	if len(objects.Deleted) != 2 || objects.Deleted[0] != "a@v1" || objects.Deleted[1] != "b@v3" {
+		t.Fatalf("chunk objects = %v", objects.Deleted)
 	}
 	if args := query.named(qGCListPending)[0].args; args[0] != 10 {
 		t.Fatalf("list args = %v", args)
@@ -78,7 +82,7 @@ func TestGarbageCollectorSkipsChangedManifestAndReportsFailures(t *testing.T) {
 		}
 		return nil, nil
 	}
-	collector := &GarbageCollector{DB: ingestDBFake{query: query}, Index: &fake.KnowledgeVectorIndex{
+	collector := &GarbageCollector{DB: ingestDBFake{query: query}, Objects: &fake.KnowledgeChunkDeleter{}, Index: &fake.KnowledgeVectorIndex{
 		RemoveFunc: func(_ context.Context, _ int64, _, _, doc string) error {
 			if doc == "b" {
 				return errors.New("index down")
@@ -100,8 +104,26 @@ func TestGarbageCollectorReclaimsRowsWithoutAVectorIndex(t *testing.T) {
 		qGCListPending: {gcRow("a", "v2", "v1", false)},
 		qGCGetManifest: {gcRow("a", "v2", "v1", false)},
 	}}
-	collector := &GarbageCollector{DB: ingestDBFake{query: query}}
+	collector := &GarbageCollector{DB: ingestDBFake{query: query}, Objects: &fake.KnowledgeChunkDeleter{}}
 	if swept, err := collector.Sweep(context.Background(), 10); err != nil || swept != 1 || len(query.named(qGCDeleteChunks)) != 1 {
 		t.Fatalf("swept = %d, %v", swept, err)
+	}
+	if _, err := (&GarbageCollector{DB: ingestDBFake{query: query}}).Sweep(context.Background(), 10); err == nil {
+		t.Fatal("a collector without a chunk object deleter would leak every object")
+	}
+}
+
+func TestGarbageCollectorKeepsRowsWhenChunkObjectsCannotBeDeleted(t *testing.T) {
+	query := &ingestQueryFake{rows: map[string][][]any{
+		qGCListPending: {gcRow("a", "v2", "v1", false)},
+		qGCGetManifest: {gcRow("a", "v2", "v1", false)},
+	}}
+	bucketDown := errors.New("bucket unreachable")
+	collector := &GarbageCollector{DB: ingestDBFake{query: query}, Objects: &fake.KnowledgeChunkDeleter{
+		DeleteFunc: func(context.Context, int64, string, string, string) error { return bucketDown },
+	}}
+	swept, err := collector.Sweep(context.Background(), 10)
+	if swept != 0 || !errors.Is(err, bucketDown) || len(query.named(qGCDeleteChunks)) != 0 || query.commits != 0 || query.rollbacks != 1 {
+		t.Fatalf("swept = %d, err = %v, chunk deletes = %d, commits = %d", swept, err, len(query.named(qGCDeleteChunks)), query.commits)
 	}
 }

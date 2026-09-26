@@ -152,6 +152,40 @@ func TestToolLoopRunsParallelCallsThroughTheGovernedGatewayToATerminalAnswer(t *
 	}
 }
 
+func TestToolLoopMergesTheCitationsOfEveryGroundedCall(t *testing.T) {
+	first := proposes(3, toolCall("c1", "search", `{"q":"a"}`))
+	first.Citations = []domain.Citation{{URL: "https://a.example", Title: "A", Position: 1}, {URL: "https://b.example", Position: 2}}
+	final := answers("done")
+	final.Citations = []domain.Citation{{URL: "https://b.example", Position: 1}, {URL: "https://c.example", Position: 2}}
+	harness := newLoopHarness(t, first, final)
+	result, err := harness.executor().Execute(context.Background(), loopInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.Citation{{URL: "https://a.example", Title: "A", Position: 1}, {URL: "https://b.example", Position: 2}, {URL: "https://c.example", Position: 3}}
+	if !reflect.DeepEqual(result.Citations, want) {
+		t.Fatalf("citations = %+v", result.Citations)
+	}
+	last := result.Events[len(result.Events)-1]
+	if last.Kind != domain.TurnEventCitations || !reflect.DeepEqual(last.Citations, want) || result.Events[len(result.Events)-2].Kind != domain.TurnEventResult {
+		t.Fatalf("events = %+v", result.Events)
+	}
+	// A redelivery replays the journal and reports the same sources.
+	replayed, err := harness.executor().Execute(context.Background(), loopInput())
+	if err != nil || !reflect.DeepEqual(replayed.Citations, want) || harness.modelCalls != 2 {
+		t.Fatalf("replay = %+v, %v, model calls %d", replayed.Citations, err, harness.modelCalls)
+	}
+	uncited := newLoopHarness(t, answers("plain"))
+	if result, err := uncited.executor().Execute(context.Background(), loopInput()); err != nil || len(result.Citations) != 0 || result.Events[len(result.Events)-1].Kind != domain.TurnEventResult {
+		t.Fatalf("an ungrounded answer emits no citations event: %+v, %v", result.Events, err)
+	}
+	negative := loopInput()
+	negative.Step.Configuration = []byte(`{"search":{"max_searches":-1}}`)
+	if _, err := newLoopHarness(t, answers("x")).executor().Execute(context.Background(), negative); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("negative search ceiling = %v", err)
+	}
+}
+
 func TestToolLoopRejectsDifferentContentThatLostAJournalRace(t *testing.T) {
 	journal := &MemoryLoopJournal{}
 	key := domain.LoopKey{TenantID: 7, RequestID: "request-1", ExecutionStepID: 11}

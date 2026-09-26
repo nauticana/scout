@@ -252,6 +252,9 @@ func (ToolLoopGraphCompiler) Compile(_ context.Context, definition domain.AgentD
 	if definition.ToolLoop.NextStepID != "" {
 		return domain.ExecutionGraph{}, fmt.Errorf("%w: a one-step graph cannot name a next step", domain.ErrValidation)
 	}
+	if search := definition.ToolLoop.Search; search != nil && search.MaxSearches < 0 {
+		return domain.ExecutionGraph{}, fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+	}
 	configuration, err := json.Marshal(definition.ToolLoop)
 	if err != nil {
 		return domain.ExecutionGraph{}, fmt.Errorf("encode tool loop configuration: %w", err)

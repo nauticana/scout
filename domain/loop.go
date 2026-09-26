@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -22,7 +23,26 @@ type ToolLoopConfig struct {
 	OutputSchemaName  string          `json:"output_schema_name,omitempty"`
 	OutputSchema      json.RawMessage `json:"output_schema,omitempty"`
 	RequireEvidence   bool            `json:"require_evidence,omitempty"`
-	NextStepID        string          `json:"next_step_id,omitempty"`
+	// Search permits provider-native web search on the step's model calls and
+	// bounds it; a task asks for it and may narrow MaxSearches, never widen it.
+	Search     *SearchGrounding `json:"search,omitempty"`
+	NextStepID string           `json:"next_step_id,omitempty"`
+}
+
+// NarrowedSearch is the grounding a task's model calls run under this step:
+// nothing unless the task asks, and never more than the step permits.
+func (config ToolLoopConfig) NarrowedSearch(task *SearchGrounding) (*SearchGrounding, error) {
+	if task == nil {
+		return nil, nil
+	}
+	if config.Search == nil {
+		return nil, fmt.Errorf("%w: the task asks for search grounding the step does not permit", ErrValidation)
+	}
+	search := *config.Search
+	if task.MaxSearches > 0 && (search.MaxSearches == 0 || task.MaxSearches < search.MaxSearches) {
+		search.MaxSearches = task.MaxSearches
+	}
+	return &search, nil
 }
 
 // ToolLoopLimits bound one loop step; each is enforced fail closed.

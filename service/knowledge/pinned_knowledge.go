@@ -90,17 +90,20 @@ func (resolver *TablePinnedKnowledge) PinnedKnowledge(ctx context.Context, reque
 	if request.TenantContext.TenantID <= 0 || strings.TrimSpace(request.AgentID) == "" || strings.TrimSpace(request.AgentVersion) == "" {
 		return domain.PinnedKnowledge{}, fmt.Errorf("%w: tenant, agent, and agent version are required", domain.ErrValidation)
 	}
-	if len(request.Entitlements) == 0 {
-		return domain.PinnedKnowledge{}, fmt.Errorf("%w: resolved entitlements are required", domain.ErrValidation)
-	}
-	held, err := ParseEntitlements(request.Entitlements)
-	if err != nil {
-		return domain.PinnedKnowledge{}, err
-	}
 	if err := resolver.init(ctx); err != nil {
 		return domain.PinnedKnowledge{}, err
 	}
 	bindings, err := resolver.bindings(ctx, request)
+	if err != nil {
+		return domain.PinnedKnowledge{}, err
+	}
+	if len(bindings) == 0 {
+		return domain.PinnedKnowledge{}, nil
+	}
+	if len(request.Entitlements) == 0 {
+		return domain.PinnedKnowledge{}, fmt.Errorf("%w: %s@%s binds knowledge whole but resolved no entitlements", domain.ErrForbidden, request.AgentID, request.AgentVersion)
+	}
+	held, err := ParseEntitlements(request.Entitlements)
 	if err != nil {
 		return domain.PinnedKnowledge{}, err
 	}

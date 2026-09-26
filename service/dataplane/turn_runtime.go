@@ -268,7 +268,6 @@ func (runtime *TurnRuntime) runSteps(ctx context.Context, execution *turnExecuti
 		steps[step.StepID] = step
 	}
 	stepID := graph.EntryStepID
-	var lastState []byte
 	for stepNo := 1; ; stepNo++ {
 		if stepNo > runtime.MaxSteps {
 			return domain.TurnResult{}, fmt.Errorf("%w: turn exceeded %d steps", domain.ErrExecutionLimit, runtime.MaxSteps)
@@ -281,12 +280,12 @@ func (runtime *TurnRuntime) runSteps(ctx context.Context, execution *turnExecuti
 		if err != nil {
 			return domain.TurnResult{}, err
 		}
-		lastState = result.State
 		if strings.TrimSpace(result.NextStepID) == "" {
 			return domain.TurnResult{
-				Response:     lastState,
+				Response:     result.State,
 				AgentVersion: execution.snapshot.AgentVersion,
 				CheckpointID: checkpointIdentity(execution.dispatch.Turn.ConversationID, execution.turnNo, stepNo),
+				Citations:    result.Citations,
 				Usage:        execution.usage,
 			}, nil
 		}
@@ -341,13 +340,13 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 	}
 	guarded, err := runtime.Guardrails.AfterModelChunk(ctx, execution.config,
 		guardrailSubject(turn, execution.snapshot.AgentVersion),
-		domain.ModelChunk{Sequence: execution.published, Payload: result.State})
+		domain.ModelChunk{Sequence: execution.published, Payload: result.State, Citations: result.Citations})
 	if err != nil {
 		runtime.observe(ctx, execution, step, started, result.Usage, err)
 		return domain.StepResult{}, stage.At(domain.StageGuardrail, err)
 	}
 	transformed := !bytes.Equal(result.State, guarded.Payload)
-	result.State = guarded.Payload
+	result.State, result.Citations = guarded.Payload, guarded.Citations
 	result.Fingerprint = DigestBytes(result.State)
 	guardedEvents := result.Events[:0]
 	for _, event := range result.Events {
@@ -356,6 +355,12 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		}
 		if event.Kind == domain.TurnEventResult {
 			event.Text = string(result.State)
+		}
+		if event.Kind == domain.TurnEventCitations {
+			if len(result.Citations) == 0 {
+				continue
+			}
+			event.Citations = result.Citations
 		}
 		guardedEvents = append(guardedEvents, event)
 	}

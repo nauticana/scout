@@ -2,6 +2,17 @@ package domain
 
 import "time"
 
+// KnowledgeVersion is one immutable embedding generation of a knowledge base.
+// Empty embedding fields mean the version is read whole only, never searched.
+type KnowledgeVersion struct {
+	TenantContext     TenantContext
+	KnowledgeBaseID   string
+	DisplayName       string
+	KnowledgeVersion  string
+	EmbeddingProvider string
+	EmbeddingModel    string
+}
+
 // KnowledgeDocument identifies immutable source content for ingestion.
 type KnowledgeDocument struct {
 	TenantContext    TenantContext

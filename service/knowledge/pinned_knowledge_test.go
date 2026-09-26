@@ -166,7 +166,13 @@ func TestPinnedKnowledgeRequiresAnAgentVersionAndEntitlements(t *testing.T) {
 	}
 	open := pinnedRequest()
 	open.Entitlements = nil
-	if _, err := resolver.PinnedKnowledge(ctx, open); !errors.Is(err, domain.ErrValidation) {
+	if pinned, err := resolver.PinnedKnowledge(ctx, open); err != nil || len(pinned.Documents) != 0 {
+		t.Fatalf("a release binding nothing whole needs no entitlements: %+v, %v", pinned, err)
+	}
+	bound := &TablePinnedKnowledge{DB: ingestDBFake{query: &ingestQueryFake{rows: map[string][][]any{
+		qPinnedBindings: {{"rules", "kv1", nil, "standing"}},
+	}}}, Content: storedChunks{}}
+	if _, err := bound.PinnedKnowledge(ctx, open); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("retrieval fails closed, so whole reading must too: %v", err)
 	}
 }

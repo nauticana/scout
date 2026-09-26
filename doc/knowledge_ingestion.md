@@ -2,7 +2,7 @@
 
 Reference implementations live in `service/knowledge/`: `IngestPipeline` (`ingest_pipeline.go`); the reference
 ports `ObjectStorageLoader`, `PlainTextDecoder`, `SectionChunker`, `PolicyRedactor`, `ObjectChunkStore`; and the
-versioning services `ManifestStore`, `VersionAliaser`, `TableSourceChangeSource`, `Reconciler`,
+versioning services `VersionPublisher`, `ManifestStore`, `VersionAliaser`, `TableSourceChangeSource`, `Reconciler`,
 `GarbageCollector` — each in the file its name suggests.
 
 ## Stages and backpressure
@@ -44,16 +44,23 @@ reclaimed by `GarbageCollector`, whose `Index` is optional for the same reason.
 
 ## Reference ports
 
-`ObjectStorageLoader` resolves `<scheme>://bucket/key` through keel `storage.ObjectStorage` under a byte cap.
+`ObjectStorageLoader` resolves `<scheme>://bucket/key` through a keel `storage.ObjectStorage` bound to that bucket, under a byte cap; a URI naming another bucket is `ErrForbidden`, so a source bucket and a chunk bucket each get their own loader.
 `PlainTextDecoder` handles `text/plain` (paragraph sections) and `text/markdown` (heading sections, fenced code
 respected) keeping `Text` byte-identical to the source so offsets stay source offsets. `SectionChunker` packs
 whole sections into `MaxTokens` windows with `Overlap` carried into the next window, splitting an oversized
 section on paragraph, line, word, then rune-safe byte boundaries, with an injectable token estimator and a
 version stamped into every chunk id. `PolicyRedactor` masks `field: value` lines whose field a versioned
-`RedactionPolicy` allowlist does not permit, and recomputes the chunk digest. Product-specific decoders — SAP
-document/table extraction, PDF, OCR — stay downstream as `MediaDecoder` implementations; Scout ships none.
+`RedactionPolicy` allowlist does not permit, and recomputes the chunk digest. Text extraction from PDF, DOCX and
+scans has nothing agent-specific in it and is requested from keel ([todo_upstream_keel.md](../todo_upstream_keel.md));
+Scout wraps it as a `MediaDecoder` once it ships. Product-specific decoders — SAP document/table extraction — stay
+downstream.
 
-## Manifests, aliases, tombstones, GC
+## Versions, manifests, aliases, tombstones, GC
+
+`VersionPublisher.EnsureVersion` creates `knowledge_base` (when missing) and `knowledge_base_version` under the
+base's advisory lock before ingestion writes under them. It is a replay for an existing version with the same
+embedding and `ErrConflict` for a different one; empty embedding fields mean a whole-read-only version. It is an
+explicit publisher call, never a side effect of `IngestBatch`.
 
 `ManifestStore` owns the per-document pointer in `knowledge_document_manifest`: build the new version fully,
 then `Activate` switches `active_version` and marks the old one `superseded_version` + `gc_pending`.
@@ -68,9 +75,12 @@ document is already published in the new generation. Retrieval reads `Active`, s
 in front of readers or not at all.
 
 `GarbageCollector.Sweep(ctx, limit)` drains `gc_pending` manifests in bounded batches: `Index.Remove` per
-reclaimable version first (idempotent), then chunk/document/manifest deletes in one transaction under the
-manifest advisory lock, re-reading the manifest inside it so a concurrent activation cannot lose a live chunk
-set. Per-document failures are joined and reported; the sweep continues. Run it from a periodic worker.
+reclaimable version first (idempotent), then, in one transaction under the manifest advisory lock and after
+re-reading the manifest so a concurrent activation cannot lose a live chunk set, `Objects.DeleteChunks` per
+version followed by the chunk/document/manifest deletes. `Objects` is required: `ObjectChunkStore.DeleteChunks`
+lists and removes the document version's key prefix, so objects whose rows a crash already lost are reclaimed
+too, and a failed object delete rolls the rows back for the next sweep. Per-document failures are joined and
+reported; the sweep continues. Run it from a periodic worker.
 
 ## CDC contract and worker composition
 

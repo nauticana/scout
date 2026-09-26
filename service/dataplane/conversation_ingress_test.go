@@ -40,7 +40,7 @@ func newTestIngress(t *testing.T, recorder *ingressRecorder, enqueueErr error) *
 				return nil
 			},
 		},
-		Objects:   &ObjectStateStore{Storage: &fake.ObjectStorage{}, Bucket: "turns", MaxBytes: 1 << 20},
+		Objects:   &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20},
 		Estimator: &fake.TurnBudgetEstimator{},
 		Budget: &fake.TenantBudgetManager{
 			ReserveFunc: func(_ context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {

@@ -44,8 +44,8 @@ RETURNING payload_uri`,
 // digest-verified, and refuse expired samples.
 type EncryptedSampleStore struct {
 	keelStore
+	// Storage is bound to the private sample bucket.
 	Storage storage.ObjectStorage
-	Bucket  string
 	// Key is the 32-byte data-encryption key from the keystore, never from config.
 	Key []byte
 	// Scheme prefixes the payload URI; default "object".
@@ -67,7 +67,7 @@ func (store *EncryptedSampleStore) now() time.Time {
 }
 
 func (store *EncryptedSampleStore) validate() error {
-	if store.Storage == nil || strings.TrimSpace(store.Bucket) == "" || len(store.Key) != 32 {
+	if store.Storage == nil || strings.TrimSpace(store.Storage.Bucket()) == "" || len(store.Key) != 32 {
 		return fmt.Errorf("encrypted sample store: object storage, bucket, and a 32-byte key are required")
 	}
 	if store.MaxPayloadBytes < 0 {
@@ -122,20 +122,20 @@ func (store *EncryptedSampleStore) Put(ctx context.Context, sample domain.Evalua
 		return domain.EvaluationSample{}, fmt.Errorf("seal sample: %w", err)
 	}
 	key := store.objectKey(sample.TenantID, sample.SampleID)
-	if err := store.Storage.Upload(ctx, store.Bucket, key, strings.NewReader(sealed), "application/octet-stream"); err != nil {
+	if err := store.Storage.PutObject(ctx, key, strings.NewReader(sealed), "application/octet-stream", nil); err != nil {
 		return domain.EvaluationSample{}, fmt.Errorf("upload sample: %w", err)
 	}
 	scheme := store.Scheme
 	if scheme == "" {
 		scheme = "object"
 	}
-	sample.Payload = domain.ObjectRef{URI: scheme + "://" + store.Bucket + "/" + key, Digest: sha256Hex([]byte(sealed))}
+	sample.Payload = domain.ObjectRef{URI: scheme + "://" + store.Storage.Bucket() + "/" + key, Digest: sha256Hex([]byte(sealed))}
 	if _, err := qs.Query(ctx, qSampleInsert,
 		sample.TenantID, sample.SampleID, sample.RequestID, sample.AgentID, sample.AgentVersion, sample.Reason,
 		basisPoints(sample.RiskScore), basisPoints(sample.Uncertainty), sample.Redacted, sample.Payload.URI, sample.Payload.Digest,
 		sample.RetentionClass, sample.Region, sample.SampledAt.UTC(), sample.ExpiresAt.UTC(),
 	); err != nil {
-		_ = store.Storage.Delete(ctx, store.Bucket, key)
+		_ = store.Storage.DeleteObject(ctx, key)
 		return domain.EvaluationSample{}, fmt.Errorf("insert sample: %w", err)
 	}
 	return sample, nil
@@ -167,7 +167,7 @@ func (store *EncryptedSampleStore) Get(ctx context.Context, tenantID int64, samp
 	if !store.now().Before(sample.ExpiresAt) {
 		return domain.EvaluationSample{}, nil, fmt.Errorf("%w: sample %q retention expired", domain.ErrNotFound, sampleID)
 	}
-	reader, err := store.Storage.Download(ctx, store.Bucket, store.objectKey(tenantID, sampleID))
+	reader, err := store.Storage.GetObject(ctx, store.objectKey(tenantID, sampleID))
 	if err != nil {
 		return domain.EvaluationSample{}, nil, fmt.Errorf("download sample: %w", err)
 	}
@@ -205,7 +205,7 @@ func (store *EncryptedSampleStore) Delete(ctx context.Context, tenantID int64, s
 	if len(result.Rows) == 0 {
 		return fmt.Errorf("%w: sample %q", domain.ErrNotFound, sampleID)
 	}
-	if err := store.Storage.Delete(ctx, store.Bucket, store.objectKey(tenantID, sampleID)); err != nil {
+	if err := store.Storage.DeleteObject(ctx, store.objectKey(tenantID, sampleID)); err != nil {
 		return fmt.Errorf("delete sample object: %w", err)
 	}
 	return nil

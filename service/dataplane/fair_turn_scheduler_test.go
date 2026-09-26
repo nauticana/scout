@@ -13,7 +13,7 @@ import (
 
 func newSchedulerCodec(t *testing.T) (*ObjectStateStore, domain.ObjectRef) {
 	t.Helper()
-	codec := &ObjectStateStore{Storage: &fake.ObjectStorage{}, Bucket: "turns", MaxBytes: 1 << 20}
+	codec := &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20}
 	ref, err := codec.Dehydrate(context.Background(), "turn-input/1/request-1", []byte("input"))
 	if err != nil {
 		t.Fatal(err)

@@ -58,6 +58,8 @@ type StepResult struct {
 	NextStepID  string
 	Fingerprint string
 	Usage       Usage
+	// Citations are the sources the step's grounded model calls used.
+	Citations []Citation
 	// Events are published on this step's reply frame, after its guardrails pass.
 	Events []TurnEvent
 }

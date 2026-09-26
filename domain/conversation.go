@@ -29,7 +29,9 @@ type TurnResult struct {
 	Response     []byte
 	AgentVersion string
 	CheckpointID string
-	Usage        Usage
+	// Citations are the sources of the final step's grounded answer.
+	Citations []Citation
+	Usage     Usage
 }
 
 // TurnReply is an ordered response frame sent from a worker to conversation ingress.

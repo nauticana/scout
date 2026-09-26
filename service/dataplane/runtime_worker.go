@@ -13,7 +13,6 @@ import (
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/secret"
-	"github.com/nauticana/keel/storage"
 	"github.com/nauticana/keel/worker"
 
 	"github.com/nauticana/scout/contract"
@@ -71,8 +70,9 @@ func (w *RuntimeWorker) HandleJob(ctx context.Context, _ logger.ApplicationLogge
 var _ worker.LeasedQueueWorker = (*RuntimeWorker)(nil)
 
 // DataPlaneComposer builds a data plane after keel has initialized the process
-// database, secret provider, configuration, and object storage.
-type DataPlaneComposer func(context.Context, port.DatabaseRepository, secret.SecretProvider, storage.ObjectStorage) (contract.DataPlane, error)
+// database, secret provider, and configuration. It binds its own state storage
+// with NewStateStorage; keel's worker storage is the product's storage_bucket.
+type DataPlaneComposer func(context.Context, port.DatabaseRepository, secret.SecretProvider) (contract.DataPlane, error)
 
 // QueueTuning is what the queue SQL is built from. A zero field is taken from the
 // configured data plane settings, which only exist once keel has loaded them.
@@ -187,7 +187,7 @@ func (w *ComposingRuntimeWorker) compose(ctx context.Context, db port.DatabaseRe
 	if w.runtimeWorker != nil {
 		return w.runtimeWorker, nil
 	}
-	plane, err := w.Compose(ctx, db, w.Secret, w.Storage)
+	plane, err := w.Compose(ctx, db, w.Secret)
 	if err == nil && plane == nil {
 		err = fmt.Errorf("%w: data plane composer returned nil", domain.ErrNotReady)
 	}

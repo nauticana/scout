@@ -134,7 +134,8 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 		}
 	}
 	if run.config.MaxIterations < 0 || run.config.MaxToolCalls < 0 || run.config.MaxTokens < 0 || run.config.MaxCostMinorUnits < 0 ||
-		run.config.MaxRepeatedCalls < 0 || run.config.DeadlineSeconds < 0 || run.config.MaxOutputTokens < 0 {
+		run.config.MaxRepeatedCalls < 0 || run.config.DeadlineSeconds < 0 || run.config.MaxOutputTokens < 0 ||
+		run.config.Search != nil && run.config.Search.MaxSearches < 0 {
 		return nil, fmt.Errorf("%w: tool loop configuration limits cannot be negative", domain.ErrValidation)
 	}
 	run.limits.MaxIterations = narrowed(run.limits.MaxIterations, run.config.MaxIterations)
@@ -394,10 +395,35 @@ func (executor *ToolLoopExecutor) finish(ctx context.Context, run *loopRun, deci
 		}
 	}
 	run.events = append(run.events, domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventResult, Text: string(decision.Output)})
+	citations := run.citations()
+	if len(citations) > 0 {
+		run.events = append(run.events, domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventCitations, Citations: citations})
+	}
 	return domain.StepResult{
 		State: decision.Output, NextStepID: run.config.NextStepID, Fingerprint: DigestBytes(decision.Output),
-		Usage: run.usage, Events: run.events,
+		Usage: run.usage, Citations: citations, Events: run.events,
 	}, nil
+}
+
+// citations merges the sources of every grounded model call of the loop, in
+// first-seen order, renumbered across calls.
+func (run *loopRun) citations() []domain.Citation {
+	var merged []domain.Citation
+	seen := map[string]bool{}
+	for _, entry := range run.journal {
+		if entry.Kind != domain.LoopEntryModel || entry.Model == nil {
+			continue
+		}
+		for _, citation := range entry.Model.Citations {
+			if seen[citation.URL] {
+				continue
+			}
+			seen[citation.URL] = true
+			citation.Position = len(merged) + 1
+			merged = append(merged, citation)
+		}
+	}
+	return merged
 }
 
 func (executor *ToolLoopExecutor) requireEvidence(ctx context.Context, run *loopRun, output []byte) error {

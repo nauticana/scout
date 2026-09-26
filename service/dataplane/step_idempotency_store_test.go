@@ -65,7 +65,7 @@ func TestStepIdempotencyStoreBeginReplaysCommittedResult(t *testing.T) {
 		t.Fatalf("replay must not transition: %v", query.calls)
 	}
 	// Digest drift fails closed instead of replaying corrupt state.
-	storage.Overwrite("sessions", objectKeyOf(ref), []byte(`{"a":2}`))
+	storage.Overwrite(objectKeyOf(ref), []byte(`{"a":2}`))
 	if _, _, err := newStepStore(query, storage).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("tampered = %v", err)
 	}

@@ -60,6 +60,19 @@ type KnowledgeChunkStore interface {
 	PutChunk(ctx context.Context, chunk domain.KnowledgeChunk) (domain.ObjectRef, error)
 }
 
+// KnowledgeChunkDeleter removes the stored content of every chunk of one
+// document version once its rows are reclaimable; deleting nothing is not an error.
+type KnowledgeChunkDeleter interface {
+	DeleteChunks(ctx context.Context, tenantID int64, knowledgeBaseID, knowledgeVersion, documentID string) error
+}
+
+// KnowledgeVersionPublisher creates the immutable knowledge base and version
+// rows ingestion writes under. A version's embedding never changes: EnsureVersion
+// is a replay for the same one and ErrConflict for a different one.
+type KnowledgeVersionPublisher interface {
+	EnsureVersion(ctx context.Context, version domain.KnowledgeVersion) error
+}
+
 // EmbeddingGateway is the governed entry point for embedding generation.
 type EmbeddingGateway interface {
 	// Embed creates a vector under tenant quotas and provider controls.

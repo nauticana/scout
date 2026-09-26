@@ -18,6 +18,7 @@ const (
 	TurnEventEffect           TurnEventKind = "effect"
 	TurnEventProgress         TurnEventKind = "progress"
 	TurnEventResult           TurnEventKind = "result"
+	TurnEventCitations        TurnEventKind = "citations"
 	TurnEventExtension        TurnEventKind = "extension"
 )
 
@@ -31,6 +32,7 @@ type TurnEvent struct {
 	Tool      *TurnToolEvent      `json:"tool,omitempty"`
 	Approval  *TurnApprovalEvent  `json:"approval,omitempty"`
 	Evidence  []EvidenceRef       `json:"evidence,omitempty"`
+	Citations []Citation          `json:"citations,omitempty"`
 	Effect    *TurnEffectEvent    `json:"effect,omitempty"`
 	Progress  *TurnProgressEvent  `json:"progress,omitempty"`
 	Extension *TurnExtensionEvent `json:"extension,omitempty"`

@@ -103,12 +103,13 @@ func TestSamplingPolicyEnforcerValidatesPolicy(t *testing.T) {
 
 func testSampleStore(t *testing.T, storage *fake.ObjectStorage, query *queryFake) *EncryptedSampleStore {
 	t.Helper()
+	storage.Name = "eval"
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i * 3)
 	}
 	return &EncryptedSampleStore{
-		keelStore: keelStore{DB: dbFake{query: query}}, Storage: storage, Bucket: "eval", Key: key,
+		keelStore: keelStore{DB: dbFake{query: query}}, Storage: storage, Key: key,
 		RequireRedacted: true, Now: fixedClock(testClock),
 	}
 }
@@ -132,7 +133,7 @@ func TestEncryptedSampleStoreSealsPayloadAndRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, ok := storage.Payload("eval", "evaluation/samples/7/s1")
+	sealed, ok := storage.Payload("evaluation/samples/7/s1")
 	if !ok || string(sealed) == string(payload) {
 		t.Fatalf("payload was not sealed: %q", sealed)
 	}
@@ -150,7 +151,7 @@ func TestEncryptedSampleStoreSealsPayloadAndRoundTrips(t *testing.T) {
 		t.Fatalf("get = %+v, %q, %v", sample, plain, err)
 	}
 
-	storage.Overwrite("eval", "evaluation/samples/7/s1", []byte("enc:v1:tampered"))
+	storage.Overwrite("evaluation/samples/7/s1", []byte("enc:v1:tampered"))
 	if _, _, err := store.Get(ctx, 7, "s1"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("digest mismatch = %v", err)
 	}
@@ -193,7 +194,7 @@ func TestEncryptedSampleStoreDeleteRemovesRowAndObject(t *testing.T) {
 	if err := store.Delete(ctx, 7, "s1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(storage.Deletes) != 1 || storage.Deletes[0] != "eval/evaluation/samples/7/s1" {
+	if len(storage.Deletes) != 1 || storage.Deletes[0] != "evaluation/samples/7/s1" {
 		t.Fatalf("deletes = %v", storage.Deletes)
 	}
 	query.rows[qSampleDelete] = nil

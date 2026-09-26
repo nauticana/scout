@@ -29,6 +29,21 @@ func (index *KnowledgeVectorIndex) Search(ctx context.Context, query domain.Know
 	return index.SearchFunc(ctx, query)
 }
 
+// KnowledgeChunkDeleter records the document versions whose chunk objects were deleted.
+type KnowledgeChunkDeleter struct {
+	Deleted    []string
+	DeleteFunc func(context.Context, int64, string, string, string) error
+}
+
+// DeleteChunks records doc@version, or delegates to DeleteFunc when set.
+func (deleter *KnowledgeChunkDeleter) DeleteChunks(ctx context.Context, tenantID int64, knowledgeBaseID, knowledgeVersion, documentID string) error {
+	if deleter.DeleteFunc != nil {
+		return deleter.DeleteFunc(ctx, tenantID, knowledgeBaseID, knowledgeVersion, documentID)
+	}
+	deleter.Deleted = append(deleter.Deleted, documentID+"@"+knowledgeVersion)
+	return nil
+}
+
 // KnowledgeRetriever contains a configurable retrieval callback.
 type KnowledgeRetriever struct {
 	RetrieveFunc func(context.Context, domain.KnowledgeQuery) (domain.KnowledgeResult, error)

@@ -37,8 +37,8 @@ type ObjectStateCodec interface {
 // "<KeyPrefix>/<name>/<sha256>" so a retry of identical content overwrites the
 // same object while different content never collides with a concurrent writer.
 type ObjectStateStore struct {
+	// Storage is bound to the private state bucket.
 	Storage storage.ObjectStorage
-	Bucket  string
 	// KeyPrefix namespaces objects inside the bucket; empty is allowed.
 	KeyPrefix string
 	// Scheme prefixes stored URIs, "<Scheme>://<bucket>/<key>"; default "scout".
@@ -55,7 +55,7 @@ const (
 )
 
 func (store *ObjectStateStore) validate() error {
-	if store.Storage == nil || strings.TrimSpace(store.Bucket) == "" || store.MaxBytes <= 0 {
+	if store.Storage == nil || strings.TrimSpace(store.Storage.Bucket()) == "" || store.MaxBytes <= 0 {
 		return fmt.Errorf("%w: object state store needs storage, bucket, and a positive max size", domain.ErrValidation)
 	}
 	return nil
@@ -92,10 +92,10 @@ func (store *ObjectStateStore) Dehydrate(ctx context.Context, name string, paylo
 	if prefix := strings.Trim(store.KeyPrefix, "/"); prefix != "" {
 		key = prefix + "/" + key
 	}
-	if err := store.Storage.Upload(ctx, store.Bucket, key, bytes.NewReader(payload), store.contentType()); err != nil {
+	if err := store.Storage.PutObject(ctx, key, bytes.NewReader(payload), store.contentType(), nil); err != nil {
 		return domain.ObjectRef{}, fmt.Errorf("upload %s: %w", key, err)
 	}
-	return domain.ObjectRef{URI: fmt.Sprintf("%s://%s/%s", store.scheme(), store.Bucket, key), Digest: digest}, nil
+	return domain.ObjectRef{URI: fmt.Sprintf("%s://%s/%s", store.scheme(), store.Storage.Bucket(), key), Digest: digest}, nil
 }
 
 // Hydrate downloads the referenced object and fails closed on any digest drift.
@@ -103,11 +103,11 @@ func (store *ObjectStateStore) Hydrate(ctx context.Context, ref domain.ObjectRef
 	if err := store.validate(); err != nil {
 		return nil, err
 	}
-	bucket, key, err := store.locate(ref)
+	key, err := store.locate(ref)
 	if err != nil {
 		return nil, err
 	}
-	reader, err := store.Storage.Download(ctx, bucket, key)
+	reader, err := store.Storage.GetObject(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", ref.URI, err)
 	}
@@ -130,35 +130,35 @@ func (store *ObjectStateStore) Delete(ctx context.Context, ref domain.ObjectRef)
 	if err := store.validate(); err != nil {
 		return err
 	}
-	bucket, key, err := store.locate(ref)
+	key, err := store.locate(ref)
 	if err != nil {
 		return err
 	}
-	if err := store.Storage.Delete(ctx, bucket, key); err != nil {
+	if err := store.Storage.DeleteObject(ctx, key); err != nil {
 		return fmt.Errorf("delete %s: %w", ref.URI, err)
 	}
 	return nil
 }
 
-func (store *ObjectStateStore) locate(ref domain.ObjectRef) (bucket, key string, err error) {
+func (store *ObjectStateStore) locate(ref domain.ObjectRef) (string, error) {
 	if len(ref.Digest) != 64 {
-		return "", "", fmt.Errorf("%w: object reference %q lacks a sha-256 digest", domain.ErrValidation, ref.URI)
+		return "", fmt.Errorf("%w: object reference %q lacks a sha-256 digest", domain.ErrValidation, ref.URI)
 	}
 	rest, ok := strings.CutPrefix(ref.URI, store.scheme()+"://")
 	if !ok {
-		return "", "", fmt.Errorf("%w: object uri %q does not use scheme %q", domain.ErrValidation, ref.URI, store.scheme())
+		return "", fmt.Errorf("%w: object uri %q does not use scheme %q", domain.ErrValidation, ref.URI, store.scheme())
 	}
-	bucket, key, ok = strings.Cut(rest, "/")
+	bucket, key, ok := strings.Cut(rest, "/")
 	if !ok || bucket == "" || key == "" {
-		return "", "", fmt.Errorf("%w: object uri %q lacks bucket or key", domain.ErrValidation, ref.URI)
+		return "", fmt.Errorf("%w: object uri %q lacks bucket or key", domain.ErrValidation, ref.URI)
 	}
-	if bucket != store.Bucket {
-		return "", "", fmt.Errorf("%w: object uri %q is outside bucket %q", domain.ErrForbidden, ref.URI, store.Bucket)
+	if bucket != store.Storage.Bucket() {
+		return "", fmt.Errorf("%w: object uri %q is outside bucket %q", domain.ErrForbidden, ref.URI, store.Storage.Bucket())
 	}
 	if prefix := strings.Trim(store.KeyPrefix, "/"); prefix != "" && key != prefix && !strings.HasPrefix(key, prefix+"/") {
-		return "", "", fmt.Errorf("%w: object uri %q is outside key prefix %q", domain.ErrForbidden, ref.URI, prefix)
+		return "", fmt.Errorf("%w: object uri %q is outside key prefix %q", domain.ErrForbidden, ref.URI, prefix)
 	}
-	return bucket, key, nil
+	return key, nil
 }
 
 // DigestBytes returns the lowercase hex SHA-256 of payload.
@@ -187,7 +187,7 @@ func (store *ObjectStateStore) VerifyObject(ctx context.Context, tenantID int64,
 	if tenantID <= 0 {
 		return fmt.Errorf("%w: evidence object tenant is required", domain.ErrValidation)
 	}
-	_, key, err := store.locate(object)
+	key, err := store.locate(object)
 	if err != nil {
 		return err
 	}
