@@ -1,7 +1,7 @@
 # Knowledge ingestion: pipeline, manifests, aliases, and GC
 
 Reference implementations live in `service/knowledge/`: `IngestPipeline` (`ingest_pipeline.go`); the reference
-ports `ObjectStorageLoader`, `PlainTextDecoder`, `SectionChunker`, `PolicyRedactor`, `ObjectChunkStore`; and the
+ports `ObjectStorageLoader`, `PlainTextDecoder`, `DocumentDecoder`, `SectionChunker`, `PolicyRedactor`, `ObjectChunkStore`; and the
 versioning services `VersionPublisher`, `ManifestStore`, `VersionAliaser`, `TableSourceChangeSource`, `Reconciler`,
 `GarbageCollector` — each in the file its name suggests.
 
@@ -50,10 +50,14 @@ respected) keeping `Text` byte-identical to the source so offsets stay source of
 whole sections into `MaxTokens` windows with `Overlap` carried into the next window, splitting an oversized
 section on paragraph, line, word, then rune-safe byte boundaries, with an injectable token estimator and a
 version stamped into every chunk id. `PolicyRedactor` masks `field: value` lines whose field a versioned
-`RedactionPolicy` allowlist does not permit, and recomputes the chunk digest. Text extraction from PDF, DOCX and
-scans has nothing agent-specific in it and is requested from keel ([todo_upstream_keel.md](../todo_upstream_keel.md));
-Scout wraps it as a `MediaDecoder` once it ships. Product-specific decoders — SAP document/table extraction — stay
-downstream.
+`RedactionPolicy` allowlist does not permit, and recomputes the chunk digest. `DocumentDecoder` wraps
+keel's `extract.TextExtractor` (`extract.Native` reads PDF text layers and DOCX): it sends `text/plain` and
+`text/markdown` through `PlainTextDecoder`, maps extracted headings (with `Depth` from the heading level), paragraphs,
+tables and pages to sections, drops blank ones, and refuses a document with no extractable text. Extraction
+failures (`extract.ErrTooLarge`, `extract.ErrEncrypted`, malformed files) are terminal `ErrValidation`; a canceled
+context stays systemic. Scanned pages yield nothing until keel ships an OCR extractor. keel's PDF parser has no
+decode limit of its own yet and its pre-check is best-effort, so extract untrusted PDFs in a worker with a memory
+limit and a deadline. Product-specific decoders — SAP document/table extraction — stay downstream.
 
 ## Versions, manifests, aliases, tombstones, GC
 

@@ -15,11 +15,14 @@ import (
 const (
 	SectionParagraph = "paragraph"
 	SectionHeading   = "heading"
+	SectionTable     = "table"
+	SectionPage      = "page"
 )
 
 // PlainTextDecoder decodes text/plain into paragraph sections and
-// text/markdown into heading-delimited sections; product-specific decoders
-// (SAP documents, tables, binaries) are downstream MediaDecoder implementations.
+// text/markdown into heading-delimited sections; DocumentDecoder adds PDF and
+// DOCX, and product-specific decoders (SAP documents, tables) are downstream
+// MediaDecoder implementations.
 type PlainTextDecoder struct{}
 
 var _ contract.MediaDecoder = (*PlainTextDecoder)(nil)

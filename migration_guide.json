@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.12.1",
+      "title": "PDF and DOCX knowledge sources through keel's text extractor; keel v1.2.78",
+      "tags": [
+        "additive"
+      ],
+      "summary": "knowledge.DocumentDecoder is a MediaDecoder that keeps text/plain and text/markdown on PlainTextDecoder and decodes PDF and DOCX through keel's extract.TextExtractor, mapping headings, paragraphs, tables and pages to sections. keel moves to v1.2.78, which adds the extract package and its extract_mode and extract_max_bytes flags; keel v1.2.77 changes nothing Scout uses.",
+      "body_markdown": "## PDF and DOCX sources\n\n`knowledge.DocumentDecoder{Extractor}` replaces `PlainTextDecoder` as the pipeline's `Decoder` when sources include PDF or DOCX. Build the extractor with `extract.NewFromConfig()` (keel flags `extract_mode`, default `native`, and `extract_max_bytes`, default 64 MiB; apply keel's `core` seed rows) or `extract.Native{MaxBytes: n}`.\n\n```go\nextractor, err := extract.NewFromConfig()\n// ...\npipeline := &knowledge.IngestPipeline{Decoder: knowledge.DocumentDecoder{Extractor: extractor}, ...}\n```\n\n- `text/plain`, `text/markdown` and an empty media type go through `PlainTextDecoder` unchanged, so their offsets stay source offsets.\n- Extracted sections map to `DocumentSection`: `heading` (with `Title` and `Depth` from the heading level), `paragraph`, `table` (new `SectionTable`) and `page` (new `SectionPage`); blank sections are dropped.\n- A document with no extractable text (a scan, until keel ships OCR), a file over `extract_max_bytes`, an encrypted PDF or a malformed file is a terminal `ErrValidation` item failure; a canceled context stays systemic; a nil `Extractor` is a configuration error.\n- keel's PDF parser does not yet bound its own decoding and keel's pre-check is best-effort: extract untrusted PDFs in a worker with a memory limit and a deadline.\n\n## keel v1.2.78\n\nAdds `github.com/razvandimescu/gopdf` as an indirect dependency. The v1.2.77 changes (dms `docProt`, `storage.Spec` JSON tags, partner documents) touch nothing in Scout; an application using those keel packages directly follows keel's own guide."
+    },
+    {
       "version": "v0.12.0",
       "title": "object stores bound to one bucket each; search grounding and citations in the tool loop; pinned knowledge in the turn; chunk objects reclaimed by GC; knowledge version publisher; keel v1.2.76",
       "tags": [

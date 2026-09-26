@@ -8,7 +8,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/mark3labs/mcp-go v0.46.0
 	github.com/nauticana/charter v1.2.1
-	github.com/nauticana/keel v1.2.76
+	github.com/nauticana/keel v1.2.78
 	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.67.0
 )
@@ -91,6 +91,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
+	github.com/razvandimescu/gopdf v0.11.2 // indirect
 	github.com/redis/go-redis/v9 v9.19.0 // indirect
 	github.com/rs/zerolog v1.26.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
