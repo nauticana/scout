@@ -132,7 +132,7 @@ func (gateway *Gateway) admit(ctx context.Context, selection domain.ModelSelecti
 		return nil, err
 	}
 	call := &modelCall{gateway: gateway, selection: selection, request: request, started: gateway.now(), contract: compiled,
-		prefillTokens: promptTokens(gateway.PromptTokens, request.Prompt)}
+		prefillTokens: inputTokens(gateway.PromptTokens, request)}
 	if err := gateway.RateLimiter.AllowModelCall(ctx, request); err != nil {
 		call.admissionRejected(ctx, err)
 		return nil, err

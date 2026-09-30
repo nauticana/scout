@@ -188,7 +188,7 @@ func (router *PolicyRouter) load(ctx context.Context, request domain.ModelReques
 		maxAge:    router.MaxSnapshotAge,
 		now:       router.now(),
 		excluded:  make(map[string]struct{}, len(excludedRouteIDs)+len(request.ExcludedRouteIDs)),
-		prompt:    promptTokens(router.PromptTokens, request.Prompt),
+		prompt:    inputTokens(router.PromptTokens, request),
 	}
 	if policy.MaxSnapshotAge > 0 {
 		inputs.maxAge = policy.MaxSnapshotAge

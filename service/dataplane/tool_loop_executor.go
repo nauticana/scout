@@ -134,9 +134,11 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 		}
 	}
 	if run.config.MaxIterations < 0 || run.config.MaxToolCalls < 0 || run.config.MaxTokens < 0 || run.config.MaxCostMinorUnits < 0 ||
-		run.config.MaxRepeatedCalls < 0 || run.config.DeadlineSeconds < 0 || run.config.MaxOutputTokens < 0 ||
-		run.config.Search != nil && run.config.Search.MaxSearches < 0 {
+		run.config.MaxRepeatedCalls < 0 || run.config.DeadlineSeconds < 0 || run.config.MaxOutputTokens < 0 {
 		return nil, fmt.Errorf("%w: tool loop configuration limits cannot be negative", domain.ErrValidation)
+	}
+	if err := run.config.Search.Validate(); err != nil {
+		return nil, fmt.Errorf("tool loop configuration: %w", err)
 	}
 	run.limits.MaxIterations = narrowed(run.limits.MaxIterations, run.config.MaxIterations)
 	run.limits.MaxToolCalls = narrowed(run.limits.MaxToolCalls, run.config.MaxToolCalls)

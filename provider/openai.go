@@ -54,6 +54,9 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 	if temperature := sampling(p.Temperature, request); temperature != nil {
 		params.Temperature = openai.Float(*temperature)
 	}
+	if len(request.Instructions) > 0 {
+		params.Messages = append(params.Messages, openai.SystemMessage(string(request.Instructions)))
+	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, openAIMessages(message)...)
 	}
@@ -75,6 +78,12 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		// An all-zero option object is omitted from the request body, which would
 		// send the call ungrounded; "medium" is the vendor default.
 		params.WebSearchOptions = openai.ChatCompletionNewParamsWebSearchOptions{SearchContextSize: "medium"}
+		if location := request.Search.Location; location != nil {
+			if err := approximateLocation(OpenAIProviderID, location); err != nil {
+				return openai.ChatCompletionNewParams{}, err
+			}
+			params.WebSearchOptions.UserLocation.Approximate = openAILocation(*location)
+		}
 	}
 	if request.Output.Mode == domain.OutputModeJSONSchema {
 		schema, err := schemaObject(request.Output.Schema)
@@ -88,6 +97,23 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		}
 	}
 	return params, nil
+}
+
+func openAILocation(location domain.SearchLocation) openai.ChatCompletionNewParamsWebSearchOptionsUserLocationApproximate {
+	var approximate openai.ChatCompletionNewParamsWebSearchOptionsUserLocationApproximate
+	if location.City != "" {
+		approximate.City = openai.String(location.City)
+	}
+	if location.Region != "" {
+		approximate.Region = openai.String(location.Region)
+	}
+	if location.Country != "" {
+		approximate.Country = openai.String(location.Country)
+	}
+	if location.Timezone != "" {
+		approximate.Timezone = openai.String(location.Timezone)
+	}
+	return approximate
 }
 
 // openAIMessages maps one message; a tool message fans out because Chat
@@ -156,7 +182,7 @@ func openAICitations(message openai.ChatCompletionMessage) []domain.Citation {
 		if cited.StartIndex >= 0 && cited.EndIndex > cited.StartIndex && cited.EndIndex <= int64(len(answer)) {
 			snippet = string(answer[cited.StartIndex:cited.EndIndex])
 		}
-		sources.add(cited.URL, cited.Title, snippet)
+		sources.add(cited.URL, urlHost(cited.URL), cited.Title, snippet)
 	}
 	return sources.list
 }

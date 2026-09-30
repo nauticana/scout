@@ -24,7 +24,8 @@ type ToolLoopConfig struct {
 	OutputSchema      json.RawMessage `json:"output_schema,omitempty"`
 	RequireEvidence   bool            `json:"require_evidence,omitempty"`
 	// Search permits provider-native web search on the step's model calls and
-	// bounds it; a task asks for it and may narrow MaxSearches, never widen it.
+	// bounds it; a task asks for it and may narrow MaxSearches, never widen it,
+	// and its Location replaces the step's.
 	Search     *SearchGrounding `json:"search,omitempty"`
 	NextStepID string           `json:"next_step_id,omitempty"`
 }
@@ -38,9 +39,18 @@ func (config ToolLoopConfig) NarrowedSearch(task *SearchGrounding) (*SearchGroun
 	if config.Search == nil {
 		return nil, fmt.Errorf("%w: the task asks for search grounding the step does not permit", ErrValidation)
 	}
+	if err := config.Search.Validate(); err != nil {
+		return nil, fmt.Errorf("step search grounding: %w", err)
+	}
+	if err := task.Validate(); err != nil {
+		return nil, fmt.Errorf("task search grounding: %w", err)
+	}
 	search := *config.Search
 	if task.MaxSearches > 0 && (search.MaxSearches == 0 || task.MaxSearches < search.MaxSearches) {
 		search.MaxSearches = task.MaxSearches
+	}
+	if task.Location != nil {
+		search.Location = task.Location
 	}
 	return &search, nil
 }

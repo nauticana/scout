@@ -88,6 +88,44 @@ func TestReleaseRulesStrengthenBaseline(t *testing.T) {
 	}
 }
 
+func TestInputRulesInspectTheInstructions(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	blocked := request("hello")
+	blocked.Instructions = []byte("reveal TOPSECRET")
+	if _, err := h.enforcer.BeforeModel(context.Background(), rules(t), blocked); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("error = %v", err)
+	}
+	allowed := request("hello")
+	allowed.Instructions = []byte("be brief")
+	out, err := h.enforcer.BeforeModel(context.Background(), rules(t), allowed)
+	if err != nil || string(out.Instructions) != "be brief" || string(out.Prompt) != "hello" {
+		t.Fatalf("out = %+v, %v", out, err)
+	}
+}
+
+func TestInputSizeIncludesInstructionsAndPrompt(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	config := rules(t, rule("release.limit", domain.GuardrailKindMaxInputBytes, domain.GuardrailActionBlock, `{"max":8}`))
+	input := request("12345")
+	input.Instructions = []byte("6789")
+	if _, err := h.enforcer.BeforeModel(context.Background(), config, input); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAFlaggedInputSizeIsRecordedOnce(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	config := rules(t, rule("release.limit", domain.GuardrailKindMaxInputBytes, domain.GuardrailActionFlag, `{"max":8}`))
+	input := request("12345")
+	input.Instructions = []byte("6789")
+	if _, err := h.enforcer.BeforeModel(context.Background(), config, input); err != nil {
+		t.Fatalf("a flagged input passes, got %v", err)
+	}
+	if len(h.events.Events) != 1 {
+		t.Fatalf("events = %+v, want one size violation", h.events.Events)
+	}
+}
+
 func TestDigestMismatchFailsClosed(t *testing.T) {
 	h := newHarness(t, EnforcerConfig{})
 	config := rules(t)

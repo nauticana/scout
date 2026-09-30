@@ -111,10 +111,21 @@ func NewLayeredEnforcer(config EnforcerConfig) (*LayeredEnforcer, error) {
 	return enforcer, nil
 }
 
-// BeforeModel applies input-stage rules to the prompt.
+// BeforeModel applies input-stage rules to the instructions and the prompt.
 func (enforcer *LayeredEnforcer) BeforeModel(ctx context.Context, config domain.GuardrailConfig, request domain.ModelRequest) (domain.ModelRequest, error) {
 	subject := domain.GuardrailSubject{TenantID: request.TenantContext.TenantID, Principal: request.Principal, RequestID: request.RequestID, ConversationID: request.ConversationID}
-	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageInput, subject: subject, content: request.Prompt, sizeBytes: len(request.Prompt)})
+	// The input size is the instructions and prompt together, checked once so a
+	// flagged size violation records one event.
+	promptBytes := len(request.Instructions) + len(request.Prompt)
+	if len(request.Instructions) > 0 {
+		instructions, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageInput, subject: subject, content: request.Instructions, sizeBytes: promptBytes})
+		if err != nil {
+			return domain.ModelRequest{}, err
+		}
+		request.Instructions = instructions
+		promptBytes = 0
+	}
+	content, _, err := enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageInput, subject: subject, content: request.Prompt, sizeBytes: promptBytes})
 	if err != nil {
 		return domain.ModelRequest{}, err
 	}

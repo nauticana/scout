@@ -32,7 +32,7 @@ inspected content, no matched substring, ever leaves the enforcer.
 
 | Stage | Entry point | Notes |
 | --- | --- | --- |
-| input | `BeforeModel` | prompt size, phrases, classifiers |
+| input | `BeforeModel` | instructions and prompt: size, phrases, classifiers |
 | output | `AfterModelChunk`, `OpenOutputSession` | prefer the session |
 | tool_input | `BeforeTool` | tool and destination allowlists, approval gate |
 | tool_output | `AfterTool` | schema, classifiers, untrusted fencing |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -58,6 +59,44 @@ func TestBudgetedGatewayReservesBeforeTheCallAndSettlesConfirmedUsage(t *testing
 	}
 	if len(order) != 1 {
 		t.Fatalf("the call must run once, order = %v", order)
+	}
+}
+
+func TestBudgetedGatewayReservesInstructionsAsInput(t *testing.T) {
+	recorder := newBudgetRecorder()
+	var reserved domain.BudgetRequest
+	manager := recorder.manager()
+	reserve := manager.ReserveFunc
+	manager.ReserveFunc = func(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
+		reserved = request
+		return reserve(ctx, request)
+	}
+	inner := &fake.ModelGateway{GenerateFunc: func(context.Context, domain.ModelSelection, domain.ModelRequest) (domain.ModelResult, error) {
+		return domain.ModelResult{Output: []byte("ok")}, nil
+	}}
+	gateway := &BudgetedGateway{Inner: inner, Budgets: manager, Pricer: fixedPricer()}
+	request := budgetedRequest()
+	request.Instructions = []byte("answer as for a buyer")
+	if _, err := gateway.Generate(context.Background(), domain.ModelSelection{Provider: "openai", Model: "gpt"}, request); err != nil {
+		t.Fatal(err)
+	}
+	want := EstimatePromptTokens(request.Instructions) + EstimatePromptTokens(request.Prompt) + request.MaxOutputTokens
+	if reserved.Tokens != want {
+		t.Fatalf("reserved %d tokens, want %d", reserved.Tokens, want)
+	}
+}
+
+func TestBudgetedGatewayRejectsAnOverflowingInputEstimate(t *testing.T) {
+	gateway := &BudgetedGateway{
+		Inner:        &fake.ModelGateway{},
+		Budgets:      newBudgetRecorder().manager(),
+		Pricer:       fixedPricer(),
+		PromptTokens: func([]byte) int64 { return math.MaxInt64 },
+	}
+	request := budgetedRequest()
+	request.Instructions = []byte("instructions")
+	if _, err := gateway.Generate(context.Background(), domain.ModelSelection{Provider: "openai", Model: "gpt"}, request); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -131,7 +131,7 @@ func TestGoogleStreamsTextPartsAndFoldsGroundingIntoTheTerminalFrame(t *testing.
 	if terminal.FinishReason != string(genai.FinishReasonStop) || terminal.Usage.OutputTokens != 7 || terminal.Usage.SearchQueries != 1 {
 		t.Fatalf("terminal frame = %+v", terminal)
 	}
-	requireCitation(t, terminal.Citations, 0, "https://a.example/p", "A", "partial")
+	requireCitation(t, terminal.Citations, 0, "https://a.example/p", "a.example", "A", "partial")
 }
 
 func TestGoogleFoldKeepsSupportsOnTheirOwnChunks(t *testing.T) {
@@ -145,8 +145,8 @@ func TestGoogleFoldKeepsSupportsOnTheirOwnChunks(t *testing.T) {
 	googleFold(aggregate, grounded("https://a.example/p", "about a"))
 	googleFold(aggregate, grounded("https://b.example/p", "about b"))
 	citations := googleCitations(aggregate.Candidates[0].GroundingMetadata)
-	requireCitation(t, citations, 0, "https://a.example/p", "", "about a")
-	requireCitation(t, citations, 1, "https://b.example/p", "", "about b")
+	requireCitation(t, citations, 0, "https://a.example/p", "a.example", "", "about a")
+	requireCitation(t, citations, 1, "https://b.example/p", "b.example", "", "about b")
 }
 
 func TestGoogleStreamReportsItsError(t *testing.T) {

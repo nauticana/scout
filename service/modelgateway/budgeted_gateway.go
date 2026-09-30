@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 
@@ -20,11 +21,15 @@ type modelBudget struct {
 	promptTokens func([]byte) int64
 }
 
-// reserve estimates one model call: its prompt, its output ceiling, and the
+// reserve estimates one model call: its input, its output ceiling, and the
 // grounding searches it may run.
 func (budget modelBudget) reserve(ctx context.Context, requestID string, selection domain.ModelSelection, request domain.ModelRequest) (domain.BudgetReservation, error) {
-	tokens := promptTokens(budget.promptTokens, request.Prompt) + request.MaxOutputTokens
-	estimated := domain.ModelUsage{InputTokens: tokens - request.MaxOutputTokens, OutputTokens: request.MaxOutputTokens, SearchQueries: EstimatedSearches(request)}
+	input := inputTokens(budget.promptTokens, request)
+	if input > math.MaxInt64-request.MaxOutputTokens {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: estimated model tokens overflow", domain.ErrValidation)
+	}
+	tokens := input + request.MaxOutputTokens
+	estimated := domain.ModelUsage{InputTokens: input, OutputTokens: request.MaxOutputTokens, SearchQueries: EstimatedSearches(request)}
 	return budget.hold(ctx, domain.BudgetRequest{TenantID: request.TenantContext.TenantID, RequestID: requestID, Principal: request.Principal, Tokens: tokens},
 		selectionReference(selection), estimated)
 }
@@ -120,8 +125,8 @@ func (gateway *BudgetedGateway) validate(selection domain.ModelSelection, reques
 		return err
 	}
 	if request.TenantContext.TenantID <= 0 || strings.TrimSpace(request.RequestID) == "" ||
-		strings.TrimSpace(selection.Provider) == "" || strings.TrimSpace(selection.Model) == "" {
-		return fmt.Errorf("%w: tenant, request id, provider, and model are required", domain.ErrValidation)
+		strings.TrimSpace(selection.Provider) == "" || strings.TrimSpace(selection.Model) == "" || request.MaxOutputTokens <= 0 {
+		return fmt.Errorf("%w: tenant, request id, provider, model, and positive max output tokens are required", domain.ErrValidation)
 	}
 	return nil
 }

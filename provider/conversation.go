@@ -3,6 +3,8 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -150,7 +152,7 @@ func emptyResult(provider string, text string, calls []domain.ModelToolCall) err
 // checkSearchBound refuses a bounded-search request whose vendor cannot bound
 // its own searches, so a grounded call never outruns the searches it was priced for.
 func checkSearchBound(provider string, search *domain.SearchGrounding) error {
-	if err := validateSearch(search); err != nil {
+	if err := search.Validate(); err != nil {
 		return err
 	}
 	if search == nil || search.MaxSearches <= 0 {
@@ -159,26 +161,42 @@ func checkSearchBound(provider string, search *domain.SearchGrounding) error {
 	return fmt.Errorf("%w: %s adapter cannot bound grounding searches", domain.ErrCapabilityUnsupported, provider)
 }
 
-func validateSearch(search *domain.SearchGrounding) error {
-	if search != nil && search.MaxSearches < 0 {
-		return fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+// approximateLocation refuses a location given only as coordinates to a vendor
+// that locates searches by place name alone.
+func approximateLocation(provider string, location *domain.SearchLocation) error {
+	if location == nil || location.City != "" || location.Region != "" || location.Country != "" || location.Timezone != "" {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%w: %s adapter locates searches by city, region, country or timezone, not coordinates", domain.ErrCapabilityUnsupported, provider)
+}
+
+var hostName = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+
+// urlHost is the lowercased host of a link, empty when it has none.
+func urlHost(link string) string {
+	parsed, err := url.Parse(strings.TrimSpace(link))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 }
 
 // citations collects the sources of a grounded answer in the order the provider
-// reported them, keeping the first title and snippet given for each URL.
+// reported them, keeping the first domain, title and snippet given for each URL.
 type citations struct {
 	list  []domain.Citation
 	index map[string]int
 }
 
-func (collected *citations) add(url, title, snippet string) {
-	url = strings.TrimSpace(url)
-	if url == "" {
+func (collected *citations) add(link, host, title, snippet string) {
+	link = strings.TrimSpace(link)
+	if link == "" {
 		return
 	}
-	if at, seen := collected.index[url]; seen {
+	if at, seen := collected.index[link]; seen {
+		if collected.list[at].Domain == "" {
+			collected.list[at].Domain = host
+		}
 		if collected.list[at].Title == "" {
 			collected.list[at].Title = title
 		}
@@ -190,6 +208,6 @@ func (collected *citations) add(url, title, snippet string) {
 	if collected.index == nil {
 		collected.index = make(map[string]int)
 	}
-	collected.index[url] = len(collected.list)
-	collected.list = append(collected.list, domain.Citation{URL: url, Title: title, Snippet: snippet, Position: len(collected.list) + 1})
+	collected.index[link] = len(collected.list)
+	collected.list = append(collected.list, domain.Citation{URL: link, Domain: host, Title: title, Snippet: snippet, Position: len(collected.list) + 1})
 }

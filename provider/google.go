@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"google.golang.org/genai"
@@ -63,6 +64,9 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 	if temperature := sampling(p.Temperature, request); temperature != nil {
 		config.Temperature = genai.Ptr(float32(*temperature))
 	}
+	if len(request.Instructions) > 0 {
+		config.SystemInstruction = genai.NewContentFromText(string(request.Instructions), genai.RoleUser)
+	}
 	if len(request.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0, len(request.Tools))
 		for _, tool := range request.Tools {
@@ -79,6 +83,14 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 			return nil, nil, err
 		}
 		config.Tools = append(config.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
+		if location := request.Search.Location; location != nil {
+			if location.Latitude == nil {
+				return nil, nil, fmt.Errorf("%w: %s adapter locates searches by coordinates only", domain.ErrCapabilityUnsupported, GoogleProviderID)
+			}
+			config.ToolConfig = &genai.ToolConfig{RetrievalConfig: &genai.RetrievalConfig{
+				LatLng: &genai.LatLng{Latitude: location.Latitude, Longitude: location.Longitude},
+			}}
+		}
 	}
 	if request.Output.Mode == domain.OutputModeJSONSchema {
 		schema, err := schemaObject(request.Output.Schema)
@@ -189,7 +201,7 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 	} else {
 		// Vertex omits usage on some model families; a 4-chars-per-token
 		// estimate keeps accounting non-zero rather than silently free.
-		usage.InputTokens = int64(len(request.Prompt)) / 4
+		usage.InputTokens = int64(len(request.Instructions)+len(request.Prompt)) / 4
 		usage.OutputTokens = int64(len(text)) / 4
 	}
 	return domain.ModelResult{
@@ -197,6 +209,10 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 		FinishReason: finishReason(native, calls), Usage: usage,
 	}, nil
 }
+
+// googleGroundingRedirect is the host Google puts in front of every grounded
+// source link, so the publisher must come from elsewhere.
+const googleGroundingRedirect = "vertexaisearch.cloud.google.com"
 
 // googleCitations maps each grounding chunk to its source; the snippet is the
 // first answer segment a support attributes to that chunk.
@@ -220,9 +236,24 @@ func googleCitations(grounding *genai.GroundingMetadata) []domain.Citation {
 		if chunk == nil || chunk.Web == nil {
 			continue
 		}
-		sources.add(chunk.Web.URI, chunk.Web.Title, snippets[int32(index)])
+		sources.add(chunk.Web.URI, googlePublisher(chunk.Web), chunk.Web.Title, snippets[int32(index)])
 	}
 	return sources.list
+}
+
+// googlePublisher is the source's host: the domain Vertex reports, else the
+// link's own host, else the title the Gemini API sets to the host behind its redirect.
+func googlePublisher(web *genai.GroundingChunkWeb) string {
+	if host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(web.Domain)), "."); host != "" {
+		return host
+	}
+	if host := urlHost(web.URI); host != "" && host != googleGroundingRedirect {
+		return host
+	}
+	if title := strings.ToLower(strings.TrimSpace(web.Title)); hostName.MatchString(title) {
+		return title
+	}
+	return ""
 }
 
 func (p *Google) Stream(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {

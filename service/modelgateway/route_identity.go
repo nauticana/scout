@@ -1,6 +1,7 @@
 package modelgateway
 
 import (
+	"math"
 	"strings"
 
 	"github.com/nauticana/scout/domain"
@@ -22,6 +23,19 @@ func promptTokens(estimate func([]byte) int64, prompt []byte) int64 {
 		estimate = EstimatePromptTokens
 	}
 	return max(0, estimate(prompt))
+}
+
+// inputTokens estimates the input a request sends: its instructions and prompt.
+func inputTokens(estimate func([]byte) int64, request domain.ModelRequest) int64 {
+	tokens := promptTokens(estimate, request.Prompt)
+	if len(request.Instructions) > 0 {
+		instructions := promptTokens(estimate, request.Instructions)
+		if tokens > math.MaxInt64-instructions {
+			return math.MaxInt64
+		}
+		tokens += instructions
+	}
+	return tokens
 }
 
 // routeKey is the identity shared by candidates, snapshots, and selections.

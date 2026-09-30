@@ -250,6 +250,8 @@ result, err := adapter.Generate(ctx, domain.ModelSelection{Provider: provider.An
     domain.ModelRequest{Prompt: []byte(prompt), MaxOutputTokens: provider.DefaultMaxOutputTokens})
 ```
 
+`ModelRequest.Instructions` goes in the vendor's own instruction slot — Chat Completions system message, Anthropic `system`, Gemini `SystemInstruction` — and never into `Prompt` or `Messages`, so framing a call does not change the question it asks. The gateway estimates and budgets it as input, and `BeforeModel` inspects it with the prompt.
+
 Adapters send no sampling parameter by default: several model families reject any non-default `temperature`, and a rejected parameter fails every call. `provider.Factory` forwards `FactoryConfig.Temperature` only to models its `Sampling` lookup accepts — `controlplane.ModelCatalog` answers from the `sampling` capability code — and to none when no lookup is composed. `agent_temperature` has no default.
 
 `domain.AgentTask.Output` carries a JSON Schema constraint through `ProviderAgent` and `MultimodalGenerator` to the provider; the prompt renderer ignores it. `ProviderAgent` validates the answer against the schema itself, because its provider may be a bare adapter, and returns `ErrInvalidModelOutput` together with the result's usage. `PricedAgent.GenerateText` likewise returns token counts with an error, so an unusable answer can still be billed — `TurnLedger.FailWithUsage` settles the reservation at that usage, finishes the turn `failed`, and writes the usage event and `OnSettled` in one transaction. Adapters project a schema onto what their vendor's structured-output mode accepts (Anthropic drops numeric and length bounds; OpenAI uses strict mode only for schemas that close and require every property) while Scout keeps validating the full schema.
@@ -534,15 +536,22 @@ Surrogate-ID tables declare explicit sequence metadata and rely on keel's core `
 
 ### Generate dialect-specific DDL
 
-The Go tool declaration pins keel's compiler. Pass the keel groups first, then the Scout modules the product needs, and pass the matching seed directories:
+The Go tool declaration pins keel's compiler. Pass the keel groups first, then the Scout modules the product needs, and pass the matching seed directories. Scout seeds reference keel's seeded authorization actions and menus, and the compiler rejects a seeded foreign key whose parent row is not in the same run, so the selected keel groups' seeds are staged into one directory (`-seed` reads directories only):
 
 ```bash
 keel="$(go list -m -f '{{.Dir}}' github.com/nauticana/keel)/schema"
-keel_in="${keel}/core,${keel}/geo,${keel}/tenant_management"
+keel_groups=(core geo tenant_management) # dependency.yml order, parents first
+keel_seed="$(mktemp -d)"
+trap 'rm -rf "${keel_seed}"' EXIT
+keel_in=""
+for group in "${keel_groups[@]}"; do
+  keel_in="${keel_in:+${keel_in},}${keel}/${group}"
+  cp "${keel}/seed/${group}.yml" "${keel_seed}/"
+done
 scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill"
 scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/execution_graph,schema/seed/runtime,schema/seed/release"
 
-go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${scout_seed}" -out build/scout_pgsql.sql
+go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_seed},${scout_seed}" -out build/scout_pgsql.sql
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
@@ -650,9 +659,9 @@ request.Output = domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, Sche
 
 ### Grounded answers and citations
 
-`domain.ModelRequest.Search` asks the selected route to answer from the provider's own web search — OpenAI web search, Google Search grounding, Anthropic web search — and requires the `web_search` capability, so a route that does not declare it is `ErrCapabilityUnsupported` and never answers ungrounded. `ModelResult.Citations` and `ModelChunk.Citations` carry the sources back provider-neutrally as `domain.Citation{URL, Title, Snippet, Position}`, in the provider's own order; URLs must be unique and positions contiguous from 1 — across every frame of a stream — or the result is `ErrInvalidModelOutput`. `SearchGrounding.MaxSearches` is refused by adapters whose vendor cannot bound its own searches, rather than accepted and ignored.
+`domain.ModelRequest.Search` asks the selected route to answer from the provider's own web search — OpenAI web search, Google Search grounding, Anthropic web search — and requires the `web_search` capability, so a route that does not declare it is `ErrCapabilityUnsupported` and never answers ungrounded. `ModelResult.Citations` and `ModelChunk.Citations` carry the sources back provider-neutrally as `domain.Citation{URL, Domain, Title, Snippet, Position}`, in the provider's own order; URLs must be unique and positions contiguous from 1 — across every frame of a stream — or the result is `ErrInvalidModelOutput`. `SearchGrounding.MaxSearches` is refused by adapters whose vendor cannot bound its own searches, rather than accepted and ignored. `SearchGrounding.Location` runs the searches from an approximate place: OpenAI and Anthropic take city, region, ISO country and IANA timezone, Google takes coordinates only, and an adapter given a location its vendor cannot honour refuses it rather than searching from the vendor default. `Citation.URL` is the link the vendor returned — Google's is its own grounding redirect — and `Citation.Domain` is the publisher's host: Vertex's reported domain, the link's host, or the Gemini API title naming the host behind the redirect; empty when unknown.
 
-A published agent asks for grounding through `domain.AgentTask.Search`, which `ProviderAgent` passes to the request exactly as it passes `Output`; the sources come back on `ModelResult.Citations`, and `MultimodalResult.Citations` carries them through the multimodal generator. In a tool loop the published step decides: `ToolLoopConfig.Search` permits search and sets its ceiling, the task asks and may only narrow `MaxSearches` (`ToolLoopConfig.NarrowedSearch`), and a task that asks on a step permitting none is `ErrValidation`. The sources of every grounded call of the loop are merged in first-seen order onto `StepResult.Citations`, pass the output guardrail with the answer, reach the client as the `citations` turn event, and end on `TurnResult.Citations`.
+A published agent asks for grounding through `domain.AgentTask.Search`, which `ProviderAgent` passes to the request exactly as it passes `Output`; the sources come back on `ModelResult.Citations`, and `MultimodalResult.Citations` carries them through the multimodal generator. In a tool loop the published step decides: `ToolLoopConfig.Search` permits search and sets its ceiling, the task asks, may only narrow `MaxSearches`, and its `Location` replaces the step's (`ToolLoopConfig.NarrowedSearch`), and a task that asks on a step permitting none is `ErrValidation`. The sources of every grounded call of the loop are merged in first-seen order onto `StepResult.Citations`, pass the output guardrail with the answer, reach the client as the `citations` turn event, and end on `TurnResult.Citations`.
 
 Searches are priced and metered like tokens: `domain.Usage.SearchQueries` reports what the provider ran, `model_price.search_minor_units` prices it under the `web_search` rate category, `modelgateway.EstimatedSearches` is what the router and the hedge budget reserve before the call, and `usage_event.search_queries` records what was settled.
 

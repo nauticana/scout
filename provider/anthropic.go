@@ -45,7 +45,7 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 	if err := checkOutputMode(AnthropicProviderID, request.Output); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
-	if err := validateSearch(request.Search); err != nil {
+	if err := request.Search.Validate(); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
 	params := anthropic.MessageNewParams{
@@ -54,6 +54,9 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 	}
 	if temperature := sampling(p.Temperature, request); temperature != nil {
 		params.Temperature = anthropic.Float(*temperature)
+	}
+	if len(request.Instructions) > 0 {
+		params.System = []anthropic.TextBlockParam{{Text: string(request.Instructions)}}
 	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, anthropicMessage(message))
@@ -84,6 +87,12 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 		if request.Search.MaxSearches > 0 {
 			search.MaxUses = anthropic.Int(request.Search.MaxSearches)
 		}
+		if location := request.Search.Location; location != nil {
+			if err := approximateLocation(AnthropicProviderID, location); err != nil {
+				return anthropic.MessageNewParams{}, err
+			}
+			search.UserLocation = anthropicLocation(*location)
+		}
 		params.Tools = append(params.Tools, anthropic.ToolUnionParam{OfWebSearchTool20250305: &search})
 	}
 	if request.Output.Mode == domain.OutputModeJSONSchema {
@@ -96,6 +105,23 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 		}}
 	}
 	return params, nil
+}
+
+func anthropicLocation(location domain.SearchLocation) anthropic.UserLocationParam {
+	var user anthropic.UserLocationParam
+	if location.City != "" {
+		user.City = anthropic.String(location.City)
+	}
+	if location.Region != "" {
+		user.Region = anthropic.String(location.Region)
+	}
+	if location.Country != "" {
+		user.Country = anthropic.String(location.Country)
+	}
+	if location.Timezone != "" {
+		user.Timezone = anthropic.String(location.Timezone)
+	}
+	return user
 }
 
 func anthropicMessage(message domain.ModelMessage) anthropic.MessageParam {
@@ -125,7 +151,7 @@ func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
 			text += block.Text
 			for _, citation := range block.Citations {
 				if citation.Type == "web_search_result_location" {
-					sources.add(citation.URL, citation.Title, citation.CitedText)
+					sources.add(citation.URL, urlHost(citation.URL), citation.Title, citation.CitedText)
 				}
 			}
 		case "tool_use":

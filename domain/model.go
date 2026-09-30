@@ -1,6 +1,13 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"math"
+	"strings"
+	"time"
+	// Timezone validation must not depend on the host's zoneinfo.
+	_ "time/tzdata"
+)
 
 // ModelRequest contains one tenant-scoped inference request.
 type ModelRequest struct {
@@ -11,8 +18,11 @@ type ModelRequest struct {
 	RequestID         string
 	ConversationID    string
 	ComplexitySignals map[string]float64
-	Prompt            []byte
-	MaxOutputTokens   int64
+	// Instructions go in the vendor's system slot, never merged into Prompt or
+	// Messages; they count as input and pass the input guardrails like the prompt.
+	Instructions    []byte
+	Prompt          []byte
+	MaxOutputTokens int64
 	// RequiredCapabilities names model capabilities the request cannot do without, e.g. "tools", "vision".
 	RequiredCapabilities []string
 	// AffinityKey groups requests that benefit from landing on the same route (session or prefix cache).
@@ -72,12 +82,75 @@ type SearchGrounding struct {
 	// default. An adapter whose vendor cannot bound them refuses a request that
 	// sets it rather than running an unbounded, unbudgeted search.
 	MaxSearches int64 `json:"max_searches,omitempty"`
+	// Location is where the searches run from; an adapter whose vendor cannot
+	// honour it refuses the request rather than searching from its default.
+	Location *SearchLocation `json:"location,omitempty"`
+}
+
+// SearchLocation is the approximate place a grounded search runs from. Country
+// is ISO 3166-1 alpha-2 and Timezone an IANA name; coordinates come as a pair.
+type SearchLocation struct {
+	City      string   `json:"city,omitempty"`
+	Region    string   `json:"region,omitempty"`
+	Country   string   `json:"country,omitempty"`
+	Timezone  string   `json:"timezone,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
+}
+
+// Validate rejects a negative search bound and a location that names no place,
+// a malformed country code, or coordinates that are unpaired or out of range.
+func (search *SearchGrounding) Validate() error {
+	if search == nil {
+		return nil
+	}
+	if search.MaxSearches < 0 {
+		return fmt.Errorf("%w: max searches cannot be negative", ErrValidation)
+	}
+	location := search.Location
+	if location == nil {
+		return nil
+	}
+	for _, field := range []string{location.City, location.Region, location.Country, location.Timezone} {
+		if field != strings.TrimSpace(field) {
+			return fmt.Errorf("%w: search location fields cannot carry surrounding whitespace", ErrValidation)
+		}
+	}
+	if location.Country != "" && !isCountryCode(location.Country) {
+		return fmt.Errorf("%w: search location country must be an ISO 3166-1 alpha-2 code", ErrValidation)
+	}
+	if location.Timezone != "" {
+		if _, err := time.LoadLocation(location.Timezone); err != nil || location.Timezone == "Local" {
+			return fmt.Errorf("%w: search location timezone must be an IANA name", ErrValidation)
+		}
+	}
+	if (location.Latitude == nil) != (location.Longitude == nil) {
+		return fmt.Errorf("%w: search location coordinates come as a latitude and longitude pair", ErrValidation)
+	}
+	if location.Latitude != nil && (!inRange(*location.Latitude, 90) || !inRange(*location.Longitude, 180)) {
+		return fmt.Errorf("%w: search location coordinates are out of range", ErrValidation)
+	}
+	if location.Latitude == nil && location.City == "" && location.Region == "" && location.Country == "" && location.Timezone == "" {
+		return fmt.Errorf("%w: search location names no place", ErrValidation)
+	}
+	return nil
+}
+
+func isCountryCode(code string) bool {
+	return len(code) == 2 && code[0] >= 'A' && code[0] <= 'Z' && code[1] >= 'A' && code[1] <= 'Z'
+}
+
+func inRange(degrees, bound float64) bool {
+	return !math.IsNaN(degrees) && degrees >= -bound && degrees <= bound
 }
 
 // Citation is one source a grounded answer used. Position is its 1-based rank
 // in the provider's own order; Snippet is the cited text where one is reported.
+// URL is the link the vendor returned, which may be its own redirect; Domain is
+// the publisher's host, empty when the vendor does not reveal it.
 type Citation struct {
 	URL      string `json:"url"`
+	Domain   string `json:"domain,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Snippet  string `json:"snippet,omitempty"`
 	Position int    `json:"position"`

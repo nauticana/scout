@@ -261,12 +261,14 @@ func TestStreamHoldsCitationsUniqueAndContiguousAcrossFrames(t *testing.T) {
 func TestGatewayRejectsInvalidSearchBounds(t *testing.T) {
 	gateway, invoked := contractGateway(t, []string{domain.CapabilityWebSearch}, domain.ModelResult{})
 	request := validModelRequest()
-	request.Search = &domain.SearchGrounding{MaxSearches: -1}
-	if _, err := gateway.Generate(context.Background(), contractSelection, request); !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("want ErrValidation, got %v", err)
+	for _, search := range []*domain.SearchGrounding{{MaxSearches: -1}, {Location: &domain.SearchLocation{Country: "usa"}}} {
+		request.Search = search
+		if _, err := gateway.Generate(context.Background(), contractSelection, request); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%+v: want ErrValidation, got %v", search, err)
+		}
 	}
 	if *invoked != 0 {
-		t.Fatal("provider was invoked for an invalid search bound")
+		t.Fatal("provider was invoked for an invalid search")
 	}
 }
 

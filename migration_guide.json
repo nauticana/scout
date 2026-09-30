@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.12.2",
+      "title": "Instructions apart from the prompt, located grounded search, and the publisher on each citation; keel v1.2.86",
+      "tags": [
+        "additive"
+      ],
+      "summary": "domain.ModelRequest.Instructions is sent in the vendor's instruction slot, never merged into the prompt, and is budgeted and guarded as input. domain.SearchGrounding.Location runs grounded searches from an approximate place; adapters refuse a location their vendor cannot honour. domain.Citation.Domain names the publisher's host, including behind Google's grounding redirect. SearchGrounding.Validate is the one check the gateway, tool loop and adapters share. keel moves to v1.2.86, whose schemagen validates seeded foreign keys, so the selected keel groups’ seeds join the Scout seed run.",
+      "body_markdown": "## Instructions\n\n`ModelRequest.Instructions []byte` maps to a Chat Completions system message, Anthropic `system`, and Gemini `SystemInstruction`. Callers that prepended framing to `Prompt` move it here. The gateway counts it in router, budget and serving estimates; `LayeredEnforcer.BeforeModel` guards it and the prompt under one input-size limit.\n\n## Search location\n\n`SearchGrounding.Location *SearchLocation{City, Region, Country, Timezone, Latitude, Longitude}`. `Country` is uppercase ISO 3166-1 alpha-2, `Timezone` is an IANA name, coordinates come as a pair within range, and a location must name something. Invalid input is `ErrValidation`.\n\n| Adapter | Uses | Refuses (`ErrCapabilityUnsupported`) |\n|---|---|---|\n| OpenAI | city, region, country, timezone | coordinates only |\n| Anthropic | city, region, country, timezone | coordinates only |\n| Google | latitude, longitude | no coordinates |\n\nIn a tool loop a task's `Location` replaces the step's; `MaxSearches` still only narrows.\n\n## Citation domain\n\n`Citation.Domain` (`json:\"domain,omitempty\"`) is the lowercased publisher host, empty when unknown. `URL` remains the vendor's link. Google uses the Vertex domain, a direct link's host, or a host-shaped Gemini title; OpenAI and Anthropic use the link host.\n\n## keel v1.2.86\n\n`schemagen` now rejects a seeded foreign key whose parent row is not seeded in the same run. Scout seeds reference keel's authorization actions and menus, so stage the selected keel groups' seed files (`core.yml`, `geo.yml`, `tenant_management.yml`) into one directory and pass it before the Scout seed directories; README shows the commands. Nothing else Scout uses changes."
+    },
+    {
       "version": "v0.12.1",
       "title": "PDF and DOCX knowledge sources through keel's text extractor; keel v1.2.78",
       "tags": [

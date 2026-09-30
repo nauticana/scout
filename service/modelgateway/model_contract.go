@@ -52,8 +52,8 @@ type modelContract struct {
 }
 
 func compileModelContract(request domain.ModelRequest) (*modelContract, error) {
-	if request.Search != nil && request.Search.MaxSearches < 0 {
-		return nil, fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+	if err := request.Search.Validate(); err != nil {
+		return nil, err
 	}
 	if request.Temperature != nil && (math.IsNaN(*request.Temperature) || math.IsInf(*request.Temperature, 0) || *request.Temperature < 0 || *request.Temperature > 2) {
 		return nil, fmt.Errorf("%w: temperature must be between 0 and 2", domain.ErrValidation)
