@@ -171,6 +171,7 @@ type MCPResourceContent struct {
 // MCPPromptArgument defines one client-supplied prompt template argument.
 type MCPPromptArgument struct {
 	Name        string
+	Title       string
 	Description string
 	Required    bool
 }

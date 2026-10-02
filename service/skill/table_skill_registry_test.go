@@ -21,16 +21,20 @@ type skillTables struct {
 	versions map[string][]any
 	tools    map[string][]string
 	examples map[string][]string
+	requires map[string][][2]string
 	bindings map[string]string
 	toolIDs  map[string]bool
 	// useSkill maps a use_skill version to its input schema.
 	useSkill map[string]string
+	// catalog holds the platform catalog versions a tenant version may derive from.
+	catalog map[string]bool
 }
 
 func (tables *skillTables) clone() *skillTables {
 	copied := &skillTables{
 		profiles: map[string]string{}, versions: map[string][]any{}, tools: map[string][]string{},
-		examples: map[string][]string{}, bindings: map[string]string{}, toolIDs: tables.toolIDs, useSkill: tables.useSkill,
+		examples: map[string][]string{}, requires: map[string][][2]string{}, bindings: map[string]string{},
+		toolIDs: tables.toolIDs, useSkill: tables.useSkill, catalog: tables.catalog,
 	}
 	for k, v := range tables.profiles {
 		copied.profiles[k] = v
@@ -43,6 +47,9 @@ func (tables *skillTables) clone() *skillTables {
 	}
 	for k, v := range tables.examples {
 		copied.examples[k] = slices.Clone(v)
+	}
+	for k, v := range tables.requires {
+		copied.requires[k] = slices.Clone(v)
 	}
 	for k, v := range tables.bindings {
 		copied.bindings[k] = v
@@ -76,7 +83,7 @@ func (fake *skillTableFake) Query(_ context.Context, name string, args ...any) (
 	key := func(n int) string { return fmt.Sprint(args[:n]...) }
 	versionRow := func(versionKey string) []any {
 		row := tables.versions[versionKey]
-		return []any{row[1], row[2], tables.profiles[fmt.Sprint(row[0], row[1])], row[3], row[4], row[5], row[6], row[7]}
+		return []any{row[1], row[2], tables.profiles[fmt.Sprint(row[0], row[1])], row[3], row[4], row[5], row[6], row[7], row[8], row[9]}
 	}
 	switch name {
 	case qSkillProfileEnsure:
@@ -115,6 +122,28 @@ func (fake *skillTableFake) Query(_ context.Context, name string, args ...any) (
 		if len(tables.examples[key(3)]) < args[3].(int) {
 			tables.examples[key(3)] = append(tables.examples[key(3)], args[4].(string))
 		}
+	case qSkillOriginGet:
+		if tables.catalog[key(2)] {
+			return rows([]string{args[1].(string)}), nil
+		}
+	case qSkillRequireList:
+		result := &keelmodel.QueryResult{}
+		for _, required := range tables.requires[key(3)] {
+			result.Rows = append(result.Rows, []any{required[0], required[1]})
+		}
+		return result, nil
+	case qSkillRequireInsert:
+		tables.requires[key(3)] = append(tables.requires[key(3)], [2]string{args[3].(string), args[4].(string)})
+	case qSkillBoundRequires:
+		result := &keelmodel.QueryResult{}
+		for _, skillID := range []string{"audit", "rewrite"} {
+			if version, ok := tables.bindings[fmt.Sprint(args[0], args[1], args[2], skillID)]; ok {
+				for _, required := range tables.requires[fmt.Sprint(args[0], skillID, version)] {
+					result.Rows = append(result.Rows, []any{skillID, required[0], required[1]})
+				}
+			}
+		}
+		return result, nil
 	case qSkillBindingGet:
 		if version, ok := tables.bindings[key(4)]; ok {
 			return rows([]string{version}), nil
@@ -186,6 +215,7 @@ func newRegistry() (*skillTableFake, *TableSkillRegistry) {
 	tables := (&skillTables{
 		toolIDs:  map[string]bool{"crawl": true, "propose_edit": true},
 		useSkill: map[string]string{open.Version: string(open.InputSchema), closed.Version: string(closed.InputSchema)},
+		catalog:  map[string]bool{fmt.Sprint("audit", "1"): true},
 	}).clone()
 	fake := &skillTableFake{committed: tables}
 	return fake, &TableSkillRegistry{DB: skillTableDB{fake: fake}}
@@ -356,5 +386,89 @@ func TestUseSkillServesOnlyTheCallersReleaseSkills(t *testing.T) {
 	}
 	if index := Index([]domain.SkillDefinition{auditSkill("1")}); !strings.Contains(index, "- audit: A page needs a technical audit.\n") {
 		t.Fatalf("index = %q", index)
+	}
+}
+
+func rewriteSkill(requires ...domain.SkillReference) domain.SkillDefinition {
+	skill := auditSkill("1")
+	skill.SkillID, skill.Tools, skill.EvalSet, skill.Requires = "rewrite", []string{"propose_edit"}, nil, requires
+	return skill
+}
+
+func TestRegisterRecordsRequirementsOnlyOnRegisteredVersions(t *testing.T) {
+	_, registry := newRegistry()
+	ctx := context.Background()
+	audit := domain.SkillReference{SkillID: "audit", Version: "1"}
+	if err := registry.Register(ctx, 1, rewriteSkill(audit)); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an unregistered requirement: want ErrNotFound, got %v", err)
+	}
+	for name, requires := range map[string][]domain.SkillReference{
+		"itself":    {{SkillID: "rewrite", Version: "1"}},
+		"empty":     {{SkillID: "audit"}},
+		"duplicate": {audit, {SkillID: "audit", Version: "2"}},
+	} {
+		if err := registry.Register(ctx, 1, rewriteSkill(requires...)); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: want ErrValidation, got %v", name, err)
+		}
+	}
+	if err := registry.Register(ctx, 1, auditSkill("1")); err != nil {
+		t.Fatalf("Register audit: %v", err)
+	}
+	if err := registry.Register(ctx, 1, rewriteSkill(domain.SkillReference{SkillID: " audit ", Version: "1"})); err != nil {
+		t.Fatalf("Register rewrite: %v", err)
+	}
+	if err := registry.Register(ctx, 1, rewriteSkill()); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("dropping a requirement: want ErrConflict, got %v", err)
+	}
+	stored, err := registry.Get(ctx, 1, "rewrite", "1")
+	if err != nil || !slices.Equal(stored.Requires, []domain.SkillReference{audit}) {
+		t.Fatalf("stored = %+v, %v", stored, err)
+	}
+}
+
+func TestWriteReleaseBindsEveryRequiredSkillAtItsVersion(t *testing.T) {
+	fake, registry := newRegistry()
+	ctx := context.Background()
+	audit := domain.SkillReference{SkillID: "audit", Version: "1"}
+	for _, skill := range []domain.SkillDefinition{auditSkill("1"), auditSkill("2"), rewriteSkill(audit)} {
+		if err := registry.Register(ctx, 1, skill); err != nil {
+			t.Fatalf("Register %s@%s: %v", skill.SkillID, skill.Version, err)
+		}
+	}
+	full := []string{domain.UseSkillToolID, "crawl", "propose_edit"}
+	rewrite := domain.SkillReference{SkillID: "rewrite", Version: "1"}
+	if err := registry.WriteRelease(ctx, fake, 1, release(full, rewrite)); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a missing requirement: want ErrValidation, got %v", err)
+	}
+	if err := registry.WriteRelease(ctx, fake, 1, release(full, rewrite, domain.SkillReference{SkillID: "audit", Version: "2"})); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a requirement at another version: want ErrValidation, got %v", err)
+	}
+	if err := registry.WriteRelease(ctx, fake, 1, release(full, rewrite, audit)); err != nil {
+		t.Fatalf("WriteRelease: %v", err)
+	}
+	bound, err := registry.List(ctx, 1, "wingmate", "7")
+	if err != nil || len(bound) != 2 || !slices.Equal(bound[1].Requires, []domain.SkillReference{audit}) {
+		t.Fatalf("List = %+v, %v", bound, err)
+	}
+}
+
+func TestRegisterNamesItsCatalogOrigin(t *testing.T) {
+	_, registry := newRegistry()
+	ctx := context.Background()
+	derived := auditSkill("1")
+	derived.DerivedFrom = &domain.SkillReference{SkillID: "audit", Version: "9"}
+	if err := registry.Register(ctx, 1, derived); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an unregistered origin: want ErrNotFound, got %v", err)
+	}
+	derived.DerivedFrom.Version = "1"
+	if err := registry.Register(ctx, 1, derived); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := registry.Register(ctx, 1, auditSkill("1")); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("dropping the origin: want ErrConflict, got %v", err)
+	}
+	stored, err := registry.Get(ctx, 1, "audit", "1")
+	if err != nil || stored.DerivedFrom == nil || *stored.DerivedFrom != *derived.DerivedFrom {
+		t.Fatalf("stored = %+v, %v", stored, err)
 	}
 }

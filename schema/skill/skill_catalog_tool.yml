@@ -1,0 +1,16 @@
+table: skill_catalog_tool
+comment: Tool ids a platform procedure uses; each tenant copy must name tools that tenant registered
+columns:
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: tool_id
+    type: VARCHAR(80)
+primary_key: [skill_id, skill_version, tool_id]
+foreign_keys:
+  - name: skill_catalog_version_tools
+    columns: [skill_id, skill_version]
+    references:
+      table: skill_catalog_version
+      columns: [skill_id, skill_version]

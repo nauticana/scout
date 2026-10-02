@@ -27,13 +27,17 @@ const (
 	qSkillToolInsert     = "scout_skill_tool_insert"
 	qSkillExampleList    = "scout_skill_example_list"
 	qSkillExampleInsert  = "scout_skill_example_insert"
+	qSkillRequireList    = "scout_skill_require_list"
+	qSkillRequireInsert  = "scout_skill_require_insert"
+	qSkillOriginGet      = "scout_skill_origin_get"
 	qSkillBoundList      = "scout_skill_bound_list"
 	qSkillBoundTools     = "scout_skill_bound_tools"
 	qSkillBoundExamples  = "scout_skill_bound_examples"
+	qSkillBoundRequires  = "scout_skill_bound_requires"
 	qSkillBindingGet     = "scout_skill_binding_get"
 	qSkillBindingInsert  = "scout_skill_binding_insert"
 
-	skillVersionColumns = `v.skill_id, v.skill_version, p.display_name, v.summary, v.instructions, v.input_schema, v.golden_set_id, v.golden_set_version`
+	skillVersionColumns = `v.skill_id, v.skill_version, p.display_name, v.summary, v.instructions, v.input_schema, v.golden_set_id, v.golden_set_version, v.origin_skill_id, v.origin_skill_version`
 
 	maxSkillIdentifier  = 80
 	maxSkillDisplayName = 200
@@ -64,8 +68,9 @@ SELECT ` + skillVersionColumns + `
   JOIN skill_profile p ON p.tenant_id = v.tenant_id AND p.skill_id = v.skill_id
  WHERE v.tenant_id = ? AND v.skill_id = ? AND v.skill_version = ?`,
 	qSkillVersionInsert: `
-INSERT INTO skill_version (tenant_id, skill_id, skill_version, summary, instructions, input_schema, golden_set_id, golden_set_version)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO skill_version (tenant_id, skill_id, skill_version, summary, instructions, input_schema, golden_set_id, golden_set_version,
+                           origin_skill_id, origin_skill_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, skill_id, skill_version) DO NOTHING`,
 	qSkillToolList: `
 SELECT tool_id
@@ -85,6 +90,19 @@ SELECT request
 INSERT INTO skill_example (tenant_id, skill_id, skill_version, example_no, request)
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, skill_id, skill_version, example_no) DO NOTHING`,
+	qSkillRequireList: `
+SELECT required_skill_id, required_skill_version
+  FROM skill_requirement
+ WHERE tenant_id = ? AND skill_id = ? AND skill_version = ?
+ ORDER BY required_skill_id`,
+	qSkillRequireInsert: `
+INSERT INTO skill_requirement (tenant_id, skill_id, skill_version, required_skill_id, required_skill_version)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, skill_id, skill_version, required_skill_id) DO NOTHING`,
+	qSkillOriginGet: `
+SELECT skill_version
+  FROM skill_catalog_version
+ WHERE skill_id = ? AND skill_version = ?`,
 	qSkillBoundList: `
 SELECT ` + skillVersionColumns + `
   FROM agent_skill_binding b
@@ -104,6 +122,12 @@ SELECT e.skill_id, e.request
   JOIN skill_example e ON e.tenant_id = b.tenant_id AND e.skill_id = b.skill_id AND e.skill_version = b.skill_version
  WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
  ORDER BY e.skill_id, e.example_no`,
+	qSkillBoundRequires: `
+SELECT r.skill_id, r.required_skill_id, r.required_skill_version
+  FROM agent_skill_binding b
+  JOIN skill_requirement r ON r.tenant_id = b.tenant_id AND r.skill_id = b.skill_id AND r.skill_version = b.skill_version
+ WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
+ ORDER BY r.skill_id, r.required_skill_id`,
 	qSkillBindingGet: `
 SELECT skill_version
   FROM agent_skill_binding
@@ -117,8 +141,8 @@ ON CONFLICT (tenant_id, agent_id, agent_version, skill_id) DO NOTHING`,
 const skillRegistryCatalogID = "scout.skill.registry"
 
 // TableSkillRegistry is the SkillRegistry over skill_profile, skill_version, skill_tool,
-// skill_example, and agent_skill_binding, and the release writer that binds a published
-// definition's skills. Versions and bindings are immutable: repeating identical content
+// skill_example, skill_requirement, and agent_skill_binding, and the release writer that
+// binds a published definition's skills. Versions and bindings are immutable: repeating identical content
 // is a no-op, different content under the same key is ErrConflict.
 type TableSkillRegistry struct {
 	DB port.DatabaseRepository
@@ -146,7 +170,10 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 	if err := registry.init(ctx); err != nil {
 		return err
 	}
-	skill, err := normalize(tenantID, skill)
+	if tenantID <= 0 {
+		return fmt.Errorf("%w: tenant is required", domain.ErrValidation)
+	}
+	skill, err := normalize(skill)
 	if err != nil {
 		return err
 	}
@@ -202,13 +229,34 @@ func insertVersion(ctx context.Context, tx port.QueryService, tenantID int64, sk
 	if skill.EvalSet != nil {
 		goldenSetID, goldenSetVersion = skill.EvalSet.GoldenSetID, skill.EvalSet.SetVersion
 	}
-	var inputSchema any
-	if len(skill.InputSchema) > 0 {
-		inputSchema = string(skill.InputSchema)
+	var originID, originVersion any
+	if origin := skill.DerivedFrom; origin != nil {
+		found, err := tx.Query(ctx, qSkillOriginGet, origin.SkillID, origin.Version)
+		if err != nil {
+			return fmt.Errorf("read catalog skill %s@%s: %w", origin.SkillID, origin.Version, err)
+		}
+		if len(found.Rows) == 0 {
+			return fmt.Errorf("%w: skill %s@%s derives from unregistered catalog skill %s@%s", domain.ErrNotFound,
+				skill.SkillID, skill.Version, origin.SkillID, origin.Version)
+		}
+		originID, originVersion = origin.SkillID, origin.Version
 	}
 	if _, err := tx.Query(ctx, qSkillVersionInsert, tenantID, skill.SkillID, skill.Version, skill.Summary, skill.Procedure,
-		inputSchema, goldenSetID, goldenSetVersion); err != nil {
+		inputSchemaValue(skill.InputSchema), goldenSetID, goldenSetVersion, originID, originVersion); err != nil {
 		return fmt.Errorf("insert skill version %s@%s: %w", skill.SkillID, skill.Version, err)
+	}
+	for _, required := range skill.Requires {
+		found, err := tx.Query(ctx, qSkillVersionGet, tenantID, required.SkillID, required.Version)
+		if err != nil {
+			return fmt.Errorf("read required skill %s@%s: %w", required.SkillID, required.Version, err)
+		}
+		if len(found.Rows) == 0 {
+			return fmt.Errorf("%w: skill %s@%s requires unregistered skill %s@%s", domain.ErrNotFound,
+				skill.SkillID, skill.Version, required.SkillID, required.Version)
+		}
+		if _, err = tx.Query(ctx, qSkillRequireInsert, tenantID, skill.SkillID, skill.Version, required.SkillID, required.Version); err != nil {
+			return fmt.Errorf("insert requirement %s of skill %s@%s: %w", required.SkillID, skill.SkillID, skill.Version, err)
+		}
 	}
 	for _, toolID := range skill.Tools {
 		profile, err := tx.Query(ctx, qSkillToolProfileGet, tenantID, toolID)
@@ -267,9 +315,16 @@ func (registry *TableSkillRegistry) List(ctx context.Context, tenantID int64, ag
 		index[skill.SkillID] = len(skills)
 		skills = append(skills, skill)
 	}
-	for query, assign := range map[string]func(*domain.SkillDefinition, string){
-		qSkillBoundTools:    func(skill *domain.SkillDefinition, toolID string) { skill.Tools = append(skill.Tools, toolID) },
-		qSkillBoundExamples: func(skill *domain.SkillDefinition, request string) { skill.Examples = append(skill.Examples, request) },
+	for query, assign := range map[string]func(*domain.SkillDefinition, []any){
+		qSkillBoundTools: func(skill *domain.SkillDefinition, row []any) {
+			skill.Tools = append(skill.Tools, common.AsString(row[1]))
+		},
+		qSkillBoundExamples: func(skill *domain.SkillDefinition, row []any) {
+			skill.Examples = append(skill.Examples, common.AsString(row[1]))
+		},
+		qSkillBoundRequires: func(skill *domain.SkillDefinition, row []any) {
+			skill.Requires = append(skill.Requires, domain.SkillReference{SkillID: common.AsString(row[1]), Version: common.AsString(row[2])})
+		},
 	} {
 		rows, err := registry.qs.Query(ctx, query, tenantID, agentID, agentVersion)
 		if err != nil {
@@ -277,7 +332,7 @@ func (registry *TableSkillRegistry) List(ctx context.Context, tenantID int64, ag
 		}
 		for _, row := range rows.Rows {
 			if at, ok := index[common.AsString(row[0])]; ok {
-				assign(&skills[at], common.AsString(row[1]))
+				assign(&skills[at], row)
 			}
 		}
 	}
@@ -285,8 +340,9 @@ func (registry *TableSkillRegistry) List(ctx context.Context, tenantID int64, ag
 }
 
 // WriteRelease binds the skills a definition names inside the caller's publish
-// transaction. Every tool a bound skill uses must be bound to the same release,
-// and so must use_skill, or the agent could load a procedure it cannot follow.
+// transaction. Every tool and required skill a bound skill uses must be bound to
+// the same release, and so must use_skill, or the agent could load a procedure it
+// cannot follow.
 func (registry *TableSkillRegistry) WriteRelease(ctx context.Context, tx port.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
 	if len(definition.Skills) == 0 {
 		return nil
@@ -308,6 +364,10 @@ func (registry *TableSkillRegistry) WriteRelease(ctx context.Context, tx port.Tx
 	if err != nil {
 		return err
 	}
+	boundSkills := make(map[string]string, len(definition.Skills))
+	for _, reference := range definition.Skills {
+		boundSkills[reference.SkillID] = reference.Version
+	}
 	for _, reference := range definition.Skills {
 		if listed != nil && !slices.Contains(listed, reference.SkillID) {
 			return fmt.Errorf("%w: %s@%s does not enumerate skill %s, which %s@%s binds", domain.ErrValidation,
@@ -324,6 +384,12 @@ func (registry *TableSkillRegistry) WriteRelease(ctx context.Context, tx port.Tx
 			if _, ok := boundTools[toolID]; !ok {
 				return fmt.Errorf("%w: skill %s@%s uses tool %q, which %s@%s does not bind", domain.ErrValidation,
 					reference.SkillID, reference.Version, toolID, definition.AgentID, definition.Version)
+			}
+		}
+		for _, required := range skill.Requires {
+			if boundSkills[required.SkillID] != required.Version {
+				return fmt.Errorf("%w: skill %s@%s requires skill %s@%s, which %s@%s does not bind", domain.ErrValidation,
+					reference.SkillID, reference.Version, required.SkillID, required.Version, definition.AgentID, definition.Version)
 			}
 		}
 		if err = bindSkill(ctx, qs, tenantID, definition.AgentID, definition.Version, reference); err != nil {
@@ -381,7 +447,7 @@ func readVersion(ctx context.Context, qs port.QueryService, tenantID int64, skil
 	return skill, err == nil, err
 }
 
-// completeVersion adds the tool and example rows to a scanned version row.
+// completeVersion adds the tool, example, and requirement rows to a scanned version row.
 func completeVersion(ctx context.Context, qs port.QueryService, tenantID int64, skill domain.SkillDefinition) (domain.SkillDefinition, error) {
 	tools, err := qs.Query(ctx, qSkillToolList, tenantID, skill.SkillID, skill.Version)
 	if err != nil {
@@ -397,6 +463,13 @@ func completeVersion(ctx context.Context, qs port.QueryService, tenantID int64, 
 	for _, row := range examples.Rows {
 		skill.Examples = append(skill.Examples, common.AsString(row[0]))
 	}
+	requires, err := qs.Query(ctx, qSkillRequireList, tenantID, skill.SkillID, skill.Version)
+	if err != nil {
+		return skill, fmt.Errorf("list requirements of skill %s@%s: %w", skill.SkillID, skill.Version, err)
+	}
+	for _, row := range requires.Rows {
+		skill.Requires = append(skill.Requires, domain.SkillReference{SkillID: common.AsString(row[0]), Version: common.AsString(row[1])})
+	}
 	return skill, nil
 }
 
@@ -411,12 +484,22 @@ func scanSkillVersion(row []any) domain.SkillDefinition {
 	if goldenSetID := common.AsString(row[6]); goldenSetID != "" {
 		skill.EvalSet = &domain.GoldenSetReference{GoldenSetID: goldenSetID, SetVersion: common.AsInt64(row[7])}
 	}
+	if originID := common.AsString(row[8]); originID != "" {
+		skill.DerivedFrom = &domain.SkillReference{SkillID: originID, Version: common.AsString(row[9])}
+	}
 	return skill
+}
+
+func inputSchemaValue(schema []byte) any {
+	if len(schema) == 0 {
+		return nil
+	}
+	return string(schema)
 }
 
 // normalize validates the definition and canonicalizes it, so equal skills
 // compare equal however they were formatted.
-func normalize(tenantID int64, skill domain.SkillDefinition) (domain.SkillDefinition, error) {
+func normalize(skill domain.SkillDefinition) (domain.SkillDefinition, error) {
 	skill.SkillID, skill.Version = strings.TrimSpace(skill.SkillID), strings.TrimSpace(skill.Version)
 	skill.DisplayName, skill.Summary = strings.TrimSpace(skill.DisplayName), strings.TrimSpace(skill.Summary)
 	skill.Procedure = strings.TrimSpace(skill.Procedure)
@@ -424,8 +507,8 @@ func normalize(tenantID int64, skill domain.SkillDefinition) (domain.SkillDefini
 		skill.DisplayName = skill.SkillID
 	}
 	switch {
-	case tenantID <= 0 || skill.SkillID == "" || skill.Version == "" || skill.Summary == "" || skill.Procedure == "":
-		return skill, fmt.Errorf("%w: tenant, skill id, version, summary, and procedure are required", domain.ErrValidation)
+	case skill.SkillID == "" || skill.Version == "" || skill.Summary == "" || skill.Procedure == "":
+		return skill, fmt.Errorf("%w: skill id, version, summary, and procedure are required", domain.ErrValidation)
 	case len([]rune(skill.SkillID)) > maxSkillIdentifier || len([]rune(skill.Version)) > maxSkillIdentifier:
 		return skill, fmt.Errorf("%w: skill id and version are limited to %d characters", domain.ErrValidation, maxSkillIdentifier)
 	case len([]rune(skill.DisplayName)) > maxSkillDisplayName:
@@ -453,6 +536,28 @@ func normalize(tenantID int64, skill domain.SkillDefinition) (domain.SkillDefini
 		examples = append(examples, request)
 	}
 	skill.Examples = examples
+	requires := make([]domain.SkillReference, 0, len(skill.Requires))
+	for _, required := range skill.Requires {
+		required = domain.SkillReference{SkillID: strings.TrimSpace(required.SkillID), Version: strings.TrimSpace(required.Version)}
+		if required.SkillID == "" || required.Version == "" || required.SkillID == skill.SkillID {
+			return skill, fmt.Errorf("%w: skill %s requires an empty skill reference or itself", domain.ErrValidation, skill.SkillID)
+		}
+		requires = append(requires, required)
+	}
+	slices.SortFunc(requires, func(a, b domain.SkillReference) int { return strings.Compare(a.SkillID, b.SkillID) })
+	for i := 1; i < len(requires); i++ {
+		if requires[i].SkillID == requires[i-1].SkillID {
+			return skill, fmt.Errorf("%w: skill %s requires skill %s more than once", domain.ErrValidation, skill.SkillID, requires[i].SkillID)
+		}
+	}
+	skill.Requires = requires
+	if origin := skill.DerivedFrom; origin != nil {
+		trimmed := domain.SkillReference{SkillID: strings.TrimSpace(origin.SkillID), Version: strings.TrimSpace(origin.Version)}
+		if trimmed.SkillID == "" || trimmed.Version == "" {
+			return skill, fmt.Errorf("%w: skill %s derives from an empty catalog reference", domain.ErrValidation, skill.SkillID)
+		}
+		skill.DerivedFrom = &trimmed
+	}
 	if len(skill.InputSchema) > 0 {
 		if _, err := jsonschema.Compile(skill.InputSchema); err != nil {
 			return skill, fmt.Errorf("%w: input schema of skill %s@%s: %w", domain.ErrValidation, skill.SkillID, skill.Version, err)
@@ -469,7 +574,15 @@ func normalize(tenantID int64, skill domain.SkillDefinition) (domain.SkillDefini
 func sameSkill(stored, offered domain.SkillDefinition) bool {
 	return stored.DisplayName == offered.DisplayName && stored.Summary == offered.Summary && stored.Procedure == offered.Procedure &&
 		bytes.Equal(stored.InputSchema, offered.InputSchema) && slices.Equal(stored.Tools, offered.Tools) &&
-		slices.Equal(stored.Examples, offered.Examples) && sameEvalSet(stored.EvalSet, offered.EvalSet)
+		slices.Equal(stored.Examples, offered.Examples) && slices.Equal(stored.Requires, offered.Requires) &&
+		sameEvalSet(stored.EvalSet, offered.EvalSet) && sameReference(stored.DerivedFrom, offered.DerivedFrom)
+}
+
+func sameReference(stored, offered *domain.SkillReference) bool {
+	if stored == nil || offered == nil {
+		return stored == offered
+	}
+	return *stored == *offered
 }
 
 func sameEvalSet(stored, offered *domain.GoldenSetReference) bool {

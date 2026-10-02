@@ -1,0 +1,24 @@
+table: skill_catalog_version
+comment: Immutable platform procedure a tenant skill version may derive from
+columns:
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: summary
+    type: VARCHAR(400)
+  - name: instructions
+    type: TEXT
+  - name: input_schema
+    type: TEXT
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [skill_id, skill_version]
+foreign_keys:
+  - name: skill_catalog_versions
+    columns: [skill_id]
+    references:
+      table: skill_catalog_profile
+      columns: [skill_id]

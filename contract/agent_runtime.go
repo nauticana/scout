@@ -69,10 +69,15 @@ type AgentRuntimeResolver interface {
 	Resolve(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (AgentRuntime, error)
 }
 
-// AgentRunRecorder records one successful execution against the exact
-// immutable release that ran.
+// AgentRunRecorder records one settled execution, successful or not, against
+// the exact immutable release that ran.
 type AgentRunRecorder interface {
-	Record(ctx context.Context, tenantID int64, release domain.AgentReleaseReference, taskKind string) error
+	Record(ctx context.Context, tenantID int64, run domain.AgentRun) error
+}
+
+// AgentRunQuery lists a tenant's settled runs, newest first.
+type AgentRunQuery interface {
+	Runs(ctx context.Context, tenantID int64, filter domain.AgentRunFilter) ([]domain.AgentRun, error)
 }
 
 // ModelPricer prices usage for one model reference, returning minor units in

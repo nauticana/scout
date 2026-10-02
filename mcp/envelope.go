@@ -60,7 +60,9 @@ func (e Envelopes) WrapWithPagination(data any, limit, offset, total int, hasMor
 func (e Envelopes) Result(result domain.MCPToolResult) *mcpgo.CallToolResult {
 	wrapped := e.Wrap(result.Data, result.Meta)
 	for _, link := range result.Evidence {
-		wrapped.Content = append(wrapped.Content, mcpgo.NewResourceLink(link.URI, link.Name, link.Description, link.MIMEType))
+		projected := mcpgo.NewResourceLink(link.URI, link.Name, link.Description, link.MIMEType)
+		projected.Title = link.Title
+		wrapped.Content = append(wrapped.Content, projected)
 	}
 	if task := result.Task; task != nil && task.ResourceURI != "" {
 		wrapped.Content = append(wrapped.Content, mcpgo.NewResourceLink(task.ResourceURI, task.ID, "task status: "+task.Status, "application/json"))

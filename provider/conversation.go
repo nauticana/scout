@@ -161,15 +161,6 @@ func checkSearchBound(provider string, search *domain.SearchGrounding) error {
 	return fmt.Errorf("%w: %s adapter cannot bound grounding searches", domain.ErrCapabilityUnsupported, provider)
 }
 
-// approximateLocation refuses a location given only as coordinates to a vendor
-// that locates searches by place name alone.
-func approximateLocation(provider string, location *domain.SearchLocation) error {
-	if location == nil || location.City != "" || location.Region != "" || location.Country != "" || location.Timezone != "" {
-		return nil
-	}
-	return fmt.Errorf("%w: %s adapter locates searches by city, region, country or timezone, not coordinates", domain.ErrCapabilityUnsupported, provider)
-}
-
 var hostName = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // urlHost is the lowercased host of a link, empty when it has none.

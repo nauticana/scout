@@ -423,7 +423,7 @@ type TurnLedger struct {
 	Currency string
 	// UsageCategory labels the usage event written per settled turn.
 	UsageCategory string
-	// Activity records last-run attribution after a completed turn; nil skips.
+	// Activity records each settled turn as an agent run; nil skips.
 	Activity contract.AgentRunRecorder
 	// Metrics records turn latency/usage dimensions; nil skips.
 	Metrics BaseRecorder
@@ -915,12 +915,7 @@ func (l *TurnLedger) Complete(ctx context.Context, execution TurnExecution, resu
 	if err = l.finishSuccessful(ctx, state, execution.Reservation); err != nil {
 		return err
 	}
-	if l.Activity != nil {
-		release := domain.AgentReleaseReference{AgentID: state.AgentID, Version: state.AgentVersion, Digest: state.ReleaseDigest}
-		if err := l.Activity.Record(context.WithoutCancel(ctx), state.TenantID, release, state.TaskKind); err != nil {
-			log.Printf("record agent run %s for tenant %d: %v", state.TaskKind, state.TenantID, err)
-		}
-	}
+	l.recordRun(ctx, state, domain.RunCompleted)
 	l.Metrics.RecordTurn(ctx, state.TaskKind, "completed", execution.Model, state.AgentVersion, turnLatency(state), usage)
 	return nil
 }
@@ -951,6 +946,7 @@ func (l *TurnLedger) Fail(ctx context.Context, execution TurnExecution, cause er
 	if err = l.finishFailed(ctx, state, execution.Reservation.ReservationID); err != nil {
 		return errors.Join(cause, err)
 	}
+	l.recordRun(ctx, state, domain.RunFailed)
 	l.Metrics.RecordTurn(ctx, state.TaskKind, "failed", execution.Model, state.AgentVersion, turnLatency(state), domain.Usage{})
 	return cause
 }
@@ -1008,6 +1004,7 @@ func (l *TurnLedger) FailWithUsage(ctx context.Context, execution TurnExecution,
 	if err = l.finishBilledFailure(ctx, state, execution.Reservation.ReservationID); err != nil {
 		return errors.Join(cause, err)
 	}
+	l.recordRun(ctx, state, domain.RunFailed)
 	l.Metrics.RecordTurn(ctx, state.TaskKind, "failed", execution.Model, state.AgentVersion, turnLatency(state), usage)
 	return cause
 }
@@ -1073,7 +1070,23 @@ func (l *TurnLedger) FailUnreserved(ctx context.Context, state TurnState, cause 
 	if len(result.Rows) == 0 {
 		return ErrTurnFenced
 	}
+	l.recordRun(ctx, state, domain.RunFailed)
 	return cause
+}
+
+// recordRun attributes a settled turn to its release. It is best-effort: the
+// turn is already final, and a request id is recorded once however often it runs.
+func (l *TurnLedger) recordRun(ctx context.Context, state TurnState, status domain.RunStatus) {
+	if l.Activity == nil {
+		return
+	}
+	run := domain.AgentRun{
+		Release:  domain.AgentReleaseReference{AgentID: state.AgentID, Version: state.AgentVersion, Digest: state.ReleaseDigest},
+		TaskKind: state.TaskKind, RequestID: state.RequestID, Status: status,
+	}
+	if err := l.Activity.Record(context.WithoutCancel(ctx), state.TenantID, run); err != nil {
+		log.Printf("record %s agent run %s for tenant %d: %v", status, state.TaskKind, state.TenantID, err)
+	}
 }
 
 // InsertUsageEvent writes the settled usage event, once per (turn, category);

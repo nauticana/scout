@@ -94,6 +94,7 @@ const (
 	DecisionCategoryPublication = "publication"
 	DecisionCategoryCredential  = "credential"
 	DecisionCategoryStateChange = "state_change"
+	DecisionCategoryRestriction = "restriction"
 )
 
 // DecisionQuery selects records for a timeline or an explain view. A positive

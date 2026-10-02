@@ -5,10 +5,13 @@ destination, or the graph before policy approval.
 
 ## Layers
 
-`LayeredEnforcer` composes two compiled rule sets. The **baseline** is release-independent operator
-policy compiled once at construction. The **release** layer is the tenant's pinned
-`domain.GuardrailConfig`, compiled per `RulesDigest`. Both layers run at every stage, so a release
-rule can only add hits — it can never disable, weaken, or shadow a baseline rule of the same id.
+`LayeredEnforcer` composes compiled rule sets. The **baseline** is release-independent operator
+policy compiled once at construction. The **platform** and **tenant** layers are the standing
+restrictions `EnforcerConfig.Restrictions` reads at each inspection and compiles once per layer
+digest; see [restriction layers](governance.md#restriction-layers). The **release** layer is the
+tenant's pinned `domain.GuardrailConfig`, compiled per `RulesDigest`. Every layer runs at every
+stage, so a later layer can only add hits — it can never disable, weaken, or shadow an earlier
+rule of the same id.
 
 Rules are a typed envelope (`domain.GuardrailRuleSet{SchemaVersion, Rules}`). `RuleSetCompiler`
 validates at publication (`contract.GuardrailRuleCompiler.Validate`) and compiles once per digest at

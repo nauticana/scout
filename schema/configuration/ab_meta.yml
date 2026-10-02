@@ -3,3 +3,7 @@ tables:
   - config_scope_binding
   - effective_agent_release
   - audit_event
+  - platform_restriction_layer
+  - platform_current_restriction
+  - tenant_restriction_layer
+  - tenant_current_restriction

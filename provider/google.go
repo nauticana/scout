@@ -84,8 +84,8 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 		}
 		config.Tools = append(config.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
 		if location := request.Search.Location; location != nil {
-			if location.Latitude == nil {
-				return nil, nil, fmt.Errorf("%w: %s adapter locates searches by coordinates only", domain.ErrCapabilityUnsupported, GoogleProviderID)
+			if err := searchLocationSupport(GoogleProviderID, *location); err != nil {
+				return nil, nil, err
 			}
 			config.ToolConfig = &genai.ToolConfig{RetrievalConfig: &genai.RetrievalConfig{
 				LatLng: &genai.LatLng{Latitude: location.Latitude, Longitude: location.Longitude},

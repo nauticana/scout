@@ -1,0 +1,31 @@
+table: skill_requirement
+comment: Another skill version a procedure relies on; a release binding the skill must bind it at that version
+columns:
+  - name: tenant_id
+    type: BIGINT
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: required_skill_id
+    type: VARCHAR(80)
+  - name: required_skill_version
+    type: VARCHAR(80)
+primary_key: [tenant_id, skill_id, skill_version, required_skill_id]
+foreign_keys:
+  - name: skill_version_requirements
+    columns: [tenant_id, skill_id, skill_version]
+    references:
+      table: skill_version
+      columns: [tenant_id, skill_id, skill_version]
+  - name: required_skill_dependents
+    columns: [tenant_id, required_skill_id, required_skill_version]
+    references:
+      table: skill_version
+      columns: [tenant_id, skill_id, skill_version]
+indexes:
+  - name: skill_requirement_required_ix
+    columns: [tenant_id, required_skill_id, required_skill_version]
+checks:
+  - name: skill_requirement_self_ck
+    expression: required_skill_id <> skill_id

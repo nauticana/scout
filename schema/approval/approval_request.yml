@@ -57,11 +57,20 @@ columns:
   - name: resolved_at
     type: TIMESTAMP
     nullable: true
+  - name: notification_event_id
+    type: BIGINT
+    nullable: true
+    comment: The keel outbox event that notifies the first approver; null when notifications go another way
 primary_key: [id]
 sequence:
   name: approval_request_seq
   column: id
 foreign_keys:
+  - name: notified_approval_requests
+    columns: [notification_event_id]
+    references:
+      table: outbox_event
+      columns: [id]
   - name: approval_requests
     columns: [tenant_id]
     references:

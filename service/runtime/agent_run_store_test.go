@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,33 +12,95 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-func TestAgentRunStoreRecordsVerifiedRelease(t *testing.T) {
+const runDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func failedRun() domain.AgentRun {
+	return domain.AgentRun{
+		Release:  domain.AgentReleaseReference{AgentID: "writer", Version: "3", Digest: runDigest},
+		TaskKind: " generate_blog ", RequestID: "req-1", Status: domain.RunFailed,
+	}
+}
+
+func TestAgentRunStoreRecordsEverySettledStatus(t *testing.T) {
 	query := &agentRunQueryFake{rows: map[string][][]any{qRecordAgentRun: {{int64(5)}}}}
 	store := &AgentRunStore{qs: query}
-	release := domain.AgentReleaseReference{
-		AgentID: "writer", Version: "3",
-		Digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-	}
-	if err := store.Record(context.Background(), 8, release, " generate_blog "); err != nil {
+	if err := store.Record(context.Background(), 8, failedRun()); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	args := query.args[qRecordAgentRun]
-	if len(args) != 8 || args[0] != int64(8) || args[3] != "generate_blog" || args[7] != release.Digest {
+	if len(args) != 11 || args[0] != int64(8) || args[3] != "generate_blog" || args[4] != "req-1" || args[5] != "failed" || args[10] != runDigest {
 		t.Fatalf("record args = %+v", args)
+	}
+	outside := failedRun()
+	outside.RequestID, outside.Release.Digest, outside.Status = "", "", domain.RunCompleted
+	if err := store.Record(context.Background(), 8, outside); err != nil {
+		t.Fatalf("Record outside a turn: %v", err)
+	}
+	if args = query.args[qRecordAgentRun]; args[4] != nil || args[9] != "" {
+		t.Fatalf("an execution outside a turn stores no request id and checks no digest: %+v", args)
+	}
+}
+
+func TestAgentRunStoreRecordsARequestOnce(t *testing.T) {
+	query := &agentRunQueryFake{rows: map[string][][]any{qAgentRunByRequest: {{"writer", "3", "generate_blog", "failed"}}}}
+	store := &AgentRunStore{qs: query}
+	if err := store.Record(context.Background(), 8, failedRun()); err != nil {
+		t.Fatalf("the same run again must be a no-op, got %v", err)
+	}
+	completed := failedRun()
+	completed.Status = domain.RunCompleted
+	if err := store.Record(context.Background(), 8, completed); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("another outcome for the request: want ErrConflict, got %v", err)
+	}
+	otherTask := failedRun()
+	otherTask.TaskKind = "summarize"
+	if err := store.Record(context.Background(), 8, otherTask); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("another task for the request: want ErrConflict, got %v", err)
 	}
 }
 
 func TestAgentRunStoreRejectsInvalidOrMismatchedRelease(t *testing.T) {
 	store := &AgentRunStore{qs: &agentRunQueryFake{rows: map[string][][]any{}}}
-	if err := store.Record(context.Background(), 0, domain.AgentReleaseReference{}, ""); !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("invalid error = %v", err)
+	for name, mutate := range map[string]func(*domain.AgentRun){
+		"no tenant release": func(run *domain.AgentRun) { run.Release = domain.AgentReleaseReference{} },
+		"short digest":      func(run *domain.AgentRun) { run.Release.Digest = "abc" },
+		"non-hex digest":    func(run *domain.AgentRun) { run.Release.Digest = strings.Repeat("z", 64) },
+		"live status":       func(run *domain.AgentRun) { run.Status = "running" },
+		"no task kind":      func(run *domain.AgentRun) { run.TaskKind = " " },
+	} {
+		run := failedRun()
+		mutate(&run)
+		if err := store.Record(context.Background(), 8, run); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: want ErrValidation, got %v", name, err)
+		}
 	}
-	release := domain.AgentReleaseReference{
-		AgentID: "writer", Version: "3",
-		Digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-	}
-	if err := store.Record(context.Background(), 8, release, "task"); !errors.Is(err, domain.ErrConflict) {
+	if err := store.Record(context.Background(), 8, failedRun()); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("mismatch error = %v", err)
+	}
+}
+
+func TestAgentRunStoreListsRunsNewestFirst(t *testing.T) {
+	completedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	query := &agentRunQueryFake{rows: map[string][][]any{
+		qAgentRuns: {{int64(9), "writer", "3", "generate_blog", "req-9", "cancelled", completedAt}},
+	}}
+	store := &AgentRunStore{qs: query}
+	runs, err := store.Runs(context.Background(), 8, domain.AgentRunFilter{AgentID: "writer", Status: domain.RunCancelled, Before: 10, Limit: 50})
+	if err != nil || len(runs) != 1 || runs[0].ID != 9 || runs[0].Status != domain.RunCancelled || runs[0].RequestID != "req-9" || !runs[0].CompletedAt.Equal(completedAt) {
+		t.Fatalf("Runs = %+v, %v", runs, err)
+	}
+	if args := query.args[qAgentRuns]; args[1] != "writer" || args[3] != "" || args[5] != "cancelled" || args[7] != int64(10) || args[9] != 50 {
+		t.Fatalf("runs args = %+v", args)
+	}
+	for name, filter := range map[string]domain.AgentRunFilter{
+		"no limit":      {},
+		"over the cap":  {Limit: MaxAgentRunPage + 1},
+		"negative from": {Limit: 1, Before: -1},
+		"non-terminal":  {Limit: 1, Status: "queued"},
+	} {
+		if _, err := store.Runs(context.Background(), 8, filter); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: want ErrValidation, got %v", name, err)
+		}
 	}
 }
 

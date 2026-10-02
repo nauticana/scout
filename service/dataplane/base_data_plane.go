@@ -20,6 +20,7 @@ import (
 	"github.com/nauticana/scout/service/isolation"
 	"github.com/nauticana/scout/service/modelgateway"
 	"github.com/nauticana/scout/service/observability"
+	"github.com/nauticana/scout/service/policy"
 	agentruntime "github.com/nauticana/scout/service/runtime"
 	"github.com/nauticana/scout/service/skill"
 	"github.com/nauticana/scout/service/toolgateway"
@@ -75,6 +76,8 @@ type BaseDataPlane struct {
 	Governor         contract.ExecutionGovernor
 	Idempotency      contract.StepIdempotencyStore
 	Audit            contract.AuditSink
+	Runs             contract.AgentRunRecorder
+	Restrictions     contract.RestrictionLayerReader
 	Guardrails       contract.GuardrailEnforcer
 	Estimator        contract.TurnBudgetEstimator
 	ReplyHub         *CacheReplyHub
@@ -87,15 +90,18 @@ type BaseDataPlane struct {
 	Credentials      contract.ToolCredentialProvider
 	Egress           contract.ToolEgressPolicy
 	ToolGateway      contract.GovernedToolGateway
-	Catalog          contract.ModelCandidateCatalog
-	Router           contract.ModelRouter
-	Models           contract.ModelGateway
-	Requests         contract.ToolLoopRequestBuilder
-	Journal          contract.LoopJournal
-	Evidence         contract.EvidenceValidator
-	Executors        contract.StepExecutorRegistry
-	TurnRuntime      contract.ConversationRuntime
-	TurnIngress      contract.ConversationIngress
+	// WrapToolGateway, when set, wraps the composed gateway the tool loop calls, such as
+	// charter.CapabilityGateway; the wrapper reaches the gateway it is given.
+	WrapToolGateway func(contract.GovernedToolGateway) (contract.GovernedToolGateway, error)
+	Catalog         contract.ModelCandidateCatalog
+	Router          contract.ModelRouter
+	Models          contract.ModelGateway
+	Requests        contract.ToolLoopRequestBuilder
+	Journal         contract.LoopJournal
+	Evidence        contract.EvidenceValidator
+	Executors       contract.StepExecutorRegistry
+	TurnRuntime     contract.ConversationRuntime
+	TurnIngress     contract.ConversationIngress
 
 	closers []io.Closer
 }
@@ -248,17 +254,21 @@ func (plane *BaseDataPlane) composeGovernance() error {
 	if plane.Audit == nil {
 		plane.Audit = &observability.TableAuditSink{DB: plane.DB, Evidence: plane.Objects}
 	}
+	if plane.Restrictions == nil {
+		plane.Restrictions = &policy.TableRestrictionLayers{DB: plane.DB}
+	}
 	if plane.Guardrails == nil {
 		compiler, err := guardrail.NewRuleSetCompiler(guardrail.CompilerConfig{})
 		if err != nil {
 			return err
 		}
 		plane.Guardrails, err = guardrail.NewLayeredEnforcer(guardrail.EnforcerConfig{
-			Baseline:  guardrail.DefaultBaseline(settings.GuardrailMaxInputBytes, settings.GuardrailMaxOutputBytes),
-			Compiler:  compiler,
-			Approvals: plane.Approvals,
-			Events:    &observability.TableSafetyEventSink{DB: plane.DB},
-			Audit:     plane.Audit,
+			Baseline:     guardrail.DefaultBaseline(settings.GuardrailMaxInputBytes, settings.GuardrailMaxOutputBytes),
+			Compiler:     compiler,
+			Approvals:    plane.Approvals,
+			Events:       &observability.TableSafetyEventSink{DB: plane.DB},
+			Audit:        plane.Audit,
+			Restrictions: plane.Restrictions,
 		})
 		if err != nil {
 			return err
@@ -341,6 +351,13 @@ func (plane *BaseDataPlane) composeTools() error {
 		gateway.Audit = plane.Audit
 		plane.ToolGateway = gateway
 	}
+	if plane.WrapToolGateway != nil {
+		wrapped, err := plane.WrapToolGateway(plane.ToolGateway)
+		if err != nil {
+			return fmt.Errorf("wrap tool gateway: %w", err)
+		}
+		plane.ToolGateway, plane.WrapToolGateway = wrapped, nil
+	}
 	return nil
 }
 
@@ -396,12 +413,15 @@ func (plane *BaseDataPlane) composeLoop() error {
 }
 
 func (plane *BaseDataPlane) composeRuntime() error {
+	if plane.Runs == nil {
+		plane.Runs = &agentruntime.AgentRunStore{DB: plane.DB}
+	}
 	if plane.TurnRuntime == nil {
 		runtime := &TurnRuntime{
 			Records: plane.Records, Sessions: plane.Sessions, Definitions: plane.Definitions, Policies: plane.Policies,
 			Governor: plane.Governor, Executors: plane.Executors, Idempotency: plane.Idempotency, Guardrails: plane.Guardrails,
 			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Cancels: plane.Cancels,
-			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, OnSettled: plane.OnSettled,
+			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, Runs: plane.Runs, OnSettled: plane.OnSettled,
 			MaxSteps: plane.Settings.TurnMaxSteps,
 		}
 		if recorder, ok := plane.Metrics.(contract.ObservationRecorder); ok {

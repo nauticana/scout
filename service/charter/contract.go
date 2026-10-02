@@ -4,12 +4,13 @@ import (
 	"context"
 
 	"github.com/nauticana/charter/sdk/binding"
+	"github.com/nauticana/charter/sdk/capability"
 	"github.com/nauticana/charter/sdk/model"
 
 	"github.com/nauticana/scout/domain"
 )
 
-// These three interfaces carry Charter types, so they live here rather than in contract: a downstream that does
+// These interfaces carry Charter types, so they live here rather than in contract: a downstream that does
 // not compose Charter never compiles its SDK.
 
 // CallContext resolves who is calling a Charter capability from the request context.
@@ -25,4 +26,11 @@ type ToolBinder interface {
 // TriggerDispatcher hands a delivered Charter trigger to the runtime for one definition that declares it.
 type TriggerDispatcher interface {
 	Dispatch(ctx context.Context, definition model.AgentDefinition, delivery binding.Delivery) error
+}
+
+// Invocations describes a governed tool call in Charter's terms: actor, assignment or responsibility, enterprise,
+// resource scope, measures, subjects, and material inputs, which only the product can read from its arguments. The
+// gateway then fixes the capability, inputs, idempotency key, and execution context. An error refuses the call.
+type Invocations interface {
+	Invocation(ctx context.Context, call domain.ToolCall, target model.Ref) (capability.Invocation, error)
 }

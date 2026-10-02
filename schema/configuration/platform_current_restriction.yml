@@ -1,0 +1,20 @@
+table: platform_current_restriction
+comment: The platform restriction layer in force; one row, swapped by compare-and-swap
+columns:
+  - name: layer_key
+    type: VARCHAR(30)
+  - name: layer_digest
+    type: CHAR(64)
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [layer_key]
+foreign_keys:
+  - name: platform_current_restrictions
+    columns: [layer_digest]
+    references:
+      table: platform_restriction_layer
+      columns: [layer_digest]
+checks:
+  - name: platform_current_restriction_key_ck
+    expression: layer_key = 'platform'

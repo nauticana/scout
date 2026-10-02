@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -40,6 +41,9 @@ type TurnRuntime struct {
 	// Audit records each turn transition once; nil skips auditing. A failed write fails the
 	// delivery, and the terminal replay offers the record again.
 	Audit contract.AuditSink
+	// Runs records each settled turn as an agent run under TurnTaskKind; nil skips.
+	// It is best-effort: the turn is already final when it runs.
+	Runs contract.AgentRunRecorder
 	// Observations records per-step stage observations; nil skips them.
 	Observations contract.ObservationRecorder
 	// OnSettled runs after a turn's usage event is recorded, on success and on a
@@ -437,6 +441,7 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 	if err := runtime.audit(settleCtx, execution, "turn_completed", ""); err != nil {
 		return err
 	}
+	runtime.recordRun(settleCtx, execution, domain.RunCompleted)
 	return runtime.publish(settleCtx, execution, nil, true, "")
 }
 
@@ -474,6 +479,8 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	}
 	if err := runtime.Records.Fail(failCtx, tenantID, turn.RequestID, status, errorCode); err != nil {
 		errs = append(errs, err)
+	} else {
+		runtime.recordRun(failCtx, execution, domain.RunStatus(status))
 	}
 	if err := runtime.audit(failCtx, execution, "turn_"+status, errorCode); err != nil {
 		errs = append(errs, err)
@@ -604,6 +611,24 @@ func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecutio
 	}
 	execution.published++
 	return nil
+}
+
+// TurnTaskKind is the task kind a data-plane turn is recorded under.
+const TurnTaskKind = "conversation_turn"
+
+func (runtime *TurnRuntime) recordRun(ctx context.Context, execution *turnExecution, status domain.RunStatus) {
+	// A turn that failed before loading its pinned version ran no release.
+	if runtime.Runs == nil || execution.snapshot.AgentVersion == "" {
+		return
+	}
+	turn := execution.dispatch.Turn
+	run := domain.AgentRun{
+		Release:  domain.AgentReleaseReference{AgentID: turn.AgentID, Version: execution.snapshot.AgentVersion},
+		TaskKind: TurnTaskKind, RequestID: turn.RequestID, Status: status,
+	}
+	if err := runtime.Runs.Record(ctx, turn.TenantContext.TenantID, run); err != nil {
+		log.Printf("record %s agent run %s for tenant %d: %v", status, turn.RequestID, turn.TenantContext.TenantID, err)
+	}
 }
 
 func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution, category, errorCode string) error {

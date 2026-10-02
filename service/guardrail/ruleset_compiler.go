@@ -118,6 +118,23 @@ func (compiler *RuleSetCompiler) Compile(ctx context.Context, config domain.Guar
 	return compiled, nil
 }
 
+// compileRestriction returns the cached compiled rules of one platform or tenant restriction layer.
+func (compiler *RuleSetCompiler) compileRestriction(layer domain.GuardrailLayer, restriction domain.RestrictionLayer) (*CompiledRuleSet, error) {
+	key := string(layer) + "/" + restriction.Digest
+	compiler.mu.Lock()
+	defer compiler.mu.Unlock()
+	if cached, ok := compiler.cache.Get(key); ok {
+		return cached, nil
+	}
+	set := domain.GuardrailRuleSet{SchemaVersion: RuleSetSchemaVersion, Rules: restriction.Guardrails}
+	compiled, err := compiler.compileSet(set, layer, restriction.Digest, restriction.Digest)
+	if err != nil {
+		return nil, fmt.Errorf("%s restriction layer %s: %w", layer, restriction.Digest, err)
+	}
+	compiler.cache.Set(key, compiled, 0)
+	return compiled, nil
+}
+
 // CompileBaseline compiles the operator-owned, release-independent rule set.
 func (compiler *RuleSetCompiler) CompileBaseline(set domain.GuardrailRuleSet) (*CompiledRuleSet, error) {
 	return compiler.compileSet(set, domain.GuardrailLayerBaseline, "", "baseline")

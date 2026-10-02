@@ -24,7 +24,7 @@ type toolOutput struct {
 }
 
 // MappedBinder resolves the Scout tool a binding realizes from an explicit map and the caller from the request;
-// an unmapped binding provably runs nothing.
+// an unmapped binding provably runs nothing. A call routed by CapabilityGateway keeps its own identity and caller.
 type MappedBinder struct {
 	Tools   map[corpus.DocumentKey]domain.ToolReference
 	Callers CallContext
@@ -33,12 +33,22 @@ type MappedBinder struct {
 var _ ToolBinder = (*MappedBinder)(nil)
 
 func (b *MappedBinder) Bind(ctx context.Context, cb model.CapabilityBinding, req binding.Request) (domain.ToolCall, error) {
-	if b == nil || b.Callers == nil {
-		return domain.ToolCall{}, fmt.Errorf("%w: caller resolver is required", binding.ErrNotExecuted)
+	if b == nil {
+		return domain.ToolCall{}, fmt.Errorf("%w: binder is required", binding.ErrNotExecuted)
 	}
 	tool, ok := b.Tools[corpus.KeyOf(cb.Namespace, model.Ref{Namespace: cb.Namespace, ID: cb.ID})]
 	if !ok {
 		return domain.ToolCall{}, fmt.Errorf("%w: no Scout tool is mapped for binding %s", binding.ErrNotExecuted, cb.ID)
+	}
+	if origin := attemptFrom(ctx); origin != nil {
+		if origin.call.ToolID != tool.ToolID || origin.call.ToolVersion != tool.Version {
+			return domain.ToolCall{}, fmt.Errorf("%w: binding %s realizes %s@%s, not the called %s@%s", binding.ErrNotExecuted,
+				cb.ID, tool.ToolID, tool.Version, origin.call.ToolID, origin.call.ToolVersion)
+		}
+		return origin.call, nil
+	}
+	if b.Callers == nil {
+		return domain.ToolCall{}, fmt.Errorf("%w: caller resolver is required", binding.ErrNotExecuted)
 	}
 	tenant, principal, err := b.Callers.Caller(ctx)
 	if err != nil {
@@ -67,15 +77,20 @@ func (e *GatewayEndpoint) Call(ctx context.Context, payload any) (any, error) {
 		return nil, fmt.Errorf("%w: payload is %T, not a tool call", binding.ErrNotExecuted, payload)
 	}
 	result, err := e.Gateway.Invoke(ctx, call)
+	if origin := attemptFrom(ctx); origin != nil {
+		origin.reached, origin.result, origin.err = true, result, err
+	}
 	if err != nil {
 		return nil, notExecuted(err)
 	}
 	return result, nil
 }
 
-// notExecuted marks refusals that provably ran nothing; every other gateway error leaves the outcome unknown.
+// notExecuted marks refusals that provably ran nothing, including a call parked for approval, so the ledger releases
+// its key for the retry; every other gateway error leaves the outcome unknown.
 func notExecuted(err error) error {
-	for _, refused := range []error{domain.ErrValidation, domain.ErrUnauthorized, domain.ErrForbidden, domain.ErrRateLimited, domain.ErrCircuitOpen, domain.ErrNotReady, domain.ErrNotFound} {
+	for _, refused := range []error{domain.ErrValidation, domain.ErrUnauthorized, domain.ErrForbidden, domain.ErrRateLimited, domain.ErrCircuitOpen,
+		domain.ErrNotReady, domain.ErrNotFound, domain.ErrApprovalPending} {
 		if errors.Is(err, refused) {
 			return fmt.Errorf("%w: %w", binding.ErrNotExecuted, err)
 		}

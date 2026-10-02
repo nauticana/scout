@@ -15,7 +15,7 @@ Scout's schema is sixteen selectable modules declared in `schema/dependency.yml`
 - Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. `schema/dependency.yml` keeps the complete list.
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
-- `skill` holds versioned procedures an agent loads on demand. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
+- `skill` holds versioned procedures an agent loads on demand, and the platform catalog tenants copy them from. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
 - `approval` holds the durable human-in-the-loop record. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
 
 ```mermaid
@@ -59,9 +59,9 @@ flowchart BT
     release["Release<br/>15 tables"]
     evaluation["Evaluation<br/>10 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
-    configuration_module["Configuration<br/>4 tables"]
+    configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
-    skill["Skill<br/>5 tables"]
+    skill["Skill<br/>10 tables"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
@@ -170,11 +170,17 @@ flowchart RL
         config_scope_binding["config_scope_binding"]
         effective_agent_release["effective_agent_release"]
         audit_event["audit_event"]
+        platform_restriction_layer["platform_restriction_layer"]
+        platform_current_restriction["platform_current_restriction"]
+        tenant_restriction_layer["tenant_restriction_layer"]
+        tenant_current_restriction["tenant_current_restriction"]
     end
     config_scope_binding --> scope
     effective_agent_release --> scope
     effective_agent_release --> agent_version
     audit_event --> scope
+    platform_current_restriction --> platform_restriction_layer
+    tenant_current_restriction --> tenant_restriction_layer
 
     subgraph approval["Approval"]
         direction BT
@@ -325,16 +331,26 @@ flowchart RL
 
     subgraph skill["Skill"]
         direction BT
+        skill_catalog_profile["skill_catalog_profile"]
+        skill_catalog_version["skill_catalog_version"]
+        skill_catalog_tool["skill_catalog_tool"]
+        skill_catalog_example["skill_catalog_example"]
         skill_profile["skill_profile"]
         skill_version["skill_version"]
         skill_tool["skill_tool"]
         skill_example["skill_example"]
+        skill_requirement["skill_requirement"]
         agent_skill_binding["agent_skill_binding"]
     end
+    skill_catalog_version --> skill_catalog_profile
+    skill_catalog_tool --> skill_catalog_version
+    skill_catalog_example --> skill_catalog_version
     skill_version --> skill_profile
+    skill_version --> skill_catalog_version
     skill_tool --> skill_version
     skill_tool --> tool_profile
     skill_example --> skill_version
+    skill_requirement --> skill_version
     agent_skill_binding --> skill_version
 
 ```
@@ -387,6 +403,8 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `tool_profile` | `tool_credential_bindings` | `tool_credential_binding[]` |
 | `skill_version` | `skill_version_tools` | `skill_tool[]` |
 | `skill_version` | `skill_version_examples` | `skill_example[]` |
+| `skill_version` | `skill_version_requirements` | `skill_requirement[]` |
+| `skill_catalog_version` | `skill_catalog_derivations` | `skill_version[]` |
 
 The YAML foreign-key definitions are the complete relationship-name registry. Any future `foreign_key_lookup` or `rest_api_child` seed must reference those names verbatim. Renaming one is an API compatibility change even when its columns do not change.
 
@@ -607,6 +625,12 @@ erDiagram
     skill_version ||--o{ skill_example : skill_version_examples
     skill_version ||--o{ agent_skill_binding : skill_agent_bindings
     agent_version ||--o{ agent_skill_binding : agent_skill_bindings
+    skill_version ||--o{ skill_requirement : skill_version_requirements
+    skill_version ||--o{ skill_requirement : required_skill_dependents
+    skill_catalog_profile ||--o{ skill_catalog_version : skill_catalog_versions
+    skill_catalog_version ||--o{ skill_catalog_tool : skill_catalog_version_tools
+    skill_catalog_version ||--o{ skill_catalog_example : skill_catalog_version_examples
+    skill_catalog_version ||--o{ skill_version : skill_catalog_derivations
 
     skill_profile {
         bigint tenant_id PK,FK
@@ -622,6 +646,37 @@ erDiagram
         text input_schema
         varchar golden_set_id
         bigint golden_set_version
+        varchar origin_skill_id FK
+        varchar origin_skill_version FK
+    }
+    skill_requirement {
+        bigint tenant_id PK,FK
+        varchar skill_id PK,FK
+        varchar skill_version PK,FK
+        varchar required_skill_id PK,FK
+        varchar required_skill_version FK
+    }
+    skill_catalog_profile {
+        varchar skill_id PK
+        varchar display_name
+    }
+    skill_catalog_version {
+        varchar skill_id PK,FK
+        varchar skill_version PK
+        varchar summary
+        text instructions
+        text input_schema
+    }
+    skill_catalog_tool {
+        varchar skill_id PK,FK
+        varchar skill_version PK,FK
+        varchar tool_id PK
+    }
+    skill_catalog_example {
+        varchar skill_id PK,FK
+        varchar skill_version PK,FK
+        int example_no PK
+        text request
     }
     skill_tool {
         bigint tenant_id PK,FK
@@ -646,6 +701,8 @@ erDiagram
 ```
 
 A skill version is immutable like a tool version. `skill_tool` names tools by id, not version: the agent release pins the versions, and publication refuses a release that binds a skill without binding every tool it lists and `use_skill`. `summary` is the one line the agent sees in the skill index; `instructions` reach the model only when it calls `use_skill`. `skill_example` rows seed the selection cases of the golden set the version names; Scout stores that reference and builds the cases, and leaves running the selection eval and gating the publish on it to the application.
+
+`skill_requirement` names another tenant skill version the procedure relies on; both ends are real versions, and a release binding the skill must bind the required one at that version. Because a requirement must exist before the version naming it, the graph cannot cycle. The `skill_catalog_*` tables hold platform versions no tenant owns; a tenant copy names its origin through `origin_skill_id`/`origin_skill_version`, indexed so a withdrawal finds every copy. Catalog tool ids are plain values: tools are tenant-owned, and each copy names tools its tenant registered.
 
 ## Agent Studio authoring
 
@@ -780,6 +837,41 @@ tries fails with `domain.ErrSealed`.
 provenance of the binding that won and of each binding it superseded, so the runtime pins one row
 instead of walking the chain per request, and an explain view never recompiles.
 
+```mermaid
+erDiagram
+    platform_restriction_layer ||--o{ platform_current_restriction : platform_current_restrictions
+    agent_tenant ||--o{ tenant_restriction_layer : tenant_restriction_layers
+    tenant_restriction_layer ||--o| tenant_current_restriction : tenant_current_restrictions
+
+    platform_restriction_layer {
+        char layer_digest PK
+        text denials
+        text guardrail_rules
+    }
+    platform_current_restriction {
+        varchar layer_key PK
+        char layer_digest FK
+        timestamp updated_at
+    }
+    tenant_restriction_layer {
+        bigint tenant_id PK,FK
+        char layer_digest PK
+        text denials
+        text guardrail_rules
+    }
+    tenant_current_restriction {
+        bigint tenant_id PK,FK
+        char layer_digest FK
+        timestamp updated_at
+    }
+```
+
+Restriction layers are the deliberate exception to freezing: standing denials and block or redact
+guardrail rules that the platform or a tenant applies to every release at decision time. Versions
+are immutable and keyed by digest; the current pointer moves by compare-and-swap, and
+`platform_current_restriction` has exactly one row. See
+[restriction layers](governance.md#restriction-layers).
+
 `agent_permission` mirrors keel's `user_permission`, including `begda`/`endda`, so agents and humans
 resolve through the same `authorization_role_permission` grants and the same `low_limit`/`high_limit`
 bounds. Agents are deliberately not rows in `user_account`: that table carries interactive
@@ -794,6 +886,7 @@ erDiagram
     scope ||--o{ approval_request : scope_approval_requests
     agent_tenant ||--o{ approval_request : approval_requests
     approval_request ||--o| approval_decision : approval_decisions
+    outbox_event |o--o{ approval_request : notified_approval_requests
     tool_profile ||--o{ tool_credential_binding : tool_credential_bindings
     approval_decision }o--|| user_account : decided_approval_decisions
     tool_credential_binding }o--|| user_account : delegated_credential_bindings
@@ -815,6 +908,7 @@ erDiagram
         char proposed_digest
         varchar status_code FK
         timestamp deadline_at
+        bigint notification_event_id FK
     }
     approval_decision {
         bigint approval_request_id PK,FK
@@ -1165,6 +1259,7 @@ erDiagram
     agent_conversation ||--o{ turn_queue : turn_queue_entries
     turn_queue ||--o| turn_dead_letter : dead_letter_queue_entries
     agent_version ||--o{ agent_run : agent_run_versions
+    turn_status ||--o{ agent_run : status_agent_runs
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -1276,6 +1371,8 @@ erDiagram
         varchar agent_id FK
         varchar agent_version FK
         varchar task_kind
+        varchar request_id UK
+        varchar status_code FK
         timestamp completed_at
     }
     turn_queue {
@@ -1683,9 +1780,9 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
-| `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event` |
+| `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `approval_request`, `approval_decision` |
-| `skill` | `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `agent_skill_binding` |
+| `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_tool`, `skill_catalog_example`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them
 cannot accept a row until they hold values — Scout seeds them all. `prompt_section`

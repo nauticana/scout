@@ -1,0 +1,11 @@
+table: skill_catalog_profile
+comment: Platform skill identity no tenant owns; tenants register copies of its versions
+columns:
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: display_name
+    type: VARCHAR(200)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [skill_id]

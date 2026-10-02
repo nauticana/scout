@@ -57,15 +57,20 @@ type EnforcerConfig struct {
 	Events    contract.SafetyEventSink
 	// Audit optionally receives a redacted copy of every safety event.
 	Audit contract.AuditSink
+	// Restrictions, when set, adds the platform and tenant layers read at each
+	// inspection; an unreadable layer fails the inspection.
+	Restrictions contract.RestrictionLayerReader
 	// MaxChunkBytes bounds one streamed chunk accepted by an output session; default 64 KiB.
 	MaxChunkBytes int
 	Now           func() time.Time
 }
 
-// LayeredEnforcer composes the release-independent baseline with the pinned release policy;
-// every rule of both layers runs, so release rules strengthen but can never disable the baseline.
+// LayeredEnforcer composes the release-independent baseline, the platform and tenant
+// restriction layers, and the pinned release policy; every rule of every layer runs, so
+// no layer can disable another's.
 type LayeredEnforcer struct {
 	baseline      *CompiledRuleSet
+	restrictions  contract.RestrictionLayerReader
 	compiler      *RuleSetCompiler
 	classifiers   map[domain.GuardrailRuleKind]contract.ClassifierProvider
 	approvals     contract.ToolApprovalGate
@@ -99,7 +104,7 @@ func NewLayeredEnforcer(config EnforcerConfig) (*LayeredEnforcer, error) {
 	}
 	enforcer := &LayeredEnforcer{
 		baseline: baseline, compiler: config.Compiler, classifiers: config.Classifiers,
-		approvals: config.Approvals, events: config.Events, audit: config.Audit,
+		approvals: config.Approvals, events: config.Events, audit: config.Audit, restrictions: config.Restrictions,
 		maxChunkBytes: config.MaxChunkBytes, now: config.Now,
 	}
 	if enforcer.maxChunkBytes == 0 {
@@ -178,17 +183,51 @@ func (enforcer *LayeredEnforcer) OpenOutputSession(ctx context.Context, config d
 	if subject.TenantID <= 0 || strings.TrimSpace(subject.RequestID) == "" {
 		return nil, fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
 	}
+	layers, err := enforcer.layers(ctx, config, subject.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	lookback := 0
+	for _, layer := range layers {
+		if err := enforcer.checkProviders(layer); err != nil {
+			return nil, err
+		}
+		lookback = max(lookback, layer.Lookback)
+	}
+	return &outputSession{enforcer: enforcer, config: config, subject: subject, lookback: lookback}, nil
+}
+
+// layers returns every rule set that applies, baseline first and the release last.
+func (enforcer *LayeredEnforcer) layers(ctx context.Context, config domain.GuardrailConfig, tenantID int64) ([]*CompiledRuleSet, error) {
 	release, err := enforcer.compiler.Compile(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	if err := enforcer.checkProviders(release); err != nil {
+	if enforcer.restrictions == nil {
+		return []*CompiledRuleSet{enforcer.baseline, release}, nil
+	}
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("%w: restriction layers need the tenant", domain.ErrValidation)
+	}
+	restrictions, err := enforcer.restrictions.Layers(ctx, tenantID)
+	if err != nil {
 		return nil, err
 	}
-	return &outputSession{
-		enforcer: enforcer, config: config, subject: subject,
-		lookback: max(enforcer.baseline.Lookback, release.Lookback),
-	}, nil
+	sets := []*CompiledRuleSet{enforcer.baseline}
+	for _, layer := range []struct {
+		kind  domain.GuardrailLayer
+		rules domain.RestrictionLayer
+	}{{domain.GuardrailLayerPlatform, restrictions.Platform}, {domain.GuardrailLayerTenant, restrictions.Tenant}} {
+		if len(layer.rules.Guardrails) == 0 {
+			continue
+		}
+		compiled, err := enforcer.compiler.compileRestriction(layer.kind, layer.rules)
+		if err != nil {
+			return nil, err
+		}
+		sets = append(sets, compiled)
+	}
+	return append(sets, release), nil
 }
 
 // TerminalFrame is the payload-free, policy-safe final reply for a blocked stream.
@@ -224,14 +263,18 @@ func (enforcer *LayeredEnforcer) inspect(ctx context.Context, config domain.Guar
 	if err := ctx.Err(); err != nil {
 		return nil, domain.GuardrailVerdict{}, err
 	}
-	release, err := enforcer.compiler.Compile(ctx, config)
+	layers, err := enforcer.layers(ctx, config, in.subject.TenantID)
 	if err != nil {
 		return nil, domain.GuardrailVerdict{}, err
 	}
+	return enforcer.inspectLayers(ctx, config, in, layers)
+}
+
+func (enforcer *LayeredEnforcer) inspectLayers(ctx context.Context, config domain.GuardrailConfig, in *inspection, layers []*CompiledRuleSet) ([]byte, domain.GuardrailVerdict, error) {
 	started := enforcer.now()
 	result := &outcome{}
 	var markers []*compiledRule
-	for _, layer := range []*CompiledRuleSet{enforcer.baseline, release} {
+	for _, layer := range layers {
 		for _, rule := range layer.rules {
 			if _, applies := rule.stages[in.stage]; !applies {
 				continue

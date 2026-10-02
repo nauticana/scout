@@ -79,7 +79,7 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		// send the call ungrounded; "medium" is the vendor default.
 		params.WebSearchOptions = openai.ChatCompletionNewParamsWebSearchOptions{SearchContextSize: "medium"}
 		if location := request.Search.Location; location != nil {
-			if err := approximateLocation(OpenAIProviderID, location); err != nil {
+			if err := searchLocationSupport(OpenAIProviderID, *location); err != nil {
 				return openai.ChatCompletionNewParams{}, err
 			}
 			params.WebSearchOptions.UserLocation.Approximate = openAILocation(*location)

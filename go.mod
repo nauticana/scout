@@ -1,16 +1,16 @@
 module github.com/nauticana/scout
 
-go 1.25.3
+go 1.25.5
 
 tool github.com/nauticana/keel/cmd/schemagen
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.26.0
-	github.com/mark3labs/mcp-go v0.46.0
-	github.com/nauticana/charter v1.2.1
-	github.com/nauticana/keel v1.2.86
+	github.com/anthropics/anthropic-sdk-go v1.78.0
+	github.com/mark3labs/mcp-go v1.1.1
+	github.com/nauticana/charter v1.2.3
+	github.com/nauticana/keel v1.2.87
 	github.com/openai/openai-go v1.12.0
-	google.golang.org/genai v1.67.0
+	google.golang.org/genai v1.72.0
 )
 
 require (
@@ -55,8 +55,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.43.4 // indirect
 	github.com/aws/smithy-go v1.27.1 // indirect
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.36.0 // indirect
@@ -77,6 +79,7 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/infisical/go-sdk v0.7.2 // indirect
+	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.9.2 // indirect
@@ -84,6 +87,7 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/nyaruka/phonenumbers v1.7.2 // indirect
 	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect
+	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
@@ -99,6 +103,7 @@ require (
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
+	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -115,6 +120,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
+	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect

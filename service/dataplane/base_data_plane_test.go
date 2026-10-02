@@ -207,3 +207,27 @@ func TestBaseDataPlaneRefusesToCompose(t *testing.T) {
 		})
 	}
 }
+
+func TestBaseDataPlaneWrapsTheComposedToolGateway(t *testing.T) {
+	plane := composablePlane()
+	var inner contract.GovernedToolGateway
+	wrapper := &toolgateway.GovernedGateway{}
+	plane.WrapToolGateway = func(composed contract.GovernedToolGateway) (contract.GovernedToolGateway, error) {
+		inner = composed
+		return wrapper, nil
+	}
+	if err := plane.Compose(); err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	t.Cleanup(func() { _ = plane.Close() })
+	if inner == nil || inner == contract.GovernedToolGateway(wrapper) || plane.ToolGateway != contract.GovernedToolGateway(wrapper) {
+		t.Fatalf("the wrapper must receive the composed gateway and replace it: inner %T, gateway %T", inner, plane.ToolGateway)
+	}
+	failing := composablePlane()
+	failing.WrapToolGateway = func(contract.GovernedToolGateway) (contract.GovernedToolGateway, error) {
+		return nil, domain.ErrNotReady
+	}
+	if err := failing.Compose(); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("a failing wrapper fails composition, got %v", err)
+	}
+}

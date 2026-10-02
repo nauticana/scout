@@ -23,13 +23,15 @@ func toolFrom(definition domain.MCPToolDefinition) mcpgo.Tool {
 
 func resourceFrom(definition domain.MCPResourceDefinition) mcpgo.Resource {
 	return mcpgo.NewResource(definition.URI, definition.Name,
-		mcpgo.WithResourceDescription(describe(definition.Title, definition.Description)),
+		mcpgo.WithResourceTitle(definition.Title),
+		mcpgo.WithResourceDescription(definition.Description),
 		mcpgo.WithMIMEType(definition.MIMEType))
 }
 
 func resourceTemplateFrom(definition domain.MCPResourceDefinition) mcpgo.ResourceTemplate {
 	return mcpgo.NewResourceTemplate(definition.URITemplate, definition.Name,
-		mcpgo.WithTemplateDescription(describe(definition.Title, definition.Description)),
+		mcpgo.WithTemplateTitle(definition.Title),
+		mcpgo.WithTemplateDescription(definition.Description),
 		mcpgo.WithTemplateMIMEType(definition.MIMEType))
 }
 
@@ -40,7 +42,8 @@ func promptFrom(definition domain.MCPPromptDefinition) mcpgo.Prompt {
 	}
 	return mcpgo.Prompt{
 		Name:        definition.Name,
-		Description: describe(definition.Title, definition.Description),
+		Title:       definition.Title,
+		Description: definition.Description,
 		Arguments:   arguments,
 	}
 }
@@ -66,12 +69,4 @@ func promptResultFrom(result domain.MCPPromptResult) *mcpgo.GetPromptResult {
 		messages[i] = mcpgo.NewPromptMessage(mcpgo.Role(message.Role), mcpgo.NewTextContent(message.Text))
 	}
 	return mcpgo.NewGetPromptResult(result.Description, messages)
-}
-
-// describe falls back to the title where mcp-go carries only a description.
-func describe(title, description string) string {
-	if description == "" {
-		return title
-	}
-	return description
 }

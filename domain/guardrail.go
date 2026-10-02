@@ -17,6 +17,8 @@ type GuardrailLayer string
 
 const (
 	GuardrailLayerBaseline GuardrailLayer = "baseline"
+	GuardrailLayerPlatform GuardrailLayer = "platform"
+	GuardrailLayerTenant   GuardrailLayer = "tenant"
 	GuardrailLayerRelease  GuardrailLayer = "release"
 )
 

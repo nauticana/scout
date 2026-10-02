@@ -16,7 +16,8 @@ import (
 // replayed turn resumes on the decision instead of asking again.
 type Gate struct {
 	Store contract.ApprovalStore
-	// Notifier is optional; without it the inbox is pull-only.
+	// Notifier is optional; without it the inbox is pull-only. Leave it unset when
+	// the store notifies through the outbox, or the approver is told twice.
 	Notifier contract.Notifier
 	// Deadline is how long a reviewer has before escalation applies; zero leaves the request open.
 	Deadline time.Duration

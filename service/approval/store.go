@@ -5,7 +5,9 @@ package approval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/outbox"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -29,11 +32,16 @@ const (
 	qApprovalPendingScope = "scout_approval_pending_scope"
 	qApprovalDue          = "scout_approval_due"
 	qApprovalEscalate     = "scout_approval_escalate"
+	qApprovalNotified     = "scout_approval_notified"
+
+	// ApprovalAggregate and ApprovalRequestedEvent route the outbox event that notifies an approver.
+	ApprovalAggregate      = "approval_request"
+	ApprovalRequestedEvent = "approval.requested"
 
 	approvalColumns = `id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
        approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code,
-       deadline_at, created_at, resolved_at`
+       deadline_at, created_at, resolved_at, notification_event_id`
 )
 
 var approvalQueries = map[string]string{
@@ -95,6 +103,10 @@ SELECT ` + approvalColumns + `
    AND deadline_at IS NOT NULL AND deadline_at <= ?
  ORDER BY deadline_at
  LIMIT ?`,
+	qApprovalNotified: `
+UPDATE approval_request
+   SET notification_event_id = ?
+ WHERE tenant_id = ? AND id = ? AND notification_event_id IS NULL`,
 	qApprovalEscalate: `
 UPDATE approval_request
    SET status_code = 'escalated', approver_kind = ?, approver_id = ?, deadline_at = ?
@@ -106,9 +118,26 @@ RETURNING id`,
 type TableStore struct {
 	DB  keelport.DatabaseRepository
 	Now func() time.Time
+	// NotifyThroughOutbox queues the first approver's notification as a keel outbox
+	// event in the transaction that opens the request, so a request never exists
+	// without its notice; a keel outbox worker's Dispatcher delivers it. Leave the
+	// gate's Notifier unset when this is on.
+	NotifyThroughOutbox bool
 
 	once sync.Once
 	qs   keelport.QueryService
+}
+
+// approvalNotice is the outbox payload: who owes which decision, never its evidence.
+type approvalNotice struct {
+	TenantID        int64     `json:"tenant_id"`
+	RecipientKind   string    `json:"recipient_kind"`
+	RecipientID     string    `json:"recipient_id"`
+	RequestID       string    `json:"request_id"`
+	ExecutionStepID int64     `json:"execution_step_id"`
+	Subject         string    `json:"subject"`
+	RiskTier        string    `json:"risk_tier"`
+	DueAt           time.Time `json:"due_at,omitzero"`
 }
 
 func (s *TableStore) init(ctx context.Context) error {
@@ -139,16 +168,14 @@ func (s *TableStore) Open(ctx context.Context, request domain.ApprovalRequest) (
 		return domain.ApprovalRequest{}, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	_, err := s.qs.Query(ctx, qApprovalOpen,
-		request.TenantID, request.RequestID, request.ConversationID, request.ExecutionStepID,
-		string(request.Principal.Kind), request.Principal.ID,
-		nullable(string(request.Approver.Kind)), nullable(request.Approver.ID),
-		nullable(request.ScopeID), nullable(request.RuleID), request.Action, request.Resource,
-		string(request.Class), string(request.RiskTier), request.Summary,
-		nullable(request.Evidence.URI), nullable(request.Evidence.Digest), request.ProposedDigest,
-		nullableTime(request.DeadlineAt))
+	var err error
+	if s.NotifyThroughOutbox {
+		err = s.openNotified(ctx, request)
+	} else {
+		_, err = insertRequest(ctx, s.qs, request)
+	}
 	if err != nil {
-		return domain.ApprovalRequest{}, fmt.Errorf("open approval: %w", err)
+		return domain.ApprovalRequest{}, err
 	}
 	stored, err := s.Get(ctx, domain.ApprovalKey{TenantID: request.TenantID, RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID})
 	if err != nil {
@@ -159,6 +186,69 @@ func (s *TableStore) Open(ctx context.Context, request domain.ApprovalRequest) (
 			domain.ErrConflict, request.ExecutionStepID)
 	}
 	return stored, nil
+}
+
+// openNotified inserts the request and, only when this call created it, queues the
+// approver's notice in the same transaction; a replayed turn notifies no one again.
+func (s *TableStore) openNotified(ctx context.Context, request domain.ApprovalRequest) error {
+	queries := maps.Clone(approvalQueries)
+	maps.Copy(queries, outbox.WriteQueries())
+	tx, err := s.DB.BeginTx(ctx, queries)
+	if err != nil {
+		return fmt.Errorf("open approval: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	id, err := insertRequest(ctx, tx, request)
+	if err != nil {
+		return err
+	}
+	if id > 0 && request.Approver.ID != "" {
+		payload, err := json.Marshal(approvalNotice{
+			TenantID: request.TenantID, RecipientKind: string(request.Approver.Kind), RecipientID: request.Approver.ID,
+			RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, Subject: request.Action,
+			RiskTier: string(request.RiskTier), DueAt: request.DeadlineAt,
+		})
+		if err != nil {
+			return fmt.Errorf("encode approval notice: %w", err)
+		}
+		eventID, err := outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: request.TenantID, AggregateType: ApprovalAggregate,
+			AggregateID: strconv.FormatInt(id, 10), EventType: ApprovalRequestedEvent, Payload: string(payload)})
+		if err != nil {
+			return fmt.Errorf("queue approval notice: %w", err)
+		}
+		if _, err = tx.Query(ctx, qApprovalNotified, eventID, request.TenantID, id); err != nil {
+			return fmt.Errorf("link approval notice: %w", err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("open approval: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// insertRequest returns the new request's id, or zero when the key already exists.
+func insertRequest(ctx context.Context, qs keelport.QueryService, request domain.ApprovalRequest) (int64, error) {
+	inserted, err := qs.Query(ctx, qApprovalOpen,
+		request.TenantID, request.RequestID, request.ConversationID, request.ExecutionStepID,
+		string(request.Principal.Kind), request.Principal.ID,
+		nullable(string(request.Approver.Kind)), nullable(request.Approver.ID),
+		nullable(request.ScopeID), nullable(request.RuleID), request.Action, request.Resource,
+		string(request.Class), string(request.RiskTier), request.Summary,
+		nullable(request.Evidence.URI), nullable(request.Evidence.Digest), request.ProposedDigest,
+		nullableTime(request.DeadlineAt))
+	if err != nil {
+		return 0, fmt.Errorf("open approval: %w", err)
+	}
+	if len(inserted.Rows) == 0 {
+		return 0, nil
+	}
+	return common.AsInt64(inserted.Rows[0][0]), nil
 }
 
 // Get returns one request by its key.
@@ -402,6 +492,7 @@ func scanRequests(tenantID int64, rows [][]any) []domain.ApprovalRequest {
 func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 	deadline, _ := common.AsTimeOK(row[19])
 	resolved, _ := common.AsTimeOK(row[21])
+	notified, _ := common.AsInt64OK(row[22])
 	return domain.ApprovalRequest{
 		ID: common.AsInt64(row[0]), TenantID: tenantID, RequestID: common.AsString(row[1]),
 		ConversationID: common.AsString(row[2]), ExecutionStepID: common.AsInt64(row[3]),
@@ -414,6 +505,7 @@ func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 		Evidence:       domain.ObjectRef{URI: common.AsString(row[15]), Digest: common.AsString(row[16])},
 		ProposedDigest: common.AsString(row[17]), Status: domain.ApprovalStatus(common.AsString(row[18])),
 		DeadlineAt: deadline, CreatedAt: common.AsTime(row[20]), ResolvedAt: resolved,
+		NotificationEventID: notified,
 	}
 }
 

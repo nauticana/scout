@@ -88,7 +88,7 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 			search.MaxUses = anthropic.Int(request.Search.MaxSearches)
 		}
 		if location := request.Search.Location; location != nil {
-			if err := approximateLocation(AnthropicProviderID, location); err != nil {
+			if err := searchLocationSupport(AnthropicProviderID, *location); err != nil {
 				return anthropic.MessageNewParams{}, err
 			}
 			search.UserLocation = anthropicLocation(*location)

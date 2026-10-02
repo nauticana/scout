@@ -1,5 +1,5 @@
 table: agent_run
-comment: Successful execution attributed to an immutable agent release
+comment: Settled execution, successful or not, attributed to an immutable agent release
 columns:
   - name: id
     type: BIGINT
@@ -11,6 +11,12 @@ columns:
     type: VARCHAR(80)
   - name: task_kind
     type: VARCHAR(80)
+  - name: request_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The durable turn's request id; null for an execution outside a turn
+  - name: status_code
+    type: VARCHAR(30)
   - name: completed_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -24,11 +30,23 @@ foreign_keys:
     references:
       table: agent_version
       columns: [tenant_id, agent_id, agent_version]
+  - name: status_agent_runs
+    columns: [status_code]
+    references:
+      table: turn_status
+      columns: [code]
 indexes:
   - name: agent_run_last_ix
     columns: [tenant_id, agent_id, completed_at]
   - name: agent_run_retention_ix
     columns: [completed_at]
+  - name: agent_run_request_ux
+    columns: [tenant_id, request_id]
+    unique: true
+  - name: agent_run_tenant_ix
+    columns: [tenant_id, id]
 checks:
   - name: agent_run_task_kind_ck
     expression: CHAR_LENGTH(TRIM(task_kind)) > 0
+  - name: agent_run_status_ck
+    expression: status_code IN ('completed', 'failed', 'cancelled')

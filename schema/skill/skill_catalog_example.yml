@@ -1,0 +1,21 @@
+table: skill_catalog_example
+comment: A request that should select the platform skill
+columns:
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: example_no
+    type: INTEGER
+  - name: request
+    type: TEXT
+primary_key: [skill_id, skill_version, example_no]
+foreign_keys:
+  - name: skill_catalog_version_examples
+    columns: [skill_id, skill_version]
+    references:
+      table: skill_catalog_version
+      columns: [skill_id, skill_version]
+checks:
+  - name: skill_catalog_example_no_ck
+    expression: example_no > 0

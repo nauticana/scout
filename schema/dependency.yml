@@ -3,7 +3,7 @@
 # to -seed. depends_on lists direct table-FK dependencies and fixes DDL order;
 # seed_depends_on names components whose tables receive this module's seed rows.
 # Scout tenancy additionally requires keel tenant_management, which depends on
-# keel core and geo.
+# keel core and geo; approval additionally requires keel outbox.
 version: 1
 groups:
   - name: catalog

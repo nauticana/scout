@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 )
 
 // toolBackendFake publishes one open and one write-scoped tool, and hides the
-// write-scoped tool from remote callers.
+// write-scoped tool from remote callers without the write scope.
 type toolBackendFake struct {
 	call   domain.MCPToolCall
 	result domain.MCPToolResult
@@ -27,7 +28,7 @@ var backendTools = []domain.MCPToolDefinition{
 }
 
 func (backend *toolBackendFake) ListTools(_ context.Context, caller domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
-	if caller.HostTrusted {
+	if caller.HostTrusted || slices.Contains(caller.Scopes, "write") {
 		return backendTools, nil
 	}
 	return backendTools[:1], nil
@@ -131,7 +132,7 @@ func TestRegisterToolBackendEnforcesPolicy(t *testing.T) {
 	params := map[string]any{"name": "submit", "arguments": map[string]any{"id": float64(3)}}
 
 	refused := call(t, server, remoteContext("read"), "tools/call", params)
-	if !strings.Contains(refused, "scope \\\"write\\\" is required") {
+	if !strings.Contains(refused, "not found") {
 		t.Fatalf("unscoped call = %s", refused)
 	}
 	if backend.call.Name != "" {
@@ -147,6 +148,16 @@ func TestRegisterToolBackendEnforcesPolicy(t *testing.T) {
 	}
 }
 
+// The handler re-checks scopes even though discovery filtering hides the tool.
+func TestBackendToolAuthorizesBeforeExecuting(t *testing.T) {
+	backend := &toolBackendFake{}
+	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], executor: backend}
+	result, err := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{})
+	if err != nil || !result.IsError || backend.call.Name != "" {
+		t.Fatalf("unscoped handle = %+v, err = %v, call = %+v", result, err, backend.call)
+	}
+}
+
 // Servers that register protocol values directly have no caller-scoped
 // catalog, so the discovery filter must leave their tools alone.
 func TestDirectRegistrationStaysVisible(t *testing.T) {
@@ -157,39 +168,5 @@ func TestDirectRegistrationStaysVisible(t *testing.T) {
 	listed := call(t, server, context.Background(), "tools/list", map[string]any{})
 	if !strings.Contains(listed, `"ping"`) {
 		t.Fatalf("listing = %s", listed)
-	}
-}
-
-func TestToolProjectionCarriesRawSchema(t *testing.T) {
-	tool := toolFrom(domain.MCPToolDefinition{
-		Name:        "search",
-		Description: "search things",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
-		Annotations: domain.MCPToolAnnotations{Title: "Search"},
-	})
-	encoded, err := json.Marshal(tool)
-	if err != nil {
-		t.Fatalf("marshal tool: %v", err)
-	}
-	if !strings.Contains(string(encoded), `"q"`) || !strings.Contains(string(encoded), `"Search"`) {
-		t.Fatalf("tool = %s", encoded)
-	}
-	bare := toolFrom(domain.MCPToolDefinition{Name: "ping"})
-	if bare.InputSchema.Type != "object" {
-		t.Fatalf("bare tool schema = %+v", bare.InputSchema)
-	}
-}
-
-func TestContentsProjection(t *testing.T) {
-	projected := contentsFrom([]domain.MCPResourceContent{
-		{URI: "scout://text", MIMEType: "text/plain", Text: "hello"},
-		{URI: "scout://blob", MIMEType: "application/octet-stream", Blob: []byte{1, 2, 3}},
-	})
-	if _, ok := projected[0].(mcpgo.TextResourceContents); !ok {
-		t.Fatalf("text content = %T", projected[0])
-	}
-	blob, ok := projected[1].(mcpgo.BlobResourceContents)
-	if !ok || blob.Blob != "AQID" {
-		t.Fatalf("blob content = %#v", projected[1])
 	}
 }

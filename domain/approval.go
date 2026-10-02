@@ -62,6 +62,8 @@ type ApprovalRequest struct {
 	DeadlineAt     time.Time
 	CreatedAt      time.Time
 	ResolvedAt     time.Time
+	// NotificationEventID is the keel outbox event that notifies the first approver; zero when none was queued.
+	NotificationEventID int64
 }
 
 // ApprovalVerdict resolves one request. Decider is the principal that acted and

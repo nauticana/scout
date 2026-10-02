@@ -396,3 +396,68 @@ func TestNewLayeredEnforcerValidates(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type restrictionsFunc func(context.Context, int64) (domain.RestrictionLayers, error)
+
+func (f restrictionsFunc) Layers(ctx context.Context, tenantID int64) (domain.RestrictionLayers, error) {
+	return f(ctx, tenantID)
+}
+
+func TestRestrictionLayersBlockWithoutARepublish(t *testing.T) {
+	tenantLayer := domain.RestrictionLayer{Digest: strings.Repeat("a", 64), Guardrails: []domain.GuardrailRule{
+		rule("tenant.codename", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["BLUEJAY"]}`),
+	}}
+	var asked int64
+	h := newHarness(t, EnforcerConfig{Restrictions: restrictionsFunc(func(_ context.Context, tenantID int64) (domain.RestrictionLayers, error) {
+		asked = tenantID
+		return domain.RestrictionLayers{Tenant: tenantLayer}, nil
+	})})
+	release := rules(t)
+	if _, err := h.enforcer.BeforeModel(context.Background(), release, request("launch BLUEJAY")); !errors.Is(err, domain.ErrForbidden) || asked != 7 {
+		t.Fatalf("tenant layer: error = %v, tenant = %d", err, asked)
+	}
+	if len(h.events.Events) != 1 || h.events.Events[0].Layer != domain.GuardrailLayerTenant {
+		t.Fatalf("events = %+v", h.events.Events)
+	}
+	if _, err := h.enforcer.BeforeModel(context.Background(), release, request("launch")); err != nil {
+		t.Fatalf("unrestricted content: %v", err)
+	}
+	anonymous := request("launch")
+	anonymous.TenantContext.TenantID = 0
+	if _, err := h.enforcer.BeforeModel(context.Background(), release, anonymous); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("no tenant: want ErrValidation, got %v", err)
+	}
+}
+
+func TestUnreadableRestrictionLayerFailsClosed(t *testing.T) {
+	unavailable := errors.New("store down")
+	h := newHarness(t, EnforcerConfig{Restrictions: restrictionsFunc(func(context.Context, int64) (domain.RestrictionLayers, error) {
+		return domain.RestrictionLayers{}, unavailable
+	})})
+	if _, err := h.enforcer.BeforeModel(context.Background(), rules(t), request("hello")); !errors.Is(err, unavailable) {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := h.enforcer.OpenOutputSession(context.Background(), rules(t), domain.GuardrailSubject{TenantID: 7, RequestID: "r1"}); !errors.Is(err, unavailable) {
+		t.Fatalf("output session error = %v", err)
+	}
+}
+
+func TestOutputSessionUpdatesLookbackWithRestrictionLayer(t *testing.T) {
+	var tenant domain.RestrictionLayer
+	h := newHarness(t, EnforcerConfig{Restrictions: restrictionsFunc(func(context.Context, int64) (domain.RestrictionLayers, error) {
+		return domain.RestrictionLayers{Tenant: tenant}, nil
+	})})
+	session, err := h.enforcer.OpenOutputSession(context.Background(), rules(t), domain.GuardrailSubject{TenantID: 7, RequestID: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant = domain.RestrictionLayer{Digest: strings.Repeat("b", 64), Guardrails: []domain.GuardrailRule{
+		rule("tenant.codename", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["BLUEJAY"]}`),
+	}}
+	if chunk, held, err := session.Inspect(context.Background(), domain.ModelChunk{Sequence: 1, Payload: []byte("BLUE")}); err != nil || !held || len(chunk.Payload) != 0 {
+		t.Fatalf("first chunk = %+v, held = %v, err = %v", chunk, held, err)
+	}
+	if _, _, err = session.Inspect(context.Background(), domain.ModelChunk{Sequence: 2, Payload: []byte("JAY")}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("cross-chunk restriction: want ErrForbidden, got %v", err)
+	}
+}

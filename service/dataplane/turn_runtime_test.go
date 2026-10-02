@@ -591,3 +591,38 @@ func (cancelledWatcher) Watch(ctx context.Context, _ int64, _ string) (context.C
 	cancel(fmt.Errorf("%w: stopped while suspended", domain.ErrTurnCanceled))
 	return turnCtx, func() {}, nil
 }
+
+type runLog []domain.AgentRun
+
+func (runs *runLog) Record(_ context.Context, _ int64, run domain.AgentRun) error {
+	*runs = append(*runs, run)
+	return nil
+}
+
+func TestTurnRuntimeRecordsEverySettledTurnAsARun(t *testing.T) {
+	runs := &runLog{}
+	completed := newTestRuntime(t, &runtimeRecorder{})
+	completed.Runs = runs
+	if _, err := completed.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := newTestRuntime(t, &runtimeRecorder{})
+	cancelled.Runs = runs
+	cancelled.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{}, domain.ErrTurnCanceled
+		}), nil
+	})
+	if _, err := cancelled.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrTurnCanceled) {
+		t.Fatalf("error = %v", err)
+	}
+	dispatch := runtimeDispatch()
+	if len(*runs) != 2 || (*runs)[0].Status != domain.RunCompleted || (*runs)[1].Status != domain.RunCancelled {
+		t.Fatalf("runs = %+v", *runs)
+	}
+	for _, run := range *runs {
+		if run.RequestID != dispatch.Turn.RequestID || run.Release.AgentID != dispatch.Turn.AgentID || run.Release.Version != "v1" || run.TaskKind != TurnTaskKind {
+			t.Fatalf("run = %+v", run)
+		}
+	}
+}

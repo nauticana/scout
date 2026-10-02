@@ -1,0 +1,18 @@
+table: platform_restriction_layer
+comment: Immutable platform-wide prohibitions applied on top of every release at decision time
+columns:
+  - name: layer_digest
+    type: CHAR(64)
+  - name: denials
+    type: TEXT
+    comment: JSON list of deny policy statements
+  - name: guardrail_rules
+    type: TEXT
+    comment: JSON guardrail rule envelope of block and redact rules
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [layer_digest]
+checks:
+  - name: platform_restriction_layer_digest_ck
+    expression: CHAR_LENGTH(layer_digest) = 64

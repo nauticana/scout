@@ -23,6 +23,28 @@ Statements bind at any scope through `config_scope_binding` with `config_resourc
 `policy` narrowing rule enforces the asymmetry that matters: **a child may drop an allow or add a
 deny, never add an allow.**
 
+## Restriction layers
+
+A prohibition that must reach every running agent cannot wait for each release to be republished.
+The platform layer and each tenant's layer hold standing denials and guardrail rules, read at
+decision time on top of the pinned release:
+
+- **They only restrict.** A layer holds deny statements, each naming actions and resources and no
+  obligations, and guardrail rules that block or redact. Anything else is `ErrValidation`.
+- **They are immutable and digest-addressed.** `policy.TableRestrictionLayers` stores each version
+  under its canonical digest and moves the current pointer by compare-and-swap; the expected digest
+  is empty before the first write. Writing the value already in force succeeds unchanged; a stale
+  expectation is `ErrConflict` with the current digest. The store clock stamps every change.
+- **Only a service principal writes,** and every change is an audit record (`restriction` category).
+- **An unreadable layer denies.** A layer that cannot be read, or whose content no longer matches
+  its digest, fails the guardrail inspection and the policy decision. A layer never written is empty.
+
+`policy.RestrictedResolver` wraps the release resolver: it appends both layers' denials, and the
+decision's policy version digests the release and both layers. `guardrail.EnforcerConfig.Restrictions`
+runs the layers' rules between the baseline and the release, attributed to the `platform` or `tenant`
+layer in safety events. Reads are cached in each process for `DefaultRestrictionTTL`, which bounds how
+long a new prohibition takes to arrive.
+
 ## Obligations
 
 An allow may carry obligations — `require_approval`, `redact`, `cap_spend`, `record_evidence`,
@@ -41,6 +63,13 @@ An irreversible action does not fail for lack of a human — it waits.
 `approval_request` and returns pending; later calls return whatever verdict was recorded. Open is
 idempotent on `(tenant, request, execution_step)`, so a replayed turn re-attaches instead of asking
 the same person twice.
+
+With `TableStore.NotifyThroughOutbox`, opening a request also queues the approver's notice as a keel
+`outbox_event` (`approval_request` / `approval.requested`) in the same transaction and records it in
+`approval_request.notification_event_id`, so a request never exists without its notice and the
+event's `dispatched_at` proves delivery. Only the call that creates the request queues one; a request
+routed by scope has no recipient and none. A keel outbox worker's `Dispatcher` delivers the notice;
+leave `Gate.Notifier` unset, or the approver is told twice. Escalation to a backup is not notified.
 
 `ProposalDigest` binds a verdict to the exact call — tenant, request, tool, version, and arguments.
 The digest is also a `WHERE` predicate in the resolve statement, so approving a changed action
@@ -127,5 +156,4 @@ than stopping, so out-of-hours work is queued for a human instead of lost.
 ## What is not here yet
 
 Tracked in [TODO.md](../TODO.md): the OPA/cedar-go adapter behind the decision point (A3),
-SPIFFE and RFC 8693 credential adapters (K4), the OpenTelemetry GenAI mapping (V4), and keel's
-outbound `Notifier` delivery (H5 ships the port; keel owns the transport).
+SPIFFE and RFC 8693 credential adapters (K4), and the OpenTelemetry GenAI mapping (V4).

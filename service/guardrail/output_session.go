@@ -91,11 +91,21 @@ func (session *outputSession) usable(ctx context.Context) error {
 
 // advance scans the held tail plus new bytes, then releases everything but the tail unless final.
 func (session *outputSession) advance(ctx context.Context, payload []byte, final bool) ([]byte, error) {
+	layers, err := session.enforcer.layers(ctx, session.config, session.subject.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, layer := range layers {
+		if err = session.enforcer.checkProviders(layer); err != nil {
+			return nil, err
+		}
+		session.lookback = max(session.lookback, layer.Lookback)
+	}
 	from := len(session.pending)
 	session.pending = append(session.pending, payload...)
 	session.total += len(payload)
 	in := &inspection{stage: domain.GuardrailStageOutput, subject: session.subject, content: session.pending, sizeBytes: session.total, from: from}
-	content, _, err := session.enforcer.inspect(ctx, session.config, in)
+	content, _, err := session.enforcer.inspectLayers(ctx, session.config, in, layers)
 	if err != nil {
 		session.pending = nil
 		if _, violated := asViolation(err); violated {
