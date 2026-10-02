@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.13.1",
+      "title": "PDF knowledge sources read by keel's bounded PDF parser; keel v1.2.88",
+      "tags": [
+        "breaking"
+      ],
+      "summary": "keel v1.2.88 replaces the PDF parser behind extract.Native. No Scout API changes, but a PDF's extracted text, and so its sections and chunks, can differ from earlier releases. extract_max_bytes now bounds PDF decoding inside the parser, PDFs that open with the empty user password are extracted, and a scanned page's OCR text layer is kept.",
+      "body_markdown": "## PDF extraction (breaking behavior)\n\n`knowledge.DocumentDecoder` with `extract.Native` now reads PDFs through keel's new parser:\n\n- Text is ordered top to bottom and left to right, so line breaks and word spacing can differ. Re-ingesting a PDF can produce different sections, chunk boundaries and chunk digests.\n- A PDF that opens with the empty user password (permission-only protection) is decoded; one that needs a password stays a terminal `ErrValidation` wrapping `extract.ErrEncrypted`.\n- A scanned page with an invisible OCR text layer contributes that text, so such a document is no longer refused as having no extractable text.\n- `extract_max_bytes` bounds every decoded PDF stream and their total inside the parser (`extract.ErrTooLarge`, terminal `ErrValidation`).\n- Nested form XObjects are bounded only by depth in the pinned parser, so a crafted file can stall one page. Keep extracting untrusted PDFs in a worker whose deadline stops the process.\n\n## Adopting\n\n1. Bump keel to `v1.2.88` and run `go mod tidy` (adds `github.com/carlos7ags/folio` and `golang.org/x/image`, drops `github.com/razvandimescu/gopdf`, raises `golang.org/x/crypto`, `net`, `sync`, `sys` and `text`).\n2. Let in-flight PDF batches finish before the upgrade. A PDF left partially indexed and resumed after it can extract different chunks and fail with `ErrConflict`; ingest it into a new knowledge version instead.\n3. Fully indexed PDFs replay by source digest and are not re-extracted. To pick up the new text, ingest them into a new knowledge version and swap the alias.\n\n## Pins\n\nkeel `v1.2.88` (from `v1.2.87`). No Scout schema change."
+    },
+    {
       "version": "v0.13.0",
       "title": "Every settled run, skill requirements and a platform skill catalog, platform and tenant restriction layers, Charter identity binding and Charter-governed tool calls; approval notices through the keel outbox; mcp-go v1, keel v1.2.87, Charter v1.2.3",
       "tags": [

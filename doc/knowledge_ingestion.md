@@ -55,9 +55,11 @@ keel's `extract.TextExtractor` (`extract.Native` reads PDF text layers and DOCX)
 `text/markdown` through `PlainTextDecoder`, maps extracted headings (with `Depth` from the heading level), paragraphs,
 tables and pages to sections, drops blank ones, and refuses a document with no extractable text. Extraction
 failures (`extract.ErrTooLarge`, `extract.ErrEncrypted`, malformed files) are terminal `ErrValidation`; a canceled
-context stays systemic. Scanned pages yield nothing until keel ships an OCR extractor. keel's PDF parser has no
-decode limit of its own yet and its pre-check is best-effort, so extract untrusted PDFs in a worker with a memory
-limit and a deadline. Product-specific decoders — SAP document/table extraction — stay downstream.
+context stays systemic. `extract_max_bytes` bounds PDF decoding inside keel's parser, and a PDF that opens with
+the empty user password is extracted. A scanned page contributes its invisible OCR layer when it has one and
+nothing otherwise, until keel ships an OCR extractor. keel's pinned PDF parser bounds nested form XObjects only by
+depth, so a crafted file can stall one page: extract untrusted PDFs in a worker whose deadline stops the process.
+Product-specific decoders — SAP document/table extraction — stay downstream.
 
 ## Versions, manifests, aliases, tombstones, GC
 
