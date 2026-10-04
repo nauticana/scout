@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/jsonschema"
 )
 
 // ServerConfig contains product-owned MCP server identity and copy.
@@ -26,12 +28,15 @@ type ServerConfig struct {
 // BaseServer wraps mcp-go with name-keyed provider registration and
 // caller-scoped discovery.
 type BaseServer struct {
-	mcp     *server.MCPServer
-	ipHook  func(context.Context, *http.Request) context.Context
-	source  string
-	callers CallerResolver
-	tools   contract.MCPToolCatalog
-	prompts contract.MCPPromptCatalog
+	mcp       *server.MCPServer
+	ipHook    func(context.Context, *http.Request) context.Context
+	source    string
+	callers   CallerResolver
+	tools     contract.MCPToolCatalog
+	resources contract.MCPResourceCatalog
+	// resourceKeys are the backend's entries; directly registered resources are not caller-scoped.
+	resourceKeys []string
+	prompts      contract.MCPPromptCatalog
 }
 
 func NewServer(config ServerConfig) *BaseServer {
@@ -42,6 +47,18 @@ func NewServer(config ServerConfig) *BaseServer {
 	if base.callers == nil {
 		base.callers = BaseCallerResolver{}
 	}
+	// mcp-go has no resource filter, so listings are narrowed after the fact.
+	hooks := &server.Hooks{}
+	hooks.AddAfterListResources(func(ctx context.Context, _ any, _ *mcpgo.ListResourcesRequest, result *mcpgo.ListResourcesResult) {
+		hidden := base.hiddenResources(ctx)
+		result.Resources = slices.DeleteFunc(result.Resources, func(resource mcpgo.Resource) bool { return hidden[resource.URI] })
+	})
+	hooks.AddAfterListResourceTemplates(func(ctx context.Context, _ any, _ *mcpgo.ListResourceTemplatesRequest, result *mcpgo.ListResourceTemplatesResult) {
+		hidden := base.hiddenResources(ctx)
+		result.ResourceTemplates = slices.DeleteFunc(result.ResourceTemplates, func(template mcpgo.ResourceTemplate) bool {
+			return template.URITemplate != nil && template.URITemplate.Template != nil && hidden[template.URITemplate.Raw()]
+		})
+	})
 	base.mcp = server.NewMCPServer(
 		config.Name, config.Version,
 		server.WithToolCapabilities(true),
@@ -51,6 +68,7 @@ func NewServer(config ServerConfig) *BaseServer {
 		server.WithRecovery(),
 		server.WithToolFilter(base.visibleTools),
 		server.WithPromptFilter(base.visiblePrompts),
+		server.WithHooks(hooks),
 	)
 	return base
 }
@@ -93,27 +111,53 @@ func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.M
 	if err != nil {
 		return fmt.Errorf("mcp tool catalog: %w", err)
 	}
+	outputs := make([]*jsonschema.Schema, len(definitions))
+	for i, definition := range definitions {
+		if outputs[i], err = outputSchema(definition); err != nil {
+			return err
+		}
+	}
 	s.tools = backend
-	for _, definition := range definitions {
+	for i, definition := range definitions {
 		s.Register(backendTool{
 			governed:   s.governed(),
 			definition: definition,
 			tool:       toolFrom(definition),
 			executor:   backend,
+			output:     outputs[i],
 		})
 	}
 	return nil
 }
 
+// outputSchema compiles a declared output schema with the validator that
+// enforces it on every result; nil when the tool declares none.
+func outputSchema(definition domain.MCPToolDefinition) (*jsonschema.Schema, error) {
+	if len(definition.OutputSchema) == 0 {
+		return nil, nil
+	}
+	schema, err := jsonschema.Compile(definition.OutputSchema)
+	if err != nil {
+		return nil, fmt.Errorf("%w: mcp tool %q output schema: %w", domain.ErrValidation, definition.Name, err)
+	}
+	if schema.Type != "object" {
+		return nil, fmt.Errorf("%w: mcp tool %q output schema must have type object", domain.ErrValidation, definition.Name)
+	}
+	return schema, nil
+}
+
 // RegisterResourceBackend publishes catalog entries as fixed resources, or as
-// URI templates when the entry carries one.
+// URI templates when the entry carries one. Remote callers list and read only
+// the entries the backend returns for them and whose scopes they hold.
 func (s *BaseServer) RegisterResourceBackend(ctx context.Context, backend contract.MCPResourceBackend) error {
 	definitions, err := backend.ListResources(ctx, HostCaller())
 	if err != nil {
 		return fmt.Errorf("mcp resource catalog: %w", err)
 	}
-	reader := backendResource{governed: s.governed(), reader: backend}
+	s.resources = backend
 	for _, definition := range definitions {
+		s.resourceKeys = append(s.resourceKeys, resourceKey(definition))
+		reader := backendResource{governed: s.governed(), backend: backend, key: resourceKey(definition)}
 		if definition.URITemplate != "" {
 			s.mcp.AddResourceTemplate(resourceTemplateFrom(definition), reader.read)
 			continue
@@ -149,7 +193,7 @@ func (s *BaseServer) allowedTools(ctx context.Context) map[string]bool {
 	if s.tools == nil {
 		return nil
 	}
-	caller, err := s.callers.Resolve(ctx)
+	caller, err := s.governed().caller(ctx)
 	if err != nil {
 		return map[string]bool{}
 	}
@@ -164,11 +208,45 @@ func (s *BaseServer) allowedTools(ctx context.Context) map[string]bool {
 	return allowed
 }
 
+// hiddenResources returns the backend entries the caller may not read; all of
+// them when the caller or its catalog cannot be resolved.
+func (s *BaseServer) hiddenResources(ctx context.Context) map[string]bool {
+	hidden := make(map[string]bool, len(s.resourceKeys))
+	for _, key := range s.resourceKeys {
+		hidden[key] = true
+	}
+	if s.resources == nil {
+		return hidden
+	}
+	caller, err := s.governed().caller(ctx)
+	if err != nil {
+		return hidden
+	}
+	definitions, err := s.resources.ListResources(ctx, caller)
+	if err != nil {
+		return hidden
+	}
+	for _, definition := range definitions {
+		if requireScopes(definition.Policy.RequiredScopes, caller) == nil {
+			delete(hidden, resourceKey(definition))
+		}
+	}
+	return hidden
+}
+
+// resourceKey names a catalog entry the way the protocol lists it.
+func resourceKey(definition domain.MCPResourceDefinition) string {
+	if definition.URITemplate != "" {
+		return definition.URITemplate
+	}
+	return definition.URI
+}
+
 func (s *BaseServer) allowedPrompts(ctx context.Context) map[string]bool {
 	if s.prompts == nil {
 		return nil
 	}
-	caller, err := s.callers.Resolve(ctx)
+	caller, err := s.governed().caller(ctx)
 	if err != nil {
 		return map[string]bool{}
 	}

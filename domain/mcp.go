@@ -25,6 +25,9 @@ type MCPCaller struct {
 	Transport     MCPTransport
 	Authenticated bool
 	HostTrusted   bool
+	// ElicitForm and ElicitURL report the elicitation modes the client declared for this request.
+	ElicitForm bool
+	ElicitURL  bool
 }
 
 // MCPServerDefinition contains product-owned values mapped to Keel server configuration.
@@ -44,13 +47,9 @@ type MCPToolAnnotations struct {
 	OpenWorldHint   *bool
 }
 
-// MCPToolPolicy declares server-enforced access, quota, approval, and audit requirements.
+// MCPToolPolicy declares the scopes Scout enforces before a call reaches the backend.
 type MCPToolPolicy struct {
-	RequiredScopes   []string
-	QuotaResource    string
-	QuotaAmount      int64
-	ApprovalRequired bool
-	AuditCategory    string
+	RequiredScopes []string
 }
 
 // MCPToolDefinition is an SDK-neutral MCP tool manifest entry.
@@ -69,6 +68,9 @@ type MCPToolCall struct {
 	RequestID string
 	Name      string
 	Arguments map[string]any
+	// Elicited and State answer a previous result's Elicit. Both come from the client and are untrusted.
+	Elicited map[string]MCPElicitationResult
+	State    string
 }
 
 // MCPResourceLink points a result consumer to supporting MCP content.
@@ -88,11 +90,40 @@ type MCPTaskReference struct {
 }
 
 // MCPToolResult is projected into Keel's text envelope and optional resource links.
+// Data is also the structured content of a tool that declares an output schema.
 type MCPToolResult struct {
 	Data     any
 	Meta     *EnvelopeMeta
 	Evidence []MCPResourceLink
 	Task     *MCPTaskReference
+	// Elicit asks the user for input keyed by id instead of completing; the call
+	// is repeated with the answers and State echoed back.
+	Elicit map[string]MCPElicitation
+	State  string
+}
+
+// MCPElicitation asks the user for input: a form when Schema is set, otherwise
+// an out-of-band interaction at URL identified by ElicitationID.
+type MCPElicitation struct {
+	Message       string
+	Schema        json.RawMessage
+	URL           string
+	ElicitationID string
+}
+
+// MCPElicitationAction is the user's response to an elicitation.
+type MCPElicitationAction string
+
+const (
+	MCPElicitationAccept  MCPElicitationAction = "accept"
+	MCPElicitationDecline MCPElicitationAction = "decline"
+	MCPElicitationCancel  MCPElicitationAction = "cancel"
+)
+
+// MCPElicitationResult is the user's answer; Content is set for an accepted form.
+type MCPElicitationResult struct {
+	Action  MCPElicitationAction
+	Content map[string]any
 }
 
 // EnvelopeMeta carries source, provenance, and pagination metadata.
@@ -151,6 +182,12 @@ type MCPResourceDefinition struct {
 	Title       string
 	Description string
 	MIMEType    string
+	Policy      MCPResourcePolicy
+}
+
+// MCPResourcePolicy declares the scopes Scout enforces before a read reaches the backend.
+type MCPResourcePolicy struct {
+	RequiredScopes []string
 }
 
 // MCPResourceRequest carries one URI and its server-derived caller context.

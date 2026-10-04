@@ -40,10 +40,14 @@ func HostCaller() domain.MCPCaller {
 // Authorize enforces a tool's declared scopes. A host-trusted stdio caller is
 // exempt because the local user already owns the process.
 func Authorize(policy domain.MCPToolPolicy, caller domain.MCPCaller) error {
+	return requireScopes(policy.RequiredScopes, caller)
+}
+
+func requireScopes(required []string, caller domain.MCPCaller) error {
 	if caller.HostTrusted {
 		return nil
 	}
-	for _, scope := range policy.RequiredScopes {
+	for _, scope := range required {
 		if !slices.Contains(caller.Scopes, scope) {
 			return fmt.Errorf("%w: scope %q is required", domain.ErrForbidden, scope)
 		}

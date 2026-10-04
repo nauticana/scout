@@ -281,7 +281,7 @@ Scout separates product MCP behavior from the MCP protocol implementation:
 - `contract.MCPPromptBackend` combines discovery and rendering for client-guidance templates; rendering never executes tools.
 - `contract.MCPServerDescriber` supplies product values mapped into Scout `mcp.ServerConfig`.
 
-`mcp.BaseCallerResolver` derives `MCPCaller` from authenticated Keel context. Tenant, actor, credential, scopes, client IP, session, transport, and trust state are never accepted as tool arguments. Each `Serve*` method stamps its transport into the request context; an unstamped context is treated as remote, so remote calls fail closed without authentication. Host trust is opt-in through `BaseCallerResolver.TrustHost` and applies only to a locally executed `stdio` composition. `mcp.Authorize` enforces `MCPToolPolicy` scopes before the backend is reached, and the same check hides unusable tools from `tools/list`; standard annotations are client hints and never authorization rules. A long-running operation returns `MCPTaskReference` after durable dispatch and completes in a worker.
+`mcp.BaseCallerResolver` derives `MCPCaller` from authenticated Keel context. Tenant, actor, credential, scopes, client IP, session, transport, and trust state are never accepted as tool arguments. Each `Serve*` method stamps its transport into the request context; an unstamped context is treated as remote, so remote calls fail closed without authentication. Host trust is opt-in through `BaseCallerResolver.TrustHost` and applies only to a locally executed `stdio` composition. `mcp.Authorize` enforces `MCPToolPolicy` scopes before the backend is reached, and the same check hides unusable tools from `tools/list`; `MCPResourcePolicy` scopes guard `resources/read` and narrow both resource listings the same way. Standard annotations are client hints and never authorization rules. A long-running operation returns `MCPTaskReference` after durable dispatch and completes in a worker.
 
 Registering a backend binds an SDK-neutral contract to the protocol in one call:
 
@@ -291,7 +291,11 @@ if err := srv.RegisterToolBackend(ctx, productToolBackend); err != nil { ... }
 if err := srv.RegisterResourceBackend(ctx, productResourceBackend); err != nil { ... }
 ```
 
-Catalogs are enumerated once at composition time with `mcp.HostCaller()`, so `ListTools` must return the full catalog for a host-trusted caller and the caller's visible subset for anyone else. A resource entry carrying `URITemplate` registers as a template; otherwise it registers as a fixed URI.
+Catalogs are enumerated once at composition time with `mcp.HostCaller()`, so `ListTools` and `ListResources` must return the full catalog for a host-trusted caller and the caller's visible subset for anyone else; a resource outside that subset cannot be read. A resource entry carrying `URITemplate` registers as a template; otherwise it registers as a fixed URI.
+
+An `OutputSchema` tool returns `MCPToolResult.Data` as structured content beside the text envelope. Registration rejects schemas Scout cannot enforce; missing, unencodable, or non-conforming data is a tool error.
+
+`MCPToolResult.Elicit` asks for a form when `Schema` is set, or a URL interaction otherwise. Scout repeats the call with `MCPToolCall.Elicited` and the echoed `State`, using input-required results from protocol 2026-07-28 and `elicitation/create` before it. `MCPCaller.ElicitForm` and `ElicitURL` report supported modes. Unsupported modes are `ErrCapabilityUnsupported`, and malformed answers are refused before execution. Answers and state remain untrusted. Resources added directly with `RegisterResource` stay visible to every caller.
 
 Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, caller resolution, policy authorization, protocol projection, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure.
 
@@ -484,7 +488,7 @@ if err := srv.RegisterToolBackend(ctx, catalogService); err != nil {
 }
 ```
 
-Scout then performs every boundary step: resolving `domain.MCPCaller` from Keel context, projecting schemas and annotations into the protocol manifest, authorizing declared scopes, calling one `MCPToolExecutor`, `MCPResourceReader`, or `MCPPromptRenderer` method, and projecting the result through the `mcp-v1` envelope with evidence resource links. Quota, approval, audit, credential, and egress policy remain the backend's own responsibility, declared on `MCPToolPolicy` and enforced with Keel infrastructure.
+Scout then performs every boundary step: resolving `domain.MCPCaller` from Keel context, projecting schemas and annotations into the protocol manifest, authorizing declared scopes, calling one `MCPToolExecutor`, `MCPResourceReader`, or `MCPPromptRenderer` method, and projecting the result through the `mcp-v1` envelope with evidence resource links. Quota, approval, audit, credential, and egress policy remain the backend's own responsibility, enforced with Keel infrastructure.
 
 A server that needs direct control over protocol values keeps using `srv.Register` and `srv.RegisterResource`; `mcp.Tool` and `mcp.Resource` bind a definition to its handler without a per-product provider type.
 
@@ -496,7 +500,7 @@ Select transport in the binary:
 - Streamable HTTP or SSE requires authentication, quota middleware, trusted proxy configuration, and a public health endpoint.
 - OAuth-protected MCP routes should use keel's OAuth resource middleware.
 
-Run `mcp/mcptest` manifest and tool-text conformance checks before publishing a server.
+Run `mcp/mcptest` conformance checks before publishing a server: manifest and tool-text checks for directly registered providers, and `AssertToolBackend` and `AssertPromptBackend` for backend catalogs (descriptions, object schemas, consistent annotations, a scope on every tool not marked read-only, and prompts naming only published tools).
 
 ## Database schema
 

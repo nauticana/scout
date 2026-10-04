@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v0.14.0",
+      "title": "MCP structured content, resource authorization, elicitation, and backend conformance checks",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "A tool that declares an output schema returns its data as validated structured content. Resource definitions carry scopes, and resource reads and listings are caller-scoped. Tool results can ask the user for input through elicitation. MCPToolPolicy keeps only RequiredScopes. mcptest checks backend tool and prompt catalogs.",
+      "body_markdown": "## Tool policy (breaking)\n\n`MCPToolPolicy.QuotaResource`, `QuotaAmount`, `ApprovalRequired` and `AuditCategory` are removed; Scout never enforced them. Enforce quota, approval and audit in `ExecuteTool`.\n\n## Structured content (breaking behavior)\n\nWhen `MCPToolDefinition.OutputSchema` is set, `MCPToolResult.Data` is also returned as `structuredContent`, and the server validates it against the schema. Registration rejects schemas Scout cannot enforce. Missing or non-conforming data is a tool error.\n\n## Resources (breaking behavior)\n\n`MCPResourceDefinition.Policy` (`MCPResourcePolicy{RequiredScopes}`) is checked before `ReadResource`. A read is refused unless the entry is in `ListResources` for that caller (`ErrNotFound`) and the caller holds its scopes (`ErrForbidden`). `resources/list` and `resources/templates/list` show only those entries.\n\n## Elicitation\n\n`MCPToolResult.Elicit` (id to `MCPElicitation{Message, Schema}` for a form, or `{Message, URL, ElicitationID}` for URL mode) and `State` ask the user for input. The call is then repeated with `MCPToolCall.Elicited` (id to `MCPElicitationResult{Action, Content}`) and `State`. This works over protocol 2026-07-28 input-required results and over `elicitation/create` for earlier clients. `MCPCaller.ElicitForm` and `ElicitURL` report what the client declared. Asking for an undeclared mode is `ErrCapabilityUnsupported`, so check them first and fall back. `Elicited` and `State` are client-supplied.\n\n## Conformance\n\n`mcptest.AssertToolBackend` and `mcptest.AssertPromptBackend` check catalogs listed with `HostCaller()`."
+    },
+    {
       "version": "v0.13.2",
       "title": "use_skill carries its registry limits",
       "tags": [
