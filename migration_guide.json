@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.13.2",
+      "title": "use_skill carries its registry limits",
+      "tags": [
+        "additive"
+      ],
+      "summary": "skill.UseSkillTool now carries a 10-second timeout and two attempts, so it registers on a TableToolRegistry with no defaults. The open contract is version 2 and enumerated contracts use 2-<digest>; earlier registrations stay valid.",
+      "body_markdown": "## Adopting\n\nDrop local `Timeout` and `MaxAttempts` overrides, register the new `use_skill` version for each tenant, and bind it on the agent type. Releases that bind a version 1 contract keep their pinned version."
+    },
+    {
       "version": "v0.13.1",
       "title": "PDF knowledge sources read by keel's bounded PDF parser; keel v1.2.88",
       "tags": [

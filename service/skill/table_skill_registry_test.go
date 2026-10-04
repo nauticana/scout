@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
@@ -325,6 +326,35 @@ func TestWriteReleaseHonoursAnEnumeratedUseSkill(t *testing.T) {
 	definition.Tools[len(definition.Tools)-1].Version = "9"
 	if err := registry.WriteRelease(ctx, fake, 1, definition); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("an unregistered use_skill: want ErrNotFound, got %v", err)
+	}
+}
+
+var errBeginTool = errors.New("begin tool registration")
+
+// beginFailsDB stops a tool registration at its transaction, after validation.
+type beginFailsDB struct{ skillTableDB }
+
+func (beginFailsDB) BeginTx(context.Context, map[string]string) (keelport.TxQueryService, error) {
+	return nil, errBeginTool
+}
+
+func TestUseSkillToolCarriesRegistryLimits(t *testing.T) {
+	base := UseSkillTool("audit")
+	if !strings.HasPrefix(base.Version, UseSkillToolVersion+"-") || base.Timeout != 10*time.Second || base.MaxAttempts != 2 {
+		t.Fatalf("contract = %+v", base)
+	}
+	if open := UseSkillTool(); open.Version != UseSkillToolVersion {
+		t.Fatalf("open contract version = %q", open.Version)
+	}
+}
+
+func TestUseSkillToolRegistersWithoutRegistryDefaults(t *testing.T) {
+	fake, _ := newRegistry()
+	tools := &toolgateway.TableToolRegistry{DB: beginFailsDB{skillTableDB{fake: fake}}}
+	for _, tool := range []domain.ToolDefinition{UseSkillTool(), UseSkillTool("audit")} {
+		if err := tools.Register(context.Background(), 1, tool); !errors.Is(err, errBeginTool) {
+			t.Fatalf("%s@%s: want validation to pass, got %v", tool.ToolID, tool.Version, err)
+		}
 	}
 }
 

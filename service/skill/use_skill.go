@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/service/toolgateway"
 )
 
-// UseSkillToolVersion is the version of the open use_skill contract, which accepts any skill id.
-const UseSkillToolVersion = "1"
+// UseSkillToolVersion is the current use_skill contract generation.
+const UseSkillToolVersion = "2"
 
 // UseSkillTool is the in-process tool contract a tenant registers and a release binds
 // alongside its skills. With skill ids the input schema enumerates them and the version
@@ -26,6 +27,8 @@ func UseSkillTool(skillIDs ...string) domain.ToolDefinition {
 	tool := domain.ToolDefinition{
 		ToolID: domain.UseSkillToolID, Version: UseSkillToolVersion, DisplayName: "Use skill",
 		Endpoint:    toolgateway.InProcessEndpoint(domain.UseSkillToolID),
+		Timeout:     10 * time.Second,
+		MaxAttempts: 2,
 		InputSchema: []byte(`{"type":"object","required":["skill"],"additionalProperties":false,"properties":{"skill":{"type":"string"}}}`),
 		OutputSchema: []byte(`{"type":"object","required":["skill","procedure","tools"],"properties":{` +
 			`"skill":{"type":"string"},"procedure":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}},"input_schema":{"type":"object"}}}`),
@@ -36,7 +39,7 @@ func UseSkillTool(skillIDs ...string) domain.ToolDefinition {
 	ids := slices.Compact(slices.Sorted(slices.Values(skillIDs)))
 	enum, _ := json.Marshal(ids)
 	sum := sha256.Sum256(enum)
-	tool.Version = UseSkillToolVersion + "-" + hex.EncodeToString(sum[:8])
+	tool.Version += "-" + hex.EncodeToString(sum[:8])
 	tool.InputSchema = []byte(`{"type":"object","required":["skill"],"additionalProperties":false,"properties":{"skill":{"type":"string","enum":` + string(enum) + `}}}`)
 	return tool
 }
