@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
 	"github.com/nauticana/scout/domain"
 )
 
@@ -112,4 +114,49 @@ func TestToolWithoutOutputSchemaReturnsTextOnly(t *testing.T) {
 	if strings.Contains(result, "structuredContent") || strings.Contains(result, `"isError":true`) {
 		t.Fatalf("result = %s", result)
 	}
+}
+
+func TestToolErrorReturnsStructuredContent(t *testing.T) {
+	resetAt := "2026-10-05T00:00:00Z"
+	backend := &definedSchemaBackend{definition: domain.MCPToolDefinition{Name: "count", Description: "count things",
+		OutputSchema: json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}`)}}
+	srv := NewServer(ServerConfig{Name: "test", Version: "1.0.0"})
+	if err := srv.RegisterToolBackend(context.Background(), &toolErrorBackend{definedSchemaBackend: backend, result: domain.MCPToolResult{
+		Error: &domain.MCPToolError{Code: "quota_exhausted", Message: "monthly quota used", Details: map[string]any{"reset_at": resetAt}},
+	}}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	result := call(t, srv, remoteContext("read"), "tools/call", map[string]any{"name": "count"})
+	want := `{"code":"quota_exhausted","message":"monthly quota used","details":{"reset_at":"2026-10-05T00:00:00Z"}}`
+	if !strings.Contains(result, `"structuredContent":`+want) || !strings.Contains(result, `"isError":true`) || !strings.Contains(result, `quota_exhausted\",\"message`) {
+		t.Fatalf("result = %s", result)
+	}
+}
+
+func TestToolErrorRefusesMalformedErrors(t *testing.T) {
+	for name, result := range map[string]domain.MCPToolResult{
+		"no code":          {Error: &domain.MCPToolError{Message: "failed"}},
+		"no message":       {Error: &domain.MCPToolError{Code: "failed"}},
+		"unencodable":      {Error: &domain.MCPToolError{Code: "failed", Message: "failed", Details: map[string]any{"c": make(chan int)}}},
+		"with data":        {Error: &domain.MCPToolError{Code: "failed", Message: "failed"}, Data: map[string]int{"n": 1}},
+		"with elicitation": {Error: &domain.MCPToolError{Code: "failed", Message: "failed"}, Elicit: map[string]domain.MCPElicitation{"q": {Message: "?"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: domain.MCPToolDefinition{Name: "count"},
+				executor: &toolErrorBackend{definedSchemaBackend: &definedSchemaBackend{}, result: result}}
+			out, err := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{})
+			if err != nil || !out.IsError || out.StructuredContent != nil || !strings.Contains(out.Content[0].(mcpgo.TextContent).Text, domain.ErrContractFailed.Error()) {
+				t.Fatalf("result = %+v, err = %v", out, err)
+			}
+		})
+	}
+}
+
+type toolErrorBackend struct {
+	*definedSchemaBackend
+	result domain.MCPToolResult
+}
+
+func (backend *toolErrorBackend) ExecuteTool(context.Context, domain.MCPToolCall) (domain.MCPToolResult, error) {
+	return backend.result, nil
 }

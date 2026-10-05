@@ -10,6 +10,14 @@ type Envelope struct {
 	Meta *EnvelopeMeta `json:"_meta,omitempty"`
 }
 
+// ToolError is the mcp-v1 payload of a typed tool failure, sent as both the
+// text and the structured content of an isError result.
+type ToolError struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
 // EnvelopeMeta carries source, provenance, and pagination metadata.
 type EnvelopeMeta struct {
 	GeneratedAt string          `json:"generated_at"`

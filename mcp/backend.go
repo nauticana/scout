@@ -41,6 +41,7 @@ type backendTool struct {
 	tool       mcpgo.Tool
 	executor   contract.MCPToolExecutor
 	output     *jsonschema.Schema
+	onDenied   DeniedFunc
 }
 
 func (provider backendTool) Name() string           { return provider.definition.Name }
@@ -49,9 +50,15 @@ func (provider backendTool) Definition() mcpgo.Tool { return provider.tool }
 func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	caller, err := provider.caller(ctx)
 	if err != nil {
+		if provider.onDenied != nil {
+			provider.onDenied(ctx, caller, provider.definition.Name, err)
+		}
 		return WrapError(err), nil
 	}
 	if err = Authorize(provider.definition.Policy, caller); err != nil {
+		if provider.onDenied != nil {
+			provider.onDenied(ctx, caller, provider.definition.Name, err)
+		}
 		return WrapError(err), nil
 	}
 	elicited, err := elicitedFrom(request.Params.InputResponses)
@@ -68,6 +75,12 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 	})
 	if err != nil {
 		return WrapError(err), nil
+	}
+	if result.Error != nil {
+		if result.Data != nil || result.Meta != nil || len(result.Evidence) > 0 || result.Task != nil || len(result.Elicit) > 0 || result.State != "" {
+			return WrapError(fmt.Errorf("%w: tool %q returned an error with other result fields", domain.ErrContractFailed, provider.definition.Name)), nil
+		}
+		return WrapToolError(*result.Error), nil
 	}
 	if len(result.Elicit) > 0 {
 		asked, err := elicitationResult(result, caller)

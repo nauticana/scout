@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/extract"
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
@@ -378,6 +379,22 @@ func TestIngestPipelineSystemicFailureCancelsBatch(t *testing.T) {
 		if item.Failure == "" || item.Terminal {
 			t.Fatalf("item = %+v", item)
 		}
+	}
+}
+
+func TestIngestPipelineRetriesIsolationFailure(t *testing.T) {
+	sources := map[string][]byte{"a": []byte("content")}
+	harness := newPipelineHarness(sources)
+	harness.pipeline.IsSystemic = func(error) bool { return false }
+	harness.pipeline.Decoder = &fake.MediaDecoder{DecodeFunc: func(context.Context, domain.KnowledgeDocument, []byte) (domain.DecodedDocument, error) {
+		return domain.DecodedDocument{}, extract.ErrIsolationFailed
+	}}
+	result, err := harness.pipeline.IngestBatch(context.Background(), domain.IngestBatch{
+		TenantContext: domain.TenantContext{TenantID: 7}, KnowledgeBaseID: "kb", KnowledgeVersion: "v1",
+		Documents: []domain.KnowledgeDocument{testDocument("a", sources["a"])}},
+	)
+	if !errors.Is(err, extract.ErrIsolationFailed) || len(result.Items) != 1 || result.Items[0].Terminal {
+		t.Fatalf("result = %+v, err = %v", result, err)
 	}
 }
 

@@ -170,3 +170,82 @@ func TestDirectRegistrationStaysVisible(t *testing.T) {
 		t.Fatalf("listing = %s", listed)
 	}
 }
+
+type deniedCall struct {
+	caller domain.MCPCaller
+	tool   string
+	err    error
+}
+
+func deniedServer(t *testing.T) (*BaseServer, *toolBackendFake, *[]deniedCall) {
+	t.Helper()
+	var denied []deniedCall
+	backend := &toolBackendFake{result: domain.MCPToolResult{Data: map[string]int{"n": 1}}}
+	server := NewServer(ServerConfig{Name: "test", Version: "1.0.0", OnDenied: func(_ context.Context, caller domain.MCPCaller, tool string, err error) {
+		denied = append(denied, deniedCall{caller: caller, tool: tool, err: err})
+	}})
+	if err := server.RegisterToolBackend(context.Background(), backend); err != nil {
+		t.Fatalf("register backend: %v", err)
+	}
+	return server, backend, &denied
+}
+
+func TestOnDeniedObservesRefusedCalls(t *testing.T) {
+	server, backend, denied := deniedServer(t)
+	submit := map[string]any{"name": "submit"}
+
+	call(t, server, remoteContext("read"), "tools/call", submit)
+	call(t, server, withTransport(context.Background(), domain.MCPTransportStreamableHTTP), "tools/call", submit)
+	if backend.call.Name != "" || len(*denied) != 2 {
+		t.Fatalf("denied = %+v, backend call = %+v", *denied, backend.call)
+	}
+	if got := (*denied)[0]; got.tool != "submit" || got.caller.TenantID != 7 || !errors.Is(got.err, domain.ErrForbidden) {
+		t.Fatalf("catalog refusal = %+v", got)
+	}
+	if got := (*denied)[1]; !errors.Is(got.err, domain.ErrUnauthorized) {
+		t.Fatalf("unauthenticated refusal = %+v", got)
+	}
+
+	*denied = nil
+	call(t, server, remoteContext("read write"), "tools/call", submit)
+	call(t, server, remoteContext("read"), "tools/call", map[string]any{"name": "search"})
+	call(t, server, remoteContext("read"), "tools/call", map[string]any{"name": "unknown"})
+	if len(*denied) != 0 {
+		t.Fatalf("admitted or unknown calls reported as denied: %+v", *denied)
+	}
+}
+
+// A tool in the caller's catalog whose scopes the caller lacks is reported with the scope refusal.
+func TestOnDeniedReportsMissingScopes(t *testing.T) {
+	var denied []error
+	backend := &definedSchemaBackend{definition: domain.MCPToolDefinition{Name: "admin", Description: "admin", Policy: domain.MCPToolPolicy{RequiredScopes: []string{"admin"}}}}
+	server := NewServer(ServerConfig{Name: "test", Version: "1.0.0", OnDenied: func(_ context.Context, _ domain.MCPCaller, _ string, err error) {
+		denied = append(denied, err)
+	}})
+	if err := server.RegisterToolBackend(context.Background(), backend); err != nil {
+		t.Fatalf("register backend: %v", err)
+	}
+	result := call(t, server, remoteContext("read"), "tools/call", map[string]any{"name": "admin"})
+	if !strings.Contains(result, "not found") || len(denied) != 1 || !errors.Is(denied[0], domain.ErrForbidden) || !strings.Contains(denied[0].Error(), `scope "admin"`) {
+		t.Fatalf("result = %s, denied = %v", result, denied)
+	}
+}
+
+func TestBackendToolReportsItsOwnRefusal(t *testing.T) {
+	var tools []string
+	backend := &toolBackendFake{}
+	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], executor: backend,
+		onDenied: func(_ context.Context, _ domain.MCPCaller, name string, _ error) { tools = append(tools, name) }}
+	if result, _ := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{}); !result.IsError || len(tools) != 1 || tools[0] != "submit" {
+		t.Fatalf("result = %+v, reported = %v", result, tools)
+	}
+}
+
+func TestBackendToolReportsUnresolvedCaller(t *testing.T) {
+	var denied []error
+	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[0], executor: &toolBackendFake{},
+		onDenied: func(_ context.Context, _ domain.MCPCaller, _ string, err error) { denied = append(denied, err) }}
+	if result, _ := tool.Handle(withTransport(context.Background(), domain.MCPTransportStreamableHTTP), mcpgo.CallToolRequest{}); !result.IsError || len(denied) != 1 || !errors.Is(denied[0], domain.ErrUnauthorized) {
+		t.Fatalf("result = %+v, denied = %v", result, denied)
+	}
+}

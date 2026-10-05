@@ -16,7 +16,8 @@ import (
 // so their offsets stay source offsets, and every other media type the keel
 // extractor supports (PDF and DOCX with extract.Native) through Extractor.
 // Pages without a text layer contribute nothing until an OCR extractor is
-// configured; a document with no extractable text is refused.
+// configured; a document with no extractable text is refused. An isolated
+// extractor whose child could not run is an operational fault, not the document's.
 type DocumentDecoder struct {
 	Extractor extract.TextExtractor
 }
@@ -37,7 +38,7 @@ func (decoder DocumentDecoder) Decode(ctx context.Context, document domain.Knowl
 	}
 	extracted, err := decoder.Extractor.Extract(ctx, document.MediaType, raw)
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, extract.ErrIsolationFailed) {
 			return domain.DecodedDocument{}, err
 		}
 		return domain.DecodedDocument{}, fmt.Errorf("%w: document %q: %w", domain.ErrValidation, document.DocumentID, err)

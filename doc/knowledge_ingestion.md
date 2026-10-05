@@ -17,7 +17,7 @@ count; a slow index blocks publish, which fills the handoff channel and stops th
 no unbounded queue. Every stage closes its output channel only after all of its workers have exited, so the
 batch returns with no goroutine still running.
 
-Failure classification decides the blast radius. A **systemic** failure — canceled/expired context, or an error
+Failure classification decides the blast radius. A **systemic** failure — canceled/expired context, `extract.ErrIsolationFailed`, or an error
 `IsSystemic` accepts (default `ErrCircuitOpen`, `ErrDegraded`) — cancels the batch; remaining items get a
 non-terminal `batch canceled` failure and `IngestBatch` returns the error with the partial result. An
 **isolated** document failure (digest mismatch, undecodable media, nil entitlements, conflicting republish)
@@ -54,11 +54,13 @@ version stamped into every chunk id. `PolicyRedactor` masks `field: value` lines
 keel's `extract.TextExtractor` (`extract.Native` reads PDF text layers and DOCX): it sends `text/plain` and
 `text/markdown` through `PlainTextDecoder`, maps extracted headings (with `Depth` from the heading level), paragraphs,
 tables and pages to sections, drops blank ones, and refuses a document with no extractable text. Extraction
-failures (`extract.ErrTooLarge`, `extract.ErrEncrypted`, malformed files) are terminal `ErrValidation`; a canceled
-context stays systemic. `extract_max_bytes` bounds PDF decoding inside keel's parser, and a PDF that opens with
-the empty user password is extracted. A scanned page contributes its invisible OCR layer when it has one and
-nothing otherwise, until keel ships an OCR extractor. keel's pinned PDF parser bounds nested form XObjects only by
-depth, so a crafted file can stall one page: extract untrusted PDFs in a worker whose deadline stops the process.
+failures (`extract.ErrTooLarge`, `extract.ErrEncrypted`, `extract.ErrTimeout`, malformed files) are terminal
+`ErrValidation`; a canceled context and `extract.ErrIsolationFailed` stay systemic. `extract_max_bytes` bounds PDF
+decoding inside keel's parser, and a PDF that opens with the empty user password is extracted. A scanned page
+contributes its invisible OCR layer when it has one and nothing otherwise, until keel ships an OCR extractor.
+keel's pinned PDF parser bounds nested form XObjects only by depth, so a crafted file can stall one page without
+checking its context: extract untrusted PDFs with `extract.NewIsolated`, which runs them in a child binary
+(`os.Exit(extract.ChildMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))`, composed downstream) that a deadline kills.
 Product-specific decoders — SAP document/table extraction — stay downstream.
 
 ## Versions, manifests, aliases, tombstones, GC

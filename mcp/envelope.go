@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -72,4 +74,20 @@ func (e Envelopes) Result(result domain.MCPToolResult) *mcpgo.CallToolResult {
 
 func WrapError(err error) *mcpgo.CallToolResult {
 	return mcpgo.NewToolResultErrorFromErr("tool execution failed", err)
+}
+
+// WrapToolError renders a typed failure as an isError result whose text and
+// structured content are the same mcp-v1 ToolError object. Error results are
+// exempt from the tool's output schema.
+func WrapToolError(toolErr domain.MCPToolError) *mcpgo.CallToolResult {
+	if strings.TrimSpace(toolErr.Code) == "" || strings.TrimSpace(toolErr.Message) == "" {
+		return WrapError(fmt.Errorf("%w: a tool error needs a code and a message", domain.ErrContractFailed))
+	}
+	encoded, err := json.Marshal(api.ToolError(toolErr))
+	if err != nil {
+		return WrapError(fmt.Errorf("%w: tool error %q details: %w", domain.ErrContractFailed, toolErr.Code, err))
+	}
+	result := mcpgo.NewToolResultError(string(encoded))
+	result.StructuredContent = json.RawMessage(encoded)
+	return result
 }

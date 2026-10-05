@@ -61,10 +61,14 @@ func TestDocumentDecoderRefusals(t *testing.T) {
 	if _, err := decodeDocument(scanned, "application/pdf", nil); !errors.Is(err, domain.ErrValidation) {
 		t.Errorf("no extractable text = %v", err)
 	}
-	for _, cause := range []error{extract.ErrTooLarge, extract.ErrEncrypted, errors.New("extract pdf: malformed document")} {
+	for _, cause := range []error{extract.ErrTooLarge, extract.ErrEncrypted, extract.ErrTimeout, errors.New("extract pdf: malformed document")} {
 		if _, err := decodeDocument(stubExtractor{err: cause}, "application/pdf", nil); !errors.Is(err, domain.ErrValidation) || !errors.Is(err, cause) {
 			t.Errorf("%v = %v", cause, err)
 		}
+	}
+	crashed := fmt.Errorf("%w: signal: killed", extract.ErrIsolationFailed)
+	if _, err := decodeDocument(stubExtractor{err: crashed}, "application/pdf", nil); !errors.Is(err, extract.ErrIsolationFailed) || errors.Is(err, domain.ErrValidation) {
+		t.Errorf("an isolated child that failed must stay systemic: %v", err)
 	}
 	if _, err := decodeDocument(stubExtractor{}, "image/png", nil); !errors.Is(err, domain.ErrValidation) {
 		t.Errorf("unsupported = %v", err)

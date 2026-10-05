@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	keeldata "github.com/nauticana/keel/data"
+	"github.com/nauticana/keel/extract"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -84,7 +85,7 @@ type IngestPipeline struct {
 	EmbedFanOut int
 	// QueueDepth is the buffered handoff between stages; default 0 (rendezvous).
 	QueueDepth int
-	// IsSystemic classifies a failure as batch-fatal; nil treats circuit-open and degraded dependencies as systemic. Context errors are always systemic.
+	// IsSystemic classifies a failure as batch-fatal; nil treats circuit-open and degraded dependencies as systemic. Context errors and extract.ErrIsolationFailed are always systemic.
 	IsSystemic func(error) bool
 
 	once sync.Once
@@ -162,7 +163,7 @@ func atLeastOne(value int) int {
 }
 
 func (pipeline *IngestPipeline) systemic(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, extract.ErrIsolationFailed) {
 		return true
 	}
 	if pipeline.IsSystemic != nil {

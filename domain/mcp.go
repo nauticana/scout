@@ -100,6 +100,16 @@ type MCPToolResult struct {
 	// is repeated with the answers and State echoed back.
 	Elicit map[string]MCPElicitation
 	State  string
+	// Error, when set, is the whole result: a failure the client reads without parsing prose.
+	Error *MCPToolError
+}
+
+// MCPToolError is a tool failure with a stable Code, a Message for the model,
+// and Details such as a link, a list of choices, or a reset time.
+type MCPToolError struct {
+	Code    string
+	Message string
+	Details map[string]any
 }
 
 // MCPElicitation asks the user for input: a form when Schema is set, otherwise

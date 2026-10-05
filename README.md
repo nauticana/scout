@@ -295,6 +295,10 @@ Catalogs are enumerated once at composition time with `mcp.HostCaller()`, so `Li
 
 An `OutputSchema` tool returns `MCPToolResult.Data` as structured content beside the text envelope. Registration rejects schemas Scout cannot enforce; missing, unencodable, or non-conforming data is a tool error.
 
+A backend reports a failure the client should act on with `MCPToolResult.Error` (`domain.MCPToolError{Code, Message, Details}`) and no other result field. Scout returns an `isError` result whose text and structured content are the same `api.ToolError` object, so a client reads the code and details (a link, choices, a reset time) without parsing prose; error results are exempt from the tool's output schema. A blank code or message, unencodable details, or an error mixed with data is `ErrContractFailed`. `mcp.WrapToolError` renders the same result for directly registered tools.
+
+`ServerConfig.OnDenied` observes every backend tool call refused before its executor runs: an unresolved caller (`ErrUnauthorized`), a tool outside the caller's catalog, or missing scopes (`ErrForbidden`). The client still sees the protocol's "tool not found" for a tool hidden from it. The hook runs synchronously on the request, so keep it to auditing, and it costs one extra `ListTools` per call only when it is set; `NewServerFor` does not take it, so build the server with `NewServer`.
+
 `MCPToolResult.Elicit` asks for a form when `Schema` is set, or a URL interaction otherwise. Scout repeats the call with `MCPToolCall.Elicited` and the echoed `State`, using input-required results from protocol 2026-07-28 and `elicitation/create` before it. `MCPCaller.ElicitForm` and `ElicitURL` report supported modes. Unsupported modes are `ErrCapabilityUnsupported`, and malformed answers are refused before execution. Answers and state remain untrusted. Resources added directly with `RegisterResource` stay visible to every caller.
 
 Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, caller resolution, policy authorization, protocol projection, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure.
@@ -558,7 +562,7 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_s
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 43 selected keel tables and 120 Scout tables. Drop the modules the product does not use:
+That full set is 45 selected keel tables and 120 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|

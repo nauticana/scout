@@ -23,7 +23,13 @@ type ServerConfig struct {
 	Source       string
 	ClientIPHook func(context.Context, *http.Request) context.Context
 	Callers      CallerResolver
+	// OnDenied observes each backend tool call refused before its executor runs:
+	// an unresolved caller, a tool outside the caller's catalog, or missing scopes.
+	OnDenied DeniedFunc
 }
+
+// DeniedFunc receives a refused call's caller, tool name, and refusal.
+type DeniedFunc func(ctx context.Context, caller domain.MCPCaller, tool string, err error)
 
 // BaseServer wraps mcp-go with name-keyed provider registration and
 // caller-scoped discovery.
@@ -37,10 +43,12 @@ type BaseServer struct {
 	// resourceKeys are the backend's entries; directly registered resources are not caller-scoped.
 	resourceKeys []string
 	prompts      contract.MCPPromptCatalog
+	toolNames    map[string]bool
+	onDenied     DeniedFunc
 }
 
 func NewServer(config ServerConfig) *BaseServer {
-	base := &BaseServer{ipHook: config.ClientIPHook, source: config.Source, callers: config.Callers}
+	base := &BaseServer{ipHook: config.ClientIPHook, source: config.Source, callers: config.Callers, onDenied: config.OnDenied}
 	if base.ipHook == nil {
 		base.ipHook = keelhandler.WithClientIPContext
 	}
@@ -59,6 +67,12 @@ func NewServer(config ServerConfig) *BaseServer {
 			return template.URITemplate != nil && template.URITemplate.Template != nil && hidden[template.URITemplate.Raw()]
 		})
 	})
+	// The call-time tool filter refuses a hidden tool as not found, so denials are observed before it runs.
+	if base.onDenied != nil {
+		hooks.AddBeforeCallTool(func(ctx context.Context, _ any, request *mcpgo.CallToolRequest) {
+			base.reportDenied(ctx, request.Params.Name)
+		})
+	}
 	base.mcp = server.NewMCPServer(
 		config.Name, config.Version,
 		server.WithToolCapabilities(true),
@@ -118,13 +132,16 @@ func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.M
 		}
 	}
 	s.tools = backend
+	s.toolNames = make(map[string]bool, len(definitions))
 	for i, definition := range definitions {
+		s.toolNames[definition.Name] = true
 		s.Register(backendTool{
 			governed:   s.governed(),
 			definition: definition,
 			tool:       toolFrom(definition),
 			executor:   backend,
 			output:     outputs[i],
+			onDenied:   s.onDenied,
 		})
 	}
 	return nil
@@ -206,6 +223,33 @@ func (s *BaseServer) allowedTools(ctx context.Context) map[string]bool {
 		allowed[definition.Name] = Authorize(definition.Policy, caller) == nil
 	}
 	return allowed
+}
+
+// reportDenied passes a refused backend tool call to OnDenied, with the
+// refusal the call-time filter and Handle apply.
+func (s *BaseServer) reportDenied(ctx context.Context, name string) {
+	if !s.toolNames[name] {
+		return
+	}
+	caller, err := s.governed().caller(ctx)
+	if err != nil {
+		s.onDenied(ctx, caller, name, err)
+		return
+	}
+	definitions, err := s.tools.ListTools(ctx, caller)
+	if err != nil {
+		s.onDenied(ctx, caller, name, fmt.Errorf("mcp tool catalog: %w", err))
+		return
+	}
+	for _, definition := range definitions {
+		if definition.Name == name {
+			if err = Authorize(definition.Policy, caller); err != nil {
+				s.onDenied(ctx, caller, name, err)
+			}
+			return
+		}
+	}
+	s.onDenied(ctx, caller, name, fmt.Errorf("%w: tool %q is not in the caller's catalog", domain.ErrForbidden, name))
 }
 
 // hiddenResources returns the backend entries the caller may not read; all of
