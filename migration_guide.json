@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.14.2",
+      "title": "Agent role seeds name partner_scoped; keel v1.2.94",
+      "tags": [
+        "schema"
+      ],
+      "summary": "The AGENT_ADMIN and AGENT_OPER seed rows carry keel's authorization_role.partner_scoped column, so the generated seed loads into a fresh database again. keel moves to v1.2.94.",
+      "body_markdown": "## Role seeds\n\nWith keel v1.2.93 the generated seed named three `authorization_role` columns but gave Scout's two roles two values, and a fresh load stopped at `AGENT_ADMIN`. Both roles are now seeded `partner_scoped = TRUE`: they act within the holder's partner, and keel's registration may grant them at signup. Regenerate the DDL. A database that already holds the roles sets the flag itself:\n\n```sql\nUPDATE authorization_role SET partner_scoped = TRUE WHERE id IN ('AGENT_ADMIN', 'AGENT_OPER');\n```\n\n## Pins\n\nkeel `v1.2.94` (from `v1.2.93`). The keel tables in the generated DDL and the Go surface Scout uses are unchanged; keel's breaking changes reach `user.RegistrationService` callers, which Scout is not."
+    },
+    {
       "version": "v0.14.1",
       "title": "Typed MCP tool errors, a hook for refused tool calls, isolated PDF extraction failures stay retryable; keel v1.2.93, Charter v1.2.4",
       "tags": [

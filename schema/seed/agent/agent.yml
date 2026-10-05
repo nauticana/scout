@@ -96,10 +96,10 @@ seeds:
       - [AGENT_STUDIO, RESTORE, Restore published versions]
       - [AGENT_APPROVAL, DECIDE, Decide assigned approval requests]
   - table: authorization_role
-    columns: [id, caption]
+    columns: [id, caption, partner_scoped]
     rows:
-      - [AGENT_ADMIN, Agent Administrator]
-      - [AGENT_OPER, Agent Operator]
+      - [AGENT_ADMIN, Agent Administrator, true]
+      - [AGENT_OPER, Agent Operator, true]
   - table: application_menu_item
     columns: [display_order, filter_on_list, menu_id, item_id, rest_uri, caption]
     rows:

@@ -24,7 +24,7 @@ All paths are relative to the authenticated API origin.
 | `GET` | `/api/agent-studio/release-sections?agent_name=<id>&version=<n>` | `VIEW` | `ReleaseSections` |
 | `GET` | `/api/agent-studio/models` | `VIEW` | `Models` |
 
-Scout seeds the `AGENT_STUDIO` authorization object, route verbs, `AGENT_ADMIN` and `AGENT_OPER`, the `agent_studio` page grant, and read-only Studio table grants. Applications assign roles to users and retain their product permissions.
+Scout seeds the `AGENT_STUDIO` authorization object, route verbs, the partner-scoped roles `AGENT_ADMIN` and `AGENT_OPER`, the `agent_studio` page grant, and read-only Studio table grants. Applications assign roles to users and retain their product permissions.
 
 ## Stable field mappings
 
