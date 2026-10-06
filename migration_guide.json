@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.14.3",
+      "title": "keel v1.2.97",
+      "tags": [
+        "additive"
+      ],
+      "summary": "keel moves to v1.2.97. Scout's Go surface and tables are unchanged; the generated seed gains one keel configuration flag.",
+      "body_markdown": "## Generated DDL\n\nThe keel `core` seed adds the `oauth_max_pending_clients` configuration flag (`0`, unbounded), which bounds pending open OAuth client registrations when keel's local authorization server is used. Regenerate the DDL; no table changes.\n\n## Pins\n\nkeel `v1.2.97` (from `v1.2.94`). keel's changes reach `user.RegistrationService` partner address handling, `service.APIKeyService` and keel's local OAuth authorization server, none of which Scout calls."
+    },
+    {
       "version": "v0.14.2",
       "title": "Agent role seeds name partner_scoped; keel v1.2.94",
       "tags": [
