@@ -14,3 +14,5 @@ tables:
   - approval_risk_tier
   - agent_output_class
   - agent_state
+  - mcp_confirmation_status
+  - mcp_confirmation_channel

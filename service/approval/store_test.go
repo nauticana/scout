@@ -14,7 +14,7 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// approvalTable keeps approval_request rows by key and the outbox events queued with them.
+// approvalTable keeps turn_approval_request rows by key and the outbox events queued with them.
 type approvalTable struct {
 	rows      map[string][]any
 	events    map[int64]string

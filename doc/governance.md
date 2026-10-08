@@ -35,7 +35,8 @@ decision time on top of the pinned release:
   under its canonical digest and moves the current pointer by compare-and-swap; the expected digest
   is empty before the first write. Writing the value already in force succeeds unchanged; a stale
   expectation is `ErrConflict` with the current digest. The store clock stamps every change.
-- **Only a service principal writes,** and every change is an audit record (`restriction` category).
+- **Only a service principal writes,** and every change is an audit record (`restriction` category)
+  written in the swap's transaction: a change that cannot be audited does not commit.
 - **An unreadable layer denies.** A layer that cannot be read, or whose content no longer matches
   its digest, fails the guardrail inspection and the policy decision. A layer never written is empty.
 
@@ -60,13 +61,13 @@ This is where the operating modes live. `advise`, `draft`, `execute_with_approva
 An irreversible action does not fail for lack of a human — it waits.
 
 `approval.Gate` implements `contract.ToolApprovalGate` over durable requests. The first call opens an
-`approval_request` and returns pending; later calls return whatever verdict was recorded. Open is
+`turn_approval_request` and returns pending; later calls return whatever verdict was recorded. Open is
 idempotent on `(tenant, request, execution_step)`, so a replayed turn re-attaches instead of asking
 the same person twice.
 
 With `TableStore.NotifyThroughOutbox`, opening a request also queues the approver's notice as a keel
-`outbox_event` (`approval_request` / `approval.requested`) in the same transaction and records it in
-`approval_request.notification_event_id`, so a request never exists without its notice and the
+`outbox_event` (`turn_approval_request` / `approval.requested`) in the same transaction and records it in
+`turn_approval_request.notification_event_id`, so a request never exists without its notice and the
 event's `dispatched_at` proves delivery. Only the call that creates the request queues one; a request
 routed by scope has no recipient and none. A keel outbox worker's `Dispatcher` delivers the notice;
 leave `Gate.Notifier` unset, or the approver is told twice. Escalation to a backup is not notified.
@@ -92,6 +93,42 @@ steps rather than leaving the last one to a caller.
 with none, expires the request. A backup needs its own grant — escalation moves *who decides*, never
 *what may be decided*.
 
+## Confirmed MCP tool calls
+
+An MCP client can call a tool that must not act until a person confirms it. That call is not a turn,
+so `service/confirmation` holds it instead of the turn approval module:
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: Prepare
+    pending --> approved: Decide / Answer / keel approval
+    pending --> declined
+    pending --> withdrawn: maker
+    pending --> expired: ExpireDue
+    pending --> failed: Abandon
+    approved --> executing: Claim (new fence)
+    executing --> executed
+    executing --> failed
+    executing --> unknown: effect unknown, cancel, or lapsed lease
+    unknown --> executed: Reconcile
+    unknown --> failed: Reconcile
+```
+
+- **The stored action is what runs.** `Prepare` keeps the exact payload under an action digest; the
+  executor never runs re-sent arguments. One action has one open confirmation, and it belongs to its
+  maker and client: anyone else preparing it gets `ErrConflict`, and an elicitation answer must name
+  the maker's own confirmation for the same tool and digest.
+- **The product decides who may act.** `contract.MCPConfirmationChecker` checks a direct decider,
+  then re-checks both maker and recorded decider before the run. Its error refuses.
+- **Maker-checker is keel's.** Set `ApprovalRequired` at preparation so direct decisions fail closed
+  while the keel request is opened. `AttachApproval` links it, and `DecideApprovalTx`, called from
+  `approval.Service.OnDecided`, decides both records in keel's transaction.
+- **Exactly once, or unknown.** A run holds a store-clock lease under a fence that only it may
+  complete. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be
+  stored, a cancellation, or a lost claim is `unknown`, never success and never retried; a person records the verified outcome with `Reconcile`.
+- **Client-safe reasons.** The stored and returned reason is generic or the product's `Reason`; the
+  cause goes to `Executor.OnFailure`.
+
 ## Credentials
 
 `ToolCredentialProvider` is keyed on the principal, not the tenant:
@@ -116,7 +153,8 @@ bindings whose delegation ended so bound work can be stopped rather than continu
 scope, action, resource, release, policy id and version, outcome, obligations, reason, and a
 reference to redacted evidence in object storage.
 
-`observability.TableAuditSink` is both sides: `Record` writes, `Decisions` reads. Evidence with no
+`observability.TableAuditSink` is both sides: `Record` writes, `RecordTx` writes inside a caller's
+transaction so a state change commits only with its record, `Decisions` reads. Evidence with no
 way to read it answers nothing, which is why `AuditQuery` ships with the sink rather than later.
 A query reads exactly one tenant, or — with `TenantID` zero — only the platform-wide records that
 name no tenant, such as a rollout transition. Reading across tenants is not expressible in

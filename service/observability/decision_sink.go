@@ -92,6 +92,26 @@ func (sink *TableAuditSink) Record(ctx context.Context, decision domain.Decision
 	if err := sink.init(ctx); err != nil {
 		return err
 	}
+	return sink.insert(ctx, sink.qs, decision)
+}
+
+const decisionCatalogID = "scout.observability.decision"
+
+// RecordTx writes one decision inside the caller's transaction, so a state change
+// and its evidence commit or roll back together.
+func (sink *TableAuditSink) RecordTx(ctx context.Context, tx keelport.TxQueryService, decision domain.DecisionRecord) error {
+	catalog, ok := tx.(keelport.TxQueryCatalog)
+	if !ok {
+		return fmt.Errorf("%w: the transaction cannot bind the audit query catalog", domain.ErrNotReady)
+	}
+	qs := catalog.QueryService(decisionCatalogID, decisionQueries)
+	if qs == nil {
+		return fmt.Errorf("%w: the transaction returned no audit query service", domain.ErrNotReady)
+	}
+	return sink.insert(ctx, qs, decision)
+}
+
+func (sink *TableAuditSink) insert(ctx context.Context, qs keelport.QueryService, decision domain.DecisionRecord) error {
 	if decision.TenantID < 0 || strings.TrimSpace(decision.Category) == "" ||
 		strings.TrimSpace(decision.Action) == "" || decision.Outcome == "" {
 		return fmt.Errorf("%w: decision needs tenant, category, action, and outcome", domain.ErrValidation)
@@ -121,7 +141,7 @@ func (sink *TableAuditSink) Record(ctx context.Context, decision domain.Decision
 	if decision.TenantID > 0 {
 		tenantID = decision.TenantID
 	}
-	_, err := sink.qs.Query(context.WithoutCancel(ctx), qDecisionInsert,
+	_, err := qs.Query(context.WithoutCancel(ctx), qDecisionInsert,
 		tenantID, decision.Category, string(decision.Principal.Kind), decision.Principal.ID,
 		nullable(decision.Authority.GrantID), nullable(string(decision.Authority.Grantor.Kind)), nullable(decision.Authority.Grantor.ID),
 		nullable(decision.ScopeID), decision.Action, nullable(decision.Resource), nullable(decision.ReleaseVersion),

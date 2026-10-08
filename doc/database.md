@@ -8,7 +8,7 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 
 ## Module dependency graph
 
-Scout's schema is sixteen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
+Scout's schema is seventeen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
 
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
@@ -16,7 +16,7 @@ Scout's schema is sixteen selectable modules declared in `schema/dependency.yml`
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
 - `skill` holds versioned procedures an agent loads on demand, and the platform catalog tenants copy them from. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
-- `approval` holds the durable human-in-the-loop record. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
+- `approval` holds the durable human-in-the-loop record of a turn; `mcp_confirmation` holds an MCP tool call a person confirms, linked to keel's maker-checker `approval_request` when one decides it. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 30, "rankSpacing": 55, "diagramPadding": 12}, "themeVariables": {"fontSize": "12px"}}}%%
@@ -43,10 +43,14 @@ flowchart BT
     approval --> configuration_module
     approval --> agent_authorization_module
     skill --> tool
+    mcp_confirmation --> tenancy
+    mcp_confirmation --> keel_approval
+    keel_approval --> tenant_management
 
     core["keel core"]
     tenant_management["keel tenant_management"]
-    catalog["Catalog<br/>15 tables"]
+    keel_approval["keel approval"]
+    catalog["Catalog<br/>17 tables"]
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
     model["Model<br/>6 tables"]
@@ -62,11 +66,12 @@ flowchart BT
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
     skill["Skill<br/>10 tables"]
+    mcp_confirmation["MCP Confirmation<br/>1 table"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 41 Scout tables — while the full platform is 111. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 42 Scout tables — while the full platform is 123. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -184,12 +189,12 @@ flowchart RL
 
     subgraph approval["Approval"]
         direction BT
-        approval_request["approval_request"]
-        approval_decision["approval_decision"]
+        turn_approval_request["turn_approval_request"]
+        turn_approval_decision["turn_approval_decision"]
     end
-    approval_request --> scope
-    approval_decision --> approval_request
-    approval_decision --> delegation_grant
+    turn_approval_request --> scope
+    turn_approval_decision --> turn_approval_request
+    turn_approval_decision --> delegation_grant
 
     subgraph tool["Tool"]
         direction BT
@@ -366,10 +371,7 @@ flowchart RL
 | Embedding vectors | Tenant-partitioned vector index |
 | Compiled effective configuration | `effective_agent_release`, frozen at publication |
 | Governed decisions and their evidence | `audit_event` typed columns; redacted payloads in object storage |
-| Pending human decisions | `approval_request` / `approval_decision` |
-| Compiled effective configuration | `effective_agent_release`, frozen at publication |
-| Governed decisions and their evidence | `audit_event` typed columns; redacted payloads in object storage |
-| Pending human decisions | `approval_request` / `approval_decision` |
+| Pending human decisions | `turn_approval_request` / `turn_approval_decision` |
 | Provider credentials | keel secret provider |
 
 All relational identifiers are lowercase. Tenant-owned relations carry `tenant_id` through their primary or foreign keys. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
@@ -399,7 +401,7 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `agent_work_item` | `child_work_items` | `agent_work_item[]` |
 | `agent_profile` | `agent_permissions` | `agent_permission[]` |
 | `authorization_role` | `permitted_agents` | `agent_permission[]` |
-| `approval_request` | `approval_decisions` | `approval_decision[]` |
+| `turn_approval_request` | `turn_approval_decisions` | `turn_approval_decision[]` |
 | `tool_profile` | `tool_credential_bindings` | `tool_credential_binding[]` |
 | `skill_version` | `skill_version_tools` | `skill_tool[]` |
 | `skill_version` | `skill_version_examples` | `skill_example[]` |
@@ -882,19 +884,19 @@ credentials — password, lockout, 2FA, device session — that no machine ident
 
 ```mermaid
 erDiagram
-    approval_status ||--o{ approval_request : status_approval_requests
-    scope ||--o{ approval_request : scope_approval_requests
-    agent_tenant ||--o{ approval_request : approval_requests
-    approval_request ||--o| approval_decision : approval_decisions
-    outbox_event |o--o{ approval_request : notified_approval_requests
+    approval_status ||--o{ turn_approval_request : status_turn_approval_requests
+    scope ||--o{ turn_approval_request : scope_turn_approval_requests
+    agent_tenant ||--o{ turn_approval_request : turn_approval_requests
+    turn_approval_request ||--o| turn_approval_decision : turn_approval_decisions
+    outbox_event |o--o{ turn_approval_request : notified_turn_approval_requests
     tool_profile ||--o{ tool_credential_binding : tool_credential_bindings
-    approval_decision }o--|| user_account : decided_approval_decisions
+    turn_approval_decision }o--|| user_account : decided_turn_approval_decisions
     tool_credential_binding }o--|| user_account : delegated_credential_bindings
     delegation_grant ||--o{ tool_credential_binding : grant_credential_bindings
     agent_tenant ||--o{ audit_event : audit_events
     audit_decision_outcome ||--o{ audit_event : outcome_audit_events
 
-    approval_request {
+    turn_approval_request {
         bigint id PK
         bigint tenant_id FK
         varchar request_id UK
@@ -910,8 +912,8 @@ erDiagram
         timestamp deadline_at
         bigint notification_event_id FK
     }
-    approval_decision {
-        bigint approval_request_id PK,FK
+    turn_approval_decision {
+        bigint turn_approval_request_id PK,FK
         bigint tenant_id FK
         varchar status_code FK
         bigint decider_user_id FK
@@ -952,10 +954,10 @@ erDiagram
     }
 ```
 
-`approval_request` is unique on `(tenant_id, request_id, execution_step_id)`, so opening a request is
+`turn_approval_request` is unique on `(tenant_id, request_id, execution_step_id)`, so opening a request is
 idempotent and a replayed turn re-attaches instead of asking a person the same question twice.
 `proposed_digest` binds a verdict to the exact action: resolving matches on it, so approving a
-changed action updates nothing. `approval_decision` records the decider through three nullable
+changed action updates nothing. `turn_approval_decision` records the decider through three nullable
 identity columns with an exactly-one check; human and agent identities keep real declared foreign
 keys, while platform service decisions retain their stable service id.
 
@@ -969,6 +971,16 @@ invalidates the credential binding.
 policy, with what outcome and obligations. The payload columns hold only a reference to redacted
 evidence in object storage. `audit_decision_outcome` classifies every row, and the query side is
 `contract.AuditQuery`, always bound to one tenant. [doc/governance.md](governance.md) has the rules.
+
+`mcp_confirmation` holds one MCP tool call until a person confirms it. A partial unique index on
+`(tenant_id, tool, payload_digest)` over the open statuses (`mcp_confirmation_status.is_open`) keeps
+one open confirmation per action. Every transition is a conditional update on `status_code`, and a
+run also on `fence`, so a stale executor changes nothing; `lease_until` is set exactly while
+`executing`, from the store clock. `approval_id` names the keel `approval_request` that alone may
+decide it; `approval_required` closes the setup window before that link exists. `notification_event_id`
+names the keel outbox notice of an inbox confirmation. `client_ref`
+has no foreign key because the authorization server that issued it may be external. Purging after
+retention clears `payload`, `preview`, and `result` and keeps the digest and decision columns.
 
 ## Agent types, delegation, and work items
 
@@ -1767,7 +1779,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 
 | Module | Tables |
 |---|---|
-| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state` |
+| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state`, `mcp_confirmation_status`, `mcp_confirmation_channel` |
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
@@ -1781,7 +1793,8 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
-| `approval` | `approval_request`, `approval_decision` |
+| `approval` | `turn_approval_request`, `turn_approval_decision` |
+| `mcp_confirmation` | `mcp_confirmation` |
 | `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_tool`, `skill_catalog_example`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them

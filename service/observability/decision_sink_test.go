@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -54,5 +55,40 @@ func TestTableAuditSinkKeysADecisionByItsScopeSoReplayWritesItOnce(t *testing.T)
 	}
 	if unscoped != nil {
 		t.Fatalf("a decision outside any scope stays append-only, got key %v", unscoped)
+	}
+}
+
+type decisionTxFake struct {
+	keelport.TxQueryService
+	query *decisionQueryFake
+}
+
+func (fake decisionTxFake) QueryService(string, map[string]string) keelport.QueryService {
+	if fake.query == nil {
+		return nil
+	}
+	return fake.query
+}
+
+func TestTableAuditSinkRecordTxWritesThroughTheCallersTransaction(t *testing.T) {
+	sink := &TableAuditSink{}
+	decision := domain.DecisionRecord{
+		Principal: domain.PrincipalRef{Kind: domain.PrincipalService, ID: "ops"},
+		Category:  domain.DecisionCategoryRestriction, Action: "replace", Outcome: domain.DecisionAllow,
+	}
+	query := &decisionQueryFake{}
+	if err := sink.RecordTx(context.Background(), decisionTxFake{query: query}, decision); err != nil || len(query.keys) != 1 {
+		t.Fatalf("RecordTx = %v, writes %d", err, len(query.keys))
+	}
+	var plain keelport.TxQueryService = struct{ keelport.TxQueryService }{}
+	if err := sink.RecordTx(context.Background(), plain, decision); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("a transaction without a query catalog: want ErrNotReady, got %v", err)
+	}
+	if err := sink.RecordTx(context.Background(), decisionTxFake{}, decision); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("a transaction without a bound query service: want ErrNotReady, got %v", err)
+	}
+	decision.Principal.ID = " "
+	if err := sink.RecordTx(context.Background(), decisionTxFake{query: query}, decision); !errors.Is(err, domain.ErrPrincipalUnknown) || len(query.keys) != 1 {
+		t.Fatalf("an anonymous decision: want ErrPrincipalUnknown, got %v", err)
 	}
 }

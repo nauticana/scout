@@ -118,6 +118,7 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/policy.go` | `PolicyDecisionPoint`, `PolicyResolver`, `ObligationEnforcer` | Decide whether a governed action is allowed, and enforce what rides along |
 | `contract/restriction.go` | `RestrictionLayerReader`, `RestrictionLayerWriter` | Hold platform- and tenant-wide prohibitions that apply on top of every release |
 | `contract/approval.go` | `ApprovalStore`, `ApprovalInbox`, `EscalationPolicy`, `Notifier` | Park work a human owes, route it, and resume on the verdict |
+| `contract/mcp_confirmation.go` | `MCPConfirmationChecker`, `MCPConfirmedRunner` | Re-authorize and run an MCP tool call a person confirmed |
 | `contract/agent_type.go` | `AgentTypeRepository`, `AgentTypeService`, `AgentLifecycle`, `AgentVersionQuarantine`, capability packages | Publish templates, instantiate agents from them, and own their state |
 | `contract/delegation.go` | `DelegationGrantRepository`, `DelegationAuthorizer`, `AgentInvoker`, `WorkItemStore` | Bound who may hand work to whom, and address work to a principal |
 | `contract/health.go` | `HealthProbe` | Expose dependency readiness to composition code |
@@ -144,6 +145,7 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | `service/runtime` | `agent_runtime.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
 | `service/policy` | `policy.go`, `restriction.go` | `SetEvaluator`, `ReleaseResolver`, `RestrictedResolver`, `TableRestrictionLayers` | Optional external evaluators behind the decision point |
 | `service/approval` | `approval.go` | `TableStore`, `Gate`, `Resumer`, `BackupEscalation`, `Sweeper` | Keel database, notification transport, turn dispatch |
+| `service/confirmation` | `store.go`, `executor.go`, `result.go` | `TableStore`, `Executor`, `ToolResult` | Keel database, keel approval and outbox, product checker and runner |
 | `service/principal` | `principal.go`, `delegation.go` | `RoleAuthorizer`, `TableResolver`, `ChainVerifier`, `TableGrants`, `GrantAuthorizer` | Keel database, external identity planes |
 | `service/scope` | `scope.go` | `Compiler`, `MergerRegistry`, `LatticeChecker`, `TableScopeRepository`, `TableEffectiveReleaseStore`, `Explainer` | Keel database and product-registered resource mergers |
 | `service/toolgateway` | `tool_gateway.go` | `GovernedGateway`, `TableToolRegistry`, `SchemaResultValidator`, `BindingAuthorizer`, `BoundCredentialProvider`, `TableCredentialBindings`, and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
@@ -304,6 +306,12 @@ A backend reports a failure the client should act on with `MCPToolResult.Error` 
 Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, caller resolution, policy authorization, protocol projection, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure.
 
 Protocol frames and manifest entries belong to `mcp-go`; Scout defines only what a frame carries. That payload is the `mcp-v1` profile in `api/` — `Envelope`, `EnvelopeMeta`, `ProvenanceMeta`, `SourceAttrib`, `PaginationMeta`, and `FieldDescriptor` — projected from the tag-free `domain/` values by `mcp/wire.go`, exactly as `handler/` projects `studio-v1`.
+
+### Confirmed tool calls
+
+An MCP tool call that must not run until a person confirms it is not a turn, so the turn `approval` module cannot hold it. `confirmation.TableStore.Prepare` records the exact payload, a preview, and the product's authorization requirements under an action digest (`confirmation.ActionDigest`); an identical open action returns the maker's own confirmation and is `ErrConflict` for anyone else. `confirmation.ToolResult` then asks the maker through an elicitation form, or returns the status and the product's inbox link. Set `MCPConfirmationDraft.ApprovalRequired` before preparing a maker-checker action; direct decisions then fail closed before and after `AttachApproval`. Wire `TableStore.DecideApprovalTx` into `approval.Service.OnDecided`.
+
+`Executor.Execute` claims an approved confirmation under a store-clock lease and a new fence, re-checks maker and decider through the product's `contract.MCPConfirmationChecker`, and runs the stored payload, never a re-sent one, through `contract.MCPConfirmedRunner`. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be stored, a cancellation, or a lost claim never becomes success or a retry: the confirmation is `unknown` until a person records what happened with `Executor.Reconcile`. A product worker calls `RunApproved`, `TableStore.MarkLapsed`, `ExpireDue`, and `Purge`. See [Confirmed MCP tool calls](doc/governance.md#confirmed-mcp-tool-calls).
 
 ### Migrating an existing MCP server
 
@@ -518,11 +526,11 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 
 ### Schema modules
 
-Scout's schema is sixteen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
+Scout's schema is seventeen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
 
 | Module | Tables | Purpose | Depends on |
 |---|---:|---|---|
-| `catalog` | 15 | Currency, priority, lifecycle, usage, scope, resource-kind, merge-mode, decision, approval, risk, output-class, and agent-state catalogs | — |
+| `catalog` | 17 | Currency, priority, lifecycle, usage, scope, resource-kind, merge-mode, decision, approval, risk, output-class, agent-state, and MCP confirmation catalogs | — |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
 | `prompt` | 2 | Prompt sections and platform baselines | — |
 | `model` | 6 | Providers, model definitions, capabilities, routes, pricing, tenant access | `catalog`, `tenancy` |
@@ -537,7 +545,8 @@ Scout's schema is sixteen modules so a downstream installs only what its product
 | `skill` | 10 | Platform skill catalog, tenant skill profiles, immutable procedure versions, the tools and skills each uses, selection examples, agent bindings | `tenancy`, `agent`, `tool` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
 | `configuration` | 8 | Configuration hierarchy, scoped bindings, compiled effective releases, governed decision records, platform and tenant restriction layers | `catalog`, `tenancy`, `agent` |
-| `approval` | 2 | Durable approval requests, their verdicts, and the outbox event that notified the approver | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization`, keel `outbox` |
+| `approval` | 2 | Durable turn approval requests, their verdicts, and the outbox event that notified the approver | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization`, keel `outbox` |
+| `mcp_confirmation` | 1 | MCP tool calls held for a person's confirmation and run once under a fenced lease | `catalog`, `tenancy`, keel `approval`, keel `outbox` |
 
 `schema/dependency.yml` declares those modules, their dependencies, and their seed files; [doc/database.md](doc/database.md#module-dependency-graph) draws the graph. `agent` is the common core every other module reaches through; `catalog` and `tenancy` sit under it. Module boundaries follow the `contract/` and `service/` boundaries, so a downstream picks modules by the Scout packages it actually constructs.
 
@@ -549,32 +558,33 @@ The Go tool declaration pins keel's compiler. Pass the keel groups first, then t
 
 ```bash
 keel="$(go list -m -f '{{.Dir}}' github.com/nauticana/keel)/schema"
-keel_groups=(core geo tenant_management outbox) # dependency.yml order, parents first; outbox for approval
+keel_groups=(core geo tenant_management outbox approval) # dependency.yml order, parents first; outbox for approval, both for mcp_confirmation
 keel_in="" keel_seed=""
 for group in "${keel_groups[@]}"; do
   keel_in="${keel_in:+${keel_in},}${keel}/${group}"
   keel_seed="${keel_seed:+${keel_seed},}${keel}/seed/${group}.yml"
 done
-scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill"
+scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill,schema/mcp_confirmation"
 scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/execution_graph,schema/seed/runtime,schema/seed/release"
 
 go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_seed},${scout_seed}" -out build/scout_pgsql.sql
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 45 selected keel tables and 120 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
+That full set is 48 selected keel tables and 123 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 48 |
-| … plus agent principals and delegation | `+ agent_authorization` | 50 |
-| … plus compiled execution graphs | `+ execution_graph` | 54 |
-| … plus governed tools and credential bindings | `+ tool` | 59 |
-| … plus durable human approvals | `+ approval` (and keel `outbox`) | 61 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 71 |
-| … plus the durable turn runtime | `+ runtime` | 85 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 110 |
-| … plus versioned skills | `+ skill` | 120 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 50 |
+| … plus agent principals and delegation | `+ agent_authorization` | 52 |
+| … plus compiled execution graphs | `+ execution_graph` | 56 |
+| … plus governed tools and credential bindings | `+ tool` | 61 |
+| … plus durable human approvals | `+ approval` (and keel `outbox`) | 63 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 73 |
+| … plus the durable turn runtime | `+ runtime` | 87 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 112 |
+| … plus versioned skills | `+ skill` | 122 |
+| … plus confirmed MCP tool calls | `+ mcp_confirmation` (and keel `approval`, `outbox`) | 123 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -1013,7 +1023,7 @@ Agents and humans resolve through **one** authorization model. Keel's authorizat
 
 An allow may carry obligations — `require_approval`, `redact`, `cap_spend`, `record_evidence`, `notify`. `GovernedGateway` applies them before egress, and an obligation with no registered enforcer fails the call: silently skipping one would turn a conditional allow into an unconditional one. The operating modes from an agent's configuration are enforced here, never in prompt text.
 
-`service/approval` makes human review durable. `Gate` opens an `approval_request` and returns pending; `TurnRuntime` then **suspends** the turn instead of failing it, holding the budget reservation and acking the delivery. `ProposalDigest` binds a verdict to the exact call, and the resolve statement matches on it, so approving a changed action updates nothing. `Resumer` records the verdict, returns the turn to `queued`, and re-dispatches it — all three, because resolving without re-dispatching would park the turn forever. `Sweeper` with `BackupEscalation` routes overdue work to a backup and expires it when none is configured; a backup needs its own grant.
+`service/approval` makes human review durable. `Gate` opens a `turn_approval_request` and returns pending; `TurnRuntime` then **suspends** the turn instead of failing it, holding the budget reservation and acking the delivery. `ProposalDigest` binds a verdict to the exact call, and the resolve statement matches on it, so approving a changed action updates nothing. `Resumer` records the verdict, returns the turn to `queued`, and re-dispatches it — all three, because resolving without re-dispatching would park the turn forever. `Sweeper` with `BackupEscalation` routes overdue work to a backup and expires it when none is configured; a backup needs its own grant.
 
 `ToolCredentialProvider` is keyed on the principal, not the tenant. `tool_credential_binding` maps `(tenant, principal, tool, purpose)` to a reference into keel's secret or OAuth-connection store — never secret material — and `BoundCredentialProvider` resolves it just in time, after policy, guardrails, egress, and admission. Two agents on one tool version therefore resolve different identities, and the returned `AuthorityRef` records whose authority was exercised while the secret is recorded nowhere.
 

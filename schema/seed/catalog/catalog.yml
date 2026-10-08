@@ -112,6 +112,23 @@ seeds:
       - [expired, true, Deadline passed with no verdict]
       - [escalated, false, Reassigned to a backup approver]
       - [withdrawn, true, Retracted before a verdict]
+  - table: mcp_confirmation_status
+    columns: [code, is_open, description]
+    rows:
+      - [pending, true, Waiting for a person to confirm]
+      - [approved, true, Confirmed and waiting to run]
+      - [executing, true, Running under a fenced lease]
+      - [executed, false, Ran and reported success]
+      - [failed, false, "Did not run, or ran and reported failure"]
+      - [unknown, true, Outcome unknown until a person reconciles it]
+      - [declined, false, Refused by a person]
+      - [withdrawn, false, Retracted by its maker]
+      - [expired, false, Not confirmed in time]
+  - table: mcp_confirmation_channel
+    columns: [code, description]
+    rows:
+      - [elicitation, Asked of the maker in the MCP client]
+      - [inbox, Decided by an authorized person outside the MCP client]
   - table: agent_state
     columns: [code, admits_work, is_terminal, description]
     rows:

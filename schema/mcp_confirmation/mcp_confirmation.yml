@@ -1,0 +1,148 @@
+table: mcp_confirmation
+comment: One MCP tool call held until a person confirms it, then run once under a fenced lease
+columns:
+  - name: id
+    type: BIGINT
+  - name: tenant_id
+    type: BIGINT
+  - name: maker_kind
+    type: VARCHAR(20)
+  - name: maker_id
+    type: VARCHAR(120)
+  - name: client_ref
+    type: VARCHAR(200)
+    nullable: true
+    comment: The MCP client that prepared the call; no foreign key because the authorization server may be external
+  - name: tool
+    type: VARCHAR(120)
+  - name: payload
+    type: TEXT
+    nullable: true
+    comment: The exact action that runs; null once purged after retention
+  - name: payload_digest
+    type: CHAR(64)
+  - name: preview
+    type: TEXT
+    nullable: true
+  - name: requirements
+    type: TEXT
+    comment: The product's authorization requirements, re-checked before the action runs
+  - name: channel_code
+    type: VARCHAR(20)
+  - name: status_code
+    type: VARCHAR(20)
+    default: pending
+  - name: approval_required
+    type: BOOLEAN
+    default: FALSE
+    comment: Direct decisions are forbidden; a keel maker-checker request must be attached
+  - name: approval_id
+    type: BIGINT
+    nullable: true
+    comment: The keel maker-checker request that decides this confirmation; when set, only it can decide
+  - name: notification_event_id
+    type: BIGINT
+    nullable: true
+    comment: The keel outbox event that announces an inbox confirmation
+  - name: expires_at
+    type: TIMESTAMP
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: decided_at
+    type: TIMESTAMP
+    nullable: true
+  - name: decider_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: decider_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: decision_note
+    type: VARCHAR(500)
+    nullable: true
+  - name: fence
+    type: BIGINT
+    default: "0"
+  - name: attempts
+    type: INTEGER
+    default: "0"
+  - name: lease_until
+    type: TIMESTAMP
+    nullable: true
+  - name: result
+    type: TEXT
+    nullable: true
+  - name: error_text
+    type: VARCHAR(500)
+    nullable: true
+  - name: completed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: reconciled_at
+    type: TIMESTAMP
+    nullable: true
+  - name: reconciler_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: reconciler_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: reconcile_note
+    type: VARCHAR(500)
+    nullable: true
+  - name: purged_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: mcp_confirmation_seq
+  column: id
+foreign_keys:
+  - name: mcp_confirmations
+    columns: [tenant_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: status_mcp_confirmations
+    columns: [status_code]
+    references:
+      table: mcp_confirmation_status
+      columns: [code]
+  - name: channel_mcp_confirmations
+    columns: [channel_code]
+    references:
+      table: mcp_confirmation_channel
+      columns: [code]
+  - name: approval_mcp_confirmations
+    columns: [approval_id]
+    references:
+      table: approval_request
+      columns: [id]
+  - name: notified_mcp_confirmations
+    columns: [notification_event_id]
+    references:
+      table: outbox_event
+      columns: [id]
+indexes:
+  - name: mcp_confirmation_open_uq
+    columns: [tenant_id, tool, payload_digest]
+    unique: true
+    where: status_code IN ('pending', 'approved', 'executing', 'unknown')
+  - name: mcp_confirmation_work_ix
+    columns: [status_code, expires_at]
+  - name: mcp_confirmation_tenant_ix
+    columns: [tenant_id, created_at]
+checks:
+  - name: mcp_confirmation_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64
+  - name: mcp_confirmation_counters_ck
+    expression: fence >= 0 AND attempts >= 0
+  - name: mcp_confirmation_decider_ck
+    expression: (decider_kind IS NULL) = (decider_id IS NULL)
+  - name: mcp_confirmation_reconciler_ck
+    expression: (reconciler_kind IS NULL) = (reconciler_id IS NULL)
+  - name: mcp_confirmation_lease_ck
+    expression: (status_code = 'executing') = (lease_until IS NOT NULL)
+  - name: mcp_confirmation_approval_ck
+    expression: approval_id IS NULL OR approval_required

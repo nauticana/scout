@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/observability"
 )
 
 const (
@@ -88,6 +89,13 @@ UPDATE tenant_current_restriction
 RETURNING layer_digest`,
 }
 
+// TxAuditSink records a decision inside the caller's transaction.
+type TxAuditSink interface {
+	RecordTx(ctx context.Context, tx port.TxQueryService, decision domain.DecisionRecord) error
+}
+
+var _ TxAuditSink = (*observability.TableAuditSink)(nil)
+
 // TableRestrictionLayers stores the platform and tenant restriction layers and
 // reads the ones in force. Reads are cached for TTL in this process, so a
 // replaced layer reaches running agents within TTL without a redeploy or
@@ -96,8 +104,8 @@ type TableRestrictionLayers struct {
 	DB port.DatabaseRepository
 	// Rules validates guardrail rules at write time; required to write any.
 	Rules contract.GuardrailRuleCompiler
-	// Audit records every change; required to write.
-	Audit contract.AuditSink
+	// Audit records every change in the transaction that makes it; required to write.
+	Audit TxAuditSink
 	// TTL defaults to DefaultRestrictionTTL; Entries to DefaultRestrictionEntries.
 	TTL     time.Duration
 	Entries int
@@ -203,33 +211,30 @@ func (store *TableRestrictionLayers) replace(ctx context.Context, actor domain.P
 	if err != nil {
 		return "", err
 	}
-	digest := encoded.layer.Digest
-	current, changed, err := store.swap(ctx, tenantID, encoded, expectedDigest)
-	if err != nil || !changed {
-		return current, err
-	}
-	store.cache.Delete(tenantID)
-	payload, err := json.Marshal(map[string]any{"previous_digest": expectedDigest, "layer_digest": digest,
+	payload, err := json.Marshal(map[string]any{"previous_digest": expectedDigest, "layer_digest": encoded.layer.Digest,
 		"denials": len(encoded.layer.Denials), "guardrails": len(encoded.layer.Guardrails)})
 	if err != nil {
-		return digest, fmt.Errorf("encode restriction audit: %w", err)
+		return "", fmt.Errorf("encode restriction audit: %w", err)
 	}
 	resource := "platform"
 	if tenantID > 0 {
 		resource = "tenant"
 	}
-	if err = store.Audit.Record(ctx, domain.DecisionRecord{
+	audit := domain.DecisionRecord{
 		TenantID: tenantID, Principal: domain.PrincipalRef{Kind: actor.Kind, ID: actor.ID},
 		Category: domain.DecisionCategoryRestriction, Action: "replace", Resource: resource,
-		PolicyVersion: digest, Outcome: domain.DecisionAllow, Payload: payload,
-	}); err != nil {
-		return digest, fmt.Errorf("audit restriction layer change: %w", err)
+		PolicyVersion: encoded.layer.Digest, Outcome: domain.DecisionAllow, Payload: payload,
 	}
-	return digest, nil
+	current, changed, err := store.swap(ctx, tenantID, encoded, expectedDigest, audit)
+	if changed {
+		store.cache.Delete(tenantID)
+	}
+	return current, err
 }
 
-// swap stores the version and moves the pointer when it still holds expectedDigest.
-func (store *TableRestrictionLayers) swap(ctx context.Context, tenantID int64, encoded encodedLayer, expectedDigest string) (string, bool, error) {
+// swap stores the version, moves the pointer when it still holds expectedDigest,
+// and records audit in the same transaction.
+func (store *TableRestrictionLayers) swap(ctx context.Context, tenantID int64, encoded encodedLayer, expectedDigest string, audit domain.DecisionRecord) (string, bool, error) {
 	digest := encoded.layer.Digest
 	insertLayer, lock, insertCurrent, swap, read := qPlatformLayerInsert, qPlatformCurrentLock, qPlatformCurrentInsert, qPlatformCurrentSwap, qPlatformCurrentRead
 	layerArgs, keyArgs := []any{digest, string(encoded.denials), string(encoded.guardrails)}, []any{}
@@ -288,6 +293,9 @@ func (store *TableRestrictionLayers) swap(ctx context.Context, tenantID int64, e
 			return current, false, nil
 		}
 		return current, false, fmt.Errorf("%w: restriction layer was written concurrently", domain.ErrConflict)
+	}
+	if err = store.Audit.RecordTx(ctx, tx, audit); err != nil {
+		return "", false, fmt.Errorf("audit restriction layer change: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return "", false, fmt.Errorf("commit restriction layer swap: %w", err)

@@ -4,21 +4,33 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/fake"
 	"github.com/nauticana/scout/service/guardrail"
+	"github.com/nauticana/scout/service/observability"
 )
 
-// restrictionTables keeps the layer versions and current pointers; key 0 is the platform.
+// restrictionTables keeps the layer versions, current pointers, and audit rows;
+// key 0 is the platform. A transaction rolls all three back together.
 type restrictionTables struct {
-	layers  map[string][2]string
-	current map[int64]string
-	reads   int
+	layers    map[string][2]string
+	current   map[int64]string
+	audits    []restrictionAudit
+	auditErr  error
+	reads     int
+	savepoint *restrictionTables
+}
+
+type restrictionAudit struct {
+	tenant   any
+	category string
+	version  string
 }
 
 func (tables *restrictionTables) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
@@ -37,6 +49,11 @@ func (tables *restrictionTables) Query(_ context.Context, name string, args ...a
 		return &keelmodel.QueryResult{}
 	}
 	switch name {
+	case qDecisionInsertName:
+		if tables.auditErr != nil {
+			return nil, tables.auditErr
+		}
+		tables.audits = append(tables.audits, restrictionAudit{tenant: args[0], category: args[1].(string), version: args[12].(string)})
 	case qPlatformLayerInsert:
 		tables.layers[fmt.Sprint(0, args[0])] = [2]string{args[1].(string), args[2].(string)}
 	case qTenantLayerInsert:
@@ -71,9 +88,23 @@ func (tables *restrictionTables) Query(_ context.Context, name string, args ...a
 	return &keelmodel.QueryResult{}, nil
 }
 
-func (*restrictionTables) GenID() int64                   { return 0 }
-func (*restrictionTables) Commit(context.Context) error   { return nil }
-func (*restrictionTables) Rollback(context.Context) error { return nil }
+func (*restrictionTables) GenID() int64 { return 0 }
+
+func (tables *restrictionTables) QueryService(string, map[string]string) keelport.QueryService {
+	return tables
+}
+
+func (tables *restrictionTables) Commit(context.Context) error {
+	tables.savepoint = nil
+	return nil
+}
+
+func (tables *restrictionTables) Rollback(context.Context) error {
+	if saved := tables.savepoint; saved != nil {
+		tables.layers, tables.current, tables.audits, tables.savepoint = saved.layers, saved.current, saved.audits, nil
+	}
+	return nil
+}
 
 type restrictionDB struct {
 	keelport.DatabaseRepository
@@ -85,26 +116,28 @@ func (db restrictionDB) GetQueryService(context.Context, map[string]string) keel
 }
 
 func (db restrictionDB) BeginTx(context.Context, map[string]string) (keelport.TxQueryService, error) {
+	db.tables.savepoint = &restrictionTables{layers: maps.Clone(db.tables.layers), current: maps.Clone(db.tables.current),
+		audits: slices.Clone(db.tables.audits)}
 	return db.tables, nil
 }
 
+var _ keelport.TxQueryCatalog = (*restrictionTables)(nil)
+
+// qDecisionInsertName is the audit sink's insert, reached through the swap transaction.
+const qDecisionInsertName = "scout_decision_insert"
+
 var platformService = domain.Principal{Kind: domain.PrincipalService, ID: "usage-policy"}
 
-func newRestrictions(t *testing.T) (*restrictionTables, *TableRestrictionLayers, *[]domain.DecisionRecord) {
+func newRestrictions(t *testing.T) (*restrictionTables, *TableRestrictionLayers) {
 	t.Helper()
 	compiler, err := guardrail.NewRuleSetCompiler(guardrail.CompilerConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tables := &restrictionTables{layers: map[string][2]string{}, current: map[int64]string{}}
-	audits := &[]domain.DecisionRecord{}
-	store := &TableRestrictionLayers{DB: restrictionDB{tables: tables}, Rules: compiler, Audit: &fake.AuditSink{
-		RecordFunc: func(_ context.Context, record domain.DecisionRecord) error {
-			*audits = append(*audits, record)
-			return nil
-		},
-	}}
-	return tables, store, audits
+	store := &TableRestrictionLayers{DB: restrictionDB{tables: tables}, Rules: compiler,
+		Audit: &observability.TableAuditSink{DB: restrictionDB{tables: tables}}}
+	return tables, store
 }
 
 func denial(id string) domain.PolicyStatement {
@@ -117,7 +150,7 @@ func noCodename() domain.GuardrailRule {
 }
 
 func TestReplaceTenantSwapsByDigestAndAuditsOnlyChanges(t *testing.T) {
-	_, store, audits := newRestrictions(t)
+	tables, store := newRestrictions(t)
 	ctx := context.Background()
 	layer := domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("b"), denial("a")}, Guardrails: []domain.GuardrailRule{noCodename()}}
 	first, err := store.ReplaceTenant(ctx, platformService, 7, layer, "")
@@ -128,8 +161,8 @@ func TestReplaceTenantSwapsByDigestAndAuditsOnlyChanges(t *testing.T) {
 	if again, err := store.ReplaceTenant(ctx, platformService, 7, reordered, "stale"); err != nil || again != first {
 		t.Fatalf("the value in force again must succeed unchanged: %q, %v", again, err)
 	}
-	if len(*audits) != 1 || (*audits)[0].Category != domain.DecisionCategoryRestriction || (*audits)[0].TenantID != 7 {
-		t.Fatalf("audits = %+v", *audits)
+	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{tenant: int64(7), category: domain.DecisionCategoryRestriction, version: first}) {
+		t.Fatalf("audits = %+v", tables.audits)
 	}
 	narrower := domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}}
 	if current, err := store.ReplaceTenant(ctx, platformService, 7, narrower, ""); !errors.Is(err, domain.ErrConflict) || current != first {
@@ -146,7 +179,7 @@ func TestReplaceTenantSwapsByDigestAndAuditsOnlyChanges(t *testing.T) {
 }
 
 func TestReplaceRefusesAnythingButAServiceAddingRestrictions(t *testing.T) {
-	_, store, _ := newRestrictions(t)
+	_, store := newRestrictions(t)
 	ctx := context.Background()
 	if _, err := store.ReplacePlatform(ctx, domain.Principal{Kind: domain.PrincipalHuman, ID: "ops"}, domain.RestrictionLayer{}, ""); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("a human writer: want ErrForbidden, got %v", err)
@@ -181,7 +214,7 @@ func TestReplaceRefusesAnythingButAServiceAddingRestrictions(t *testing.T) {
 }
 
 func TestLayersCachesAndRefusesACorruptLayer(t *testing.T) {
-	tables, store, _ := newRestrictions(t)
+	tables, store := newRestrictions(t)
 	ctx := context.Background()
 	digest, err := store.ReplacePlatform(ctx, platformService, domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}}, "")
 	if err != nil {
@@ -199,5 +232,26 @@ func TestLayersCachesAndRefusesACorruptLayer(t *testing.T) {
 	other := &TableRestrictionLayers{DB: restrictionDB{tables: tables}}
 	if _, err := other.Layers(ctx, 7); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("a layer that no longer matches its digest: want ErrConflict, got %v", err)
+	}
+}
+
+func TestReplaceCommitsTheLayerOnlyWithItsAudit(t *testing.T) {
+	tables, store := newRestrictions(t)
+	ctx := context.Background()
+	layer := domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}}
+	tables.auditErr = errors.New("audit store down")
+	if _, err := store.ReplacePlatform(ctx, platformService, layer, ""); err == nil {
+		t.Fatal("an unrecorded change must fail")
+	}
+	if len(tables.current) != 0 || len(tables.layers) != 0 {
+		t.Fatalf("a failed audit must roll the swap back: %+v, %+v", tables.current, tables.layers)
+	}
+	tables.auditErr = nil
+	digest, err := store.ReplacePlatform(ctx, platformService, layer, "")
+	if err != nil || tables.current[0] != digest {
+		t.Fatalf("retry = %q, %v", digest, err)
+	}
+	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{category: domain.DecisionCategoryRestriction, version: digest}) {
+		t.Fatalf("the retry must record the change: %+v", tables.audits)
 	}
 }

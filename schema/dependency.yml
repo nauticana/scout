@@ -3,7 +3,8 @@
 # to -seed. depends_on lists direct table-FK dependencies and fixes DDL order;
 # seed_depends_on names components whose tables receive this module's seed rows.
 # Scout tenancy additionally requires keel tenant_management, which depends on
-# keel core and geo; approval additionally requires keel outbox.
+# keel core and geo; approval additionally requires keel outbox, and mcp_confirmation
+# keel approval and outbox.
 version: 1
 groups:
   - name: catalog
@@ -85,3 +86,7 @@ groups:
   - name: approval
     path: approval
     depends_on: [catalog, tenancy, agent, configuration, agent_authorization]
+
+  - name: mcp_confirmation
+    path: mcp_confirmation
+    depends_on: [catalog, tenancy]

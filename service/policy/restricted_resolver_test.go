@@ -10,7 +10,7 @@ import (
 )
 
 func TestRestrictedResolverAddsStandingDenials(t *testing.T) {
-	_, store, _ := newRestrictions(t)
+	_, store := newRestrictions(t)
 	ctx := context.Background()
 	release := fake.PolicyResolverFunc(func(context.Context, domain.Principal) (domain.PolicySet, error) {
 		return domain.PolicySet{PolicyID: "writer", Version: "release-1", Statements: []domain.PolicyStatement{
