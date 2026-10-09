@@ -128,6 +128,8 @@ stateDiagram-v2
   stored, a cancellation, or a lost claim is `unknown`, never success and never retried; a person records the verified outcome with `Reconcile`.
 - **Client-safe reasons.** The stored and returned reason is generic or the product's `Reason`; the
   cause goes to `Executor.OnFailure`.
+- **The store is a seam.** The executor drives `contract.MCPConfirmationStore`. `TableStore` and the
+  in-memory `confirmationtest.Store` pass the same `confirmationtest.RunStoreSuite`.
 
 ## Credentials
 

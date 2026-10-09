@@ -151,7 +151,7 @@ func TestRegisterToolBackendEnforcesPolicy(t *testing.T) {
 // The handler re-checks scopes even though discovery filtering hides the tool.
 func TestBackendToolAuthorizesBeforeExecuting(t *testing.T) {
 	backend := &toolBackendFake{}
-	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], executor: backend}
+	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], backend: backend}
 	result, err := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{})
 	if err != nil || !result.IsError || backend.call.Name != "" {
 		t.Fatalf("unscoped handle = %+v, err = %v, call = %+v", result, err, backend.call)
@@ -168,6 +168,78 @@ func TestDirectRegistrationStaysVisible(t *testing.T) {
 	listed := call(t, server, context.Background(), "tools/list", map[string]any{})
 	if !strings.Contains(listed, `"ping"`) {
 		t.Fatalf("listing = %s", listed)
+	}
+}
+
+func TestDirectToolsAreNotCallerScoped(t *testing.T) {
+	server, _ := registeredServer(t)
+	server.Register(Tool(mcpgo.NewTool("ping"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText("pong"), nil
+	}))
+	listed := call(t, server, remoteContext("read"), "tools/list", map[string]any{})
+	if !strings.Contains(listed, `"ping"`) || !strings.Contains(listed, `"search"`) || strings.Contains(listed, `"submit"`) {
+		t.Fatalf("listing = %s", listed)
+	}
+	if result := call(t, server, remoteContext("read"), "tools/call", map[string]any{"name": "ping"}); !strings.Contains(result, "pong") {
+		t.Fatalf("direct call = %s", result)
+	}
+}
+
+// countingBackend counts catalog reads and answers calls through LookupTool when lookup is set.
+type countingBackend struct {
+	toolBackendFake
+	listed, looked int
+}
+
+func (backend *countingBackend) ListTools(ctx context.Context, caller domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+	backend.listed++
+	return backend.toolBackendFake.ListTools(ctx, caller)
+}
+
+type lookupBackend struct{ *countingBackend }
+
+func (backend lookupBackend) LookupTool(ctx context.Context, caller domain.MCPCaller, name string) (domain.MCPToolDefinition, bool, error) {
+	backend.looked++
+	definitions, err := backend.toolBackendFake.ListTools(ctx, caller)
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return definition, true, err
+		}
+	}
+	return domain.MCPToolDefinition{}, false, err
+}
+
+var _ contract.MCPToolLookup = lookupBackend{}
+
+func TestToolCallReadsTheCatalogOnce(t *testing.T) {
+	for name, lookup := range map[string]bool{"listing": false, "lookup": true} {
+		t.Run(name, func(t *testing.T) {
+			counting := &countingBackend{}
+			var backend contract.MCPToolBackend = counting
+			if lookup {
+				backend = lookupBackend{counting}
+			}
+			var denied []error
+			server := NewServer(ServerConfig{Name: "test", Version: "1.0.0", OnDenied: func(_ context.Context, _ domain.MCPCaller, _ string, err error) {
+				denied = append(denied, err)
+			}})
+			if err := server.RegisterToolBackend(context.Background(), backend); err != nil {
+				t.Fatalf("register backend: %v", err)
+			}
+			counting.listed = 0
+			call(t, server, remoteContext("read"), "tools/call", map[string]any{"name": "search"})
+			refused := call(t, server, remoteContext("read"), "tools/call", map[string]any{"name": "submit"})
+			wantListed, wantLooked := 2, 0
+			if lookup {
+				wantListed, wantLooked = 0, 2
+			}
+			if counting.listed != wantListed || counting.looked != wantLooked {
+				t.Fatalf("listed = %d, looked = %d", counting.listed, counting.looked)
+			}
+			if !strings.Contains(refused, "not found") || len(denied) != 1 || !errors.Is(denied[0], domain.ErrForbidden) {
+				t.Fatalf("refused = %s, denied = %v", refused, denied)
+			}
+		})
 	}
 }
 
@@ -234,7 +306,7 @@ func TestOnDeniedReportsMissingScopes(t *testing.T) {
 func TestBackendToolReportsItsOwnRefusal(t *testing.T) {
 	var tools []string
 	backend := &toolBackendFake{}
-	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], executor: backend,
+	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], backend: backend,
 		onDenied: func(_ context.Context, _ domain.MCPCaller, name string, _ error) { tools = append(tools, name) }}
 	if result, _ := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{}); !result.IsError || len(tools) != 1 || tools[0] != "submit" {
 		t.Fatalf("result = %+v, reported = %v", result, tools)
@@ -243,7 +315,7 @@ func TestBackendToolReportsItsOwnRefusal(t *testing.T) {
 
 func TestBackendToolReportsUnresolvedCaller(t *testing.T) {
 	var denied []error
-	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[0], executor: &toolBackendFake{},
+	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[0], backend: &toolBackendFake{},
 		onDenied: func(_ context.Context, _ domain.MCPCaller, _ string, err error) { denied = append(denied, err) }}
 	if result, _ := tool.Handle(withTransport(context.Background(), domain.MCPTransportStreamableHTTP), mcpgo.CallToolRequest{}); !result.IsError || len(denied) != 1 || !errors.Is(denied[0], domain.ErrUnauthorized) {
 		t.Fatalf("result = %+v, denied = %v", result, denied)

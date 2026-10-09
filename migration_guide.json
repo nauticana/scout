@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v0.14.6",
+      "title": "keel v1.2.103, one catalog read per MCP tool call, tool list change notifications, a store seam for confirmations",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "keel moves to v1.2.103. A tool call reads the caller's catalog once, through an optional single-tool lookup. Servers can notify sessions that their tool list changed, also on request from another process, and can list tools without output schemas. The confirmation executor takes a store interface, with an in-memory store for tests.",
+      "body_markdown": "## MCP tool calls (breaking)\n\n- A backend tool call is checked once, in its handler, instead of in the protocol tool filter and again in the denial hook. A call to a tool hidden from the caller now returns an `isError` result reading not found, where it was a JSON-RPC invalid-params error. `OnDenied` sees the same refusals.\n- New optional `contract.MCPToolLookup.LookupTool(ctx, caller, name)`. When the backend implements it, a call reads that one definition instead of `ListTools`; without it, a call costs one `ListTools`, where it cost two with `OnDenied` set.\n- Tools registered directly with `Register` are no longer hidden from remote callers when a tool backend is also registered, matching directly registered resources.\n\n## Tool list changes (additive)\n\n- `BaseServer.NotifyToolsChanged(ctx, match)` sends `notifications/tools/list_changed` to the live sessions whose caller matches, including `subscriptions/listen` streams that asked for tool changes.\n- `mcp.ToolsChange{TenantID, ActorID}`, `mcp.PublishToolsChange(ctx, publisher, topic, change)`, and `BaseServer.ToolsChangedHandler(onError)` carry the request from another process over keel messaging. Give each server instance its own subscription.\n\n## Output schemas (additive)\n\n`ServerConfig.OmitOutputSchemas` lists backend tools without `outputSchema`. Results are still validated against it and returned as structured content.\n\n## Confirmation store (breaking)\n\n- `confirmation.Executor.Store` is `contract.MCPConfirmationStore` (was `*TableStore`). Assigning a `*TableStore` is unchanged; code that called other `TableStore` methods through `Executor.Store` keeps its own `*TableStore`.\n- New `service/confirmation/confirmationtest`: `Store`, an in-memory store with the table store's guards and an injectable clock, and `RunStoreSuite`, the conformance suite both stores pass. `confirmation.ValidateDraft` is the draft check `Prepare` applies.\n\n## Generated DDL\n\nkeel's `core` group adds `user_external_identity.provider_grant`, and its seeds add the `apple_team_id`, `apple_key_id`, and `apple_key_secret` configuration flags.\n\n## Pins\n\nkeel `v1.2.103` (from `v1.2.101`). keel's changes reach re-authentication codes, the grant set read, one-time code verification, and Sign in with Apple grants, none of which Scout calls; `RoleAuthorizer` reads grants through keel's catalog, which now selects `bypass_scope`. A product that mounts keel's sign-in follows keel's v1.2.102 and v1.2.103 guides."
+    },
+    {
       "version": "v0.14.5",
       "title": "keel v1.2.101",
       "tags": [

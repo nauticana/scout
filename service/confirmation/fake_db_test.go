@@ -1,8 +1,10 @@
 package confirmation
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -196,12 +198,19 @@ func (db *confirmationDB) Query(_ context.Context, name string, args ...any) (*k
 			return rowsOf([]any{row.id}), nil
 		}
 	case qConfirmLapse:
-		var out [][]any
+		var candidates []*confirmationRow
 		for _, row := range db.rows {
 			if row.status == "executing" && !row.leaseUntil.After(db.now) {
-				row.status, row.leaseUntil = "unknown", time.Time{}
-				out = append(out, []any{row.id})
+				candidates = append(candidates, row)
 			}
+		}
+		slices.SortFunc(candidates, func(a, b *confirmationRow) int {
+			return cmp.Or(a.leaseUntil.Compare(b.leaseUntil), cmp.Compare(a.id, b.id))
+		})
+		var out [][]any
+		for _, row := range candidates[:min(args[0].(int), len(candidates))] {
+			row.status, row.leaseUntil = "unknown", time.Time{}
+			out = append(out, []any{row.id})
 		}
 		return rowsOf(out...), nil
 	case qConfirmExpire:

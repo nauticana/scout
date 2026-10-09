@@ -18,6 +18,7 @@ import (
 	"github.com/nauticana/keel/outbox"
 	keelport "github.com/nauticana/keel/port"
 
+	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
 
@@ -205,7 +206,7 @@ func (s *TableStore) Prepare(ctx context.Context, draft domain.MCPConfirmationDr
 	if err := s.init(ctx); err != nil {
 		return domain.MCPConfirmation{}, false, err
 	}
-	requirements, err := validateDraft(draft)
+	requirements, err := ValidateDraft(draft)
 	if err != nil {
 		return domain.MCPConfirmation{}, false, err
 	}
@@ -564,7 +565,9 @@ func (s *TableStore) guarded(ctx context.Context, verb string, key domain.MCPCon
 	return nil
 }
 
-func validateDraft(draft domain.MCPConfirmationDraft) (json.RawMessage, error) {
+// ValidateDraft checks a draft as Prepare does and returns its requirements,
+// defaulted to an empty object.
+func ValidateDraft(draft domain.MCPConfirmationDraft) (json.RawMessage, error) {
 	requirements := draft.Requirements
 	if len(requirements) == 0 {
 		requirements = json.RawMessage(`{}`)
@@ -669,3 +672,5 @@ func rawJSON(value any) json.RawMessage {
 	}
 	return json.RawMessage(text)
 }
+
+var _ contract.MCPConfirmationStore = (*TableStore)(nil)

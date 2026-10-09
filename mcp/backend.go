@@ -39,7 +39,7 @@ type backendTool struct {
 	governed
 	definition domain.MCPToolDefinition
 	tool       mcpgo.Tool
-	executor   contract.MCPToolExecutor
+	backend    contract.MCPToolBackend
 	output     *jsonschema.Schema
 	onDenied   DeniedFunc
 }
@@ -55,6 +55,12 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 		}
 		return WrapError(err), nil
 	}
+	if err = provider.listed(ctx, caller); err != nil {
+		if provider.onDenied != nil {
+			provider.onDenied(ctx, caller, provider.definition.Name, err)
+		}
+		return WrapError(fmt.Errorf("%w: tool %q", domain.ErrNotFound, provider.definition.Name)), nil
+	}
 	if err = Authorize(provider.definition.Policy, caller); err != nil {
 		if provider.onDenied != nil {
 			provider.onDenied(ctx, caller, provider.definition.Name, err)
@@ -65,7 +71,7 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 	if err != nil {
 		return WrapError(err), nil
 	}
-	result, err := provider.executor.ExecuteTool(ctx, domain.MCPToolCall{
+	result, err := provider.backend.ExecuteTool(ctx, domain.MCPToolCall{
 		Caller:    caller,
 		RequestID: requestID(ctx),
 		Name:      provider.definition.Name,
@@ -102,6 +108,36 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 	}
 	wrapped.StructuredContent = json.RawMessage(encoded)
 	return wrapped, nil
+}
+
+// listed admits a call only to a tool in the caller's own catalog whose scopes
+// the caller holds; the client sees any refusal as an unknown tool.
+func (provider backendTool) listed(ctx context.Context, caller domain.MCPCaller) error {
+	name := provider.definition.Name
+	definition, found, err := lookupTool(ctx, provider.backend, caller, name)
+	if err != nil {
+		return fmt.Errorf("mcp tool catalog: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("%w: tool %q is not in the caller's catalog", domain.ErrForbidden, name)
+	}
+	return Authorize(definition.Policy, caller)
+}
+
+func lookupTool(ctx context.Context, catalog contract.MCPToolCatalog, caller domain.MCPCaller, name string) (domain.MCPToolDefinition, bool, error) {
+	if lookup, ok := catalog.(contract.MCPToolLookup); ok {
+		return lookup.LookupTool(ctx, caller, name)
+	}
+	definitions, err := catalog.ListTools(ctx, caller)
+	if err != nil {
+		return domain.MCPToolDefinition{}, false, err
+	}
+	for _, definition := range definitions {
+		if definition.Name == name {
+			return definition, true, nil
+		}
+	}
+	return domain.MCPToolDefinition{}, false, nil
 }
 
 // backendResource reads URI-addressed product data for an authenticated caller.

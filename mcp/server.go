@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 
@@ -26,6 +27,9 @@ type ServerConfig struct {
 	// OnDenied observes each backend tool call refused before its executor runs:
 	// an unresolved caller, a tool outside the caller's catalog, or missing scopes.
 	OnDenied DeniedFunc
+	// OmitOutputSchemas lists backend tools without outputSchema. Results are
+	// still validated against it and returned as structured content.
+	OmitOutputSchemas bool
 }
 
 // DeniedFunc receives a refused call's caller, tool name, and refusal.
@@ -45,18 +49,25 @@ type BaseServer struct {
 	prompts      contract.MCPPromptCatalog
 	toolNames    map[string]bool
 	onDenied     DeniedFunc
+	omitOutputs  bool
+	listeners    *toolListeners
 }
 
 func NewServer(config ServerConfig) *BaseServer {
-	base := &BaseServer{ipHook: config.ClientIPHook, source: config.Source, callers: config.Callers, onDenied: config.OnDenied}
+	base := &BaseServer{ipHook: config.ClientIPHook, source: config.Source, callers: config.Callers, onDenied: config.OnDenied,
+		omitOutputs: config.OmitOutputSchemas, listeners: newToolListeners()}
 	if base.ipHook == nil {
 		base.ipHook = keelhandler.WithClientIPContext
 	}
 	if base.callers == nil {
 		base.callers = BaseCallerResolver{}
 	}
-	// mcp-go has no resource filter, so listings are narrowed after the fact.
+	// Listings are narrowed after the fact; a tool call is checked once, in its handler.
 	hooks := &server.Hooks{}
+	hooks.AddAfterListTools(func(ctx context.Context, _ any, _ *mcpgo.ListToolsRequest, result *mcpgo.ListToolsResult) {
+		hidden := base.hiddenTools(ctx)
+		result.Tools = slices.DeleteFunc(result.Tools, func(tool mcpgo.Tool) bool { return hidden[tool.Name] })
+	})
 	hooks.AddAfterListResources(func(ctx context.Context, _ any, _ *mcpgo.ListResourcesRequest, result *mcpgo.ListResourcesResult) {
 		hidden := base.hiddenResources(ctx)
 		result.Resources = slices.DeleteFunc(result.Resources, func(resource mcpgo.Resource) bool { return hidden[resource.URI] })
@@ -67,12 +78,7 @@ func NewServer(config ServerConfig) *BaseServer {
 			return template.URITemplate != nil && template.URITemplate.Template != nil && hidden[template.URITemplate.Raw()]
 		})
 	})
-	// The call-time tool filter refuses a hidden tool as not found, so denials are observed before it runs.
-	if base.onDenied != nil {
-		hooks.AddBeforeCallTool(func(ctx context.Context, _ any, request *mcpgo.CallToolRequest) {
-			base.reportDenied(ctx, request.Params.Name)
-		})
-	}
+	base.trackListeners(hooks)
 	base.mcp = server.NewMCPServer(
 		config.Name, config.Version,
 		server.WithToolCapabilities(true),
@@ -80,7 +86,6 @@ func NewServer(config ServerConfig) *BaseServer {
 		server.WithPromptCapabilities(true),
 		server.WithInstructions(config.Instructions),
 		server.WithRecovery(),
-		server.WithToolFilter(base.visibleTools),
 		server.WithPromptFilter(base.visiblePrompts),
 		server.WithHooks(hooks),
 	)
@@ -135,11 +140,15 @@ func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.M
 	s.toolNames = make(map[string]bool, len(definitions))
 	for i, definition := range definitions {
 		s.toolNames[definition.Name] = true
+		tool := toolFrom(definition)
+		if s.omitOutputs {
+			tool.RawOutputSchema = nil
+		}
 		s.Register(backendTool{
 			governed:   s.governed(),
 			definition: definition,
-			tool:       toolFrom(definition),
-			executor:   backend,
+			tool:       tool,
+			backend:    backend,
 			output:     outputs[i],
 			onDenied:   s.onDenied,
 		})
@@ -198,58 +207,32 @@ func (s *BaseServer) RegisterPromptBackend(ctx context.Context, backend contract
 	return nil
 }
 
-func (s *BaseServer) visibleTools(ctx context.Context, tools []mcpgo.Tool) []mcpgo.Tool {
-	return filterNamed(tools, s.allowedTools(ctx), func(tool mcpgo.Tool) string { return tool.Name })
-}
-
 func (s *BaseServer) visiblePrompts(ctx context.Context, prompts []mcpgo.Prompt) []mcpgo.Prompt {
 	return filterNamed(prompts, s.allowedPrompts(ctx), func(prompt mcpgo.Prompt) string { return prompt.Name })
 }
 
-func (s *BaseServer) allowedTools(ctx context.Context) map[string]bool {
+// hiddenTools returns the backend tools the caller may not call; all of them
+// when the caller or its catalog cannot be resolved. Directly registered tools
+// are not caller-scoped.
+func (s *BaseServer) hiddenTools(ctx context.Context) map[string]bool {
+	hidden := maps.Clone(s.toolNames)
 	if s.tools == nil {
-		return nil
+		return hidden
 	}
 	caller, err := s.governed().caller(ctx)
 	if err != nil {
-		return map[string]bool{}
+		return hidden
 	}
 	definitions, err := s.tools.ListTools(ctx, caller)
 	if err != nil {
-		return map[string]bool{}
-	}
-	allowed := make(map[string]bool, len(definitions))
-	for _, definition := range definitions {
-		allowed[definition.Name] = Authorize(definition.Policy, caller) == nil
-	}
-	return allowed
-}
-
-// reportDenied passes a refused backend tool call to OnDenied, with the
-// refusal the call-time filter and Handle apply.
-func (s *BaseServer) reportDenied(ctx context.Context, name string) {
-	if !s.toolNames[name] {
-		return
-	}
-	caller, err := s.governed().caller(ctx)
-	if err != nil {
-		s.onDenied(ctx, caller, name, err)
-		return
-	}
-	definitions, err := s.tools.ListTools(ctx, caller)
-	if err != nil {
-		s.onDenied(ctx, caller, name, fmt.Errorf("mcp tool catalog: %w", err))
-		return
+		return hidden
 	}
 	for _, definition := range definitions {
-		if definition.Name == name {
-			if err = Authorize(definition.Policy, caller); err != nil {
-				s.onDenied(ctx, caller, name, err)
-			}
-			return
+		if Authorize(definition.Policy, caller) == nil {
+			delete(hidden, definition.Name)
 		}
 	}
-	s.onDenied(ctx, caller, name, fmt.Errorf("%w: tool %q is not in the caller's catalog", domain.ErrForbidden, name))
+	return hidden
 }
 
 // hiddenResources returns the backend entries the caller may not read; all of

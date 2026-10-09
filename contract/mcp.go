@@ -18,6 +18,14 @@ type MCPToolCatalog interface {
 	ListTools(ctx context.Context, caller domain.MCPCaller) ([]domain.MCPToolDefinition, error)
 }
 
+// MCPToolLookup is an optional MCPToolCatalog extension. When implemented, a
+// tool call is checked with it instead of listing the caller's whole catalog.
+type MCPToolLookup interface {
+	// LookupTool returns the caller's definition of name; found is false when
+	// ListTools would not list it for this caller.
+	LookupTool(ctx context.Context, caller domain.MCPCaller, name string) (definition domain.MCPToolDefinition, found bool, err error)
+}
+
 // MCPToolExecutor invokes product services after Keel infrastructure checks.
 type MCPToolExecutor interface {
 	// ExecuteTool performs one bounded call or returns a durable task reference.

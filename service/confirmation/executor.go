@@ -20,7 +20,7 @@ const DefaultLease = time.Minute
 // and waits for a person to reconcile it.
 type Executor struct {
 	// Store and Checker are required; Runner and OnFailure only to run.
-	Store   *TableStore
+	Store   contract.MCPConfirmationStore
 	Checker contract.MCPConfirmationChecker
 	Runner  contract.MCPConfirmedRunner
 	// OnFailure receives the internal cause of a recorded failure, which people

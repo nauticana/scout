@@ -42,6 +42,29 @@ func TestOutputSchemaToolReturnsStructuredContent(t *testing.T) {
 	}
 }
 
+func TestOmittedOutputSchemaIsStillEnforced(t *testing.T) {
+	for name, want := range map[string]struct {
+		data   any
+		result string
+	}{
+		"conforming":     {data: map[string]int{"n": 3}, result: `"structuredContent":{"n":3}`},
+		"non-conforming": {data: map[string]string{"n": "three"}, result: domain.ErrContractFailed.Error()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer(ServerConfig{Name: "test", Version: "1.0.0", OmitOutputSchemas: true})
+			if err := srv.RegisterToolBackend(context.Background(), schemaBackend{data: want.data}); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			if listed := call(t, srv, remoteContext("read"), "tools/list", map[string]any{}); !strings.Contains(listed, `"count"`) || strings.Contains(listed, "outputSchema") {
+				t.Fatalf("listing = %s", listed)
+			}
+			if result := call(t, srv, remoteContext("read"), "tools/call", map[string]any{"name": "count"}); !strings.Contains(result, want.result) {
+				t.Fatalf("result = %s", result)
+			}
+		})
+	}
+}
+
 func TestRegisterToolBackendRejectsInvalidOutputSchema(t *testing.T) {
 	for name, schema := range map[string]json.RawMessage{
 		"malformed":   json.RawMessage(`{"type":"object","properties":`),
@@ -142,8 +165,9 @@ func TestToolErrorRefusesMalformedErrors(t *testing.T) {
 		"with elicitation": {Error: &domain.MCPToolError{Code: "failed", Message: "failed"}, Elicit: map[string]domain.MCPElicitation{"q": {Message: "?"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: domain.MCPToolDefinition{Name: "count"},
-				executor: &toolErrorBackend{definedSchemaBackend: &definedSchemaBackend{}, result: result}}
+			definition := domain.MCPToolDefinition{Name: "count"}
+			tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: definition,
+				backend: &toolErrorBackend{definedSchemaBackend: &definedSchemaBackend{definition: definition}, result: result}}
 			out, err := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{})
 			if err != nil || !out.IsError || out.StructuredContent != nil || !strings.Contains(out.Content[0].(mcpgo.TextContent).Text, domain.ErrContractFailed.Error()) {
 				t.Fatalf("result = %+v, err = %v", out, err)
