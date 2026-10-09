@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v0.14.5",
+      "title": "keel v1.2.101",
+      "tags": [
+        "additive"
+      ],
+      "summary": "keel moves to v1.2.101. Scout's Go surface, tables and generated DDL are unchanged.",
+      "body_markdown": "## Generated DDL\n\nUnchanged. keel adds `oauth_client.registered` and `oauth_authorization_code.consumed_at` in its `oauth_server` group, which is not in Scout's documented set.\n\n## Pins\n\nkeel `v1.2.101` (from `v1.2.100`). keel's changes reach its OAuth authorization server, the connect flow, JWT, OpenID Connect and SAML verification, and SCIM, none of which Scout calls. A product that mounts them follows keel's v1.2.101 guide."
+    },
+    {
       "version": "v0.14.4",
       "title": "keel v1.2.100, confirmed MCP tool calls, turn approval tables renamed, restriction changes audited atomically",
       "tags": [
