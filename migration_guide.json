@@ -9,7 +9,7 @@
   },
   "migrations": [
     {
-      "version": null,
+      "version": "v1.0.1",
       "title": "keel v1.2.106, client application on decision records",
       "tags": [
         "additive",
