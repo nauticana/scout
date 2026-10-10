@@ -2,7 +2,7 @@
 
 Scout requires keel `tenant_management`, which declares direct dependencies on keel `core` and `geo`. Install the groups from the same pinned `github.com/nauticana/keel` module in dependency order: `core`, `geo`, `tenant_management`, then Scout. Keel supplies `business_partner`, users and sessions, authorization, consent, metadata-driven REST, and `table_sequence_usage`. `agent_tenant` is a one-to-one child of `business_partner`, and Studio actor fields reference `user_account`; Scout does not copy either YAML definition.
 
-The diagrams below show Scout-owned tables. A keel-owned table appears only as a bare stub when a Scout relation points at it — `business_partner` and `user_account` — because it is a dependency rather than part of the agent domain. Generate both layers together as documented in [README.md](../README.md#generate-dialect-specific-ddl).
+The diagrams below show Scout-owned tables. A keel-owned table appears only as a bare stub when a Scout relation points at it — `business_partner` and `user_account` — because it is a dependency rather than part of the agent domain. Generate both layers together as documented in the [engineering reference](engineering-reference.md#generate-dialect-specific-ddl).
 
 The YAML files under `schema/` are authoritative. This document explains ownership and relationships; it is not another schema source.
 
@@ -71,7 +71,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, and `agent` — 42 Scout tables — while the full platform is 123. The profile table in [README.md](../README.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 50 Scout tables — while the full platform is 123. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -945,6 +945,7 @@ erDiagram
         varchar principal_id
         varchar grant_id
         varchar grantor_id
+        varchar client_ref
         varchar scope_id FK
         varchar performed_action
         varchar resource_ref
@@ -1776,7 +1777,7 @@ erDiagram
 
 ## Scout table inventory
 
-Tables are grouped by the schema module that owns them. A downstream generates only the modules its product uses; see the profile table in [README.md](../README.md#generate-dialect-specific-ddl).
+Tables are grouped by the schema module that owns them. A downstream generates only the modules its product uses; see the profile table in the [engineering reference](engineering-reference.md#generate-dialect-specific-ddl).
 
 | Module | Tables |
 |---|---|

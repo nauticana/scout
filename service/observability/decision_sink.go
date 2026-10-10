@@ -31,15 +31,15 @@ const (
 var decisionQueries = map[string]string{
 	qDecisionInsert: `
 INSERT INTO audit_event
-       (id, partner_id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
+       (id, partner_id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id, client_ref,
         scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
         obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, decision_key)
-VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, decision_key) DO NOTHING`,
 	qDecisionPage: `
 SELECT id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
        scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
-       obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at
+       obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, client_ref
   FROM audit_event
  WHERE ((? > 0 AND partner_id = ?) OR (? = 0 AND partner_id IS NULL))
    AND (? = '' OR category = ?)
@@ -62,12 +62,10 @@ type EvidenceStore interface {
 	Dehydrate(ctx context.Context, name string, payload []byte) (domain.ObjectRef, error)
 }
 
-// TableAuditSink is the durable evidence trail over audit_event. It is both the
-// write and the read side: evidence with no way to read it answers nothing.
+// TableAuditSink records and reads governed decisions in audit_event.
 type TableAuditSink struct {
 	DB keelport.DatabaseRepository
-	// Evidence is optional; without it a record keeps its typed columns and drops
-	// the payload, because a decision must be recorded even when storage is not configured.
+	// Evidence is optional; without it a record keeps its typed columns and drops the payload.
 	Evidence EvidenceStore
 
 	once sync.Once
@@ -144,7 +142,7 @@ func (sink *TableAuditSink) insert(ctx context.Context, qs keelport.QueryService
 	_, err := qs.Query(context.WithoutCancel(ctx), qDecisionInsert,
 		tenantID, decision.Category, string(decision.Principal.Kind), decision.Principal.ID,
 		nullable(decision.Authority.GrantID), nullable(string(decision.Authority.Grantor.Kind)), nullable(decision.Authority.Grantor.ID),
-		nullable(decision.ScopeID), decision.Action, nullable(decision.Resource), nullable(decision.ReleaseVersion),
+		nullable(decision.ClientRef), nullable(decision.ScopeID), decision.Action, nullable(decision.Resource), nullable(decision.ReleaseVersion),
 		nullable(decision.PolicyID), nullable(decision.PolicyVersion), string(decision.Outcome),
 		nullable(strings.Join(obligations, ",")), nullable(decision.Reason),
 		nullable(decision.RequestID), nullable(decision.ConversationID),
@@ -198,7 +196,7 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 			Outcome: domain.DecisionOutcome(common.AsString(row[13])), Reason: common.AsString(row[15]),
 			RequestID: common.AsString(row[16]), ConversationID: common.AsString(row[17]),
 			Evidence:   domain.ObjectRef{URI: common.AsString(row[18]), Digest: common.AsString(row[19])},
-			OccurredAt: common.AsTime(row[20]),
+			OccurredAt: common.AsTime(row[20]), ClientRef: common.AsString(row[21]),
 		}
 		for _, obligation := range strings.Split(common.AsString(row[14]), ",") {
 			if obligation != "" {

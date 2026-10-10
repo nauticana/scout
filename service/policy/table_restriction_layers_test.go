@@ -53,7 +53,7 @@ func (tables *restrictionTables) Query(_ context.Context, name string, args ...a
 		if tables.auditErr != nil {
 			return nil, tables.auditErr
 		}
-		tables.audits = append(tables.audits, restrictionAudit{tenant: args[0], category: args[1].(string), version: args[12].(string)})
+		tables.audits = append(tables.audits, restrictionAudit{tenant: args[0], category: args[1].(string), version: args[13].(string)})
 	case qPlatformLayerInsert:
 		tables.layers[fmt.Sprint(0, args[0])] = [2]string{args[1].(string), args[2].(string)}
 	case qTenantLayerInsert:

@@ -26,11 +26,8 @@ type LatencyBudgetConfig struct {
 	Embedding, Retrieval, Rerank, PromptBuild, Guardrail StageSlice
 }
 
-// LatencyBudgetAllocator turns the caller deadline (or the policy turn timeout) into per-stage slices:
-// generation is reserved first from the model estimate, optional stages take what remains, and a
-// deadline that cannot cover admission, prompt build, minimum generation, and guardrail is rejected.
+// LatencyBudgetAllocator splits the caller deadline, or the policy turn timeout, into per-stage slices.
 type LatencyBudgetAllocator struct {
-	// Model predicts stage costs; nil uses StaticStageLatencyModel defaults.
 	Model  contract.StageLatencyModel
 	Config LatencyBudgetConfig
 	Now    func() time.Time
@@ -38,7 +35,7 @@ type LatencyBudgetAllocator struct {
 
 var _ contract.LatencyBudgetAllocator = (*LatencyBudgetAllocator)(nil)
 
-// NewLatencyBudgetAllocator validates the stage bounds; model nil uses the static README table.
+// NewLatencyBudgetAllocator validates the stage bounds; model nil uses DefaultStageLatencyEstimate.
 func NewLatencyBudgetAllocator(model contract.StageLatencyModel, config LatencyBudgetConfig) (*LatencyBudgetAllocator, error) {
 	for name, slice := range map[string]StageSlice{
 		"embedding": config.Embedding, "retrieval": config.Retrieval, "rerank": config.Rerank,
@@ -57,7 +54,8 @@ func NewLatencyBudgetAllocator(model contract.StageLatencyModel, config LatencyB
 	return &LatencyBudgetAllocator{Model: model, Config: config}, nil
 }
 
-// Allocate reserves generation first and returns ErrDeadlineInfeasible when the minimum path cannot fit.
+// Allocate reserves generation first, gives optional stages what remains, and returns
+// ErrDeadlineInfeasible when admission, prompt build, minimum generation, and guardrail cannot fit.
 func (allocator *LatencyBudgetAllocator) Allocate(ctx context.Context, request domain.TurnRequest, policy domain.TenantRuntimePolicy) (domain.TurnBudget, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.TurnBudget{}, err
@@ -150,14 +148,14 @@ func ApplyBudget(query domain.KnowledgeQuery, budget domain.TurnBudget) (domain.
 	return query, nil
 }
 
-// StaticStageLatencyModel returns one fixed table; zero fields take the README starting p95 targets.
+// StaticStageLatencyModel returns one fixed table; zero fields take DefaultStageLatencyEstimate.
 type StaticStageLatencyModel struct {
 	Table domain.StageLatencyEstimate
 }
 
 var _ contract.StageLatencyModel = (*StaticStageLatencyModel)(nil)
 
-// DefaultStageLatencyEstimate is the README "starting latency budget" split by stage.
+// DefaultStageLatencyEstimate is the starting p95 target of each stage.
 var DefaultStageLatencyEstimate = domain.StageLatencyEstimate{
 	Admission:     40 * time.Millisecond,
 	Embedding:     20 * time.Millisecond,

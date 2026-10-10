@@ -16,15 +16,51 @@ type decisionQueryFake struct {
 	keelport.DatabaseRepository
 	keelport.QueryService
 	keys []any
+	args [][]any
+	rows [][]any
 }
 
 func (fake *decisionQueryFake) GetQueryService(context.Context, map[string]string) keelport.QueryService {
 	return fake
 }
 
-func (fake *decisionQueryFake) Query(_ context.Context, _ string, args ...any) (*keelmodel.QueryResult, error) {
+func (fake *decisionQueryFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
+	if name == qDecisionPage {
+		return &keelmodel.QueryResult{Rows: fake.rows}, nil
+	}
 	fake.keys = append(fake.keys, args[len(args)-1])
+	fake.args = append(fake.args, args)
 	return &keelmodel.QueryResult{}, nil
+}
+
+func TestTableAuditSinkStoresAndReadsTheClientApplication(t *testing.T) {
+	query := &decisionQueryFake{}
+	sink := &TableAuditSink{DB: query}
+	decision := domain.DecisionRecord{
+		TenantID: 7, Principal: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "41"}, ClientRef: "oauth_client:abc",
+		Category: domain.DecisionCategoryToolInvoke, Action: "publish_page", Outcome: domain.DecisionAllow,
+	}
+	if err := sink.Record(context.Background(), decision); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(decisionQueries[qDecisionInsert], "grantor_id, client_ref,") || query.args[0][7] != decision.ClientRef {
+		t.Fatalf("client_ref insert = %v", query.args[0][7])
+	}
+	row := make([]any, 22)
+	row[21] = decision.ClientRef
+	query.rows = [][]any{row}
+	page, err := sink.Decisions(context.Background(), domain.DecisionQuery{TenantID: 7})
+	if !strings.Contains(decisionQueries[qDecisionPage], "occurred_at, client_ref") ||
+		err != nil || len(page.Records) != 1 || page.Records[0].ClientRef != decision.ClientRef {
+		t.Fatalf("Decisions = %+v, %v", page, err)
+	}
+	decision.ClientRef = ""
+	if err := sink.Record(context.Background(), decision); err != nil {
+		t.Fatal(err)
+	}
+	if got := query.args[1][7]; got != nil {
+		t.Fatalf("empty client_ref = %v", got)
+	}
 }
 
 func TestTableAuditSinkKeysADecisionByItsScopeSoReplayWritesItOnce(t *testing.T) {

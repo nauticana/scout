@@ -152,8 +152,9 @@ bindings whose delegation ended so bound work can be stopped rather than continu
 ## Evidence
 
 `domain.DecisionRecord` replaces the old opaque audit event. It carries principal, authority chain,
-scope, action, resource, release, policy id and version, outcome, obligations, reason, and a
-reference to redacted evidence in object storage.
+the client application the principal acted through (such as an OAuth client), scope, action,
+resource, release, policy id and version, outcome, obligations, reason, and a reference to redacted
+evidence in object storage.
 
 `observability.TableAuditSink` is both sides: `Record` writes, `RecordTx` writes inside a caller's
 transaction so a state change commits only with its record, `Decisions` reads. Evidence with no

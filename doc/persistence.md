@@ -30,7 +30,7 @@ the durable row does not reference that digest (`scout_session_checkpoint_digest
 `scout_step_find`); a concurrent identical replay may legitimately share the object. Delete failures are joined
 onto the original error, never swallowed. What remains unreferenced (delete failed, crash between upload and row
 write) is reclaimed by a reconciliation sweeper that lists the prefix and drops objects no row references —
-the same worker that expires reservations (IDEAS E4). Reads always fail closed: a missing or tampered object
+the same worker that expires reservations. Reads always fail closed: a missing or tampered object
 is `ErrDigestMismatch`/download error, never empty state.
 
 ## Transaction boundaries

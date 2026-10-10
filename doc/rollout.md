@@ -5,7 +5,7 @@ Scout keeps two rollout controls apart and gives each its own persisted identity
 - **Agent version** — one tenant's immutable agent definition, routed by `AgentVersionTrafficManager`, persisted on `agent_conversation.agent_version`.
 - **Platform release** — the certified platform artifact and the component set it ships, advanced by `PlatformReleaseRolloutController` through tenant rings, persisted on `conversation_release.platform_version`.
 
-A conversation resolves both once, at creation, and reads them back on every later turn. Rolling one back never rewrites the other.
+A conversation resolves both once, at creation, and reads them back on every later turn. Rolling one back never rewrites the other. Merging them would force a ring change on every tenant publish and make rollback ambiguous; the release bundle is a manifest naming what a rollback restores, not a third traffic control.
 
 ## Release bundle
 

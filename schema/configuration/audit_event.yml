@@ -21,6 +21,10 @@ columns:
   - name: grantor_id
     type: VARCHAR(120)
     nullable: true
+  - name: client_ref
+    type: VARCHAR(200)
+    nullable: true
+    comment: Client application the principal acted through; external issuers prevent a foreign key
   - name: scope_id
     type: VARCHAR(80)
     nullable: true

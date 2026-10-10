@@ -55,13 +55,14 @@ type Decision struct {
 }
 
 // DecisionRecord is the durable evidence of one governed decision. It carries
-// identity, authority, and reasoning; Evidence points at redacted content in
-// object storage and never holds the content itself.
+// identity, authority, client application, and reasoning; Evidence points at
+// redacted content in object storage and never holds the content itself.
 type DecisionRecord struct {
 	// TenantID is zero only for platform-wide decisions such as global rollouts.
 	TenantID       int64
 	Principal      PrincipalRef
 	Authority      AuthorityRef
+	ClientRef      string
 	ScopeID        string
 	Category       string
 	Action         string

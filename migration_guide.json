@@ -1,6 +1,6 @@
 {
   "package": "github.com/nauticana/scout",
-  "description": "Per-version migration guides (README documents the current package state; this file is the versioned upgrade history). Newest first.",
+  "description": "Per-version upgrade history; current behavior is documented under doc/. Newest first.",
   "field_notes": {
     "version": "semver tag (e.g. v0.3.3), or null for non-versioned/schema-only guides",
     "tags": "any of: additive, breaking, schema",
@@ -8,6 +8,17 @@
     "body_markdown": "full guide in GitHub-flavored markdown (tables/code/steps preserved)"
   },
   "migrations": [
+    {
+      "version": null,
+      "title": "keel v1.2.106, client application on decision records",
+      "tags": [
+        "additive",
+        "breaking",
+        "schema"
+      ],
+      "summary": "keel moves to v1.2.106. A decision record names the client application its principal acted through, stored in a new nullable audit_event.client_ref.",
+      "body_markdown": "## Client application on decision records (schema)\n\n- `domain.DecisionRecord.ClientRef` names the client application the principal acted through, such as an OAuth client. `TableAuditSink` stores it in nullable `audit_event.client_ref VARCHAR(200)` and returns it from `Decisions`; empty stores NULL.\n- A product that recorded the client elsewhere, such as in the authority's grantor, sets `ClientRef` instead.\n- Stored data: `ALTER TABLE audit_event ADD COLUMN client_ref VARCHAR(200) NULL`.\n\n## keel pin (breaking)\n\nkeel moves from `v1.2.105` to `v1.2.106`. Scout does not call its changed Go APIs; a product that does follows keel's v1.2.106 guide. The generated DDL gains keel's `user_refresh_token` session columns and `partner_signin_network`; a database with stored rows applies keel's schema steps for them."
+    },
     {
       "version": "v1.0.0",
       "title": "Partner-scoped tenant tables, a registration catalog, tenant-aware tool listing, keel v1.2.105, charter v1.2.5",
