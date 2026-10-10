@@ -38,67 +38,67 @@ const (
 
 var agentTypeQueries = map[string]string{
 	qTypePut: `
-INSERT INTO agent_type (tenant_id, agent_type_id, display_name, description)
+INSERT INTO agent_type (partner_id, agent_type_id, display_name, description)
 VALUES (?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_type_id) DO UPDATE
+ON CONFLICT (partner_id, agent_type_id) DO UPDATE
    SET display_name = EXCLUDED.display_name, description = EXCLUDED.description`,
 	qTypePublish: `
-INSERT INTO agent_type_version (tenant_id, agent_type_id, type_version, definition, definition_digest, change_summary, published_by)
+INSERT INTO agent_type_version (partner_id, agent_type_id, type_version, definition, definition_digest, change_summary, published_by)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	qTypeCapability: `
-INSERT INTO agent_type_capability (tenant_id, agent_type_id, type_version, package_id, package_version, is_required)
+INSERT INTO agent_type_capability (partner_id, agent_type_id, type_version, package_id, package_version, is_required)
 VALUES (?, ?, ?, ?, ?, ?)`,
 	qTypeGet: `
 SELECT definition, definition_digest, change_summary, published_by, published_at
   FROM agent_type_version
- WHERE tenant_id = ? AND agent_type_id = ? AND type_version = ?`,
+ WHERE partner_id = ? AND agent_type_id = ? AND type_version = ?`,
 	qTypeLatest: `
 SELECT type_version, definition, definition_digest, change_summary, published_by, published_at
   FROM agent_type_version
- WHERE tenant_id = ? AND agent_type_id = ?
+ WHERE partner_id = ? AND agent_type_id = ?
  ORDER BY published_at DESC, type_version DESC
  LIMIT 1`,
 	qTypeInstances: `
 SELECT p.agent_id, p.agent_type_version
   FROM agent_profile p
- WHERE p.tenant_id = ? AND p.agent_type_id = ? AND p.agent_type_version IS NOT NULL`,
+ WHERE p.partner_id = ? AND p.agent_type_id = ? AND p.agent_type_version IS NOT NULL`,
 	qTypePackages: `
 SELECT package_id, package_version, is_required
   FROM agent_type_capability
- WHERE tenant_id = ? AND agent_type_id = ? AND type_version = ?`,
+ WHERE partner_id = ? AND agent_type_id = ? AND type_version = ?`,
 	qPackagePut: `
-INSERT INTO agent_capability_package (tenant_id, package_id, package_version, display_name, payload, payload_digest)
+INSERT INTO agent_capability_package (partner_id, package_id, package_version, display_name, payload, payload_digest)
 VALUES (?, ?, ?, ?, ?, ?)`,
 	qPackageGet: `
 SELECT display_name, payload, payload_digest, created_at
   FROM agent_capability_package
- WHERE tenant_id = ? AND package_id = ? AND package_version = ?`,
+ WHERE partner_id = ? AND package_id = ? AND package_version = ?`,
 	qInstanceProfile: `
-INSERT INTO agent_profile (tenant_id, agent_id, agent_type_id, agent_type_version, display_name, state_code)
+INSERT INTO agent_profile (partner_id, agent_id, agent_type_id, agent_type_version, display_name, state_code)
 VALUES (?, ?, ?, ?, ?, 'draft')`,
 	qInstanceBinding: `
-INSERT INTO config_scope_binding (tenant_id, scope_id, resource_kind_code, resource_id, resource_version,
+INSERT INTO config_scope_binding (partner_id, scope_id, resource_kind_code, resource_id, resource_version,
                             merge_mode_code, sealed, resource_value, resource_value_digest, bound_by)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-	qAgentStateGet: `SELECT state_code FROM agent_profile WHERE tenant_id = ? AND agent_id = ?`,
+	qAgentStateGet: `SELECT state_code FROM agent_profile WHERE partner_id = ? AND agent_id = ?`,
 	qAgentStateSet: `
 UPDATE agent_profile
    SET state_code = ?, state_reason = ?, state_changed_by = ?, state_changed_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ? AND state_code = ?
+ WHERE partner_id = ? AND agent_id = ? AND state_code = ?
 RETURNING state_code`,
 	qQuarantinePut: `
-INSERT INTO agent_version_quarantine (tenant_id, agent_id, agent_version, reason, actor_kind, actor_id)
+INSERT INTO agent_version_quarantine (partner_id, agent_id, agent_version, reason, actor_kind, actor_id)
 VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id, agent_version) DO UPDATE
+ON CONFLICT (partner_id, agent_id, agent_version) DO UPDATE
    SET reason = EXCLUDED.reason, actor_kind = EXCLUDED.actor_kind, actor_id = EXCLUDED.actor_id,
        quarantined_at = CURRENT_TIMESTAMP, lifted_at = NULL`,
 	qQuarantineLift: `
 UPDATE agent_version_quarantine SET lifted_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND lifted_at IS NULL
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND lifted_at IS NULL
 RETURNING agent_version`,
 	qQuarantineActive: `
 SELECT 1 FROM agent_version_quarantine
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND lifted_at IS NULL`,
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND lifted_at IS NULL`,
 }
 
 // PutType creates or updates the mutable label of a reusable type. Published

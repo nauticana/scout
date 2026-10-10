@@ -3,7 +3,7 @@ comment: Queryable tenant agent lifecycle event
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -24,10 +24,10 @@ sequence:
   column: id
 foreign_keys:
   - name: agent_studio_events
-    columns: [tenant_id, agent_id]
+    columns: [partner_id, agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
   - name: actor_agent_studio_events
     columns: [actor_id]
     references:
@@ -35,4 +35,4 @@ foreign_keys:
       columns: [id]
 indexes:
   - name: agent_studio_event_agent_time_ix
-    columns: [tenant_id, agent_id, occurred_at]
+    columns: [partner_id, agent_id, occurred_at]

@@ -19,13 +19,13 @@ const (
 
 var modelAccessQueries = map[string]string{
 	qModelAccessGrant: `
-INSERT INTO tenant_model_access (tenant_id, provider_id, model_id, priority_class_code)
+INSERT INTO tenant_model_access (partner_id, provider_id, model_id, priority_class_code)
 VALUES (?, ?, ?, ?)
-ON CONFLICT (tenant_id, provider_id, model_id) DO UPDATE
+ON CONFLICT (partner_id, provider_id, model_id) DO UPDATE
    SET priority_class_code = EXCLUDED.priority_class_code`,
 	qModelAccessRevoke: `
 DELETE FROM tenant_model_access
- WHERE tenant_id = ? AND provider_id = ? AND model_id = ?`,
+ WHERE partner_id = ? AND provider_id = ? AND model_id = ?`,
 }
 
 // DefaultPriorityClass is the scheduling class a grant takes when none is named.

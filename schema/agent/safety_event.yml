@@ -3,7 +3,7 @@ comment: One guardrail intervention, attributed to the principal, release, and p
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: principal_kind
     type: VARCHAR(20)
@@ -39,15 +39,15 @@ sequence:
   column: id
 foreign_keys:
   - name: safety_events
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
 indexes:
   - name: safety_event_tenant_time_ix
-    columns: [tenant_id, occurred_at]
+    columns: [partner_id, occurred_at]
   - name: safety_event_release_ix
-    columns: [tenant_id, release_version, severity_code]
+    columns: [partner_id, release_version, severity_code]
 checks:
   - name: safety_event_duration_ck
     expression: duration_ms >= 0

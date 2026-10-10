@@ -1,7 +1,7 @@
 table: tool_version
 comment: Immutable tool endpoint and data contract
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: tool_id
     type: VARCHAR(80)
@@ -26,16 +26,16 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, tool_id, tool_version]
+primary_key: [partner_id, tool_id, tool_version]
 foreign_keys:
   - name: tool_versions
-    columns: [tenant_id, tool_id]
+    columns: [partner_id, tool_id]
     references:
       table: tool_profile
-      columns: [tenant_id, tool_id]
+      columns: [partner_id, tool_id]
 indexes:
   - name: tool_version_created_ix
-    columns: [tenant_id, tool_id, created_at]
+    columns: [partner_id, tool_id, created_at]
 checks:
   - name: tool_version_timeout_ck
     expression: timeout_ms > 0

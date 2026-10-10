@@ -28,21 +28,21 @@ var pinnedKnowledgeQueries = map[string]string{
 SELECT b.knowledge_base_id, b.knowledge_version, b.max_whole_tokens, d.document_id
   FROM agent_knowledge_binding b
   LEFT JOIN agent_knowledge_document d
-    ON d.tenant_id = b.tenant_id AND d.agent_id = b.agent_id AND d.agent_version = b.agent_version
+    ON d.partner_id = b.partner_id AND d.agent_id = b.agent_id AND d.agent_version = b.agent_version
    AND d.knowledge_base_id = b.knowledge_base_id
- WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ? AND b.mode_code = 'whole'
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ? AND b.mode_code = 'whole'
  ORDER BY b.knowledge_base_id, d.ordinal, d.document_id`,
 	qPinnedChunks: `
 SELECT c.document_id, c.chunk_no, c.content_uri, c.token_count, d.source_uri, c.source_version,
        c.start_offset, c.end_offset, c.entitlements
   FROM knowledge_chunk c
   JOIN knowledge_document d
-    ON d.tenant_id = c.tenant_id AND d.knowledge_base_id = c.knowledge_base_id
+    ON d.partner_id = c.partner_id AND d.knowledge_base_id = c.knowledge_base_id
    AND d.knowledge_version = c.knowledge_version AND d.document_id = c.document_id
   JOIN knowledge_document_manifest m
-    ON m.tenant_id = c.tenant_id AND m.knowledge_base_id = c.knowledge_base_id
+    ON m.partner_id = c.partner_id AND m.knowledge_base_id = c.knowledge_base_id
    AND m.document_id = c.document_id AND m.active_version = c.knowledge_version AND m.tombstoned = FALSE
- WHERE c.tenant_id = ? AND c.knowledge_base_id = ? AND c.knowledge_version = ?
+ WHERE c.partner_id = ? AND c.knowledge_base_id = ? AND c.knowledge_version = ?
  ORDER BY c.document_id, c.chunk_no`,
 }
 

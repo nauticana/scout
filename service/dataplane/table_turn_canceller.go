@@ -32,20 +32,20 @@ var turnCancelQueries = map[string]string{
 UPDATE conversation_turn
    SET cancel_requested_at = COALESCE(cancel_requested_at, CURRENT_TIMESTAMP),
        cancel_reason = COALESCE(cancel_reason, ?)
- WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
+ WHERE partner_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
 RETURNING status_code`,
 	// Nothing runs a suspended turn, so it goes back to a worker, which ends it cancelled
 	// and releases the reservation the suspension held.
 	qCancelWake: `
 UPDATE conversation_turn
    SET status_code = 'queued'
- WHERE tenant_id = ? AND request_id = ? AND status_code = 'suspended'
+ WHERE partner_id = ? AND request_id = ? AND status_code = 'suspended'
 RETURNING turn_no`,
 	qQueueRequeue: turnDispatcherQueries[qQueueRequeue],
 	qCancelRead: `
 SELECT cancel_reason
   FROM conversation_turn
- WHERE tenant_id = ? AND request_id = ? AND cancel_requested_at IS NOT NULL`,
+ WHERE partner_id = ? AND request_id = ? AND cancel_requested_at IS NOT NULL`,
 }
 
 // TableTurnCanceller cancels a turn from any process. The request is a flag on

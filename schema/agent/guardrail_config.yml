@@ -1,7 +1,7 @@
 table: guardrail_config
 comment: Immutable agent guardrail configuration
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -14,13 +14,13 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, agent_id, guardrail_version]
+primary_key: [partner_id, agent_id, guardrail_version]
 foreign_keys:
   - name: guardrail_configs
-    columns: [tenant_id, agent_id]
+    columns: [partner_id, agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
 checks:
   - name: guardrail_config_digest_ck
     expression: CHAR_LENGTH(rules_digest) = 64

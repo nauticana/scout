@@ -3,7 +3,7 @@ comment: One durable decision a human owes; proposed_digest binds the verdict to
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: request_id
     type: VARCHAR(120)
@@ -72,15 +72,15 @@ foreign_keys:
       table: outbox_event
       columns: [id]
   - name: turn_approval_requests
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
   - name: scope_turn_approval_requests
-    columns: [tenant_id, scope_id]
+    columns: [partner_id, scope_id]
     references:
       table: config_scope
-      columns: [tenant_id, scope_id]
+      columns: [partner_id, scope_id]
   - name: status_turn_approval_requests
     columns: [status_code]
     references:
@@ -98,15 +98,15 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: turn_approval_request_id_tenant_uq
-    columns: [id, tenant_id]
+    columns: [id, partner_id]
     unique: true
   - name: turn_approval_request_step_uq
-    columns: [tenant_id, request_id, execution_step_id]
+    columns: [partner_id, request_id, execution_step_id]
     unique: true
   - name: turn_approval_request_pending_ix
-    columns: [tenant_id, status_code, deadline_at]
+    columns: [partner_id, status_code, deadline_at]
   - name: turn_approval_request_approver_ix
-    columns: [tenant_id, approver_kind, approver_id, status_code]
+    columns: [partner_id, approver_kind, approver_id, status_code]
 checks:
   - name: turn_approval_request_digest_ck
     expression: CHAR_LENGTH(proposed_digest) = 64

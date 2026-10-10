@@ -32,30 +32,30 @@ var ingestQueries = map[string]string{
 	qIngestFindDocument: `
 SELECT content_digest,
        (SELECT COUNT(*) FROM knowledge_chunk chunk
-         WHERE chunk.tenant_id = doc.tenant_id AND chunk.knowledge_base_id = doc.knowledge_base_id
+         WHERE chunk.partner_id = doc.partner_id AND chunk.knowledge_base_id = doc.knowledge_base_id
            AND chunk.knowledge_version = doc.knowledge_version AND chunk.document_id = doc.document_id),
        (SELECT COUNT(*) FROM knowledge_chunk chunk
-         WHERE chunk.tenant_id = doc.tenant_id AND chunk.knowledge_base_id = doc.knowledge_base_id
+         WHERE chunk.partner_id = doc.partner_id AND chunk.knowledge_base_id = doc.knowledge_base_id
            AND chunk.knowledge_version = doc.knowledge_version AND chunk.document_id = doc.document_id
            AND chunk.vector_ref <> '')
   FROM knowledge_document doc
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 	qIngestInsertDocument: `
-INSERT INTO knowledge_document (tenant_id, knowledge_base_id, knowledge_version, document_id, source_uri, content_digest, media_type)
+INSERT INTO knowledge_document (partner_id, knowledge_base_id, knowledge_version, document_id, source_uri, content_digest, media_type)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	qIngestInsertChunk: `
-INSERT INTO knowledge_chunk (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no, content_uri, content_digest, vector_ref, token_count,
+INSERT INTO knowledge_chunk (partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no, content_uri, content_digest, vector_ref, token_count,
                              source_version, start_offset, end_offset, entitlements)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qIngestMarkIndexed: `
 UPDATE knowledge_chunk SET vector_ref = ?
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ? AND chunk_no = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ? AND chunk_no = ?`,
 	qIngestDeleteChunks: `
 DELETE FROM knowledge_chunk
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 	qIngestDeleteDocument: `
 DELETE FROM knowledge_document
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 }
 
 // IngestPipeline is a bounded synchronous batch executor: prepare (load,

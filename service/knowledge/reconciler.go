@@ -22,22 +22,22 @@ const (
 )
 
 var reconcileQueries = map[string]string{
-	qReconcileActive: `SELECT active_version FROM knowledge_base_alias WHERE tenant_id = ? AND knowledge_base_id = ?`,
+	qReconcileActive: `SELECT active_version FROM knowledge_base_alias WHERE partner_id = ? AND knowledge_base_id = ?`,
 	qReconcileOldest: `
 SELECT MIN(occurred_at) FROM knowledge_source_event
- WHERE tenant_id = ? AND knowledge_base_id = ? AND acked_at IS NULL`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND acked_at IS NULL`,
 	// Orphans are published chunks that no manifest points at, actively or as a pending superseded version.
 	qReconcileOrphans: `
 SELECT COUNT(*) FROM knowledge_chunk chunk
- WHERE chunk.tenant_id = ? AND chunk.knowledge_base_id = ?
+ WHERE chunk.partner_id = ? AND chunk.knowledge_base_id = ?
    AND NOT EXISTS (SELECT 1 FROM knowledge_document_manifest manifest
-                    WHERE manifest.tenant_id = chunk.tenant_id AND manifest.knowledge_base_id = chunk.knowledge_base_id
+                    WHERE manifest.partner_id = chunk.partner_id AND manifest.knowledge_base_id = chunk.knowledge_base_id
                       AND manifest.document_id = chunk.document_id
                       AND (manifest.active_version = chunk.knowledge_version
                         OR manifest.gc_pending = TRUE AND manifest.superseded_version = chunk.knowledge_version))`,
 	qReconcileTombstones: `
 SELECT COUNT(*) FROM knowledge_document_manifest
- WHERE tenant_id = ? AND knowledge_base_id = ? AND tombstoned = TRUE`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND tombstoned = TRUE`,
 }
 
 // Reconciler reports freshness lag (oldest unacked source event), orphan

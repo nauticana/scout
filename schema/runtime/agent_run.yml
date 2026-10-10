@@ -3,7 +3,7 @@ comment: Settled execution, successful or not, attributed to an immutable agent 
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -26,10 +26,10 @@ sequence:
   column: id
 foreign_keys:
   - name: agent_run_versions
-    columns: [tenant_id, agent_id, agent_version]
+    columns: [partner_id, agent_id, agent_version]
     references:
       table: agent_version
-      columns: [tenant_id, agent_id, agent_version]
+      columns: [partner_id, agent_id, agent_version]
   - name: status_agent_runs
     columns: [status_code]
     references:
@@ -37,14 +37,14 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: agent_run_last_ix
-    columns: [tenant_id, agent_id, completed_at]
+    columns: [partner_id, agent_id, completed_at]
   - name: agent_run_retention_ix
     columns: [completed_at]
   - name: agent_run_request_ux
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
     unique: true
   - name: agent_run_tenant_ix
-    columns: [tenant_id, id]
+    columns: [partner_id, id]
 checks:
   - name: agent_run_task_kind_ck
     expression: CHAR_LENGTH(TRIM(task_kind)) > 0

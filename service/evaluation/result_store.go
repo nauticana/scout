@@ -24,28 +24,28 @@ const (
 
 var resultQueries = map[string]string{
 	qRunInsert: `
-INSERT INTO evaluation_run (id, tenant_id, manifest_id, scope_code, status_code, started_at)
+INSERT INTO evaluation_run (id, partner_id, manifest_id, scope_code, status_code, started_at)
 VALUES (?, ?, ?, ?, ?, ?)`,
 	qRunFinish: `
 UPDATE evaluation_run
    SET status_code = ?, completed_at = ?, sample_count = ?, input_tokens = ?, output_tokens = ?, cost_minor_units = ?, currency_code = ?
- WHERE tenant_id = ? AND id = ? AND status_code = 'running'
+ WHERE partner_id = ? AND id = ? AND status_code = 'running'
 RETURNING id`,
 	qRunGetSet: `
 SELECT run.manifest_id, manifest.golden_set_id, manifest.golden_set_version
   FROM evaluation_run run
-  JOIN evaluation_manifest manifest ON manifest.manifest_id = run.manifest_id
- WHERE run.tenant_id = ? AND run.id = ?`,
+  JOIN evaluation_manifest manifest ON manifest.partner_id = run.partner_id AND manifest.manifest_id = run.manifest_id
+ WHERE run.partner_id = ? AND run.id = ?`,
 	qResultInsert: `
-INSERT INTO evaluation_result (run_id, tenant_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
+INSERT INTO evaluation_result (run_id, partner_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
                                input_tokens, output_tokens, cost_minor_units, currency_code, needs_human_review, reason)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qResultList: `
 SELECT run.manifest_id, result.example_id, result.role_code, result.scores, result.latency_ms, result.input_tokens,
        result.output_tokens, result.cost_minor_units, result.currency_code, result.needs_human_review, result.reason
   FROM evaluation_result result
-  JOIN evaluation_run run ON run.id = result.run_id
- WHERE result.tenant_id = ? AND result.run_id = ?
+  JOIN evaluation_run run ON run.partner_id = result.partner_id AND run.id = result.run_id
+ WHERE result.partner_id = ? AND result.run_id = ?
  ORDER BY result.example_id, result.role_code`,
 }
 

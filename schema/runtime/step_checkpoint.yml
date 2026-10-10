@@ -1,7 +1,7 @@
 table: step_checkpoint
 comment: Durable state and usage after a completed execution step
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: conversation_id
     type: VARCHAR(120)
@@ -36,18 +36,18 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, conversation_id, turn_no, step_no]
+primary_key: [partner_id, conversation_id, turn_no, step_no]
 foreign_keys:
   - name: step_checkpoints
-    columns: [tenant_id, conversation_id, turn_no]
+    columns: [partner_id, conversation_id, turn_no]
     references:
       table: conversation_turn
-      columns: [tenant_id, conversation_id, turn_no]
+      columns: [partner_id, conversation_id, turn_no]
   - name: execution_step_checkpoints
-    columns: [execution_step_id]
+    columns: [partner_id, execution_step_id]
     references:
       table: execution_step
-      columns: [id]
+      columns: [partner_id, id]
   - name: currency_step_checkpoints
     columns: [currency_code]
     references:
@@ -55,10 +55,10 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: step_checkpoint_idempotency_uq
-    columns: [tenant_id, idempotency_key]
+    columns: [partner_id, idempotency_key]
     unique: true
   - name: step_checkpoint_execution_step_ix
-    columns: [execution_step_id]
+    columns: [partner_id, execution_step_id]
 checks:
   - name: step_checkpoint_number_ck
     expression: step_no > 0

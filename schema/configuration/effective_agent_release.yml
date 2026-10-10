@@ -1,7 +1,7 @@
 table: effective_agent_release
 comment: Immutable configuration compiled for one agent version; payload carries every effective resource with its provenance
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -19,18 +19,18 @@ columns:
   - name: compiled_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, agent_id, agent_version]
+primary_key: [partner_id, agent_id, agent_version]
 foreign_keys:
   - name: effective_agent_releases
-    columns: [tenant_id, agent_id, agent_version]
+    columns: [partner_id, agent_id, agent_version]
     references:
       table: agent_version
-      columns: [tenant_id, agent_id, agent_version]
+      columns: [partner_id, agent_id, agent_version]
   - name: scope_effective_agent_releases
-    columns: [tenant_id, scope_id]
+    columns: [partner_id, scope_id]
     references:
       table: config_scope
-      columns: [tenant_id, scope_id]
+      columns: [partner_id, scope_id]
   - name: compiled_effective_agent_releases
     columns: [compiled_by]
     references:

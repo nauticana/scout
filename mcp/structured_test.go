@@ -15,7 +15,11 @@ import (
 // schemaBackend publishes one tool with an output schema and returns data.
 type schemaBackend struct{ data any }
 
-func (backend schemaBackend) ListTools(context.Context, domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+func (backend schemaBackend) ListTools(ctx context.Context, _ domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+	return backend.Catalog(ctx)
+}
+
+func (backend schemaBackend) Catalog(context.Context) ([]domain.MCPToolDefinition, error) {
 	return []domain.MCPToolDefinition{{
 		Name: "count", Description: "count things",
 		OutputSchema: json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]}`),
@@ -89,8 +93,12 @@ type definedSchemaBackend struct {
 	data       any
 }
 
-func (backend *definedSchemaBackend) ListTools(context.Context, domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+func (backend *definedSchemaBackend) Catalog(context.Context) ([]domain.MCPToolDefinition, error) {
 	return []domain.MCPToolDefinition{backend.definition}, nil
+}
+
+func (backend *definedSchemaBackend) ListTools(ctx context.Context, _ domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+	return backend.Catalog(ctx)
 }
 
 func (backend *definedSchemaBackend) ExecuteTool(context.Context, domain.MCPToolCall) (domain.MCPToolResult, error) {

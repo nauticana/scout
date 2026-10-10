@@ -3,7 +3,7 @@ comment: One unit of work addressed to a principal rather than to a conversation
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: assignee_kind
     type: VARCHAR(20)
@@ -54,20 +54,20 @@ sequence:
   column: id
 foreign_keys:
   - name: agent_work_items
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
   - name: child_work_items
-    columns: [parent_work_item_id, tenant_id]
+    columns: [parent_work_item_id, partner_id]
     references:
       table: agent_work_item
-      columns: [id, tenant_id]
+      columns: [id, partner_id]
   - name: grant_work_items
-    columns: [tenant_id, grant_id]
+    columns: [partner_id, grant_id]
     references:
       table: delegation_grant
-      columns: [tenant_id, grant_id]
+      columns: [partner_id, grant_id]
   - name: status_work_items
     columns: [status_code]
     references:
@@ -80,12 +80,12 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: work_item_id_tenant_uq
-    columns: [id, tenant_id]
+    columns: [id, partner_id]
     unique: true
   - name: work_item_assignee_ix
-    columns: [tenant_id, assignee_kind, assignee_id, status_code]
+    columns: [partner_id, assignee_kind, assignee_id, status_code]
   - name: work_item_request_uq
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
     unique: true
 checks:
   - name: work_item_depth_ck

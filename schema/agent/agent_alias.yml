@@ -1,7 +1,7 @@
 table: agent_alias
 comment: Revisioned tenant alias and shared prompt profile for one logical kind
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: alias_id
     type: VARCHAR(80)
@@ -18,13 +18,13 @@ columns:
   - name: modified_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, alias_id]
+primary_key: [partner_id, alias_id]
 foreign_keys:
   - name: agent_aliases
-    columns: [tenant_id, agent_type_id, agent_id]
+    columns: [partner_id, agent_type_id, agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_type_id, agent_id]
+      columns: [partner_id, agent_type_id, agent_id]
   - name: modified_agent_aliases
     columns: [modified_by]
     references:
@@ -32,10 +32,10 @@ foreign_keys:
       columns: [id]
 indexes:
   - name: agent_alias_kind_uq
-    columns: [tenant_id, agent_type_id]
+    columns: [partner_id, agent_type_id]
     unique: true
   - name: agent_alias_agent_ix
-    columns: [tenant_id, agent_id]
+    columns: [partner_id, agent_id]
 checks:
   - name: agent_alias_revision_ck
     expression: revision > 0

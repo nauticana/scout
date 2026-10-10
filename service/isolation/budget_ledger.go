@@ -39,14 +39,14 @@ var budgetQueries = map[string]string{
 SELECT status.is_terminal
   FROM conversation_turn turn_row
   JOIN turn_status status ON status.code = turn_row.status_code
- WHERE turn_row.tenant_id = ? AND turn_row.request_id = ?`,
+ WHERE turn_row.partner_id = ? AND turn_row.request_id = ?`,
 	qFindBudget: `
 SELECT reservation_id, request_id, status_code, granted_tokens,
        granted_cost_minor_units, currency_code, expires_at,
        settled_tokens, settled_cost_minor_units, attempt_no,
        status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
   FROM budget_reservation
- WHERE tenant_id = ? AND request_id = ?
+ WHERE partner_id = ? AND request_id = ?
  ORDER BY attempt_no DESC
  LIMIT 1`,
 	qGetBudget: `
@@ -55,31 +55,31 @@ SELECT reservation_id, request_id, status_code, granted_tokens,
        settled_tokens, settled_cost_minor_units, attempt_no,
        status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
   FROM budget_reservation
- WHERE tenant_id = ? AND reservation_id = ?`,
+ WHERE partner_id = ? AND reservation_id = ?`,
 	qReserveBudget: `
-INSERT INTO budget_reservation (tenant_id, reservation_id, request_id, principal_kind, principal_id, attempt_no, status_code,
+INSERT INTO budget_reservation (partner_id, reservation_id, request_id, principal_kind, principal_id, attempt_no, status_code,
                                 granted_tokens, granted_cost_minor_units, currency_code, expires_at)
 SELECT ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?, CURRENT_TIMESTAMP + make_interval(secs => ?)
  WHERE (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_tokens ELSE settled_tokens END), 0)
           FROM budget_reservation
-         WHERE tenant_id = ?
+         WHERE partner_id = ?
            AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
              OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
    AND (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_cost_minor_units ELSE settled_cost_minor_units END), 0)
           FROM budget_reservation
-         WHERE tenant_id = ?
+         WHERE partner_id = ?
            AND currency_code = ?
            AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
              OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
    AND (NOT ? OR
        (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_tokens ELSE settled_tokens END), 0)
           FROM budget_reservation
-         WHERE tenant_id = ? AND principal_kind = ? AND principal_id = ?
+         WHERE partner_id = ? AND principal_kind = ? AND principal_id = ?
            AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
              OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
    AND (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_cost_minor_units ELSE settled_cost_minor_units END), 0)
           FROM budget_reservation
-         WHERE tenant_id = ? AND principal_kind = ? AND principal_id = ?
+         WHERE partner_id = ? AND principal_kind = ? AND principal_id = ?
            AND currency_code = ?
            AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
              OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?)
@@ -87,24 +87,24 @@ RETURNING reservation_id, expires_at`,
 	qSettleBudget: `
 UPDATE budget_reservation
    SET status_code = 'settled', settled_at = CURRENT_TIMESTAMP, settled_tokens = ?, settled_cost_minor_units = ?
- WHERE tenant_id = ? AND reservation_id = ? AND status_code = 'held'
+ WHERE partner_id = ? AND reservation_id = ? AND status_code = 'held'
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING reservation_id`,
 	qReleaseBudget: `
 UPDATE budget_reservation
    SET status_code = 'released', settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
- WHERE tenant_id = ? AND reservation_id = ? AND status_code = 'held'
+ WHERE partner_id = ? AND reservation_id = ? AND status_code = 'held'
 RETURNING reservation_id`,
 	qExpireOneBudget: `
 UPDATE budget_reservation
    SET status_code = 'expired', settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
- WHERE tenant_id = ? AND reservation_id = ? AND status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND reservation_id = ? AND status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
 RETURNING reservation_id`,
 	qExpireBudget: `
 UPDATE budget_reservation
    SET status_code = 'expired', settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
  WHERE status_code = 'held'
-   AND (tenant_id, reservation_id) IN (SELECT tenant_id, reservation_id
+   AND (partner_id, reservation_id) IN (SELECT partner_id, reservation_id
                                          FROM budget_reservation
                                         WHERE status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
                                         ORDER BY expires_at

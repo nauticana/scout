@@ -27,7 +27,7 @@ const (
 
 // A prompt_section binding's resource id is "<section id>/<language>"; see PromptResourceID.
 var promptSourceQueries = map[string]string{
-	qPromptAgent: `SELECT agent_type_id FROM agent_profile WHERE tenant_id = ? AND agent_id = ?`,
+	qPromptAgent: `SELECT agent_type_id FROM agent_profile WHERE partner_id = ? AND agent_id = ?`,
 	qPromptBaselines: `
 SELECT b.baseline_key, s.id, s.caption, s.description, s.display_order, b.instruction, b.output
   FROM prompt_baseline b
@@ -38,7 +38,7 @@ SELECT b.scope_id, s.id, s.caption, s.description, s.display_order,
        b.merge_mode_code, b.sealed, b.resource_version, b.bound_by, b.resource_value
   FROM config_scope_binding b
   JOIN prompt_section s ON s.id = CAST(split_part(b.resource_id, '/', 1) AS BIGINT)
- WHERE b.tenant_id = ? AND b.resource_kind_code = 'prompt_section'
+ WHERE b.partner_id = ? AND b.resource_kind_code = 'prompt_section'
    AND b.scope_id = ANY(string_to_array(?, chr(31)))
    AND split_part(b.resource_id, '/', 2) = ?
    AND b.begda <= CURRENT_TIMESTAMP AND (b.endda IS NULL OR b.endda > CURRENT_TIMESTAMP)`,
@@ -46,7 +46,7 @@ SELECT b.scope_id, s.id, s.caption, s.description, s.display_order,
 	qPromptBindingLanguages: `
 SELECT DISTINCT split_part(resource_id, '/', 2)
   FROM config_scope_binding
- WHERE tenant_id = ? AND resource_kind_code = 'prompt_section'
+ WHERE partner_id = ? AND resource_kind_code = 'prompt_section'
    AND scope_id = ANY(string_to_array(?, chr(31)))
    AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 }

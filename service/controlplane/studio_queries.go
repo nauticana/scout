@@ -36,30 +36,30 @@ var studioQueries = map[string]string{
 	qStudioListBindings: `
 SELECT resource_id, merge_mode_code, sealed, resource_value
   FROM config_scope_binding
- WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND endda IS NULL`,
+ WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND endda IS NULL`,
 	qStudioInsertBinding: `
-INSERT INTO config_scope_binding (tenant_id, scope_id, resource_kind_code, resource_id, resource_version,
+INSERT INTO config_scope_binding (partner_id, scope_id, resource_kind_code, resource_id, resource_version,
                                   merge_mode_code, sealed, resource_value, resource_value_digest, bound_by)
 VALUES (?, ?, 'prompt_section', ?, ?, ?, ?, ?, ?, ?)`,
 	qStudioDropBinding: `
 DELETE FROM config_scope_binding
- WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND resource_id = ?
+ WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND resource_id = ?
    AND endda IS NULL AND begda >= CURRENT_TIMESTAMP`,
 	qStudioEndBinding: `
 UPDATE config_scope_binding
    SET endda = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND resource_id = ?
+ WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section' AND resource_id = ?
    AND endda IS NULL`,
 	qStudioResetDropBindings: `
 DELETE FROM config_scope_binding
- WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section'
+ WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section'
    AND (? = '' OR split_part(resource_id, '/', 1) = ?)
    AND (? = '' OR split_part(resource_id, '/', 2) = ?)
    AND endda IS NULL AND begda >= CURRENT_TIMESTAMP`,
 	qStudioResetEndBindings: `
 UPDATE config_scope_binding
    SET endda = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section'
+ WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'prompt_section'
    AND (? = '' OR split_part(resource_id, '/', 1) = ?)
    AND (? = '' OR split_part(resource_id, '/', 2) = ?)
    AND endda IS NULL`,
@@ -68,11 +68,11 @@ SELECT p.agent_id, p.agent_type_id, p.display_name, p.state_code = 'active', d.e
        d.draft_revision, COALESCE(a.revision, 0), COALESCE(a.agent_id = p.agent_id, FALSE),
        dep.stable_version, v.published_at, v.definition
   FROM agent_profile p
-  JOIN agent_draft d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
-  LEFT JOIN agent_alias a ON a.tenant_id = p.tenant_id AND a.agent_type_id = p.agent_type_id
-  LEFT JOIN agent_deployment dep ON dep.tenant_id = p.tenant_id AND dep.agent_id = p.agent_id
-  LEFT JOIN agent_version v ON v.tenant_id = dep.tenant_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
- WHERE p.tenant_id = ?
+  JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
+  LEFT JOIN agent_alias a ON a.partner_id = p.partner_id AND a.agent_type_id = p.agent_type_id
+  LEFT JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
+  LEFT JOIN agent_version v ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
+ WHERE p.partner_id = ?
  ORDER BY p.agent_type_id, p.display_name, p.agent_id`,
 	qStudioGetDraft: `
 SELECT p.agent_type_id, p.display_name, p.state_code = 'active', d.enabled, d.require_approval,
@@ -80,81 +80,81 @@ SELECT p.agent_type_id, p.display_name, p.state_code = 'active', d.enabled, d.re
        d.video_model_provider, d.video_model_id, d.extension, d.draft_revision,
        COALESCE(a.revision, 0), COALESCE(a.agent_id = p.agent_id, FALSE)
   FROM agent_profile p
-  JOIN agent_draft d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
-  LEFT JOIN agent_alias a ON a.tenant_id = p.tenant_id AND a.agent_type_id = p.agent_type_id
- WHERE p.tenant_id = ? AND p.agent_id = ?`,
-	qStudioUpdateProfile:    `UPDATE agent_profile SET display_name = ?, state_code = ? WHERE tenant_id = ? AND agent_id = ?`,
-	qStudioSetProfileActive: `UPDATE agent_profile SET state_code = ?, state_reason = ?, state_changed_by = ?, state_changed_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND agent_id = ?`,
+  JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
+  LEFT JOIN agent_alias a ON a.partner_id = p.partner_id AND a.agent_type_id = p.agent_type_id
+ WHERE p.partner_id = ? AND p.agent_id = ?`,
+	qStudioUpdateProfile:    `UPDATE agent_profile SET display_name = ?, state_code = ? WHERE partner_id = ? AND agent_id = ?`,
+	qStudioSetProfileActive: `UPDATE agent_profile SET state_code = ?, state_reason = ?, state_changed_by = ?, state_changed_at = CURRENT_TIMESTAMP WHERE partner_id = ? AND agent_id = ?`,
 	qStudioUpdateDraft: `
 UPDATE agent_draft
    SET enabled = ?, require_approval = ?, text_model_provider = ?, text_model_id = ?,
        image_model_provider = ?, image_model_id = ?, video_model_provider = ?, video_model_id = ?,
        extension = ?, modified_by = ?, modified_at = CURRENT_TIMESTAMP, draft_revision = draft_revision + 1
- WHERE tenant_id = ? AND agent_id = ? AND draft_revision = ?
+ WHERE partner_id = ? AND agent_id = ? AND draft_revision = ?
  RETURNING draft_revision`,
 	qStudioSetDraftEnabled: `
 UPDATE agent_draft
    SET enabled = ?, modified_by = ?, modified_at = CURRENT_TIMESTAMP, draft_revision = draft_revision + 1
- WHERE tenant_id = ? AND agent_id = ? AND draft_revision = ?
+ WHERE partner_id = ? AND agent_id = ? AND draft_revision = ?
  RETURNING draft_revision`,
-	qStudioLockAlias: `SELECT agent_id, revision FROM agent_alias WHERE tenant_id = ? AND agent_type_id = ? FOR UPDATE`,
+	qStudioLockAlias: `SELECT agent_id, revision FROM agent_alias WHERE partner_id = ? AND agent_type_id = ? FOR UPDATE`,
 	qStudioBumpAlias: `
 UPDATE agent_alias SET revision = revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
+ WHERE partner_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
 	qStudioAudit: `
-INSERT INTO agent_studio_event (id, tenant_id, agent_id, event, detail, actor_id)
+INSERT INTO agent_studio_event (id, partner_id, agent_id, event, detail, actor_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?)`,
 	qStudioLockDraft: `
 SELECT d.draft_revision, p.agent_type_id
   FROM agent_draft d
-  JOIN agent_profile p ON p.tenant_id = d.tenant_id AND p.agent_id = d.agent_id
- WHERE d.tenant_id = ? AND d.agent_id = ? FOR UPDATE OF d`,
+  JOIN agent_profile p ON p.partner_id = d.partner_id AND p.agent_id = d.agent_id
+ WHERE d.partner_id = ? AND d.agent_id = ? FOR UPDATE OF d`,
 	qStudioNextVersion: `
 SELECT COALESCE(MAX(CASE WHEN agent_version ~ '^[0-9]+$' THEN CAST(agent_version AS BIGINT) END), 0) + 1
-  FROM agent_version WHERE tenant_id = ? AND agent_id = ?`,
+  FROM agent_version WHERE partner_id = ? AND agent_id = ?`,
 	qStudioGrantModel: `
-INSERT INTO tenant_model_access (tenant_id, provider_id, model_id, priority_class_code)
+INSERT INTO tenant_model_access (partner_id, provider_id, model_id, priority_class_code)
 VALUES (?, ?, ?, 'standard')
-ON CONFLICT (tenant_id, provider_id, model_id) DO NOTHING`,
+ON CONFLICT (partner_id, provider_id, model_id) DO NOTHING`,
 	qStudioInsertVersion: `
 INSERT INTO agent_version
-       (tenant_id, agent_id, agent_version, definition, definition_digest, draft_revision,
+       (partner_id, agent_id, agent_version, definition, definition_digest, draft_revision,
         prompt_profile_revision, change_summary, published_by, restored_from_version)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qStudioDeployVersion: `
-INSERT INTO agent_deployment (tenant_id, agent_id, stable_version)
+INSERT INTO agent_deployment (partner_id, agent_id, stable_version)
 VALUES (?, ?, ?)
-ON CONFLICT (tenant_id, agent_id) DO UPDATE
+ON CONFLICT (partner_id, agent_id) DO UPDATE
 SET stable_version = EXCLUDED.stable_version, canary_version = NULL,
     canary_percentage = 0, updated_at = CURRENT_TIMESTAMP`,
 	qStudioGetVersion: `
 SELECT v.definition, COALESCE(dep.stable_version = v.agent_version, FALSE)
   FROM agent_version v
-  LEFT JOIN agent_deployment dep ON dep.tenant_id = v.tenant_id AND dep.agent_id = v.agent_id
- WHERE v.tenant_id = ? AND v.agent_id = ? AND v.agent_version = ?`,
+  LEFT JOIN agent_deployment dep ON dep.partner_id = v.partner_id AND dep.agent_id = v.agent_id
+ WHERE v.partner_id = ? AND v.agent_id = ? AND v.agent_version = ?`,
 	qStudioHistory: `
 SELECT v.definition, COALESCE(dep.stable_version = v.agent_version, FALSE)
   FROM agent_version v
-  LEFT JOIN agent_deployment dep ON dep.tenant_id = v.tenant_id AND dep.agent_id = v.agent_id
- WHERE v.tenant_id = ? AND v.agent_id = ?
+  LEFT JOIN agent_deployment dep ON dep.partner_id = v.partner_id AND dep.agent_id = v.agent_id
+ WHERE v.partner_id = ? AND v.agent_id = ?
  ORDER BY v.published_at DESC, v.agent_version DESC`,
 	qStudioAuditLog: `
 SELECT event, detail, actor_id, occurred_at
-  FROM agent_studio_event WHERE tenant_id = ? AND agent_id = ?
+  FROM agent_studio_event WHERE partner_id = ? AND agent_id = ?
  ORDER BY occurred_at DESC, id DESC`,
 	qStudioSetAlias: `
 UPDATE agent_alias
    SET agent_id = ?, revision = revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
+ WHERE partner_id = ? AND agent_type_id = ? AND revision = ? RETURNING revision`,
 	qStudioBumpDraft: `
 UPDATE agent_draft SET draft_revision = draft_revision + 1, modified_by = ?, modified_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ? AND draft_revision = ? RETURNING draft_revision`,
+ WHERE partner_id = ? AND agent_id = ? AND draft_revision = ? RETURNING draft_revision`,
 	qStudioLastTest: `
 SELECT agent_id, MAX(occurred_at) FROM agent_studio_event
- WHERE tenant_id = ? AND event = 'TEST' GROUP BY agent_id`,
+ WHERE partner_id = ? AND event = 'TEST' GROUP BY agent_id`,
 	qStudioActiveDefinition: `
 SELECT v.agent_version, v.definition
   FROM agent_deployment dep
-  JOIN agent_version v ON v.tenant_id = dep.tenant_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
- WHERE dep.tenant_id = ? AND dep.agent_id = ?`,
+  JOIN agent_version v ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
+ WHERE dep.partner_id = ? AND dep.agent_id = ?`,
 }

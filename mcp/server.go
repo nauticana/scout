@@ -122,17 +122,21 @@ func (s *BaseServer) RegisterResource(resources ...ResourceProvider) {
 	}
 }
 
-// RegisterToolBackend publishes the full catalog and routes every call through
-// the backend after scope authorization. Remote callers list only the subset
-// the backend returns for them.
+// RegisterToolBackend publishes the backend's Catalog and routes every call
+// through the backend after scope authorization. Callers list only the subset
+// ListTools returns for them.
 func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.MCPToolBackend) error {
-	definitions, err := backend.ListTools(ctx, HostCaller())
+	definitions, err := backend.Catalog(ctx)
 	if err != nil {
 		return fmt.Errorf("mcp tool catalog: %w", err)
 	}
+	definitions = slices.Clone(definitions)
 	outputs := make([]*jsonschema.Schema, len(definitions))
-	for i, definition := range definitions {
-		if outputs[i], err = outputSchema(definition); err != nil {
+	for i := range definitions {
+		if definitions[i], err = shapeDefinition(definitions[i]); err != nil {
+			return err
+		}
+		if outputs[i], err = outputSchema(definitions[i]); err != nil {
 			return err
 		}
 	}
@@ -150,6 +154,7 @@ func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.M
 			tool:       tool,
 			backend:    backend,
 			output:     outputs[i],
+			paged:      pages(definition.InputSchema),
 			onDenied:   s.onDenied,
 		})
 	}
@@ -313,11 +318,12 @@ func (s *BaseServer) ServeStdio() error {
 
 func (s *BaseServer) ServeSSE(options ...server.SSEOption) *server.SSEServer {
 	hook := server.WithSSEContextFunc(s.httpContext(domain.MCPTransportSSE))
-	return server.NewSSEServer(s.mcp, append([]server.SSEOption{hook}, options...)...)
+	return server.NewSSEServer(s.mcp, append(slices.Clone(options), hook)...)
 }
 
-func (s *BaseServer) ServeStreamableHTTP() *server.StreamableHTTPServer {
-	return server.NewStreamableHTTPServer(s.mcp, server.WithHTTPContextFunc(s.httpContext(domain.MCPTransportStreamableHTTP)))
+func (s *BaseServer) ServeStreamableHTTP(options ...server.StreamableHTTPOption) *server.StreamableHTTPServer {
+	hook := server.WithHTTPContextFunc(s.httpContext(domain.MCPTransportStreamableHTTP))
+	return server.NewStreamableHTTPServer(s.mcp, append(slices.Clone(options), hook)...)
 }
 
 func (s *BaseServer) httpContext(transport domain.MCPTransport) func(context.Context, *http.Request) context.Context {

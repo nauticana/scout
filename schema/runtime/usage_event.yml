@@ -3,7 +3,7 @@ comment: Immutable runtime usage ledger entry, attributed to the principal and s
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: conversation_id
     type: VARCHAR(120)
@@ -48,10 +48,10 @@ sequence:
   column: id
 foreign_keys:
   - name: usage_events
-    columns: [tenant_id, conversation_id, turn_no]
+    columns: [partner_id, conversation_id, turn_no]
     references:
       table: conversation_turn
-      columns: [tenant_id, conversation_id, turn_no]
+      columns: [partner_id, conversation_id, turn_no]
   - name: category_usage_events
     columns: [category_code]
     references:
@@ -63,16 +63,16 @@ foreign_keys:
       table: currency
       columns: [code]
   - name: scope_usage_events
-    columns: [tenant_id, scope_id]
+    columns: [partner_id, scope_id]
     references:
       table: config_scope
-      columns: [tenant_id, scope_id]
+      columns: [partner_id, scope_id]
 indexes:
   - name: usage_event_turn_category_uq
-    columns: [tenant_id, conversation_id, turn_no, category_code]
+    columns: [partner_id, conversation_id, turn_no, category_code]
     unique: true
   - name: usage_event_tenant_time_ix
-    columns: [tenant_id, occurred_at]
+    columns: [partner_id, occurred_at]
 checks:
   - name: usage_event_input_tokens_ck
     expression: input_tokens >= 0

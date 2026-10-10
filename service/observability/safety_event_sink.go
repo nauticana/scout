@@ -17,7 +17,7 @@ const qSafetyEventInsert = "scout_safety_event_insert"
 var safetyEventQueries = map[string]string{
 	qSafetyEventInsert: `
 INSERT INTO safety_event
-       (id, tenant_id, principal_kind, principal_id, stage_code, layer_code, action_code, severity_code,
+       (id, partner_id, principal_kind, principal_id, stage_code, layer_code, action_code, severity_code,
         rule_ids, release_version, policy_version, duration_ms, occurred_at)
 VALUES (nextval('safety_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 }

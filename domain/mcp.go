@@ -47,9 +47,30 @@ type MCPToolAnnotations struct {
 	OpenWorldHint   *bool
 }
 
-// MCPToolPolicy declares the scopes Scout enforces before a call reaches the backend.
+// MCPToolPolicy declares what a tool needs. Scout enforces RequiredScopes
+// before a call reaches the backend; the tenant fields drive mcp.ToolLister
+// only, and the backend authorizes each call against the tenant it acts in.
 type MCPToolPolicy struct {
 	RequiredScopes []string
+	// Tenant marks a tool that acts in one tenant; the other fields apply only to it.
+	Tenant bool
+	// ActionLevel is the lowest tenant action level that may call the tool.
+	ActionLevel int
+	// OwnTenantOnly refuses tenants reached through delegation.
+	OwnTenantOnly bool
+	// Grants must all hold in the tenant, or any one with AnyGrant when the
+	// call's arguments select which one is checked.
+	Grants   []MCPGrant
+	AnyGrant bool
+	// Sources are data-source ids that must be ready in the tenant.
+	Sources []string
+}
+
+// MCPGrant is one keel authorization-object grant: object, action and scope.
+type MCPGrant struct {
+	Object string
+	Action string
+	Scope  string
 }
 
 // MCPToolDefinition is an SDK-neutral MCP tool manifest entry.

@@ -1,7 +1,7 @@
 table: step_loop_entry
 comment: Append-only journal of one model and tool loop step, replayed on redelivery and approval resume
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: request_id
     type: VARCHAR(120)
@@ -16,13 +16,13 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, request_id, execution_step_id, entry_no]
+primary_key: [partner_id, request_id, execution_step_id, entry_no]
 foreign_keys:
   - name: step_loop_entries
-    columns: [tenant_id, request_id, execution_step_id]
+    columns: [partner_id, request_id, execution_step_id]
     references:
       table: step_idempotency
-      columns: [tenant_id, request_id, execution_step_id]
+      columns: [partner_id, request_id, execution_step_id]
 checks:
   - name: step_loop_entry_no_ck
     expression: entry_no > 0

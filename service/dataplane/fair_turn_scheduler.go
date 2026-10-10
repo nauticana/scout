@@ -32,7 +32,7 @@ const (
 	qSchedDead       = "scout_turn_queue_dead"
 )
 
-const queueRowColumns = `id, tenant_id, request_id, conversation_id, agent_id, reply_route,
+const queueRowColumns = `id, partner_id, request_id, conversation_id, agent_id, reply_route,
        input_uri, input_digest, attempt, enqueued_at, lease_token, lease_until, acting_context`
 
 var turnSchedulerQueries = map[string]string{
@@ -52,13 +52,13 @@ SELECT ` + queueRowColumns + `
  FOR UPDATE SKIP LOCKED`,
 
 	qSchedCandidates: `
-SELECT tenant_id,
+SELECT partner_id,
        SUM(CASE WHEN status_code = 'leased' THEN 1 ELSE 0 END),
        MIN(CASE WHEN status_code = 'queued' AND available_at <= ? THEN priority_rank END),
        MIN(CASE WHEN status_code = 'queued' AND available_at <= ? THEN enqueued_at END)
   FROM turn_queue
  WHERE status_code IN ('queued', 'leased') AND partition_no BETWEEN ? AND ?
- GROUP BY tenant_id
+ GROUP BY partner_id
 HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
 
 	// Head-of-line per conversation: nothing is claimable while an older
@@ -67,7 +67,7 @@ HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 
 	qSchedPrincipals: `
 SELECT principal_kind, principal_id, SUM(CASE WHEN status_code = 'leased' THEN 1 ELSE 0 END)
   FROM turn_queue
- WHERE tenant_id = ? AND status_code IN ('queued', 'leased') AND partition_no BETWEEN ? AND ?
+ WHERE partner_id = ? AND status_code IN ('queued', 'leased') AND partition_no BETWEEN ? AND ?
  GROUP BY principal_kind, principal_id
 HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
 
@@ -76,12 +76,12 @@ UPDATE turn_queue
    SET status_code = 'leased', lease_token = ?, lease_until = ?, worker_id = ?, attempt = attempt + 1
  WHERE id = (SELECT q.id
                FROM turn_queue q
-              WHERE q.tenant_id = ? AND q.status_code = 'queued' AND q.available_at <= ?
+              WHERE q.partner_id = ? AND q.status_code = 'queued' AND q.available_at <= ?
                 AND q.partition_no BETWEEN ? AND ? AND q.attempt < ?
                 AND (q.principal_kind || ':' || q.principal_id) <> ALL(string_to_array(?, chr(31)))
                 AND NOT EXISTS (SELECT 1
                                   FROM turn_queue o
-                                 WHERE o.tenant_id = q.tenant_id AND o.conversation_id = q.conversation_id
+                                 WHERE o.partner_id = q.partner_id AND o.conversation_id = q.conversation_id
                                    AND o.id <> q.id
                                    AND (o.status_code = 'leased'
                                         OR (o.status_code = 'queued'
@@ -528,7 +528,7 @@ SELECT q.id
   FROM turn_queue q
  WHERE q.status_code = 'queued' AND q.available_at <= CURRENT_TIMESTAMP AND q.attempt < %d
    AND NOT EXISTS (SELECT 1 FROM turn_queue o
-                    WHERE o.tenant_id = q.tenant_id AND o.conversation_id = q.conversation_id AND o.id <> q.id
+                    WHERE o.partner_id = q.partner_id AND o.conversation_id = q.conversation_id AND o.id <> q.id
                       AND (o.status_code = 'leased'
                            OR (o.status_code = 'queued' AND (o.enqueued_at < q.enqueued_at
                                                              OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))
@@ -547,10 +547,10 @@ WITH expired AS (
            lease_token = NULL, lease_until = NULL, worker_id = NULL,
            last_error = CASE WHEN attempt >= %d THEN 'lease expired after last attempt' ELSE 'lease expired' END
      WHERE status_code = 'leased' AND lease_until < CURRENT_TIMESTAMP
- RETURNING id, tenant_id, request_id, attempt, input_uri, input_digest, status_code
+ RETURNING id, partner_id, request_id, attempt, input_uri, input_digest, status_code
 ), parked AS (
-    INSERT INTO turn_dead_letter (id, tenant_id, request_id, queue_id, reason, attempts, input_uri, input_digest)
-    SELECT nextval('turn_dead_letter_seq'), tenant_id, request_id, id, 'lease expired after last attempt', attempt, input_uri, input_digest
+    INSERT INTO turn_dead_letter (id, partner_id, request_id, queue_id, reason, attempts, input_uri, input_digest)
+    SELECT nextval('turn_dead_letter_seq'), partner_id, request_id, id, 'lease expired after last attempt', attempt, input_uri, input_digest
       FROM expired
      WHERE status_code = 'dead'
     ON CONFLICT (queue_id) DO NOTHING

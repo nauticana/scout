@@ -21,7 +21,7 @@ const (
 
 var gateQueries = map[string]string{
 	qGateInsert: `
-INSERT INTO gate_decision (decision_id, tenant_id, manifest_id, platform_version, dataset_revision, verdict_code, confidence_bp,
+INSERT INTO gate_decision (decision_id, partner_id, manifest_id, platform_version, dataset_revision, verdict_code, confidence_bp,
                            decision_json, signature_hex, signer_key_id, issued_at, expires_at, telemetry_fresh_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGateLatest: `

@@ -21,14 +21,14 @@ const (
 	qGoldenQueryList     = "scout_evaluation_golden_query_list"
 )
 
-const goldenExampleColumns = `tenant_id, golden_set_id, set_version, example_id, scope_code, provenance, consent_class, retention_class,
+const goldenExampleColumns = `partner_id, golden_set_id, set_version, example_id, scope_code, provenance, consent_class, retention_class,
        risk_tier, domain_code, language_code, rubric_ref, expected_behavior, payload_uri, payload_digest, reviews`
 
 // The list queries take the caller scope twice: dev callers see only dev rows,
 // gate callers see every row. Authorization is in the predicate, never post-filtered.
 var goldenQueries = map[string]string{
 	qGoldenVersionInsert: `
-INSERT INTO golden_set_version (tenant_id, golden_set_id, set_version, dataset_revision, example_count, frozen_at)
+INSERT INTO golden_set_version (partner_id, golden_set_id, set_version, dataset_revision, example_count, frozen_at)
 VALUES (?, ?, ?, ?, ?, ?)`,
 	qGoldenExampleInsert: `
 INSERT INTO golden_example (` + goldenExampleColumns + `)
@@ -36,22 +36,22 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGoldenExampleGet: `
 SELECT ` + goldenExampleColumns + `
   FROM golden_example
- WHERE tenant_id = ? AND golden_set_id = ? AND set_version = ? AND example_id = ?`,
+ WHERE partner_id = ? AND golden_set_id = ? AND set_version = ? AND example_id = ?`,
 	qGoldenExampleList: `
 SELECT ` + goldenExampleColumns + `
   FROM golden_example
- WHERE tenant_id = ? AND golden_set_id = ? AND set_version = ?
+ WHERE partner_id = ? AND golden_set_id = ? AND set_version = ?
    AND (scope_code = ? OR ? = 'gate')
  ORDER BY example_id`,
 	qGoldenQueryInsert: `
-INSERT INTO golden_query (tenant_id, golden_set_id, set_version, query_id, scope_code, knowledge_base_id, query_text,
+INSERT INTO golden_query (partner_id, golden_set_id, set_version, query_id, scope_code, knowledge_base_id, query_text,
                           principal, entitlements, expected_document_ids, expect_abstention)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGoldenQueryList: `
-SELECT tenant_id, golden_set_id, set_version, query_id, knowledge_base_id, query_text, principal, entitlements,
+SELECT partner_id, golden_set_id, set_version, query_id, knowledge_base_id, query_text, principal, entitlements,
        expected_document_ids, expect_abstention
   FROM golden_query
- WHERE tenant_id = ? AND golden_set_id = ? AND set_version = ?
+ WHERE partner_id = ? AND golden_set_id = ? AND set_version = ?
    AND (scope_code = ? OR ? = 'gate')
  ORDER BY query_id`,
 }

@@ -22,18 +22,18 @@ const (
 
 var sourceEventQueries = map[string]string{
 	qSourceEventInsert: `
-INSERT INTO knowledge_source_event (id, tenant_id, knowledge_base_id, object_id, source_version, op_code, entitlements, occurred_at, acked_at)
+INSERT INTO knowledge_source_event (id, partner_id, knowledge_base_id, object_id, source_version, op_code, entitlements, occurred_at, acked_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), NULL)`,
 	qSourceEventPoll: `
-SELECT tenant_id, knowledge_base_id, object_id, source_version, op_code, entitlements, occurred_at
+SELECT partner_id, knowledge_base_id, object_id, source_version, op_code, entitlements, occurred_at
   FROM knowledge_source_event
- WHERE tenant_id = ? AND knowledge_base_id = ? AND acked_at IS NULL
+ WHERE partner_id = ? AND knowledge_base_id = ? AND acked_at IS NULL
  ORDER BY occurred_at, id
  LIMIT ?`,
 	qSourceEventAck: `
 UPDATE knowledge_source_event
    SET acked_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND knowledge_base_id = ? AND object_id = ? AND source_version = ? AND op_code = ? AND acked_at IS NULL`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND object_id = ? AND source_version = ? AND op_code = ? AND acked_at IS NULL`,
 }
 
 // SourceChangeWriteQueries is merged into a producer's transaction query map so

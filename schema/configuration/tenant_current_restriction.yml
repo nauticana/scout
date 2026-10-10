@@ -1,17 +1,17 @@
 table: tenant_current_restriction
 comment: The tenant restriction layer in force, swapped by compare-and-swap
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: layer_digest
     type: CHAR(64)
   - name: updated_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id]
+primary_key: [partner_id]
 foreign_keys:
   - name: tenant_current_restrictions
-    columns: [tenant_id, layer_digest]
+    columns: [partner_id, layer_digest]
     references:
       table: tenant_restriction_layer
-      columns: [tenant_id, layer_digest]
+      columns: [partner_id, layer_digest]

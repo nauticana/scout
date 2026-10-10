@@ -20,7 +20,7 @@ var egressPolicyQueries = map[string]string{
 	qEgressRuleMatch: `
 SELECT 1
   FROM tool_egress_rule
- WHERE tenant_id = ? AND protocol = ? AND host = ? AND port = ?
+ WHERE partner_id = ? AND protocol = ? AND host = ? AND port = ?
  LIMIT 1`,
 }
 

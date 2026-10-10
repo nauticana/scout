@@ -14,18 +14,37 @@ import (
 	"github.com/nauticana/scout/mcp"
 )
 
-// AssertToolBackend checks the full catalog a backend publishes: unique,
-// described tools, object schemas, consistent annotations, and at least one
-// scope on every tool not marked read-only.
+// AssertToolBackend checks the catalog a backend registers: unique, described
+// tools, object schemas, consistent annotations, at least one scope on every
+// tool not marked read-only, coherent tenant policy, and a host listing that
+// names only catalog tools.
 func AssertToolBackend(t *testing.T, backend contract.MCPToolCatalog) {
 	t.Helper()
-	definitions, err := backend.ListTools(t.Context(), mcp.HostCaller())
+	problems, err := catalogProblems(t.Context(), backend)
 	if err != nil {
-		t.Fatalf("list tools: %v", err)
+		t.Fatal(err)
 	}
-	for _, problem := range toolProblems(definitions) {
+	for _, problem := range problems {
 		t.Error(problem)
 	}
+}
+
+func catalogProblems(ctx context.Context, backend contract.MCPToolCatalog) ([]string, error) {
+	definitions, err := backend.Catalog(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tool catalog: %w", err)
+	}
+	listed, err := backend.ListTools(ctx, mcp.HostCaller())
+	if err != nil {
+		return nil, fmt.Errorf("list tools for the host: %w", err)
+	}
+	problems := toolProblems(definitions)
+	for _, definition := range listed {
+		if !slices.ContainsFunc(definitions, func(d domain.MCPToolDefinition) bool { return d.Name == definition.Name }) {
+			problems = append(problems, fmt.Sprintf("tool %q is listed but not in the catalog", definition.Name))
+		}
+	}
+	return problems, nil
 }
 
 // AssertPromptBackend checks the full prompt catalog: unique, described
@@ -71,6 +90,37 @@ func toolProblems(definitions []domain.MCPToolDefinition) []string {
 		if !readOnly && len(definition.Policy.RequiredScopes) == 0 {
 			problems = append(problems, fmt.Sprintf("tool %q may write but requires no scope", name))
 		}
+		problems = append(problems, policyProblems(name, definition.Policy)...)
+	}
+	return problems
+}
+
+// policyProblems checks the tenant fields mcp.ToolLister reads.
+func policyProblems(name string, policy domain.MCPToolPolicy) []string {
+	var problems []string
+	if !policy.Tenant {
+		if policy.ActionLevel != 0 || policy.OwnTenantOnly || len(policy.Grants) > 0 || policy.AnyGrant || len(policy.Sources) > 0 {
+			problems = append(problems, fmt.Sprintf("tool %q declares tenant policy without Tenant", name))
+		}
+		return problems
+	}
+	if policy.ActionLevel < 0 {
+		problems = append(problems, fmt.Sprintf("tool %q has a negative action level", name))
+	}
+	if policy.AnyGrant && len(policy.Grants) < 2 {
+		problems = append(problems, fmt.Sprintf("tool %q sets AnyGrant with fewer than two grants", name))
+	}
+	for _, grant := range policy.Grants {
+		if strings.TrimSpace(grant.Object) == "" || strings.TrimSpace(grant.Action) == "" {
+			problems = append(problems, fmt.Sprintf("tool %q has a grant without object or action", name))
+		}
+	}
+	seen := make(map[string]bool, len(policy.Sources))
+	for _, source := range policy.Sources {
+		if strings.TrimSpace(source) == "" || seen[source] {
+			problems = append(problems, fmt.Sprintf("tool %q source %q is empty or duplicated", name, source))
+		}
+		seen[source] = true
 	}
 	return problems
 }
@@ -80,9 +130,9 @@ func promptProblems(ctx context.Context, prompts contract.MCPPromptCatalog, tool
 	if err != nil {
 		return nil, fmt.Errorf("list prompts: %w", err)
 	}
-	toolDefinitions, err := tools.ListTools(ctx, mcp.HostCaller())
+	toolDefinitions, err := tools.Catalog(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list tools: %w", err)
+		return nil, fmt.Errorf("tool catalog: %w", err)
 	}
 	var problems []string
 	published := make(map[string]bool, len(promptDefinitions))

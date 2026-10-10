@@ -7,7 +7,7 @@ comment: >-
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: request_id
     type: VARCHAR(120)
@@ -63,27 +63,30 @@ sequence:
   column: id
 foreign_keys:
   - name: turn_queue_entries
-    columns: [tenant_id, conversation_id]
+    columns: [partner_id, conversation_id]
     references:
       table: agent_conversation
-      columns: [tenant_id, conversation_id]
+      columns: [partner_id, conversation_id]
   - name: turn_queue_turns
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
     references:
       table: conversation_turn
-      columns: [tenant_id, request_id]
+      columns: [partner_id, request_id]
 indexes:
+  - name: turn_queue_partner_uq
+    columns: [partner_id, id]
+    unique: true
   - name: turn_queue_request_uq
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
     unique: true
   - name: turn_queue_ready_ix
     columns: [status_code, partition_no, available_at]
   - name: turn_queue_conversation_ix
-    columns: [tenant_id, conversation_id, status_code, enqueued_at]
+    columns: [partner_id, conversation_id, status_code, enqueued_at]
   - name: turn_queue_lease_ix
     columns: [status_code, lease_until]
   - name: turn_queue_principal_ix
-    columns: [tenant_id, principal_kind, principal_id, status_code]
+    columns: [partner_id, principal_kind, principal_id, status_code]
 checks:
   - name: turn_queue_status_ck
     expression: status_code IN ('queued', 'leased', 'acked', 'dead')

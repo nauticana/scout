@@ -25,29 +25,29 @@ const (
 )
 
 const gcManifestColumns = `
-SELECT tenant_id, knowledge_base_id, document_id, active_version, superseded_version, tombstoned, gc_pending
+SELECT partner_id, knowledge_base_id, document_id, active_version, superseded_version, tombstoned, gc_pending
   FROM knowledge_document_manifest`
 
 var gcQueries = map[string]string{
 	qGCListPending: gcManifestColumns + `
  WHERE gc_pending = TRUE
- ORDER BY activated_at, tenant_id, knowledge_base_id, document_id
+ ORDER BY activated_at, partner_id, knowledge_base_id, document_id
  LIMIT ?`,
 	qGCLock:        "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-	qGCGetManifest: gcManifestColumns + ` WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ?`,
+	qGCGetManifest: gcManifestColumns + ` WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ?`,
 	qGCDeleteChunks: `
 DELETE FROM knowledge_chunk
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 	qGCDeleteDocument: `
 DELETE FROM knowledge_document
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 	qGCClearPending: `
 UPDATE knowledge_document_manifest
    SET superseded_version = NULL, gc_pending = tombstoned
- WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ?`,
 	qGCDeleteManifest: `
 DELETE FROM knowledge_document_manifest
- WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ? AND tombstoned = TRUE`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ? AND tombstoned = TRUE`,
 }
 
 // GarbageCollector reclaims superseded and tombstoned document versions in

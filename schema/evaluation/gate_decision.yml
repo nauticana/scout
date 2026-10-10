@@ -3,7 +3,7 @@ comment: Signed expiring quality verdict consumed by rollout
 columns:
   - name: decision_id
     type: CHAR(64)
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: manifest_id
     type: CHAR(64)
@@ -31,10 +31,10 @@ columns:
 primary_key: [decision_id]
 foreign_keys:
   - name: gate_decisions
-    columns: [manifest_id]
+    columns: [partner_id, manifest_id]
     references:
       table: evaluation_manifest
-      columns: [manifest_id]
+      columns: [partner_id, manifest_id]
   - name: platform_gate_decisions
     columns: [platform_version]
     references:
@@ -44,7 +44,7 @@ indexes:
   - name: gate_decision_platform_ix
     columns: [platform_version, issued_at]
   - name: gate_decision_manifest_ix
-    columns: [tenant_id, manifest_id, issued_at]
+    columns: [partner_id, manifest_id, issued_at]
 checks:
   - name: gate_decision_id_ck
     expression: CHAR_LENGTH(decision_id) = 64

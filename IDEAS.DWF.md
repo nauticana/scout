@@ -90,7 +90,7 @@ Idea-12 §12 says agent principals "require a deliberate principal model or para
 
 Only the **subject side** needs work. Two candidate shapes were considered.
 
-**Option A — `agent_permission` parallel to `user_permission`.** A new assignment table `(tenant_id, agent_id, role_id, begda, endda, granted_by)` FK'd to `agent_profile` and `authorization_role`, plus a second named query that joins it, and a `Principal{Kind, ID}` argument replacing the bare `userID` on the evaluation entry points.
+**Option A — `agent_permission` parallel to `user_permission`.** A new assignment table `(partner_id, agent_id, role_id, begda, endda, granted_by)` FK'd to `agent_profile` and `authorization_role`, plus a second named query that joins it, and a `Principal{Kind, ID}` argument replacing the bare `userID` on the evaluation entry points.
 
 **Option B — agents as rows in `user_account` with a different authentication method.** Zero change to permission evaluation, sessions, or any `created_by` / `modified_by` / `published_by` foreign key.
 
@@ -102,7 +102,7 @@ Only the **subject side** needs work. Two candidate shapes were considered.
 | Bounded authority for "bounded autonomous" mode | Inherited free | Inherited free |
 | Credential columns | Agent identity carries only what it needs | Agents inherit `passtext`, `passdate`, `login_attempts`, `lock_time`, `twofa_*`, `single_device_session` — twelve columns that must never apply |
 | Silent failure modes | None | A password-expiry job, an inactive-account lockout sweep, a 2FA enforcement policy or a "disable after 90 days without login" task will hit agent rows. The failure is an agent silently locked out, or an interactive login path left open on a machine identity |
-| Natural keys | Agent keyed by `(tenant_id, agent_id)` as today | `user_account` has unique indexes on `user_email` and `phone`; an agent has neither |
+| Natural keys | Agent keyed by `(partner_id, agent_id)` as today | `user_account` has unique indexes on `user_email` and `phone`; an agent has neither |
 | Blast radius | Nil for human flows | Every human-facing query needs a `principal_kind` filter added: user lists, admin pickers, seat/licence counting, GDPR export and erasure, notification broadcast. Each one missed is a leak or a mis-billed seat |
 | Audit provability | "Human or agent?" is structural | "Human or agent?" is a column value — weaker evidence for the EU AI Act posture in idea-12 §16 |
 | Positioning | Matches §9: software principals with delegated authority | Storing agents in the user table is the technical form of the "agents are employees" claim §9 explicitly rejects |
@@ -111,7 +111,7 @@ Option B also does not stay small. To be safe it forces `principal_kind NOT NULL
 
 **Shape to build (Option A):**
 
-1. `agent_permission (tenant_id, agent_id, role_id, begda, endda, granted_by)` — mirrors `user_permission` exactly, including effective dating. Downstream products may narrow, never broaden, an agent's roles relative to its type (DWF-2).
+1. `agent_permission (partner_id, agent_id, role_id, begda, endda, granted_by)` — mirrors `user_permission` exactly, including effective dating. Downstream products may narrow, never broaden, an agent's roles relative to its type (DWF-2).
 2. A second named query alongside `QCheckAuthorization` that joins `agent_permission`, identical in every other respect so `low_limit` / `high_limit` / `bypass_scope` semantics stay one implementation.
 3. `Principal{Kind, ID}` replacing the bare `userID` on `CheckPermission`, `CheckActionPermission`, `GetPermission` and the REST/table-action middleware. Clean break per the shared-library rule — no `…ForUser` wrapper kept behind.
 4. **Where a column must record "who did this" and either kind is possible** — the DWF-7 decision record, DWF-3 approval decisions — use two nullable FK columns (`user_id`, `agent_id`) with an XOR check constraint rather than a polymorphic `(actor_kind, actor_id)` pair, so every relationship stays a real declared FK. Introduce a physical `principal` table only if such columns pass three or four; today they do not.

@@ -31,17 +31,17 @@ const (
 var decisionQueries = map[string]string{
 	qDecisionInsert: `
 INSERT INTO audit_event
-       (id, tenant_id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
+       (id, partner_id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
         scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
         obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, decision_key)
 VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, decision_key) DO NOTHING`,
+ON CONFLICT (partner_id, decision_key) DO NOTHING`,
 	qDecisionPage: `
 SELECT id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
        scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
        obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at
   FROM audit_event
- WHERE ((? > 0 AND tenant_id = ?) OR (? = 0 AND tenant_id IS NULL))
+ WHERE ((? > 0 AND partner_id = ?) OR (? = 0 AND partner_id IS NULL))
    AND (? = '' OR category = ?)
    AND (? = '' OR principal_kind = ?)
    AND (? = '' OR principal_id = ?)

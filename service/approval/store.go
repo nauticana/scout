@@ -47,27 +47,27 @@ const (
 var approvalQueries = map[string]string{
 	qApprovalOpen: `
 INSERT INTO turn_approval_request
-       (id, tenant_id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
+       (id, partner_id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
         approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
         risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at)
 VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-ON CONFLICT (tenant_id, request_id, execution_step_id) DO NOTHING
+ON CONFLICT (partner_id, request_id, execution_step_id) DO NOTHING
 RETURNING id`,
 	qApprovalGet: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?`,
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?`,
 	// The digest guard is in the WHERE clause, so approving a changed action
 	// updates nothing rather than resolving the wrong proposal.
 	qApprovalResolve: `
 UPDATE turn_approval_request
    SET status_code = ?, resolved_at = ?
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
    AND status_code IN ('pending', 'escalated') AND proposed_digest = ?
 RETURNING id`,
 	qApprovalDecision: `
 INSERT INTO turn_approval_decision
-       (turn_approval_request_id, tenant_id, status_code, decider_kind, decider_user_id, decider_agent_id,
+       (turn_approval_request_id, partner_id, status_code, decider_kind, decider_user_id, decider_agent_id,
         decider_service_id, grant_id, proposed_digest, reason, decided_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qApprovalDecisionGet: `
@@ -75,12 +75,12 @@ SELECT d.status_code, d.decider_kind, d.decider_user_id, d.decider_agent_id, d.d
        d.grant_id, d.proposed_digest, d.reason
   FROM turn_approval_decision d
   JOIN turn_approval_request r ON r.id = d.turn_approval_request_id
- WHERE r.tenant_id = ? AND r.request_id = ? AND r.execution_step_id = ?`,
+ WHERE r.partner_id = ? AND r.request_id = ? AND r.execution_step_id = ?`,
 	qApprovalPending: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request r
   JOIN approval_risk_tier risk ON risk.code = r.risk_tier_code
- WHERE r.tenant_id = ? AND r.status_code IN ('pending', 'escalated')
+ WHERE r.partner_id = ? AND r.status_code IN ('pending', 'escalated')
    AND (? = '' OR approver_kind = ?)
    AND (? = '' OR approver_id = ?)
    AND (? = '' OR risk.severity_rank >= (SELECT severity_rank FROM approval_risk_tier WHERE code = ?))
@@ -90,7 +90,7 @@ SELECT ` + approvalColumns + `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request r
   JOIN approval_risk_tier risk ON risk.code = r.risk_tier_code
- WHERE r.tenant_id = ? AND r.status_code IN ('pending', 'escalated') AND r.scope_id = ?
+ WHERE r.partner_id = ? AND r.status_code IN ('pending', 'escalated') AND r.scope_id = ?
    AND (? = '' OR approver_kind = ?)
    AND (? = '' OR approver_id = ?)
    AND (? = '' OR risk.severity_rank >= (SELECT severity_rank FROM approval_risk_tier WHERE code = ?))
@@ -99,18 +99,18 @@ SELECT ` + approvalColumns + `
 	qApprovalDue: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request
- WHERE tenant_id = ? AND status_code IN ('pending', 'escalated')
+ WHERE partner_id = ? AND status_code IN ('pending', 'escalated')
    AND deadline_at IS NOT NULL AND deadline_at <= ?
  ORDER BY deadline_at
  LIMIT ?`,
 	qApprovalNotified: `
 UPDATE turn_approval_request
    SET notification_event_id = ?
- WHERE tenant_id = ? AND id = ? AND notification_event_id IS NULL`,
+ WHERE partner_id = ? AND id = ? AND notification_event_id IS NULL`,
 	qApprovalEscalate: `
 UPDATE turn_approval_request
    SET status_code = 'escalated', approver_kind = ?, approver_id = ?, deadline_at = ?
- WHERE tenant_id = ? AND id = ? AND status_code IN ('pending', 'escalated')
+ WHERE partner_id = ? AND id = ? AND status_code IN ('pending', 'escalated')
 RETURNING id`,
 }
 

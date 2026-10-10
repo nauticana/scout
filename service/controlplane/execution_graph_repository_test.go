@@ -16,11 +16,12 @@ import (
 // graphTableFake is an in-memory execution_graph store that is also a
 // transaction offering other catalogs, like keel's.
 type graphTableFake struct {
-	digests map[string]string
-	steps   map[string][][]any
-	entries map[string]int64
-	edges   map[string][][]any
-	nextID  int64
+	digests     map[string]string
+	steps       map[string][][]any
+	entries     map[string]int64
+	edges       map[string][][]any
+	edgeTenants []int64
+	nextID      int64
 }
 
 func newGraphTableFake() *graphTableFake {
@@ -42,6 +43,8 @@ func (fake *graphTableFake) Query(_ context.Context, name string, args ...any) (
 		return &keelmodel.QueryResult{Rows: [][]any{{fake.nextID}}}, nil
 	case qGraphEntryInsert:
 		fake.entries[key] = args[3].(int64)
+	case qGraphEdgeInsert:
+		fake.edgeTenants = append(fake.edgeTenants, args[0].(int64))
 	case qGraphGet:
 		if digest, ok := fake.digests[key]; ok {
 			for _, step := range fake.steps[key] {
@@ -125,5 +128,21 @@ func TestPutRejectsAnInconsistentGraph(t *testing.T) {
 		Steps: []domain.ExecutionStep{{StepID: "a", Kind: "model", NextStepIDs: []string{"ghost"}}}}
 	if err := repository.Put(context.Background(), 7, graph); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("want ErrValidation, got %v", err)
+	}
+}
+
+func TestPutScopesTransitionsToTheGraphTenant(t *testing.T) {
+	fake := newGraphTableFake()
+	repository := &TableExecutionGraphRepository{DB: graphDBFake{fake: fake}}
+	graph := domain.ExecutionGraph{AgentID: "writer", Version: "1", Digest: strings.Repeat("b", 64), EntryStepID: "a",
+		Steps: []domain.ExecutionStep{
+			{StepID: "a", Kind: "model", NextStepIDs: []string{"b"}},
+			{StepID: "b", Kind: "tool"},
+		}}
+	if err := repository.Put(context.Background(), 7, graph); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.edgeTenants) != 1 || fake.edgeTenants[0] != 7 {
+		t.Fatalf("transition tenants = %v", fake.edgeTenants)
 	}
 }

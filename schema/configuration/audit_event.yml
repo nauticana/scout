@@ -3,7 +3,7 @@ comment: One governed decision, with the principal, authority, and reasoning beh
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
     nullable: true
   - name: category
@@ -70,7 +70,7 @@ sequence:
   column: id
 foreign_keys:
   - name: audit_events
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
@@ -80,19 +80,19 @@ foreign_keys:
       table: audit_decision_outcome
       columns: [code]
   - name: scope_audit_events
-    columns: [tenant_id, scope_id]
+    columns: [partner_id, scope_id]
     references:
       table: config_scope
-      columns: [tenant_id, scope_id]
+      columns: [partner_id, scope_id]
 indexes:
   - name: audit_event_tenant_time_ix
-    columns: [tenant_id, occurred_at]
+    columns: [partner_id, occurred_at]
   - name: audit_event_principal_ix
-    columns: [tenant_id, principal_kind, principal_id, occurred_at]
+    columns: [partner_id, principal_kind, principal_id, occurred_at]
   - name: audit_event_request_ix
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
   - name: audit_event_decision_uq
-    columns: [tenant_id, decision_key]
+    columns: [partner_id, decision_key]
     unique: true
 checks:
   - name: audit_event_payload_ck

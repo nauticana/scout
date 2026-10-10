@@ -19,10 +19,10 @@ var deadLetterQueries = map[string]string{
 	// The input reference is copied from the queue row so the parked message
 	// stays replayable even after the queue row is pruned.
 	qDeadLetterInsert: `
-INSERT INTO turn_dead_letter (id, tenant_id, request_id, queue_id, reason, attempts, input_uri, input_digest)
-SELECT nextval('turn_dead_letter_seq'), q.tenant_id, q.request_id, q.id, ?, ?, q.input_uri, q.input_digest
+INSERT INTO turn_dead_letter (id, partner_id, request_id, queue_id, reason, attempts, input_uri, input_digest)
+SELECT nextval('turn_dead_letter_seq'), q.partner_id, q.request_id, q.id, ?, ?, q.input_uri, q.input_digest
   FROM turn_queue q
- WHERE q.id = ? AND q.tenant_id = ? AND q.request_id = ?
+ WHERE q.id = ? AND q.partner_id = ? AND q.request_id = ?
 ON CONFLICT DO NOTHING
 RETURNING id`,
 }

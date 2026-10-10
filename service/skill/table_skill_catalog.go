@@ -63,10 +63,10 @@ INSERT INTO skill_catalog_example (skill_id, skill_version, example_no, request)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (skill_id, skill_version, example_no) DO NOTHING`,
 	qCatalogDerived: `
-SELECT tenant_id, skill_id, skill_version
+SELECT partner_id, skill_id, skill_version
   FROM skill_version
  WHERE origin_skill_id = ? AND origin_skill_version = ?
- ORDER BY tenant_id, skill_id, skill_version`,
+ ORDER BY partner_id, skill_id, skill_version`,
 }
 
 // TableSkillCatalog is the SkillCatalog over the skill_catalog tables. It has no

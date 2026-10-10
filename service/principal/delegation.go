@@ -27,22 +27,22 @@ const (
 var delegationQueries = map[string]string{
 	qGrantPut: `
 INSERT INTO delegation_grant
-       (tenant_id, grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_kind, grantee_agent_id,
+       (partner_id, grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_kind, grantee_agent_id,
         action_scope, max_depth, budget_minor_units, currency_code, approval_required, begda, endda, granted_by)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGrantGet: `
 SELECT ` + grantColumns + `
   FROM delegation_grant
- WHERE tenant_id = ? AND grant_id = ?`,
+ WHERE partner_id = ? AND grant_id = ?`,
 	qGrantRevoke: `
 UPDATE delegation_grant
    SET revoked_at = CURRENT_TIMESTAMP, endda = COALESCE(endda, CURRENT_TIMESTAMP)
- WHERE tenant_id = ? AND grant_id = ? AND revoked_at IS NULL
+ WHERE partner_id = ? AND grant_id = ? AND revoked_at IS NULL
 RETURNING grant_id`,
 	qGrantsGrantee: `
 SELECT ` + grantColumns + `
   FROM delegation_grant
- WHERE tenant_id = ? AND grantee_kind = ? AND grantee_agent_id = ?
+ WHERE partner_id = ? AND grantee_kind = ? AND grantee_agent_id = ?
    AND revoked_at IS NULL AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 }
 

@@ -25,22 +25,22 @@ var credentialQueries = map[string]string{
 SELECT b.credential_ref, b.delegated_from_user_id, b.grant_id, b.config_scopes, b.max_ttl_seconds,
        b.begda, b.endda, b.revoked_at
   FROM tool_credential_binding b
-  LEFT JOIN delegation_grant g ON g.tenant_id = b.tenant_id AND g.grant_id = b.grant_id
- WHERE b.tenant_id = ? AND b.principal_kind = ? AND b.principal_id = ? AND b.tool_id = ? AND b.purpose = ?
+  LEFT JOIN delegation_grant g ON g.partner_id = b.partner_id AND g.grant_id = b.grant_id
+ WHERE b.partner_id = ? AND b.principal_kind = ? AND b.principal_id = ? AND b.tool_id = ? AND b.purpose = ?
    AND b.begda <= CURRENT_TIMESTAMP AND (b.endda IS NULL OR b.endda > CURRENT_TIMESTAMP)
    AND b.revoked_at IS NULL
    AND (b.grant_id IS NULL OR (g.revoked_at IS NULL AND g.begda <= CURRENT_TIMESTAMP AND (g.endda IS NULL OR g.endda > CURRENT_TIMESTAMP)))
  ORDER BY b.begda DESC
  LIMIT 1`,
 	qCredentialRevoked: `
-SELECT b.tenant_id, b.principal_kind, b.principal_id, b.tool_id, b.purpose, b.credential_ref,
+SELECT b.partner_id, b.principal_kind, b.principal_id, b.tool_id, b.purpose, b.credential_ref,
        COALESCE(b.revoked_at, g.revoked_at),
        CASE WHEN b.endda IS NULL THEN g.endda WHEN g.endda IS NULL THEN b.endda
             WHEN b.endda < g.endda THEN b.endda ELSE g.endda END,
        b.grant_id
   FROM tool_credential_binding b
-  LEFT JOIN delegation_grant g ON g.tenant_id = b.tenant_id AND g.grant_id = b.grant_id
- WHERE b.tenant_id = ?
+  LEFT JOIN delegation_grant g ON g.partner_id = b.partner_id AND g.grant_id = b.grant_id
+ WHERE b.partner_id = ?
    AND (COALESCE(b.revoked_at, g.revoked_at) >= ?
         OR (b.endda IS NOT NULL AND b.endda >= ? AND b.endda <= CURRENT_TIMESTAMP)
         OR (g.endda IS NOT NULL AND g.endda >= ? AND g.endda <= CURRENT_TIMESTAMP))`,

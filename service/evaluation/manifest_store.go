@@ -22,9 +22,9 @@ var manifestQueries = map[string]string{
 	qManifestGet: `
 SELECT manifest_json
   FROM evaluation_manifest
- WHERE tenant_id = ? AND manifest_id = ?`,
+ WHERE partner_id = ? AND manifest_id = ?`,
 	qManifestInsert: `
-INSERT INTO evaluation_manifest (manifest_id, tenant_id, agent_id, candidate_agent_version, baseline_agent_version,
+INSERT INTO evaluation_manifest (manifest_id, partner_id, agent_id, candidate_agent_version, baseline_agent_version,
                                  golden_set_id, golden_set_version, dataset_revision, safety_policy_version, manifest_json, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 }

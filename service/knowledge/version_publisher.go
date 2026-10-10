@@ -26,12 +26,12 @@ var versionQueries = map[string]string{
 	qVersionLock: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
 	qVersionGet: `
 SELECT embedding_provider, embedding_model FROM knowledge_base_version
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ?`,
-	qVersionBaseGet: `SELECT 1 FROM knowledge_base WHERE tenant_id = ? AND knowledge_base_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ?`,
+	qVersionBaseGet: `SELECT 1 FROM knowledge_base WHERE partner_id = ? AND knowledge_base_id = ?`,
 	qVersionBaseInsert: `
-INSERT INTO knowledge_base (tenant_id, knowledge_base_id, display_name) VALUES (?, ?, ?)`,
+INSERT INTO knowledge_base (partner_id, knowledge_base_id, display_name) VALUES (?, ?, ?)`,
 	qVersionInsert: `
-INSERT INTO knowledge_base_version (tenant_id, knowledge_base_id, knowledge_version, embedding_provider, embedding_model)
+INSERT INTO knowledge_base_version (partner_id, knowledge_base_id, knowledge_version, embedding_provider, embedding_model)
 VALUES (?, ?, ?, ?, ?)`,
 }
 

@@ -20,8 +20,12 @@ type confirmingBackend struct {
 	call domain.MCPToolCall
 }
 
-func (backend *confirmingBackend) ListTools(context.Context, domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+func (backend *confirmingBackend) Catalog(context.Context) ([]domain.MCPToolDefinition, error) {
 	return []domain.MCPToolDefinition{{Name: "publish", Description: "publish things"}}, nil
+}
+
+func (backend *confirmingBackend) ListTools(ctx context.Context, _ domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+	return backend.Catalog(ctx)
 }
 
 func (backend *confirmingBackend) ExecuteTool(_ context.Context, call domain.MCPToolCall) (domain.MCPToolResult, error) {

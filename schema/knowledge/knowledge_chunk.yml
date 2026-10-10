@@ -1,7 +1,7 @@
 table: knowledge_chunk
 comment: Authorized, redacted source chunk with its position and the entitlement labels that grant it
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: knowledge_base_id
     type: VARCHAR(80)
@@ -28,13 +28,13 @@ columns:
   - name: entitlements
     type: TEXT
     comment: canonical JSON array of entitlement labels; a chunk is visible when the principal holds any of them
-primary_key: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+primary_key: [partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
 foreign_keys:
   - name: knowledge_chunks
-    columns: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+    columns: [partner_id, knowledge_base_id, knowledge_version, document_id]
     references:
       table: knowledge_document
-      columns: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+      columns: [partner_id, knowledge_base_id, knowledge_version, document_id]
 checks:
   - name: knowledge_chunk_number_ck
     expression: chunk_no >= 0

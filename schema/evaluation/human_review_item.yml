@@ -3,7 +3,7 @@ comment: Paired example routed to a human reviewer
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: run_id
     type: BIGINT
@@ -41,18 +41,18 @@ sequence:
   column: id
 foreign_keys:
   - name: human_review_items
-    columns: [run_id]
+    columns: [partner_id, run_id]
     references:
       table: evaluation_run
-      columns: [id]
+      columns: [partner_id, id]
   - name: example_human_review_items
-    columns: [tenant_id, golden_set_id, set_version, example_id]
+    columns: [partner_id, golden_set_id, set_version, example_id]
     references:
       table: golden_example
-      columns: [tenant_id, golden_set_id, set_version, example_id]
+      columns: [partner_id, golden_set_id, set_version, example_id]
 indexes:
   - name: human_review_item_status_ix
-    columns: [tenant_id, status_code, enqueued_at]
+    columns: [partner_id, status_code, enqueued_at]
 checks:
   - name: human_review_item_status_ck
     expression: (status_code = 'pending' AND resolved_at IS NULL) OR (status_code = 'resolved' AND resolved_at IS NOT NULL AND reviewer IS NOT NULL AND verdict IS NOT NULL)

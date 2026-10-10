@@ -29,13 +29,13 @@ SELECT d.provider_id, d.model_id, d.context_token_limit, d.output_token_limit,
   JOIN model_definition d ON d.provider_id = a.provider_id AND d.model_id = a.model_id
   JOIN model_provider p ON p.provider_id = d.provider_id
   LEFT JOIN model_route r ON r.provider_id = d.provider_id AND r.model_id = d.model_id
- WHERE a.tenant_id = ? AND d.is_active AND p.is_active
+ WHERE a.partner_id = ? AND d.is_active AND p.is_active
  ORDER BY d.provider_id, d.model_id, r.route_id`,
 	qCandidateCapabilities: `
 SELECT c.provider_id, c.model_id, c.capability_code
   FROM tenant_model_access a
   JOIN model_capability c ON c.provider_id = a.provider_id AND c.model_id = a.model_id
- WHERE a.tenant_id = ?
+ WHERE a.partner_id = ?
  ORDER BY c.provider_id, c.model_id, c.capability_code`,
 }
 

@@ -1,7 +1,7 @@
 table: golden_set_version
 comment: Frozen revision of a golden set with its dataset digest
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: golden_set_id
     type: VARCHAR(80)
@@ -14,13 +14,13 @@ columns:
   - name: frozen_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, golden_set_id, set_version]
+primary_key: [partner_id, golden_set_id, set_version]
 foreign_keys:
   - name: golden_set_versions
-    columns: [tenant_id, golden_set_id]
+    columns: [partner_id, golden_set_id]
     references:
       table: golden_set
-      columns: [tenant_id, golden_set_id]
+      columns: [partner_id, golden_set_id]
 checks:
   - name: golden_set_version_no_ck
     expression: set_version > 0

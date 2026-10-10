@@ -54,7 +54,7 @@ const (
 
 var turnLedgerQueries = map[string]string{
 	qLedgerFindTurn: `
-SELECT runtime.tenant_id, runtime.conversation_id, runtime.turn_no, runtime.request_id,
+SELECT runtime.partner_id, runtime.conversation_id, runtime.turn_no, runtime.request_id,
        runtime.status_code, runtime.input_digest, runtime.response_digest,
        detail.task_kind, detail.input_summary, detail.result_kind, detail.result_payload,
        detail.error_text, detail.job_ref, detail.artifact_ref, detail.release_digest,
@@ -66,34 +66,34 @@ SELECT runtime.tenant_id, runtime.conversation_id, runtime.turn_no, runtime.requ
        conversation.agent_id, conversation.agent_version, runtime.queued_at
   FROM conversation_turn runtime
   JOIN agent_conversation conversation
-    ON conversation.tenant_id = runtime.tenant_id
+    ON conversation.partner_id = runtime.partner_id
    AND conversation.conversation_id = runtime.conversation_id
   JOIN conversation_turn_detail detail
-    ON detail.tenant_id = runtime.tenant_id
+    ON detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
   LEFT JOIN budget_reservation reservation
-    ON reservation.tenant_id = detail.tenant_id
+    ON reservation.partner_id = detail.partner_id
    AND reservation.reservation_id = detail.active_reservation_id
- WHERE runtime.tenant_id = ? AND runtime.request_id = ?`,
+ WHERE runtime.partner_id = ? AND runtime.request_id = ?`,
 
 	// Serialized by the ledger's advisory workspace lock. Deliberately no
 	// uniqueness rule on agent_conversation itself.
 	qLedgerEnsureConversation: `
 INSERT INTO agent_conversation
-       (tenant_id, conversation_id, agent_id, agent_version, end_user_ref)
+       (partner_id, conversation_id, agent_id, agent_version, end_user_ref)
 SELECT ?, ?, ?, ?, ?
  WHERE NOT EXISTS (
        SELECT 1
          FROM agent_conversation
-        WHERE tenant_id = ? AND end_user_ref = ? AND agent_id = ? AND agent_version = ?
+        WHERE partner_id = ? AND end_user_ref = ? AND agent_id = ? AND agent_version = ?
           AND closed_at IS NULL
  )`,
 
 	qLedgerGetConversation: `
 SELECT conversation_id
  FROM agent_conversation
- WHERE tenant_id = ? AND end_user_ref = ? AND agent_id = ? AND agent_version = ?
+ WHERE partner_id = ? AND end_user_ref = ? AND agent_id = ? AND agent_version = ?
    AND closed_at IS NULL
  ORDER BY created_at, conversation_id
  LIMIT 1`,
@@ -102,24 +102,24 @@ SELECT conversation_id
 
 	qLedgerInsertTurn: `
 INSERT INTO conversation_turn
-       (tenant_id, conversation_id, turn_no, request_id, status_code,
+       (partner_id, conversation_id, turn_no, request_id, status_code,
         input_uri, input_digest, started_at)
 SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, ?, ?, ?,
        CASE WHEN ? = 'queued' THEN NULL ELSE CURRENT_TIMESTAMP END
   FROM conversation_turn
- WHERE tenant_id = ? AND conversation_id = ?
+ WHERE partner_id = ? AND conversation_id = ?
 ON CONFLICT DO NOTHING
 RETURNING turn_no`,
 
 	qLedgerInsertDetail: `
 INSERT INTO conversation_turn_detail
-       (tenant_id, conversation_id, turn_no, task_kind, input_summary, release_digest)
+       (partner_id, conversation_id, turn_no, task_kind, input_summary, release_digest)
 VALUES (?, ?, ?, ?, ?, ?)`,
 
 	qLedgerAttachJob: `
 UPDATE conversation_turn_detail
    SET result_kind = ?, job_ref = ?
- WHERE tenant_id = ? AND conversation_id = ? AND turn_no = ? AND job_ref IS NULL
+ WHERE partner_id = ? AND conversation_id = ? AND turn_no = ? AND job_ref IS NULL
 RETURNING turn_no`,
 
 	// The detail row is the single execution claim. Compare-and-swap prevents
@@ -129,14 +129,14 @@ RETURNING turn_no`,
 UPDATE conversation_turn_detail detail
    SET active_reservation_id = ?
   FROM conversation_turn runtime
- WHERE detail.tenant_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code IN ('queued', 'running', 'streaming')
    AND detail.active_reservation_id IS NOT DISTINCT FROM ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = detail.tenant_id
+                WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = ?
                   AND reservation.request_id = runtime.request_id
                   AND reservation.attempt_no = ?
@@ -150,15 +150,15 @@ UPDATE conversation_turn_detail detail
        staged_input_tokens = ?, staged_output_tokens = ?,
        staged_cost_minor_units = ?, staged_currency_code = ?
   FROM conversation_turn runtime
- WHERE detail.tenant_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code IN ('running', 'streaming')
    AND detail.active_reservation_id = ?
    AND detail.result_payload IS NULL
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = detail.tenant_id
+                WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'held'
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
@@ -168,14 +168,14 @@ RETURNING detail.turn_no`,
 UPDATE conversation_turn_detail detail
    SET error_text = ?
   FROM conversation_turn runtime
- WHERE detail.tenant_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code IN ('running', 'streaming')
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = detail.tenant_id
+                WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'held'
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
@@ -187,15 +187,15 @@ UPDATE conversation_turn_detail detail
        staged_input_tokens = ?, staged_output_tokens = ?,
        staged_cost_minor_units = ?, staged_currency_code = ?
   FROM conversation_turn runtime
- WHERE detail.tenant_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code IN ('running', 'streaming')
    AND detail.active_reservation_id = ?
    AND detail.result_payload IS NULL
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = detail.tenant_id
+                WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'held'
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
@@ -205,15 +205,15 @@ RETURNING detail.turn_no`,
 UPDATE conversation_turn runtime
    SET status_code = 'failed', completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
- WHERE runtime.tenant_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
-   AND detail.tenant_id = runtime.tenant_id
+ WHERE runtime.partner_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
+   AND detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
    AND runtime.status_code IN ('running', 'streaming')
    AND detail.active_reservation_id = ?
    AND detail.error_text IS NOT NULL
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = runtime.tenant_id
+                WHERE reservation.partner_id = runtime.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'settled'
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
@@ -225,14 +225,14 @@ UPDATE conversation_turn runtime
    SET status_code = 'completed', response_uri = ?, response_digest = ?,
        completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
- WHERE runtime.tenant_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
-   AND detail.tenant_id = runtime.tenant_id
+ WHERE runtime.partner_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
+   AND detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
    AND runtime.status_code IN ('running', 'streaming')
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = runtime.tenant_id
+                WHERE reservation.partner_id = runtime.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'settled'
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
@@ -243,14 +243,14 @@ RETURNING runtime.turn_no`,
 UPDATE conversation_turn runtime
    SET status_code = 'failed', completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
- WHERE runtime.tenant_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
-   AND detail.tenant_id = runtime.tenant_id
+ WHERE runtime.partner_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
+   AND detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
    AND runtime.status_code IN ('running', 'streaming')
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = runtime.tenant_id
+                WHERE reservation.partner_id = runtime.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'released')
 RETURNING runtime.turn_no`,
@@ -260,25 +260,25 @@ WITH failed AS (
   UPDATE conversation_turn
      SET status_code = 'failed', started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
          completed_at = CURRENT_TIMESTAMP
-   WHERE tenant_id = ? AND conversation_id = ? AND turn_no = ?
+   WHERE partner_id = ? AND conversation_id = ? AND turn_no = ?
      AND status_code IN ('queued', 'running')
-  RETURNING tenant_id, conversation_id, turn_no
+  RETURNING partner_id, conversation_id, turn_no
 )
 UPDATE conversation_turn_detail detail
    SET error_text = ?
   FROM failed
- WHERE detail.tenant_id = failed.tenant_id
+ WHERE detail.partner_id = failed.partner_id
    AND detail.conversation_id = failed.conversation_id
    AND detail.turn_no = failed.turn_no
 RETURNING detail.turn_no`,
 
 	qLedgerInsertUsageEvent: `
 INSERT INTO usage_event
-       (id, tenant_id, conversation_id, turn_no, category_code, subject_ref,
+       (id, partner_id, conversation_id, turn_no, category_code, subject_ref,
         principal_kind, principal_id, scope_id,
         input_tokens, output_tokens, tool_calls, search_queries, cost_minor_units, currency_code)
 VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, conversation_id, turn_no, category_code) DO NOTHING
+ON CONFLICT (partner_id, conversation_id, turn_no, category_code) DO NOTHING
 RETURNING id`,
 
 	qLedgerSetJobStatus: `
@@ -287,8 +287,8 @@ UPDATE conversation_turn runtime
        started_at = CASE WHEN ? IN ('running', 'failed') THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
        completed_at = CASE WHEN ? = 'failed' THEN CURRENT_TIMESTAMP ELSE NULL END
   FROM conversation_turn_detail detail
- WHERE detail.tenant_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code IN ('queued', 'running')
@@ -298,19 +298,19 @@ RETURNING runtime.turn_no`,
 UPDATE conversation_turn_detail detail
    SET active_reservation_id = ?
   FROM conversation_turn runtime
- WHERE detail.tenant_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code = 'running'
    AND (detail.active_reservation_id IS NULL
         OR detail.active_reservation_id = ?
         OR EXISTS (SELECT 1 FROM budget_reservation old
-                    WHERE old.tenant_id = detail.tenant_id
+                    WHERE old.partner_id = detail.partner_id
                       AND old.reservation_id = detail.active_reservation_id
                       AND old.status_code = 'expired'))
    AND EXISTS (SELECT 1 FROM budget_reservation current
-                WHERE current.tenant_id = detail.tenant_id
+                WHERE current.partner_id = detail.partner_id
                   AND current.reservation_id = ?
                   AND current.request_id = runtime.request_id
                   AND current.attempt_no = ?
@@ -323,14 +323,14 @@ UPDATE conversation_turn_detail detail
    SET staged_input_tokens = ?, staged_output_tokens = ?,
        staged_cost_minor_units = ?, staged_currency_code = ?
   FROM conversation_turn runtime
- WHERE detail.tenant_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code = 'running'
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = detail.tenant_id
+                WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'held'
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
@@ -339,7 +339,7 @@ RETURNING detail.turn_no`,
 	qLedgerAttachJobArtifact: `
 UPDATE conversation_turn_detail
    SET artifact_ref = ?
- WHERE tenant_id = ? AND job_ref = ? AND task_kind = ?
+ WHERE partner_id = ? AND job_ref = ? AND task_kind = ?
    AND active_reservation_id = ? AND artifact_ref IS NULL
 RETURNING turn_no`,
 
@@ -349,14 +349,14 @@ UPDATE conversation_turn runtime
    SET status_code = 'completed', started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
        response_uri = ?, response_digest = ?, completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
- WHERE detail.tenant_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
-   AND runtime.tenant_id = detail.tenant_id
+ WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
+   AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
    AND runtime.status_code = 'running'
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
-                WHERE reservation.tenant_id = detail.tenant_id
+                WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
                   AND reservation.status_code = 'settled'
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens

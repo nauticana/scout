@@ -27,20 +27,20 @@ var scopeQueries = map[string]string{
 	qScopeNode: `
 SELECT parent_scope_id, scope_kind_code, display_name
   FROM config_scope
- WHERE tenant_id = ? AND scope_id = ?`,
+ WHERE partner_id = ? AND scope_id = ?`,
 	qScopeBindings: `
 SELECT scope_id, resource_kind_code, resource_id, resource_version, merge_mode_code,
        sealed, resource_value, resource_value_digest, begda, endda, bound_by
   FROM config_scope_binding
- WHERE tenant_id = ? AND begda <= ? AND (endda IS NULL OR endda > ?)
+ WHERE partner_id = ? AND begda <= ? AND (endda IS NULL OR endda > ?)
  ORDER BY resource_kind_code, resource_id, begda`,
 	qEffectiveGet: `
 SELECT scope_id, payload, payload_digest, compiled_by, compiled_at
   FROM effective_agent_release
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ?`,
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 	qEffectivePut: `
 INSERT INTO effective_agent_release
-       (tenant_id, agent_id, agent_version, scope_id, payload, payload_digest, compiled_by, compiled_at)
+       (partner_id, agent_id, agent_version, scope_id, payload, payload_digest, compiled_by, compiled_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 }
 

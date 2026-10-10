@@ -1,7 +1,7 @@
 table: agent_version
 comment: Immutable agent definition version
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -32,31 +32,31 @@ columns:
   - name: published_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, agent_id, agent_version]
+primary_key: [partner_id, agent_id, agent_version]
 foreign_keys:
   - name: agent_versions
-    columns: [tenant_id, agent_id]
+    columns: [partner_id, agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
   - name: agent_versions_guardrail
-    columns: [tenant_id, agent_id, guardrail_version]
+    columns: [partner_id, agent_id, guardrail_version]
     references:
       table: guardrail_config
-      columns: [tenant_id, agent_id, guardrail_version]
+      columns: [partner_id, agent_id, guardrail_version]
   - name: published_agent_versions
     columns: [published_by]
     references:
       table: user_account
       columns: [id]
   - name: restored_agent_versions
-    columns: [tenant_id, agent_id, restored_from_version]
+    columns: [partner_id, agent_id, restored_from_version]
     references:
       table: agent_version
-      columns: [tenant_id, agent_id, agent_version]
+      columns: [partner_id, agent_id, agent_version]
 indexes:
   - name: agent_version_created_ix
-    columns: [tenant_id, agent_id, published_at]
+    columns: [partner_id, agent_id, published_at]
 checks:
   - name: agent_version_digest_ck
     expression: CHAR_LENGTH(definition_digest) = 64

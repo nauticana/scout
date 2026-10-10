@@ -46,7 +46,7 @@ SELECT GREATEST(
                     WHERE partner_id = ? AND resource_name = ? AND usage_time >= ?), 0)
        - COALESCE((SELECT SUM(cost_minor_units)
                      FROM usage_event
-                    WHERE tenant_id = ? AND category_code = ? AND occurred_at >= ?), 0),
+                    WHERE partner_id = ? AND category_code = ? AND occurred_at >= ?), 0),
          0)`,
 }
 

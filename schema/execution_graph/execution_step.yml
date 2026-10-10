@@ -3,7 +3,7 @@ comment: Node in a compiled execution graph
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -21,14 +21,17 @@ sequence:
   column: id
 foreign_keys:
   - name: execution_steps
-    columns: [tenant_id, agent_id, agent_version]
+    columns: [partner_id, agent_id, agent_version]
     references:
       table: execution_graph
-      columns: [tenant_id, agent_id, agent_version]
+      columns: [partner_id, agent_id, agent_version]
 indexes:
+  - name: execution_step_partner_uq
+    columns: [partner_id, id]
+    unique: true
   - name: execution_step_identity_uq
-    columns: [tenant_id, agent_id, agent_version, step_id]
+    columns: [partner_id, agent_id, agent_version, step_id]
     unique: true
   - name: execution_step_graph_id_uq
-    columns: [tenant_id, agent_id, agent_version, id]
+    columns: [partner_id, agent_id, agent_version, id]
     unique: true

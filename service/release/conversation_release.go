@@ -28,27 +28,27 @@ var conversationReleaseQueries = map[string]string{
 	qConversationReleaseGet: `
 SELECT c.agent_version, r.platform_version, r.resolved_at
   FROM conversation_release r
-  JOIN agent_conversation c ON c.tenant_id = r.tenant_id AND c.conversation_id = r.conversation_id
- WHERE r.tenant_id = ? AND r.conversation_id = ?`,
+  JOIN agent_conversation c ON c.partner_id = r.partner_id AND c.conversation_id = r.conversation_id
+ WHERE r.partner_id = ? AND r.conversation_id = ?`,
 	// Inserts only against an existing conversation on the same agent version,
 	// so the two identities can never disagree.
 	qConversationReleasePut: `
-INSERT INTO conversation_release (tenant_id, conversation_id, platform_version, resolved_at)
+INSERT INTO conversation_release (partner_id, conversation_id, platform_version, resolved_at)
 SELECT ?, ?, ?, ?
   FROM agent_conversation c
- WHERE c.tenant_id = ? AND c.conversation_id = ? AND c.agent_version = ?
-   AND NOT EXISTS (SELECT 1 FROM conversation_release WHERE tenant_id = ? AND conversation_id = ?)
+ WHERE c.partner_id = ? AND c.conversation_id = ? AND c.agent_version = ?
+   AND NOT EXISTS (SELECT 1 FROM conversation_release WHERE partner_id = ? AND conversation_id = ?)
 RETURNING conversation_id`,
 	qConversationReleaseMigrate: `
 UPDATE conversation_release
    SET platform_version = ?, resolved_at = ?
- WHERE tenant_id = ? AND conversation_id = ?
+ WHERE partner_id = ? AND conversation_id = ?
 RETURNING conversation_id`,
 	qTenantRingOrder: `
 SELECT ring.rollout_order
   FROM tenant_ring_member m
   JOIN tenant_ring ring ON ring.ring_code = m.ring_code
- WHERE m.tenant_id = ?`,
+ WHERE m.partner_id = ?`,
 	// Paused releases keep their sessions but take no new ones; shadow never takes user sessions.
 	qLiveReleaseCandidates: `
 SELECT s.platform_version, s.stage_code, s.traffic_percentage, COALESCE(ring.rollout_order, 0)

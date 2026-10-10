@@ -1,7 +1,7 @@
 table: tenant_model_access
 comment: Models authorized for a tenant and scheduling class
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: provider_id
     type: VARCHAR(80)
@@ -12,10 +12,10 @@ columns:
   - name: daily_token_limit
     type: BIGINT
     nullable: true
-primary_key: [tenant_id, provider_id, model_id]
+primary_key: [partner_id, provider_id, model_id]
 foreign_keys:
   - name: tenant_model_accesses
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]

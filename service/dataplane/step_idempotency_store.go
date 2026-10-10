@@ -35,10 +35,10 @@ var stepIdempotencyQueries = map[string]string{
 	qStepFind: `
 SELECT status_code, result_uri, result_digest, updated_at
   FROM step_idempotency
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?`,
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?`,
 
 	qStepClaim: `
-INSERT INTO step_idempotency (tenant_id, request_id, execution_step_id, status_code, updated_at)
+INSERT INTO step_idempotency (partner_id, request_id, execution_step_id, status_code, updated_at)
 VALUES (?, ?, ?, 'claimed', ?)
 ON CONFLICT DO NOTHING
 RETURNING status_code`,
@@ -46,28 +46,28 @@ RETURNING status_code`,
 	qStepReclaimExpired: `
 UPDATE step_idempotency
    SET updated_at = ?
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
    AND status_code = 'claimed' AND updated_at <= ?
 RETURNING status_code`,
 
 	qStepReplay: `
 UPDATE step_idempotency
    SET status_code = 'claimed', updated_at = ?
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
    AND status_code = 'abandoned'
 RETURNING status_code`,
 
 	qStepCommit: `
 UPDATE step_idempotency
    SET status_code = 'committed', result_uri = ?, result_digest = ?, updated_at = ?
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
    AND status_code = 'claimed'
 RETURNING status_code`,
 
 	qStepAbandon: `
 UPDATE step_idempotency
    SET status_code = 'abandoned', updated_at = ?
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
    AND status_code = 'claimed'
 RETURNING status_code`,
 }

@@ -7,7 +7,7 @@ comment: >-
   artifact_ref are product-scoped references with downstream FKs and
   task-scoped uniqueness.
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: conversation_id
     type: VARCHAR(120)
@@ -49,18 +49,18 @@ columns:
   - name: staged_currency_code
     type: CHAR(3)
     nullable: true
-primary_key: [tenant_id, conversation_id, turn_no]
+primary_key: [partner_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turn_details
-    columns: [tenant_id, conversation_id, turn_no]
+    columns: [partner_id, conversation_id, turn_no]
     references:
       table: conversation_turn
-      columns: [tenant_id, conversation_id, turn_no]
+      columns: [partner_id, conversation_id, turn_no]
   - name: reservation_conversation_turn_details
-    columns: [tenant_id, active_reservation_id]
+    columns: [partner_id, active_reservation_id]
     references:
       table: budget_reservation
-      columns: [tenant_id, reservation_id]
+      columns: [partner_id, reservation_id]
   - name: conversation_turn_details_currency
     columns: [staged_currency_code]
     references:
@@ -68,11 +68,11 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: conversation_turn_detail_job_uq
-    columns: [tenant_id, task_kind, job_ref]
+    columns: [partner_id, task_kind, job_ref]
     unique: true
     where: job_ref IS NOT NULL
   - name: conversation_turn_detail_artifact_uq
-    columns: [tenant_id, task_kind, artifact_ref]
+    columns: [partner_id, task_kind, artifact_ref]
     unique: true
     where: artifact_ref IS NOT NULL
 checks:

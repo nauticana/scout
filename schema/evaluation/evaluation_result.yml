@@ -3,7 +3,7 @@ comment: Every score one arm earned on one example in a run
 columns:
   - name: run_id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: golden_set_id
     type: VARCHAR(80)
@@ -38,15 +38,15 @@ columns:
 primary_key: [run_id, example_id, role_code]
 foreign_keys:
   - name: evaluation_results
-    columns: [run_id]
+    columns: [partner_id, run_id]
     references:
       table: evaluation_run
-      columns: [id]
+      columns: [partner_id, id]
   - name: example_evaluation_results
-    columns: [tenant_id, golden_set_id, set_version, example_id]
+    columns: [partner_id, golden_set_id, set_version, example_id]
     references:
       table: golden_example
-      columns: [tenant_id, golden_set_id, set_version, example_id]
+      columns: [partner_id, golden_set_id, set_version, example_id]
   - name: currency_evaluation_results
     columns: [currency_code]
     references:
@@ -54,7 +54,7 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: evaluation_result_example_ix
-    columns: [tenant_id, golden_set_id, set_version, example_id]
+    columns: [partner_id, golden_set_id, set_version, example_id]
 checks:
   - name: evaluation_result_role_ck
     expression: role_code IN ('baseline', 'candidate')

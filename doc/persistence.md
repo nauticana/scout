@@ -9,10 +9,10 @@ Reference implementations live in `service/dataplane/`: `ObjectStateStore` (`sta
 | DTO | Table | Notes |
 |---|---|---|
 | `domain.ExecutionStep.ExecutionStepID` | `execution_step.id` | Compiled surrogate id; the only step identity persistence keys on. `StepID` is the logical name and is derived on load via `execution_step.step_id`. |
-| `domain.StepCheckpoint` | `step_checkpoint` | `(tenant_id, conversation_id, turn_no, step_no)`; `IdempotencyKey`, `Fingerprint` (64-hex), `Usage` (currency required) map 1:1. `State` is dehydrated to `state_uri`/`state_digest` (`StateRef`). No checkpoint id or request id column exists; neither is stored. |
+| `domain.StepCheckpoint` | `step_checkpoint` | `(partner_id, conversation_id, turn_no, step_no)`; `IdempotencyKey`, `Fingerprint` (64-hex), `Usage` (currency required) map 1:1. `State` is dehydrated to `state_uri`/`state_digest` (`StateRef`). No checkpoint id or request id column exists; neither is stored. |
 | `domain.SessionSnapshot` | `session_snapshot` + `agent_conversation.agent_version` + latest checkpoint's `execution_step.step_id` | `Revision` = `session_snapshot.revision`; `State` is hydrated from `state_uri`/`state_digest`, digest verified before return. A conversation with no checkpoint loads at revision 0 with empty state. |
 | `domain.TurnResult.Response` | `conversation_turn.response_uri`/`response_digest` | Written by `Complete` on the conversation's oldest non-terminal turn (`queued`/`running`/`streaming`). |
-| `domain.StepResult` (JSON) | `step_idempotency.result_uri`/`result_digest` | Keyed by `(tenant_id, request_id, execution_step_id)`. |
+| `domain.StepResult` (JSON) | `step_idempotency.result_uri`/`result_digest` | Keyed by `(partner_id, request_id, execution_step_id)`. |
 | `domain.ObjectRef{URI, Digest}` | any `*_uri`/`*_digest` pair | URI `<scheme>://<bucket>/<key>`, digest lowercase SHA-256 hex. |
 
 The repository never invents a fingerprint, currency, or digest: `Checkpoint` rejects a checkpoint that lacks them

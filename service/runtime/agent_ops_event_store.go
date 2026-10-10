@@ -16,7 +16,7 @@ const qRecordAgentOpsEvent = "scout_runtime_record_agent_ops_event"
 
 var agentOpsEventQueries = map[string]string{
 	qRecordAgentOpsEvent: `
-INSERT INTO agent_ops_event (id, tenant_id, event, detail)
+INSERT INTO agent_ops_event (id, partner_id, event, detail)
 VALUES (nextval('agent_ops_event_seq'), ?, ?, ?)`,
 }
 

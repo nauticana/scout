@@ -3,7 +3,7 @@ comment: The verdict on one turn approval request, with the principal that decid
 columns:
   - name: turn_approval_request_id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: status_code
     type: VARCHAR(30)
@@ -32,10 +32,10 @@ columns:
 primary_key: [turn_approval_request_id]
 foreign_keys:
   - name: turn_approval_decisions
-    columns: [turn_approval_request_id, tenant_id]
+    columns: [turn_approval_request_id, partner_id]
     references:
       table: turn_approval_request
-      columns: [id, tenant_id]
+      columns: [id, partner_id]
   - name: status_turn_approval_decisions
     columns: [status_code]
     references:
@@ -47,15 +47,15 @@ foreign_keys:
       table: user_account
       columns: [id]
   - name: agent_turn_approval_decisions
-    columns: [tenant_id, decider_agent_id]
+    columns: [partner_id, decider_agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
   - name: grant_turn_approval_decisions
-    columns: [tenant_id, grant_id]
+    columns: [partner_id, grant_id]
     references:
       table: delegation_grant
-      columns: [tenant_id, grant_id]
+      columns: [partner_id, grant_id]
 checks:
   - name: turn_approval_decision_decider_ck
     expression: (CASE WHEN decider_user_id IS NULL THEN 0 ELSE 1 END + CASE WHEN decider_agent_id IS NULL THEN 0 ELSE 1 END + CASE WHEN decider_service_id IS NULL THEN 0 ELSE 1 END) = 1

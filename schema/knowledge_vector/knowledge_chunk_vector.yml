@@ -9,7 +9,7 @@ comment: >-
   so PgVectorIndex.EnsureIndexes creates the dimension-specific HNSW index and
   CREATE EXTENSION vector is a deployment step.
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: knowledge_base_id
     type: VARCHAR(80)
@@ -33,13 +33,13 @@ columns:
   - name: tombstoned
     type: BOOLEAN
     default: FALSE
-primary_key: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+primary_key: [partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
 foreign_keys:
   - name: knowledge_chunk_vectors
-    columns: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+    columns: [partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
     references:
       table: knowledge_chunk
-      columns: [tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
+      columns: [partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no]
 checks:
   - name: knowledge_chunk_vector_chunk_id_ck
     expression: CHAR_LENGTH(chunk_id) = 64

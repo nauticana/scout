@@ -3,7 +3,7 @@ comment: One MCP tool call held until a person confirms it, then run once under 
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: maker_kind
     type: VARCHAR(20)
@@ -100,7 +100,7 @@ sequence:
   column: id
 foreign_keys:
   - name: mcp_confirmations
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
@@ -126,13 +126,13 @@ foreign_keys:
       columns: [id]
 indexes:
   - name: mcp_confirmation_open_uq
-    columns: [tenant_id, tool, payload_digest]
+    columns: [partner_id, tool, payload_digest]
     unique: true
     where: status_code IN ('pending', 'approved', 'executing', 'unknown')
   - name: mcp_confirmation_work_ix
     columns: [status_code, expires_at]
   - name: mcp_confirmation_tenant_ix
-    columns: [tenant_id, created_at]
+    columns: [partner_id, created_at]
 checks:
   - name: mcp_confirmation_digest_ck
     expression: CHAR_LENGTH(payload_digest) = 64

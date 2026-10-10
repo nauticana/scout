@@ -1,7 +1,7 @@
 table: delegation_grant
 comment: Typed bound on who may assign or approve work for whom; conveys a subset of the grantor's own authority
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: grant_id
     type: VARCHAR(80)
@@ -43,10 +43,10 @@ columns:
   - name: revoked_at
     type: TIMESTAMP
     nullable: true
-primary_key: [tenant_id, grant_id]
+primary_key: [partner_id, grant_id]
 foreign_keys:
   - name: delegation_grants
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
@@ -56,15 +56,15 @@ foreign_keys:
       table: user_account
       columns: [id]
   - name: grantor_delegation_grants
-    columns: [tenant_id, grantor_agent_id]
+    columns: [partner_id, grantor_agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
   - name: grantee_delegation_grants
-    columns: [tenant_id, grantee_agent_id]
+    columns: [partner_id, grantee_agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
   - name: authorized_delegation_grants
     columns: [granted_by]
     references:
@@ -77,7 +77,7 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: delegation_grant_grantee_ix
-    columns: [tenant_id, grantee_kind, grantee_agent_id]
+    columns: [partner_id, grantee_kind, grantee_agent_id]
 checks:
   - name: delegation_grant_grantor_ck
     expression: (grantor_user_id IS NULL) <> (grantor_agent_id IS NULL)

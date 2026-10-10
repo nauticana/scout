@@ -28,32 +28,32 @@ INSERT INTO agent_tenant (partner_id, tenant_key, home_region)
 VALUES (?, ?, ?)
 ON CONFLICT (partner_id) DO NOTHING`,
 	qProvisionType: `
-INSERT INTO agent_type (tenant_id, agent_type_id, display_name)
+INSERT INTO agent_type (partner_id, agent_type_id, display_name)
 VALUES (?, ?, ?)
-ON CONFLICT (tenant_id, agent_type_id) DO NOTHING`,
+ON CONFLICT (partner_id, agent_type_id) DO NOTHING`,
 	qProvisionProfile: `
-INSERT INTO agent_profile (tenant_id, agent_id, agent_type_id, display_name, state_code)
+INSERT INTO agent_profile (partner_id, agent_id, agent_type_id, display_name, state_code)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id) DO NOTHING`,
+ON CONFLICT (partner_id, agent_id) DO NOTHING`,
 	qProvisionDraft: `
-INSERT INTO agent_draft (tenant_id, agent_id, enabled, require_approval,
+INSERT INTO agent_draft (partner_id, agent_id, enabled, require_approval,
        text_model_provider, text_model_id, image_model_provider, image_model_id,
        video_model_provider, video_model_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id) DO NOTHING`,
+ON CONFLICT (partner_id, agent_id) DO NOTHING`,
 	qProvisionAccess: `
-INSERT INTO tenant_model_access (tenant_id, provider_id, model_id, priority_class_code)
+INSERT INTO tenant_model_access (partner_id, provider_id, model_id, priority_class_code)
 VALUES (?, ?, ?, 'standard')
-ON CONFLICT (tenant_id, provider_id, model_id) DO NOTHING`,
+ON CONFLICT (partner_id, provider_id, model_id) DO NOTHING`,
 	// A scope the product already placed elsewhere in its tree is left where it is.
 	qProvisionScope: `
-INSERT INTO config_scope (tenant_id, scope_id, parent_scope_id, scope_kind_code, display_name)
+INSERT INTO config_scope (partner_id, scope_id, parent_scope_id, scope_kind_code, display_name)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, scope_id) DO NOTHING`,
+ON CONFLICT (partner_id, scope_id) DO NOTHING`,
 	qProvisionAlias: `
-INSERT INTO agent_alias (tenant_id, alias_id, agent_type_id, agent_id)
+INSERT INTO agent_alias (partner_id, alias_id, agent_type_id, agent_id)
 VALUES (?, ?, ?, ?)
-ON CONFLICT (tenant_id, alias_id) DO NOTHING`,
+ON CONFLICT (partner_id, alias_id) DO NOTHING`,
 	qRuntimePolicyInsert:  runtimePolicyQueries[qRuntimePolicyInsert],
 	qRuntimePolicyGet:     runtimePolicyQueries[qRuntimePolicyGet],
 	qRuntimePolicyDefault: runtimePolicyQueries[qRuntimePolicyDefault],

@@ -24,27 +24,27 @@ const (
 
 var aliasQueries = map[string]string{
 	qAliasLock: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-	qAliasGet:  `SELECT active_version FROM knowledge_base_alias WHERE tenant_id = ? AND knowledge_base_id = ?`,
+	qAliasGet:  `SELECT active_version FROM knowledge_base_alias WHERE partner_id = ? AND knowledge_base_id = ?`,
 	qAliasInsert: `
-INSERT INTO knowledge_base_alias (tenant_id, knowledge_base_id, active_version, previous_version, swapped_at)
+INSERT INTO knowledge_base_alias (partner_id, knowledge_base_id, active_version, previous_version, swapped_at)
 VALUES (?, ?, ?, NULL, CURRENT_TIMESTAMP)`,
 	qAliasSwap: `
 UPDATE knowledge_base_alias
    SET previous_version = active_version, active_version = ?, swapped_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND knowledge_base_id = ? AND active_version = ?
+ WHERE partner_id = ? AND knowledge_base_id = ? AND active_version = ?
 RETURNING previous_version`,
 	// Documents fully rebuilt into the new generation follow the alias in the same
 	// transaction; one still awaiting its vectors (an unmarked chunk) and the rest keep their pointer.
 	qAliasRepointManifest: `
 UPDATE knowledge_document_manifest manifest
    SET superseded_version = manifest.active_version, gc_pending = TRUE, active_version = ?, activated_at = CURRENT_TIMESTAMP
- WHERE manifest.tenant_id = ? AND manifest.knowledge_base_id = ? AND manifest.tombstoned = FALSE AND manifest.gc_pending = FALSE
+ WHERE manifest.partner_id = ? AND manifest.knowledge_base_id = ? AND manifest.tombstoned = FALSE AND manifest.gc_pending = FALSE
    AND manifest.active_version <> ?
    AND EXISTS (SELECT 1 FROM knowledge_document doc
-                WHERE doc.tenant_id = manifest.tenant_id AND doc.knowledge_base_id = manifest.knowledge_base_id
+                WHERE doc.partner_id = manifest.partner_id AND doc.knowledge_base_id = manifest.knowledge_base_id
                   AND doc.knowledge_version = ? AND doc.document_id = manifest.document_id)
    AND NOT EXISTS (SELECT 1 FROM knowledge_chunk chunk
-                    WHERE chunk.tenant_id = manifest.tenant_id AND chunk.knowledge_base_id = manifest.knowledge_base_id
+                    WHERE chunk.partner_id = manifest.partner_id AND chunk.knowledge_base_id = manifest.knowledge_base_id
                       AND chunk.knowledge_version = ? AND chunk.document_id = manifest.document_id AND chunk.vector_ref = '')`,
 }
 

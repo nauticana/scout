@@ -374,7 +374,7 @@ flowchart RL
 | Pending human decisions | `turn_approval_request` / `turn_approval_decision` |
 | Provider credentials | keel secret provider |
 
-All relational identifiers are lowercase. Tenant-owned relations carry `tenant_id` through their primary or foreign keys. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
+All relational identifiers are lowercase. Tenant-owned relations carry `partner_id` in every foreign key toward `agent_tenant`, so keel's generic CRUD treats each as partner-specific and pins it to the caller's partner at any depth; `agent_ops_event` reaches `business_partner` directly. Go types keep the name `TenantID` for the same value. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
 
 `execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
 
@@ -432,18 +432,18 @@ erDiagram
         varchar home_region
     }
     tenant_runtime_policy {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar policy_version PK
         varchar priority_class_code FK
         varchar capacity_class_code
         char cost_currency_code FK
     }
     tenant_current_policy {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar policy_version FK
     }
     tenant_quota {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar quota_name PK
         char currency_code FK
     }
@@ -495,14 +495,14 @@ erDiagram
         bigint search_minor_units
     }
     tenant_model_access {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar provider_id PK,FK
         varchar model_id PK,FK
         varchar priority_class_code FK
     }
 ```
 
-`tenant_runtime_policy`, `tenant_quota`, and `model_price` reference `currency`; those edges are omitted from the diagram to keep the layout readable. Policies are immutable by `(tenant_id, policy_version)`, and `tenant_current_policy` changes only the active pointer.
+`tenant_runtime_policy`, `tenant_quota`, and `model_price` reference `currency`; those edges are omitted from the diagram to keep the layout readable. Policies are immutable by `(partner_id, policy_version)`, and `tenant_current_policy` changes only the active pointer.
 
 ## Agent, tool, and execution control plane
 
@@ -531,20 +531,20 @@ erDiagram
         bigint partner_id PK,FK
     }
     agent_profile {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK
         varchar agent_kind
         varchar display_name
         boolean is_active
     }
     guardrail_config {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar guardrail_version PK
         text rules
     }
     agent_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK
         varchar guardrail_version FK
@@ -554,26 +554,26 @@ erDiagram
         bigint published_by FK
     }
     agent_deployment {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar stable_version FK
         varchar canary_version FK
         smallint canary_percentage
     }
     tool_profile {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar tool_id PK
         varchar display_name
     }
     tool_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar tool_id PK,FK
         varchar tool_version PK
         text endpoint_uri
         text credential_ref
     }
     tool_egress_rule {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar tool_id PK,FK
         varchar tool_version PK,FK
         varchar protocol PK
@@ -581,33 +581,34 @@ erDiagram
         int port PK
     }
     agent_tool_binding {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         varchar tool_id PK,FK
         varchar tool_version FK
     }
     execution_graph {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         char graph_digest
     }
     execution_step {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar agent_id FK
         varchar agent_version FK
         varchar step_id
         varchar step_kind_code
     }
     execution_graph_entry {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         bigint execution_step_id FK,UK
     }
     execution_transition {
+        bigint partner_id PK,FK
         bigint source_step_id PK,FK
         varchar transition_key PK
         bigint target_step_id FK
@@ -635,12 +636,12 @@ erDiagram
     skill_catalog_version ||--o{ skill_version : skill_catalog_derivations
 
     skill_profile {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar skill_id PK
         varchar display_name
     }
     skill_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar skill_id PK,FK
         varchar skill_version PK
         varchar summary
@@ -652,7 +653,7 @@ erDiagram
         varchar origin_skill_version FK
     }
     skill_requirement {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar skill_id PK,FK
         varchar skill_version PK,FK
         varchar required_skill_id PK,FK
@@ -681,20 +682,20 @@ erDiagram
         text request
     }
     skill_tool {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar skill_id PK,FK
         varchar skill_version PK,FK
         varchar tool_id PK,FK
     }
     skill_example {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar skill_id PK,FK
         varchar skill_version PK,FK
         int example_no PK
         text request
     }
     agent_skill_binding {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         varchar skill_id PK,FK
@@ -721,7 +722,7 @@ erDiagram
     }
     agent_studio_event {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar agent_id FK
         varchar event
         text detail
@@ -729,12 +730,12 @@ erDiagram
         timestamp occurred_at
     }
     agent_profile {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK
         varchar agent_kind
     }
     agent_draft {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         bigint draft_revision
         boolean enabled
@@ -742,7 +743,7 @@ erDiagram
         text extension
     }
     agent_alias {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar alias_id PK
         varchar agent_kind FK
         varchar agent_id FK
@@ -776,7 +777,7 @@ erDiagram
     authorization_role ||--o{ agent_permission : permitted_agents
 
     agent_permission {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar role_id PK,FK
         timestamp begda PK
@@ -801,13 +802,13 @@ erDiagram
     agent_version ||--o| effective_agent_release : effective_agent_releases
 
     scope {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar scope_id PK
         varchar parent_scope_id FK
         varchar scope_kind_code FK
     }
     config_scope_binding {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar scope_id PK,FK
         varchar resource_kind_code PK,FK
         varchar resource_id PK
@@ -820,7 +821,7 @@ erDiagram
         char value_digest
     }
     effective_agent_release {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         varchar scope_id FK
@@ -856,13 +857,13 @@ erDiagram
         timestamp updated_at
     }
     tenant_restriction_layer {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         char layer_digest PK
         text denials
         text guardrail_rules
     }
     tenant_current_restriction {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         char layer_digest FK
         timestamp updated_at
     }
@@ -898,7 +899,7 @@ erDiagram
 
     turn_approval_request {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar request_id UK
         bigint execution_step_id UK
         varchar principal_kind
@@ -914,7 +915,7 @@ erDiagram
     }
     turn_approval_decision {
         bigint turn_approval_request_id PK,FK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar status_code FK
         bigint decider_user_id FK
         varchar decider_agent_id FK
@@ -923,7 +924,7 @@ erDiagram
         char proposed_digest
     }
     tool_credential_binding {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar principal_kind PK
         varchar principal_id PK
         varchar tool_id PK,FK
@@ -938,7 +939,7 @@ erDiagram
     }
     audit_event {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar category
         varchar principal_kind
         varchar principal_id
@@ -954,7 +955,7 @@ erDiagram
     }
 ```
 
-`turn_approval_request` is unique on `(tenant_id, request_id, execution_step_id)`, so opening a request is
+`turn_approval_request` is unique on `(partner_id, request_id, execution_step_id)`, so opening a request is
 idempotent and a replayed turn re-attaches instead of asking a person the same question twice.
 `proposed_digest` binds a verdict to the exact action: resolving matches on it, so approving a
 changed action updates nothing. `turn_approval_decision` records the decider through three nullable
@@ -973,7 +974,7 @@ evidence in object storage. `audit_decision_outcome` classifies every row, and t
 `contract.AuditQuery`, always bound to one tenant. [doc/governance.md](governance.md) has the rules.
 
 `mcp_confirmation` holds one MCP tool call until a person confirms it. A partial unique index on
-`(tenant_id, tool, payload_digest)` over the open statuses (`mcp_confirmation_status.is_open`) keeps
+`(partner_id, tool, payload_digest)` over the open statuses (`mcp_confirmation_status.is_open`) keeps
 one open confirmation per action. Every transition is a conditional update on `status_code`, and a
 run also on `fence`, so a stale executor changes nothing; `lease_until` is set exactly while
 `executing`, from the store clock. `approval_id` names the keel `approval_request` that alone may
@@ -997,7 +998,7 @@ erDiagram
     agent_work_item ||--o{ agent_work_item : child_work_items
 
     agent_type_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_type_id PK,FK
         varchar type_version PK
         text definition
@@ -1005,14 +1006,14 @@ erDiagram
         bigint published_by FK
     }
     agent_capability_package {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar package_id PK
         varchar package_version PK
         text payload
         char payload_digest
     }
     agent_type_capability {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_type_id PK,FK
         varchar type_version PK,FK
         varchar package_id PK,FK
@@ -1020,7 +1021,7 @@ erDiagram
         boolean is_required
     }
     agent_profile {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK
         varchar agent_type_id FK
         varchar agent_type_version FK
@@ -1030,7 +1031,7 @@ erDiagram
         timestamp state_changed_at
     }
     agent_version_quarantine {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         varchar reason
@@ -1038,7 +1039,7 @@ erDiagram
         timestamp lifted_at
     }
     delegation_grant {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar grant_id PK
         varchar grantor_kind
         bigint grantor_user_id FK
@@ -1053,7 +1054,7 @@ erDiagram
     }
     agent_work_item {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar assignee_id
         varchar requester_id
         varchar grant_id FK
@@ -1073,7 +1074,7 @@ change. `agent_version_quarantine` withdraws one version from all traffic withou
 deployment pointers that would otherwise select it.
 
 `delegation_grant` records who may assign or approve what, for how deep, under what budget, and until
-when. `agent_work_item` is unique on `(tenant_id, request_id)` so a redelivered delegation re-attaches
+when. `agent_work_item` is unique on `(partner_id, request_id)` so a redelivered delegation re-attaches
 rather than fanning out, and `parent_work_item_id` gives the chain that cycle detection walks.
 [doc/organization.md](organization.md) has the rules.
 
@@ -1094,24 +1095,24 @@ erDiagram
         bigint partner_id PK,FK
     }
     agent_version {
-        bigint tenant_id PK
+        bigint partner_id PK
         varchar agent_id PK
         varchar agent_version PK
     }
     knowledge_base {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK
         varchar display_name
     }
     knowledge_base_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version PK
         varchar embedding_provider
         varchar embedding_model
     }
     knowledge_document {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version PK,FK
         varchar document_id PK
@@ -1119,7 +1120,7 @@ erDiagram
         char content_digest
     }
     knowledge_chunk {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version PK,FK
         varchar document_id PK,FK
@@ -1129,7 +1130,7 @@ erDiagram
         text entitlements
     }
     knowledge_chunk_vector {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version PK,FK
         varchar document_id PK,FK
@@ -1142,7 +1143,7 @@ erDiagram
         bool tombstoned
     }
     agent_knowledge_binding {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         varchar knowledge_base_id PK,FK
@@ -1151,7 +1152,7 @@ erDiagram
         bigint max_whole_tokens
     }
     agent_knowledge_document {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar agent_version PK,FK
         varchar knowledge_base_id PK,FK
@@ -1177,22 +1178,22 @@ erDiagram
     knowledge_base_version ||--o{ knowledge_base_alias : active_knowledge_base_aliases
 
     knowledge_base {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK
     }
     knowledge_base_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version PK
     }
     knowledge_document {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version PK,FK
         varchar document_id PK
     }
     knowledge_document_manifest {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar document_id PK
         varchar active_version FK
@@ -1205,7 +1206,7 @@ erDiagram
         bool gc_pending
     }
     knowledge_base_alias {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK,FK
         varchar active_version FK
         varchar previous_version
@@ -1213,7 +1214,7 @@ erDiagram
     }
     knowledge_source_event {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar knowledge_base_id FK
         varchar object_id
         varchar source_version
@@ -1234,7 +1235,7 @@ erDiagram
 
     agent_ops_event {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar event
         text detail
         timestamp occurred_at
@@ -1277,7 +1278,7 @@ erDiagram
         bigint partner_id PK,FK
     }
     agent_version {
-        bigint tenant_id PK
+        bigint partner_id PK
         varchar agent_id PK
         varchar agent_version PK
     }
@@ -1285,14 +1286,14 @@ erDiagram
         bigint id PK
     }
     agent_conversation {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar conversation_id PK
         varchar agent_id FK
         varchar agent_version FK
         varchar end_user_ref
     }
     conversation_turn {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar conversation_id PK,FK
         bigint turn_no PK
         varchar request_id UK
@@ -1306,7 +1307,7 @@ erDiagram
         boolean is_terminal
     }
     conversation_turn_detail {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar conversation_id PK,FK
         bigint turn_no PK,FK
         varchar task_kind
@@ -1318,7 +1319,7 @@ erDiagram
         bigint staged_cost_minor_units
     }
     step_checkpoint {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar conversation_id PK,FK
         bigint turn_no PK,FK
         int step_no PK
@@ -1327,21 +1328,21 @@ erDiagram
         text state_uri
     }
     session_snapshot {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar conversation_id PK,FK
         bigint latest_turn_no FK
         int latest_step_no FK
         bigint revision
     }
     step_idempotency {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar request_id PK,FK
         bigint execution_step_id PK,FK
         varchar status_code FK
         text result_uri
     }
     step_loop_entry {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar request_id PK,FK
         bigint execution_step_id PK,FK
         integer entry_no PK
@@ -1353,7 +1354,7 @@ erDiagram
         boolean is_terminal
     }
     budget_reservation {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar reservation_id PK
         varchar request_id FK
         bigint attempt_no
@@ -1368,7 +1369,7 @@ erDiagram
     }
     usage_event {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar conversation_id FK
         bigint turn_no FK
         varchar category_code FK
@@ -1379,7 +1380,7 @@ erDiagram
     }
     agent_run {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar agent_id FK
         varchar agent_version FK
         varchar task_kind
@@ -1389,7 +1390,7 @@ erDiagram
     }
     turn_queue {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar request_id
         varchar conversation_id FK
         varchar agent_id
@@ -1409,7 +1410,7 @@ erDiagram
     }
     turn_dead_letter {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar request_id FK
         bigint queue_id FK
         text reason
@@ -1455,7 +1456,7 @@ erDiagram
         bigint partner_id PK,FK
     }
     agent_version {
-        bigint tenant_id PK
+        bigint partner_id PK
         varchar agent_id PK
         varchar agent_version PK
     }
@@ -1464,7 +1465,7 @@ erDiagram
         smallint rollout_order UK
     }
     tenant_ring_member {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar ring_code FK
     }
     platform_release {
@@ -1482,7 +1483,7 @@ erDiagram
         boolean is_terminal
     }
     contract_test_case {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar test_case_id PK
         varchar agent_id FK
         varchar agent_version FK
@@ -1494,13 +1495,13 @@ erDiagram
     }
     contract_test_result {
         bigint run_id PK,FK
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar test_case_id PK,FK
         boolean passed
     }
     audit_event {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar category
         text payload_uri
     }
@@ -1568,12 +1569,12 @@ erDiagram
     platform_release ||--o{ conversation_release : platform_conversation_releases
 
     agent_version {
-        bigint tenant_id PK
+        bigint partner_id PK
         varchar agent_id PK
         varchar agent_version PK
     }
     agent_conversation {
-        bigint tenant_id PK
+        bigint partner_id PK
         varchar conversation_id PK
         varchar agent_version FK
     }
@@ -1582,7 +1583,7 @@ erDiagram
     }
     agent_version_pin {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar agent_id FK
         varchar agent_version FK
         varchar scope_code
@@ -1597,7 +1598,7 @@ erDiagram
         timestamp expires_at
     }
     experiment_cohort {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar agent_id PK,FK
         varchar experiment_id PK
         varchar agent_version FK
@@ -1605,7 +1606,7 @@ erDiagram
         varchar salt
     }
     conversation_release {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar conversation_id PK,FK
         varchar platform_version FK
         timestamp resolved_at
@@ -1650,24 +1651,24 @@ erDiagram
         bigint partner_id PK,FK
     }
     agent_version {
-        bigint tenant_id PK
+        bigint partner_id PK
         varchar agent_id PK
         varchar agent_version PK
     }
     knowledge_base {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar knowledge_base_id PK
     }
     platform_release {
         varchar platform_version PK
     }
     golden_set {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar golden_set_id PK
         varchar name
     }
     golden_set_version {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar golden_set_id PK,FK
         varchar set_version PK
         char dataset_revision
@@ -1675,7 +1676,7 @@ erDiagram
         timestamp frozen_at
     }
     golden_example {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar golden_set_id PK,FK
         varchar set_version PK,FK
         varchar example_id PK
@@ -1690,7 +1691,7 @@ erDiagram
         char payload_digest
     }
     golden_query {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar golden_set_id PK,FK
         varchar set_version PK,FK
         varchar query_id PK
@@ -1704,7 +1705,7 @@ erDiagram
     }
     evaluation_manifest {
         char manifest_id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         varchar agent_id FK
         varchar candidate_agent_version FK
         varchar baseline_agent_version FK
@@ -1716,7 +1717,7 @@ erDiagram
     }
     evaluation_run {
         bigint id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         char manifest_id FK
         varchar scope_code
         varchar status_code
@@ -1736,7 +1737,7 @@ erDiagram
     }
     gate_decision {
         char decision_id PK
-        bigint tenant_id FK
+        bigint partner_id FK
         char manifest_id FK
         varchar platform_version FK
         varchar verdict_code
@@ -1757,7 +1758,7 @@ erDiagram
         varchar verdict
     }
     evaluation_sample {
-        bigint tenant_id PK,FK
+        bigint partner_id PK,FK
         varchar sample_id PK
         varchar request_id
         varchar agent_id FK

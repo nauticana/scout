@@ -1,7 +1,7 @@
 table: knowledge_document_manifest
 comment: Active-version pointer and tombstone for one knowledge document
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: knowledge_base_id
     type: VARCHAR(80)
@@ -30,21 +30,21 @@ columns:
   - name: gc_pending
     type: BOOLEAN
     default: FALSE
-primary_key: [tenant_id, knowledge_base_id, document_id]
+primary_key: [partner_id, knowledge_base_id, document_id]
 foreign_keys:
   - name: knowledge_document_manifests
-    columns: [tenant_id, knowledge_base_id]
+    columns: [partner_id, knowledge_base_id]
     references:
       table: knowledge_base
-      columns: [tenant_id, knowledge_base_id]
+      columns: [partner_id, knowledge_base_id]
   - name: active_knowledge_document_manifests
-    columns: [tenant_id, knowledge_base_id, active_version, document_id]
+    columns: [partner_id, knowledge_base_id, active_version, document_id]
     references:
       table: knowledge_document
-      columns: [tenant_id, knowledge_base_id, knowledge_version, document_id]
+      columns: [partner_id, knowledge_base_id, knowledge_version, document_id]
 indexes:
   - name: knowledge_document_manifest_gc_ix
-    columns: [tenant_id, knowledge_base_id, gc_pending]
+    columns: [partner_id, knowledge_base_id, gc_pending]
 checks:
   - name: knowledge_document_manifest_digest_ck
     expression: CHAR_LENGTH(content_digest) = 64

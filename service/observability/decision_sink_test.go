@@ -28,7 +28,7 @@ func (fake *decisionQueryFake) Query(_ context.Context, _ string, args ...any) (
 }
 
 func TestTableAuditSinkKeysADecisionByItsScopeSoReplayWritesItOnce(t *testing.T) {
-	if !strings.Contains(decisionQueries[qDecisionInsert], "ON CONFLICT (tenant_id, decision_key) DO NOTHING") {
+	if !strings.Contains(decisionQueries[qDecisionInsert], "ON CONFLICT (partner_id, decision_key) DO NOTHING") {
 		t.Fatal("the insert must keep the first record of a decision key")
 	}
 	query := &decisionQueryFake{}

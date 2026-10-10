@@ -1,7 +1,7 @@
 table: agent_conversation
 comment: Tenant conversation pinned to an agent version
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: conversation_id
     type: VARCHAR(120)
@@ -18,23 +18,23 @@ columns:
   - name: closed_at
     type: TIMESTAMP
     nullable: true
-primary_key: [tenant_id, conversation_id]
+primary_key: [partner_id, conversation_id]
 foreign_keys:
   - name: conversations
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]
   - name: agent_version_conversations
-    columns: [tenant_id, agent_id, agent_version]
+    columns: [partner_id, agent_id, agent_version]
     references:
       table: agent_version
-      columns: [tenant_id, agent_id, agent_version]
+      columns: [partner_id, agent_id, agent_version]
 indexes:
   - name: agent_conversation_created_ix
-    columns: [tenant_id, created_at]
+    columns: [partner_id, created_at]
   - name: agent_conversation_user_ix
-    columns: [tenant_id, end_user_ref, created_at]
+    columns: [partner_id, end_user_ref, created_at]
     where: end_user_ref IS NOT NULL
 checks:
   - name: agent_conversation_dates_ck

@@ -1,7 +1,7 @@
 table: agent_permission
 comment: Agent-to-role assignments; mirrors keel user_permission so both principal kinds evaluate through one authorization model
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: agent_id
     type: VARCHAR(80)
@@ -16,13 +16,13 @@ columns:
   - name: granted_by
     type: BIGINT
     nullable: true
-primary_key: [tenant_id, agent_id, role_id, begda]
+primary_key: [partner_id, agent_id, role_id, begda]
 foreign_keys:
   - name: agent_permissions
-    columns: [tenant_id, agent_id]
+    columns: [partner_id, agent_id]
     references:
       table: agent_profile
-      columns: [tenant_id, agent_id]
+      columns: [partner_id, agent_id]
   - name: permitted_agents
     columns: [role_id]
     references:

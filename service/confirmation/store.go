@@ -57,7 +57,7 @@ const (
 	MaxBatch     = 1000
 )
 
-const confirmationColumns = `id, tenant_id, maker_kind, maker_id, COALESCE(client_ref, ''), tool, COALESCE(payload, ''),
+const confirmationColumns = `id, partner_id, maker_kind, maker_id, COALESCE(client_ref, ''), tool, COALESCE(payload, ''),
        payload_digest, COALESCE(preview, ''), requirements, channel_code, status_code, approval_required, COALESCE(approval_id, 0),
        expires_at, created_at, decided_at, COALESCE(decider_kind, ''), COALESCE(decider_id, ''),
        COALESCE(decision_note, ''), fence, attempts, COALESCE(result, ''), COALESCE(error_text, ''), completed_at,
@@ -72,31 +72,31 @@ const openStatuses = `('pending', 'approved', 'executing', 'unknown')`
 var confirmationQueries = map[string]string{
 	qConfirmInsert: `
 INSERT INTO mcp_confirmation
-       (id, tenant_id, maker_kind, maker_id, client_ref, tool, payload, payload_digest, preview, requirements,
+       (id, partner_id, maker_kind, maker_id, client_ref, tool, payload, payload_digest, preview, requirements,
         channel_code, approval_required, expires_at)
 VALUES (nextval('mcp_confirmation_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         CURRENT_TIMESTAMP + CAST(? AS INTEGER) * INTERVAL '1 second')
-ON CONFLICT (tenant_id, tool, payload_digest) WHERE status_code IN ` + openStatuses + ` DO NOTHING
+ON CONFLICT (partner_id, tool, payload_digest) WHERE status_code IN ` + openStatuses + ` DO NOTHING
 RETURNING id`,
 	qConfirmOpen: `SELECT ` + confirmationColumns + ` FROM mcp_confirmation
- WHERE tenant_id = ? AND tool = ? AND payload_digest = ? AND status_code IN ` + openStatuses,
-	qConfirmGet: `SELECT ` + confirmationColumns + ` FROM mcp_confirmation WHERE tenant_id = ? AND id = ?`,
+ WHERE partner_id = ? AND tool = ? AND payload_digest = ? AND status_code IN ` + openStatuses,
+	qConfirmGet: `SELECT ` + confirmationColumns + ` FROM mcp_confirmation WHERE partner_id = ? AND id = ?`,
 	qConfirmNotified: `
 UPDATE mcp_confirmation SET notification_event_id = ?
- WHERE tenant_id = ? AND id = ? AND notification_event_id IS NULL`,
+ WHERE partner_id = ? AND id = ? AND notification_event_id IS NULL`,
 	qConfirmAttach: `
 UPDATE mcp_confirmation SET approval_id = ?
- WHERE tenant_id = ? AND id = ? AND status_code = 'pending' AND approval_required AND approval_id IS NULL
+ WHERE partner_id = ? AND id = ? AND status_code = 'pending' AND approval_required AND approval_id IS NULL
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING id`,
 	qConfirmAbandon: `
 UPDATE mcp_confirmation SET status_code = 'failed', error_text = ?, completed_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND id = ? AND status_code = 'pending'
+ WHERE partner_id = ? AND id = ? AND status_code = 'pending'
 RETURNING id`,
 	qConfirmDecide: `
 UPDATE mcp_confirmation
    SET status_code = ?, decided_at = CURRENT_TIMESTAMP, decider_kind = ?, decider_id = ?, decision_note = ?
- WHERE tenant_id = ? AND id = ? AND status_code = 'pending' AND approval_id IS NULL
+ WHERE partner_id = ? AND id = ? AND status_code = 'pending' AND approval_id IS NULL
    AND NOT approval_required
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING id`,
@@ -104,16 +104,16 @@ RETURNING id`,
 	qConfirmDecideApproval: `
 UPDATE mcp_confirmation
    SET status_code = ?, decided_at = CURRENT_TIMESTAMP, decider_kind = ?, decider_id = ?, decision_note = ?
- WHERE tenant_id = ? AND id = ? AND approval_id = ? AND status_code = 'pending'
+ WHERE partner_id = ? AND id = ? AND approval_id = ? AND status_code = 'pending'
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING id`,
 	qConfirmWithdraw: `
 UPDATE mcp_confirmation
    SET status_code = 'withdrawn', decided_at = CURRENT_TIMESTAMP, decider_kind = maker_kind, decider_id = maker_id
- WHERE tenant_id = ? AND id = ? AND maker_kind = ? AND maker_id = ? AND status_code = 'pending'
+ WHERE partner_id = ? AND id = ? AND maker_kind = ? AND maker_id = ? AND status_code = 'pending'
 RETURNING COALESCE(approval_id, 0)`,
 	qConfirmApproved: `
-SELECT tenant_id, id FROM mcp_confirmation
+SELECT partner_id, id FROM mcp_confirmation
  WHERE status_code = 'approved'
  ORDER BY decided_at, id
  LIMIT ?`,
@@ -121,17 +121,17 @@ SELECT tenant_id, id FROM mcp_confirmation
 UPDATE mcp_confirmation
    SET status_code = 'executing', fence = fence + 1, attempts = attempts + 1,
        lease_until = CURRENT_TIMESTAMP + CAST(? AS INTEGER) * INTERVAL '1 second'
- WHERE tenant_id = ? AND id = ? AND status_code = 'approved'
+ WHERE partner_id = ? AND id = ? AND status_code = 'approved'
 RETURNING fence`,
 	qConfirmRenew: `
 UPDATE mcp_confirmation SET lease_until = CURRENT_TIMESTAMP + CAST(? AS INTEGER) * INTERVAL '1 second'
- WHERE tenant_id = ? AND id = ? AND fence = ? AND status_code = 'executing'
+ WHERE partner_id = ? AND id = ? AND fence = ? AND status_code = 'executing'
 RETURNING id`,
 	qConfirmComplete: `
 UPDATE mcp_confirmation
    SET status_code = ?, result = ?, error_text = ?, lease_until = NULL,
        completed_at = CASE WHEN ? = 'unknown' THEN NULL ELSE CURRENT_TIMESTAMP END
- WHERE tenant_id = ? AND id = ? AND fence = ? AND status_code = 'executing'
+ WHERE partner_id = ? AND id = ? AND fence = ? AND status_code = 'executing'
 RETURNING id`,
 	qConfirmLapse: `
 UPDATE mcp_confirmation
@@ -146,12 +146,12 @@ UPDATE mcp_confirmation SET status_code = 'expired', decided_at = CURRENT_TIMEST
  WHERE id IN (SELECT id FROM mcp_confirmation
                WHERE status_code = 'pending' AND expires_at <= CURRENT_TIMESTAMP
                ORDER BY expires_at, id LIMIT ? FOR UPDATE SKIP LOCKED)
-RETURNING id, tenant_id, maker_kind, maker_id, tool, COALESCE(approval_id, 0)`,
+RETURNING id, partner_id, maker_kind, maker_id, tool, COALESCE(approval_id, 0)`,
 	qConfirmReconcile: `
 UPDATE mcp_confirmation
    SET status_code = ?, reconciled_at = CURRENT_TIMESTAMP, reconciler_kind = ?, reconciler_id = ?,
        reconcile_note = ?, completed_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND id = ? AND status_code = 'unknown'
+ WHERE partner_id = ? AND id = ? AND status_code = 'unknown'
 RETURNING id`,
 	// The digest and the decision evidence outlive the payload.
 	qConfirmPurge: `
@@ -162,7 +162,7 @@ UPDATE mcp_confirmation SET payload = NULL, preview = NULL, result = NULL, purge
                ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED)
 RETURNING id`,
 	qConfirmList: `SELECT ` + confirmationColumns + ` FROM mcp_confirmation
- WHERE tenant_id = ? AND (status_code IN ` + openStatuses + ` OR created_at >= ?)
+ WHERE partner_id = ? AND (status_code IN ` + openStatuses + ` OR created_at >= ?)
  ORDER BY created_at DESC, id DESC
  LIMIT ?`,
 }

@@ -24,32 +24,32 @@ const (
 )
 
 const manifestColumns = `
-SELECT tenant_id, knowledge_base_id, document_id, active_version, source_version, content_digest, chunker_version,
+SELECT partner_id, knowledge_base_id, document_id, active_version, source_version, content_digest, chunker_version,
        tombstoned, tombstoned_at, activated_at, superseded_version, gc_pending,
        (SELECT COUNT(*) FROM knowledge_chunk chunk
-         WHERE chunk.tenant_id = manifest.tenant_id AND chunk.knowledge_base_id = manifest.knowledge_base_id
+         WHERE chunk.partner_id = manifest.partner_id AND chunk.knowledge_base_id = manifest.knowledge_base_id
            AND chunk.document_id = manifest.document_id AND chunk.knowledge_version = manifest.superseded_version)
   FROM knowledge_document_manifest manifest`
 
 var manifestQueries = map[string]string{
 	qManifestLock: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-	qManifestGet:  manifestColumns + ` WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ?`,
+	qManifestGet:  manifestColumns + ` WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ?`,
 	qManifestInsert: `
-INSERT INTO knowledge_document_manifest (tenant_id, knowledge_base_id, document_id, active_version, source_version, content_digest, chunker_version,
+INSERT INTO knowledge_document_manifest (partner_id, knowledge_base_id, document_id, active_version, source_version, content_digest, chunker_version,
                                          tombstoned, tombstoned_at, activated_at, superseded_version, gc_pending)
 VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, NULL, CURRENT_TIMESTAMP, NULL, FALSE)`,
 	qManifestSwitch: `
 UPDATE knowledge_document_manifest
    SET superseded_version = active_version, gc_pending = TRUE, active_version = ?, source_version = ?, content_digest = ?, chunker_version = ?,
        tombstoned = FALSE, tombstoned_at = NULL, activated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ?`,
 	qManifestTombstone: `
 UPDATE knowledge_document_manifest
    SET tombstoned = TRUE, tombstoned_at = CURRENT_TIMESTAMP, gc_pending = TRUE
- WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ? AND tombstoned = FALSE
+ WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ? AND tombstoned = FALSE
 RETURNING document_id`,
 	qManifestListSuperseded: manifestColumns + `
- WHERE tenant_id = ? AND knowledge_base_id = ? AND gc_pending = TRUE
+ WHERE partner_id = ? AND knowledge_base_id = ? AND gc_pending = TRUE
  ORDER BY activated_at, document_id
  LIMIT ?`,
 }

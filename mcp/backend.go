@@ -41,6 +41,7 @@ type backendTool struct {
 	tool       mcpgo.Tool
 	backend    contract.MCPToolBackend
 	output     *jsonschema.Schema
+	paged      bool
 	onDenied   DeniedFunc
 }
 
@@ -100,6 +101,9 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 		return wrapped, nil
 	}
 	encoded, err := json.Marshal(result.Data)
+	if err == nil && provider.paged {
+		encoded, err = withPagination(encoded, result.Meta)
+	}
 	if err == nil {
 		err = provider.output.ValidateJSON(encoded)
 	}

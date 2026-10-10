@@ -31,37 +31,37 @@ const (
 
 var executionGraphQueries = map[string]string{
 	qGraphInsert: `
-INSERT INTO execution_graph (tenant_id, agent_id, agent_version, graph_digest, compiler_version)
+INSERT INTO execution_graph (partner_id, agent_id, agent_version, graph_digest, compiler_version)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id, agent_version) DO NOTHING
+ON CONFLICT (partner_id, agent_id, agent_version) DO NOTHING
 RETURNING agent_version`,
 	qGraphGet: `
 SELECT g.graph_digest, s.step_id
   FROM execution_graph g
-  JOIN execution_graph_entry e ON e.tenant_id = g.tenant_id AND e.agent_id = g.agent_id AND e.agent_version = g.agent_version
-  JOIN execution_step s ON s.id = e.execution_step_id
- WHERE g.tenant_id = ? AND g.agent_id = ? AND g.agent_version = ?`,
+  JOIN execution_graph_entry e ON e.partner_id = g.partner_id AND e.agent_id = g.agent_id AND e.agent_version = g.agent_version
+  JOIN execution_step s ON s.partner_id = e.partner_id AND s.id = e.execution_step_id
+ WHERE g.partner_id = ? AND g.agent_id = ? AND g.agent_version = ?`,
 	qGraphStepInsert: `
-INSERT INTO execution_step (id, tenant_id, agent_id, agent_version, step_id, step_kind_code, configuration)
+INSERT INTO execution_step (id, partner_id, agent_id, agent_version, step_id, step_kind_code, configuration)
 VALUES (nextval('execution_step_seq'), ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 	qGraphEntryInsert: `
-INSERT INTO execution_graph_entry (tenant_id, agent_id, agent_version, execution_step_id)
+INSERT INTO execution_graph_entry (partner_id, agent_id, agent_version, execution_step_id)
 VALUES (?, ?, ?, ?)`,
 	qGraphEdgeInsert: `
-INSERT INTO execution_transition (source_step_id, transition_key, target_step_id)
-VALUES (?, ?, ?)`,
+INSERT INTO execution_transition (partner_id, source_step_id, transition_key, target_step_id)
+VALUES (?, ?, ?, ?)`,
 	qGraphSteps: `
 SELECT id, step_id, step_kind_code, configuration
   FROM execution_step
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ?
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ?
  ORDER BY id`,
 	qGraphEdges: `
 SELECT source.step_id, target.step_id
   FROM execution_transition t
-  JOIN execution_step source ON source.id = t.source_step_id
-  JOIN execution_step target ON target.id = t.target_step_id
- WHERE source.tenant_id = ? AND source.agent_id = ? AND source.agent_version = ?
+  JOIN execution_step source ON source.partner_id = t.partner_id AND source.id = t.source_step_id
+  JOIN execution_step target ON target.partner_id = t.partner_id AND target.id = t.target_step_id
+ WHERE source.partner_id = ? AND source.agent_id = ? AND source.agent_version = ?
  ORDER BY t.source_step_id, t.transition_key`,
 }
 
@@ -167,7 +167,7 @@ func putGraph(ctx context.Context, tx keelport.QueryService, tenantID int64, gra
 	}
 	for _, step := range graph.Steps {
 		for _, next := range step.NextStepIDs {
-			if _, err = tx.Query(ctx, qGraphEdgeInsert, ids[step.StepID], next, ids[next]); err != nil {
+			if _, err = tx.Query(ctx, qGraphEdgeInsert, tenantID, ids[step.StepID], next, ids[next]); err != nil {
 				return fmt.Errorf("insert transition %s→%s: %w", step.StepID, next, err)
 			}
 		}

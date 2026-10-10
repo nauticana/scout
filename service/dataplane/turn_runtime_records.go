@@ -32,42 +32,42 @@ var turnRecordQueries = map[string]string{
 	qRecordFind: `
 SELECT turn_no, conversation_id, status_code, input_digest, response_uri, response_digest
   FROM conversation_turn
- WHERE tenant_id = ? AND request_id = ?`,
+ WHERE partner_id = ? AND request_id = ?`,
 
 	// A new conversation pins the agent's deployed stable version; an existing one keeps its pin.
 	qRecordConversation: `
-INSERT INTO agent_conversation (tenant_id, conversation_id, agent_id, agent_version, end_user_ref)
-SELECT dep.tenant_id, ?, dep.agent_id, dep.stable_version, ?
+INSERT INTO agent_conversation (partner_id, conversation_id, agent_id, agent_version, end_user_ref)
+SELECT dep.partner_id, ?, dep.agent_id, dep.stable_version, ?
   FROM agent_deployment dep
- WHERE dep.tenant_id = ? AND dep.agent_id = ?
-ON CONFLICT (tenant_id, conversation_id) DO NOTHING`,
+ WHERE dep.partner_id = ? AND dep.agent_id = ?
+ON CONFLICT (partner_id, conversation_id) DO NOTHING`,
 	qRecordPinnedAgent: `
 SELECT agent_id, agent_version
   FROM agent_conversation
- WHERE tenant_id = ? AND conversation_id = ?`,
+ WHERE partner_id = ? AND conversation_id = ?`,
 
 	// The same history row TurnLedger writes, so turn listings include runtime turns.
 	qRecordDetail: `
-INSERT INTO conversation_turn_detail (tenant_id, conversation_id, turn_no, task_kind, input_summary, release_digest)
-SELECT c.tenant_id, c.conversation_id, ?, ?, ?, v.definition_digest
+INSERT INTO conversation_turn_detail (partner_id, conversation_id, turn_no, task_kind, input_summary, release_digest)
+SELECT c.partner_id, c.conversation_id, ?, ?, ?, v.definition_digest
   FROM agent_conversation c
-  JOIN agent_version v ON v.tenant_id = c.tenant_id AND v.agent_id = c.agent_id AND v.agent_version = c.agent_version
- WHERE c.tenant_id = ? AND c.conversation_id = ?
-ON CONFLICT (tenant_id, conversation_id, turn_no) DO NOTHING`,
+  JOIN agent_version v ON v.partner_id = c.partner_id AND v.agent_id = c.agent_id AND v.agent_version = c.agent_version
+ WHERE c.partner_id = ? AND c.conversation_id = ?
+ON CONFLICT (partner_id, conversation_id, turn_no) DO NOTHING`,
 
 	qRecordOpen: `
 INSERT INTO conversation_turn
-       (tenant_id, conversation_id, turn_no, request_id, status_code, input_uri, input_digest)
+       (partner_id, conversation_id, turn_no, request_id, status_code, input_uri, input_digest)
 SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, 'queued', ?, ?
   FROM conversation_turn
- WHERE tenant_id = ? AND conversation_id = ?
+ WHERE partner_id = ? AND conversation_id = ?
 ON CONFLICT DO NOTHING
 RETURNING turn_no`,
 
 	qRecordStart: `
 UPDATE conversation_turn
    SET status_code = 'running', started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
- WHERE tenant_id = ? AND request_id = ? AND status_code = 'queued'
+ WHERE partner_id = ? AND request_id = ? AND status_code = 'queued'
 RETURNING turn_no`,
 
 	// Suspend and Resume move only between live states, so a terminal turn is
@@ -75,13 +75,13 @@ RETURNING turn_no`,
 	qRecordSuspend: `
 UPDATE conversation_turn
    SET status_code = 'suspended'
- WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming')
+ WHERE partner_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming')
 RETURNING turn_no`,
 
 	qRecordResume: `
 UPDATE conversation_turn
    SET status_code = 'queued'
- WHERE tenant_id = ? AND request_id = ? AND status_code IN ('suspended', 'queued')
+ WHERE partner_id = ? AND request_id = ? AND status_code IN ('suspended', 'queued')
 RETURNING turn_no`,
 
 	// The history row, when the turn has one, carries the same error in the same statement.
@@ -90,13 +90,13 @@ WITH failed AS (
 UPDATE conversation_turn
    SET status_code = ?, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
-RETURNING tenant_id, conversation_id, turn_no),
+ WHERE partner_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
+RETURNING partner_id, conversation_id, turn_no),
 mirrored AS (
 UPDATE conversation_turn_detail detail
    SET error_text = ?
   FROM failed
- WHERE detail.tenant_id = failed.tenant_id AND detail.conversation_id = failed.conversation_id AND detail.turn_no = failed.turn_no
+ WHERE detail.partner_id = failed.partner_id AND detail.conversation_id = failed.conversation_id AND detail.turn_no = failed.turn_no
 RETURNING detail.turn_no)
 SELECT turn_no FROM failed`,
 }

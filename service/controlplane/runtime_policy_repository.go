@@ -33,39 +33,39 @@ var runtimePolicyQueries = map[string]string{
 SELECT p.priority_class_code, p.capacity_class_code, p.max_steps, p.max_tokens,
        p.max_cost_minor_units, p.cost_currency_code, p.turn_timeout_ms
   FROM tenant_current_policy c
-  JOIN tenant_runtime_policy p ON p.tenant_id = c.tenant_id AND p.policy_version = c.policy_version
- WHERE c.tenant_id = ?`,
+  JOIN tenant_runtime_policy p ON p.partner_id = c.partner_id AND p.policy_version = c.policy_version
+ WHERE c.partner_id = ?`,
 	qRuntimePolicyInsert: `
-INSERT INTO tenant_runtime_policy (tenant_id, policy_version, priority_class_code, capacity_class_code,
+INSERT INTO tenant_runtime_policy (partner_id, policy_version, priority_class_code, capacity_class_code,
        max_steps, max_tokens, max_cost_minor_units, cost_currency_code, turn_timeout_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, policy_version) DO NOTHING`,
+ON CONFLICT (partner_id, policy_version) DO NOTHING`,
 	qRuntimePolicyGet: `
 SELECT priority_class_code, capacity_class_code, max_steps, max_tokens,
        max_cost_minor_units, cost_currency_code, turn_timeout_ms
   FROM tenant_runtime_policy
- WHERE tenant_id = ? AND policy_version = ?`,
+ WHERE partner_id = ? AND policy_version = ?`,
 	qRuntimePolicyPoint: `
-INSERT INTO tenant_current_policy (tenant_id, policy_version)
+INSERT INTO tenant_current_policy (partner_id, policy_version)
 VALUES (?, ?)
-ON CONFLICT (tenant_id) DO UPDATE SET policy_version = EXCLUDED.policy_version`,
+ON CONFLICT (partner_id) DO UPDATE SET policy_version = EXCLUDED.policy_version`,
 	qRuntimePolicyDefault: `
-INSERT INTO tenant_current_policy (tenant_id, policy_version)
+INSERT INTO tenant_current_policy (partner_id, policy_version)
 VALUES (?, ?)
-ON CONFLICT (tenant_id) DO NOTHING`,
+ON CONFLICT (partner_id) DO NOTHING`,
 	qGuardrailPublish: `
-INSERT INTO guardrail_config (tenant_id, agent_id, guardrail_version, rules, rules_digest)
+INSERT INTO guardrail_config (partner_id, agent_id, guardrail_version, rules, rules_digest)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id, guardrail_version) DO NOTHING`,
+ON CONFLICT (partner_id, agent_id, guardrail_version) DO NOTHING`,
 	qGuardrailGet: `
 SELECT guardrail_version, rules, rules_digest
   FROM guardrail_config
- WHERE tenant_id = ? AND agent_id = ? AND guardrail_version = ?`,
+ WHERE partner_id = ? AND agent_id = ? AND guardrail_version = ?`,
 	qGuardrailPinned: `
 SELECT g.guardrail_version, g.rules, g.rules_digest
   FROM agent_version v
-  JOIN guardrail_config g ON g.tenant_id = v.tenant_id AND g.agent_id = v.agent_id AND g.guardrail_version = v.guardrail_version
- WHERE v.tenant_id = ? AND v.agent_id = ? AND v.agent_version = ?`,
+  JOIN guardrail_config g ON g.partner_id = v.partner_id AND g.agent_id = v.agent_id AND g.guardrail_version = v.guardrail_version
+ WHERE v.partner_id = ? AND v.agent_id = ? AND v.agent_version = ?`,
 }
 
 // TableTenantPolicyRepository publishes immutable runtime policy versions and reads

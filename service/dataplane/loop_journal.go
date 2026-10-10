@@ -28,18 +28,18 @@ var loopJournalQueries = map[string]string{
 	qLoopEntryList: `
 SELECT entry_no, entry_uri, entry_digest
   FROM step_loop_entry
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ?
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
  ORDER BY entry_no
  LIMIT ?`,
 	qLoopEntryInsert: `
-INSERT INTO step_loop_entry (tenant_id, request_id, execution_step_id, entry_no, entry_uri, entry_digest)
+INSERT INTO step_loop_entry (partner_id, request_id, execution_step_id, entry_no, entry_uri, entry_digest)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 RETURNING entry_no`,
 	qLoopEntryGet: `
 SELECT entry_no, entry_uri, entry_digest
   FROM step_loop_entry
- WHERE tenant_id = ? AND request_id = ? AND execution_step_id = ? AND entry_no = ?`,
+ WHERE partner_id = ? AND request_id = ? AND execution_step_id = ? AND entry_no = ?`,
 }
 
 func validateLoopAppend(key domain.LoopKey, entry domain.LoopEntry) error {

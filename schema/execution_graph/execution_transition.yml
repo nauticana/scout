@@ -1,6 +1,8 @@
 table: execution_transition
 comment: Directed transition between execution graph nodes
 columns:
+  - name: partner_id
+    type: BIGINT
   - name: source_step_id
     type: BIGINT
   - name: transition_key
@@ -10,21 +12,21 @@ columns:
   - name: condition_expression
     type: TEXT
     nullable: true
-primary_key: [source_step_id, transition_key]
+primary_key: [partner_id, source_step_id, transition_key]
 foreign_keys:
   - name: outgoing_execution_transitions
-    columns: [source_step_id]
+    columns: [partner_id, source_step_id]
     references:
       table: execution_step
-      columns: [id]
+      columns: [partner_id, id]
   - name: incoming_execution_transitions
-    columns: [target_step_id]
+    columns: [partner_id, target_step_id]
     references:
       table: execution_step
-      columns: [id]
+      columns: [partner_id, id]
 indexes:
   - name: execution_transition_target_ix
-    columns: [target_step_id]
+    columns: [partner_id, target_step_id]
 checks:
   - name: execution_transition_self_ck
     expression: source_step_id <> target_step_id

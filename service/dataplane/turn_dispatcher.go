@@ -26,19 +26,19 @@ const (
 var turnDispatcherQueries = map[string]string{
 	qQueueEnqueue: `
 INSERT INTO turn_queue
-       (id, tenant_id, request_id, conversation_id, agent_id, principal_kind, principal_id, partition_no, priority_rank,
+       (id, partner_id, request_id, conversation_id, agent_id, principal_kind, principal_id, partition_no, priority_rank,
         reply_route, input_uri, input_digest, acting_context, attempt, status_code, available_at, enqueued_at)
-SELECT nextval('turn_queue_seq'), turn.tenant_id, turn.request_id, turn.conversation_id, ?, ?, ?, ?, ?,
+SELECT nextval('turn_queue_seq'), turn.partner_id, turn.request_id, turn.conversation_id, ?, ?, ?, ?, ?,
        ?, turn.input_uri, turn.input_digest, ?, 0, 'queued', ?, ?
   FROM conversation_turn turn
- WHERE turn.tenant_id = ? AND turn.request_id = ? AND turn.conversation_id = ? AND turn.input_digest = ?
+ WHERE turn.partner_id = ? AND turn.request_id = ? AND turn.conversation_id = ? AND turn.input_digest = ?
 ON CONFLICT DO NOTHING
 RETURNING id`,
 
 	qQueueFindByReq: `
 SELECT id, input_digest, status_code
   FROM turn_queue
- WHERE tenant_id = ? AND request_id = ?`,
+ WHERE partner_id = ? AND request_id = ?`,
 
 	// An acknowledged delivery returns to the queue only while its turn is live again: a
 	// suspended turn that was resumed. A settled turn's delivery stays acknowledged.
@@ -46,16 +46,16 @@ SELECT id, input_digest, status_code
 UPDATE turn_queue queued
    SET status_code = 'queued', attempt = 0, available_at = ?, lease_token = NULL, lease_until = NULL,
        worker_id = NULL, last_error = NULL
- WHERE queued.tenant_id = ? AND queued.request_id = ? AND queued.status_code = 'acked'
+ WHERE queued.partner_id = ? AND queued.request_id = ? AND queued.status_code = 'acked'
    AND EXISTS (SELECT 1 FROM conversation_turn turn
-                WHERE turn.tenant_id = queued.tenant_id AND turn.request_id = queued.request_id
+                WHERE turn.partner_id = queued.partner_id AND turn.request_id = queued.request_id
                   AND turn.status_code IN ('queued', 'running', 'streaming'))
 RETURNING queued.id`,
 
 	qQueueTurnDigest: `
 SELECT input_digest, conversation_id
   FROM conversation_turn
- WHERE tenant_id = ? AND request_id = ?`,
+ WHERE partner_id = ? AND request_id = ?`,
 }
 
 // QueueTurnDispatcher writes admitted turns to turn_queue: shuffle-sharded by

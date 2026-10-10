@@ -34,7 +34,7 @@ const (
 var versionPinQueries = map[string]string{
 	qPinInsert: `
 INSERT INTO agent_version_pin
-       (tenant_id, agent_id, agent_version, scope_code, region, reason, owner, approved_by, signature,
+       (partner_id, agent_id, agent_version, scope_code, region, reason, owner, approved_by, signature,
         compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
@@ -42,55 +42,55 @@ RETURNING id`,
 SELECT id, agent_version, scope_code, region, reason, owner, approved_by, signature,
        compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at
   FROM agent_version_pin
- WHERE tenant_id = ? AND agent_id = ? AND effective_at <= ? AND (expires_at IS NULL OR expires_at > ?)
+ WHERE partner_id = ? AND agent_id = ? AND effective_at <= ? AND (expires_at IS NULL OR expires_at > ?)
  ORDER BY CASE scope_code WHEN 'compliance' THEN 0 ELSE 1 END, created_at DESC, id DESC`,
 	qPinExpire: `
 UPDATE agent_version_pin SET expires_at = ?
- WHERE tenant_id = ? AND id = ? AND (expires_at IS NULL OR expires_at > ?)`,
+ WHERE partner_id = ? AND id = ? AND (expires_at IS NULL OR expires_at > ?)`,
 	qCohortsForAgent: `
 SELECT experiment_id, agent_version, percentage, salt
   FROM experiment_cohort
- WHERE tenant_id = ? AND agent_id = ?
+ WHERE partner_id = ? AND agent_id = ?
  ORDER BY experiment_id`,
 	qDeploymentGet: `
 SELECT stable_version, canary_version, canary_percentage
   FROM agent_deployment
- WHERE tenant_id = ? AND agent_id = ?`,
+ WHERE partner_id = ? AND agent_id = ?`,
 	qDeploymentCanary: `
 UPDATE agent_deployment
    SET canary_version = ?, canary_percentage = ?, updated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ? AND stable_version <> ?
+ WHERE partner_id = ? AND agent_id = ? AND stable_version <> ?
 RETURNING stable_version`,
 	qDeploymentPromote: `
 UPDATE agent_deployment
    SET stable_version = ?, canary_version = NULL, canary_percentage = 0, updated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ?
+ WHERE partner_id = ? AND agent_id = ?
 RETURNING stable_version`,
 	qDeploymentClear: `
 UPDATE agent_deployment
    SET canary_version = NULL, canary_percentage = 0, updated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ? AND canary_version IS NOT NULL
+ WHERE partner_id = ? AND agent_id = ? AND canary_version IS NOT NULL
 RETURNING stable_version`,
 	qDeploymentPrevious: `
 SELECT v.agent_version
   FROM agent_version v
-  JOIN agent_deployment dep ON dep.tenant_id = v.tenant_id AND dep.agent_id = v.agent_id
-  JOIN agent_version stable ON stable.tenant_id = dep.tenant_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version
- WHERE v.tenant_id = ? AND v.agent_id = ? AND v.agent_version <> stable.agent_version
+  JOIN agent_deployment dep ON dep.partner_id = v.partner_id AND dep.agent_id = v.agent_id
+  JOIN agent_version stable ON stable.partner_id = dep.partner_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version
+ WHERE v.partner_id = ? AND v.agent_id = ? AND v.agent_version <> stable.agent_version
    AND (v.published_at < stable.published_at OR (v.published_at = stable.published_at AND v.agent_version < stable.agent_version))
  ORDER BY v.published_at DESC, v.agent_version DESC
  LIMIT 1`,
 	qDeploymentRestore: `
 UPDATE agent_deployment
    SET stable_version = ?, canary_version = NULL, canary_percentage = 0, updated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND agent_id = ? AND stable_version = ?
+ WHERE partner_id = ? AND agent_id = ? AND stable_version = ?
 RETURNING stable_version`,
 	// A version is retained while it is deployed, pinned, in a cohort, or held by an open conversation.
 	qVersionRetained: `
-SELECT EXISTS (SELECT 1 FROM agent_deployment WHERE tenant_id = ? AND agent_id = ? AND (stable_version = ? OR canary_version = ?))
-    OR EXISTS (SELECT 1 FROM agent_version_pin WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND (expires_at IS NULL OR expires_at > ?))
-    OR EXISTS (SELECT 1 FROM experiment_cohort WHERE tenant_id = ? AND agent_id = ? AND agent_version = ?)
-    OR EXISTS (SELECT 1 FROM agent_conversation WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND closed_at IS NULL)`,
+SELECT EXISTS (SELECT 1 FROM agent_deployment WHERE partner_id = ? AND agent_id = ? AND (stable_version = ? OR canary_version = ?))
+    OR EXISTS (SELECT 1 FROM agent_version_pin WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND (expires_at IS NULL OR expires_at > ?))
+    OR EXISTS (SELECT 1 FROM experiment_cohort WHERE partner_id = ? AND agent_id = ? AND agent_version = ?)
+    OR EXISTS (SELECT 1 FROM agent_conversation WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND closed_at IS NULL)`,
 }
 
 // TableVersionPinStore is the keel-backed VersionPinStore over agent_version_pin.

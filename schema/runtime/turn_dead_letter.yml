@@ -3,7 +3,7 @@ comment: Turn delivery parked after retry exhaustion, kept for investigation or 
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: request_id
     type: VARCHAR(120)
@@ -26,21 +26,21 @@ sequence:
   column: id
 foreign_keys:
   - name: dead_letter_turns
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
     references:
       table: conversation_turn
-      columns: [tenant_id, request_id]
+      columns: [partner_id, request_id]
   - name: dead_letter_queue_entries
-    columns: [queue_id]
+    columns: [partner_id, queue_id]
     references:
       table: turn_queue
-      columns: [id]
+      columns: [partner_id, id]
 indexes:
   - name: turn_dead_letter_queue_uq
     columns: [queue_id]
     unique: true
   - name: turn_dead_letter_tenant_ix
-    columns: [tenant_id, created_at]
+    columns: [partner_id, created_at]
 checks:
   - name: turn_dead_letter_attempts_ck
     expression: attempts >= 0

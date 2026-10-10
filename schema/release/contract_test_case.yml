@@ -1,7 +1,7 @@
 table: contract_test_case
 comment: Compatibility assertion for a tenant agent version
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: test_case_id
     type: VARCHAR(120)
@@ -18,13 +18,13 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, test_case_id]
+primary_key: [partner_id, test_case_id]
 foreign_keys:
   - name: contract_test_cases
-    columns: [tenant_id, agent_id, agent_version]
+    columns: [partner_id, agent_id, agent_version]
     references:
       table: agent_version
-      columns: [tenant_id, agent_id, agent_version]
+      columns: [partner_id, agent_id, agent_version]
 checks:
   - name: contract_test_case_input_digest_ck
     expression: CHAR_LENGTH(input_digest) = 64

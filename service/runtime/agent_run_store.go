@@ -28,20 +28,20 @@ const (
 
 var agentRunQueries = map[string]string{
 	qRecordAgentRun: `
-INSERT INTO agent_run (id, tenant_id, agent_id, agent_version, task_kind, request_id, status_code)
+INSERT INTO agent_run (id, partner_id, agent_id, agent_version, task_kind, request_id, status_code)
 SELECT nextval('agent_run_seq'), ?, ?, ?, ?, ?, ?
   FROM agent_version
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND (? = '' OR definition_digest = ?)
-ON CONFLICT (tenant_id, request_id) DO NOTHING
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND (? = '' OR definition_digest = ?)
+ON CONFLICT (partner_id, request_id) DO NOTHING
 RETURNING id`,
 	qAgentRunByRequest: `
 SELECT agent_id, agent_version, task_kind, status_code
   FROM agent_run
- WHERE tenant_id = ? AND request_id = ?`,
+ WHERE partner_id = ? AND request_id = ?`,
 	qAgentRuns: `
 SELECT id, agent_id, agent_version, task_kind, request_id, status_code, completed_at
   FROM agent_run
- WHERE tenant_id = ?
+ WHERE partner_id = ?
    AND (? = '' OR agent_id = ?)
    AND (? = '' OR request_id = ?)
    AND (? = '' OR status_code = ?)
@@ -51,7 +51,7 @@ SELECT id, agent_id, agent_version, task_kind, request_id, status_code, complete
 	qAgentLastRun: `
 SELECT agent_id, MAX(completed_at)
   FROM agent_run
- WHERE tenant_id = ? AND status_code = 'completed'
+ WHERE partner_id = ? AND status_code = 'completed'
  GROUP BY agent_id`,
 	qPurgeAgentRuns: `
 DELETE FROM agent_run

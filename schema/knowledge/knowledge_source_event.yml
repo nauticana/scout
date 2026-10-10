@@ -3,7 +3,7 @@ comment: CDC/outbox record of an upstream knowledge source change
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: knowledge_base_id
     type: VARCHAR(80)
@@ -28,13 +28,13 @@ sequence:
   column: id
 foreign_keys:
   - name: knowledge_source_events
-    columns: [tenant_id, knowledge_base_id]
+    columns: [partner_id, knowledge_base_id]
     references:
       table: knowledge_base
-      columns: [tenant_id, knowledge_base_id]
+      columns: [partner_id, knowledge_base_id]
 indexes:
   - name: knowledge_source_event_pending_ix
-    columns: [tenant_id, knowledge_base_id, acked_at, occurred_at]
+    columns: [partner_id, knowledge_base_id, acked_at, occurred_at]
 checks:
   - name: knowledge_source_event_op_ck
     expression: op_code IN ('upsert', 'delete')

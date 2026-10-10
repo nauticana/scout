@@ -1,7 +1,7 @@
 table: budget_reservation
 comment: Token and cost reservation for an admitted request
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: reservation_id
     type: VARCHAR(120)
@@ -37,13 +37,13 @@ columns:
   - name: settled_at
     type: TIMESTAMP
     nullable: true
-primary_key: [tenant_id, reservation_id]
+primary_key: [partner_id, reservation_id]
 foreign_keys:
   - name: budget_reservations
-    columns: [tenant_id, request_id]
+    columns: [partner_id, request_id]
     references:
       table: conversation_turn
-      columns: [tenant_id, request_id]
+      columns: [partner_id, request_id]
   - name: status_budget_reservations
     columns: [status_code]
     references:
@@ -56,13 +56,13 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: budget_reservation_status_ix
-    columns: [tenant_id, status_code, created_at]
+    columns: [partner_id, status_code, created_at]
   - name: budget_reservation_expiry_ix
     columns: [status_code, expires_at]
   - name: budget_reservation_principal_ix
-    columns: [tenant_id, principal_kind, principal_id, status_code]
+    columns: [partner_id, principal_kind, principal_id, status_code]
   - name: budget_reservation_request_attempt_uq
-    columns: [tenant_id, request_id, attempt_no]
+    columns: [partner_id, request_id, attempt_no]
     unique: true
 checks:
   - name: budget_reservation_principal_ck

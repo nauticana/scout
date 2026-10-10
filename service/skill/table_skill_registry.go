@@ -46,59 +46,59 @@ const (
 
 var skillRegistryQueries = map[string]string{
 	qSkillProfileEnsure: `
-INSERT INTO skill_profile (tenant_id, skill_id, display_name)
+INSERT INTO skill_profile (partner_id, skill_id, display_name)
 VALUES (?, ?, ?)
-ON CONFLICT (tenant_id, skill_id) DO NOTHING`,
+ON CONFLICT (partner_id, skill_id) DO NOTHING`,
 	qSkillProfileLock: `
 SELECT display_name
   FROM skill_profile
- WHERE tenant_id = ? AND skill_id = ?
+ WHERE partner_id = ? AND skill_id = ?
    FOR UPDATE`,
 	qSkillToolProfileGet: `
 SELECT tool_id
   FROM tool_profile
- WHERE tenant_id = ? AND tool_id = ?`,
+ WHERE partner_id = ? AND tool_id = ?`,
 	qSkillUseToolSchema: `
 SELECT input_schema
   FROM tool_version
- WHERE tenant_id = ? AND tool_id = ? AND tool_version = ?`,
+ WHERE partner_id = ? AND tool_id = ? AND tool_version = ?`,
 	qSkillVersionGet: `
 SELECT ` + skillVersionColumns + `
   FROM skill_version v
-  JOIN skill_profile p ON p.tenant_id = v.tenant_id AND p.skill_id = v.skill_id
- WHERE v.tenant_id = ? AND v.skill_id = ? AND v.skill_version = ?`,
+  JOIN skill_profile p ON p.partner_id = v.partner_id AND p.skill_id = v.skill_id
+ WHERE v.partner_id = ? AND v.skill_id = ? AND v.skill_version = ?`,
 	qSkillVersionInsert: `
-INSERT INTO skill_version (tenant_id, skill_id, skill_version, summary, instructions, input_schema, golden_set_id, golden_set_version,
+INSERT INTO skill_version (partner_id, skill_id, skill_version, summary, instructions, input_schema, golden_set_id, golden_set_version,
                            origin_skill_id, origin_skill_version)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, skill_id, skill_version) DO NOTHING`,
+ON CONFLICT (partner_id, skill_id, skill_version) DO NOTHING`,
 	qSkillToolList: `
 SELECT tool_id
   FROM skill_tool
- WHERE tenant_id = ? AND skill_id = ? AND skill_version = ?
+ WHERE partner_id = ? AND skill_id = ? AND skill_version = ?
  ORDER BY tool_id`,
 	qSkillToolInsert: `
-INSERT INTO skill_tool (tenant_id, skill_id, skill_version, tool_id)
+INSERT INTO skill_tool (partner_id, skill_id, skill_version, tool_id)
 VALUES (?, ?, ?, ?)
-ON CONFLICT (tenant_id, skill_id, skill_version, tool_id) DO NOTHING`,
+ON CONFLICT (partner_id, skill_id, skill_version, tool_id) DO NOTHING`,
 	qSkillExampleList: `
 SELECT request
   FROM skill_example
- WHERE tenant_id = ? AND skill_id = ? AND skill_version = ?
+ WHERE partner_id = ? AND skill_id = ? AND skill_version = ?
  ORDER BY example_no`,
 	qSkillExampleInsert: `
-INSERT INTO skill_example (tenant_id, skill_id, skill_version, example_no, request)
+INSERT INTO skill_example (partner_id, skill_id, skill_version, example_no, request)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, skill_id, skill_version, example_no) DO NOTHING`,
+ON CONFLICT (partner_id, skill_id, skill_version, example_no) DO NOTHING`,
 	qSkillRequireList: `
 SELECT required_skill_id, required_skill_version
   FROM skill_requirement
- WHERE tenant_id = ? AND skill_id = ? AND skill_version = ?
+ WHERE partner_id = ? AND skill_id = ? AND skill_version = ?
  ORDER BY required_skill_id`,
 	qSkillRequireInsert: `
-INSERT INTO skill_requirement (tenant_id, skill_id, skill_version, required_skill_id, required_skill_version)
+INSERT INTO skill_requirement (partner_id, skill_id, skill_version, required_skill_id, required_skill_version)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, skill_id, skill_version, required_skill_id) DO NOTHING`,
+ON CONFLICT (partner_id, skill_id, skill_version, required_skill_id) DO NOTHING`,
 	qSkillOriginGet: `
 SELECT skill_version
   FROM skill_catalog_version
@@ -106,36 +106,36 @@ SELECT skill_version
 	qSkillBoundList: `
 SELECT ` + skillVersionColumns + `
   FROM agent_skill_binding b
-  JOIN skill_version v ON v.tenant_id = b.tenant_id AND v.skill_id = b.skill_id AND v.skill_version = b.skill_version
-  JOIN skill_profile p ON p.tenant_id = v.tenant_id AND p.skill_id = v.skill_id
- WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
+  JOIN skill_version v ON v.partner_id = b.partner_id AND v.skill_id = b.skill_id AND v.skill_version = b.skill_version
+  JOIN skill_profile p ON p.partner_id = v.partner_id AND p.skill_id = v.skill_id
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ?
  ORDER BY v.skill_id`,
 	qSkillBoundTools: `
 SELECT t.skill_id, t.tool_id
   FROM agent_skill_binding b
-  JOIN skill_tool t ON t.tenant_id = b.tenant_id AND t.skill_id = b.skill_id AND t.skill_version = b.skill_version
- WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
+  JOIN skill_tool t ON t.partner_id = b.partner_id AND t.skill_id = b.skill_id AND t.skill_version = b.skill_version
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ?
  ORDER BY t.skill_id, t.tool_id`,
 	qSkillBoundExamples: `
 SELECT e.skill_id, e.request
   FROM agent_skill_binding b
-  JOIN skill_example e ON e.tenant_id = b.tenant_id AND e.skill_id = b.skill_id AND e.skill_version = b.skill_version
- WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
+  JOIN skill_example e ON e.partner_id = b.partner_id AND e.skill_id = b.skill_id AND e.skill_version = b.skill_version
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ?
  ORDER BY e.skill_id, e.example_no`,
 	qSkillBoundRequires: `
 SELECT r.skill_id, r.required_skill_id, r.required_skill_version
   FROM agent_skill_binding b
-  JOIN skill_requirement r ON r.tenant_id = b.tenant_id AND r.skill_id = b.skill_id AND r.skill_version = b.skill_version
- WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
+  JOIN skill_requirement r ON r.partner_id = b.partner_id AND r.skill_id = b.skill_id AND r.skill_version = b.skill_version
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ?
  ORDER BY r.skill_id, r.required_skill_id`,
 	qSkillBindingGet: `
 SELECT skill_version
   FROM agent_skill_binding
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND skill_id = ?`,
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND skill_id = ?`,
 	qSkillBindingInsert: `
-INSERT INTO agent_skill_binding (tenant_id, agent_id, agent_version, skill_id, skill_version)
+INSERT INTO agent_skill_binding (partner_id, agent_id, agent_version, skill_id, skill_version)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id, agent_version, skill_id) DO NOTHING`,
+ON CONFLICT (partner_id, agent_id, agent_version, skill_id) DO NOTHING`,
 }
 
 const skillRegistryCatalogID = "scout.skill.registry"

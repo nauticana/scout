@@ -17,7 +17,7 @@ var definitionReaderQueries = map[string]string{
 	qDefinitionGet: `
 SELECT definition
   FROM agent_version
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ?`,
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 }
 
 // TableAgentDefinitionReader reads immutable definitions from agent_version.

@@ -12,9 +12,11 @@ type MCPServerDescriber interface {
 	DescribeServer() domain.MCPServerDefinition
 }
 
-// MCPToolCatalog lists tools visible to the authenticated caller.
+// MCPToolCatalog publishes the full tool catalog and the subset each caller sees.
 type MCPToolCatalog interface {
-	// ListTools returns SDK-neutral definitions with enforceable policy metadata.
+	// Catalog returns every tool the server registers, independent of any caller.
+	Catalog(ctx context.Context) ([]domain.MCPToolDefinition, error)
+	// ListTools returns the caller's tools/list subset of Catalog.
 	ListTools(ctx context.Context, caller domain.MCPCaller) ([]domain.MCPToolDefinition, error)
 }
 

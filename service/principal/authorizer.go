@@ -26,14 +26,14 @@ const qAgentPrincipal = "scout_agent_principal"
 
 // agentGrants is where an agent or service principal's role grants live. keel
 // generates the lookup SQL from it, so agents and humans cannot drift apart.
-var agentGrants = keeldata.GrantSource{Table: "agent_permission", Subject: "agent_id", Filters: []string{"tenant_id"}}
+var agentGrants = keeldata.GrantSource{Table: "agent_permission", Subject: "agent_id", Filters: []string{"partner_id"}}
 
 var principalQueries = map[string]string{
 	qAgentPrincipal: `
 SELECT p.agent_type_id, p.state_code, d.stable_version
   FROM agent_profile p
-  LEFT JOIN agent_deployment d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
- WHERE p.tenant_id = ? AND p.agent_id = ?`,
+  LEFT JOIN agent_deployment d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
+ WHERE p.partner_id = ? AND p.agent_id = ?`,
 }
 
 // RoleAuthorizer answers one authorization-object question for either principal

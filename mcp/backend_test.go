@@ -27,6 +27,10 @@ var backendTools = []domain.MCPToolDefinition{
 	{Name: "submit", Description: "submit things", Policy: domain.MCPToolPolicy{RequiredScopes: []string{"write"}}},
 }
 
+func (backend *toolBackendFake) Catalog(context.Context) ([]domain.MCPToolDefinition, error) {
+	return backendTools, nil
+}
+
 func (backend *toolBackendFake) ListTools(_ context.Context, caller domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
 	if caller.HostTrusted || slices.Contains(caller.Scopes, "write") {
 		return backendTools, nil
@@ -319,5 +323,27 @@ func TestBackendToolReportsUnresolvedCaller(t *testing.T) {
 		onDenied: func(_ context.Context, _ domain.MCPCaller, _ string, err error) { denied = append(denied, err) }}
 	if result, _ := tool.Handle(withTransport(context.Background(), domain.MCPTransportStreamableHTTP), mcpgo.CallToolRequest{}); !result.IsError || len(denied) != 1 || !errors.Is(denied[0], domain.ErrUnauthorized) {
 		t.Fatalf("result = %+v, denied = %v", result, denied)
+	}
+}
+
+// hostRefusingBackend lists nothing to the host, as a per-caller view that
+// refuses an identity it cannot place in a tenant would.
+type hostRefusingBackend struct{ toolBackendFake }
+
+func (backend *hostRefusingBackend) ListTools(_ context.Context, caller domain.MCPCaller) ([]domain.MCPToolDefinition, error) {
+	if caller.HostTrusted {
+		return nil, nil
+	}
+	return backendTools, nil
+}
+
+func TestRegistrationPublishesTheCatalogNotTheHostListing(t *testing.T) {
+	srv := NewServer(ServerConfig{Name: "test", Version: "1.0.0"})
+	if err := srv.RegisterToolBackend(context.Background(), &hostRefusingBackend{}); err != nil {
+		t.Fatal(err)
+	}
+	listed := call(t, srv, remoteContext("write"), "tools/list", map[string]any{})
+	if !strings.Contains(listed, `"search"`) || !strings.Contains(listed, `"submit"`) {
+		t.Fatalf("remote caller listing = %s", listed)
 	}
 }

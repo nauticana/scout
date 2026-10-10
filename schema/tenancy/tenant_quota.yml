@@ -1,7 +1,7 @@
 table: tenant_quota
 comment: Tenant token and monetary quota windows
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: quota_name
     type: VARCHAR(80)
@@ -16,10 +16,10 @@ columns:
   - name: currency_code
     type: CHAR(3)
     nullable: true
-primary_key: [tenant_id, quota_name]
+primary_key: [partner_id, quota_name]
 foreign_keys:
   - name: tenant_quotas
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]

@@ -32,34 +32,34 @@ const (
 
 var workItemQueries = map[string]string{
 	qWorkAssign: `
-INSERT INTO agent_work_item (id, tenant_id, assignee_kind, assignee_id, requester_kind, requester_id, grant_id,
+INSERT INTO agent_work_item (id, partner_id, assignee_kind, assignee_id, requester_kind, requester_id, grant_id,
                        parent_work_item_id, delegation_depth, scope_id, task_kind, input_uri, input_digest,
                        request_id, status_code, budget_minor_units, currency_code)
 VALUES (nextval('agent_work_item_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
-ON CONFLICT (tenant_id, request_id) DO NOTHING
+ON CONFLICT (partner_id, request_id) DO NOTHING
 RETURNING id`,
 	qWorkGet: `
 SELECT ` + workColumns + `
-  FROM agent_work_item WHERE tenant_id = ? AND id = ?`,
+  FROM agent_work_item WHERE partner_id = ? AND id = ?`,
 	qWorkByRequest: `
 SELECT ` + workColumns + `
-  FROM agent_work_item WHERE tenant_id = ? AND request_id = ?`,
+  FROM agent_work_item WHERE partner_id = ? AND request_id = ?`,
 	qWorkPending: `
 SELECT ` + workColumns + `
   FROM agent_work_item
- WHERE tenant_id = ? AND assignee_kind = ? AND assignee_id = ?
+ WHERE partner_id = ? AND assignee_kind = ? AND assignee_id = ?
    AND status_code IN ('queued', 'running', 'streaming', 'suspended')
  ORDER BY created_at, id
  LIMIT ?`,
 	qWorkComplete: `
 UPDATE agent_work_item
    SET status_code = ?, completed_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND id = ? AND completed_at IS NULL
+ WHERE partner_id = ? AND id = ? AND completed_at IS NULL
 RETURNING id`,
 	qWorkAncestors: `
 WITH RECURSIVE chain AS (
     SELECT ` + workColumns + `
-      FROM agent_work_item WHERE tenant_id = ? AND id = ?
+      FROM agent_work_item WHERE partner_id = ? AND id = ?
     UNION ALL
     SELECT parent.` + `id, parent.assignee_kind, parent.assignee_id, parent.requester_kind, parent.requester_id,
            parent.grant_id, parent.parent_work_item_id, parent.delegation_depth, parent.scope_id, parent.task_kind,

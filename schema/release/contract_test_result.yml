@@ -3,7 +3,7 @@ comment: Outcome of one compatibility assertion in a run
 columns:
   - name: run_id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: test_case_id
     type: VARCHAR(120)
@@ -13,7 +13,7 @@ columns:
     type: TEXT
   - name: duration_ms
     type: INTEGER
-primary_key: [run_id, tenant_id, test_case_id]
+primary_key: [run_id, partner_id, test_case_id]
 foreign_keys:
   - name: contract_test_results
     columns: [run_id]
@@ -21,13 +21,13 @@ foreign_keys:
       table: contract_test_run
       columns: [id]
   - name: case_test_results
-    columns: [tenant_id, test_case_id]
+    columns: [partner_id, test_case_id]
     references:
       table: contract_test_case
-      columns: [tenant_id, test_case_id]
+      columns: [partner_id, test_case_id]
 indexes:
   - name: contract_test_result_case_ix
-    columns: [tenant_id, test_case_id]
+    columns: [partner_id, test_case_id]
 checks:
   - name: contract_test_result_duration_ck
     expression: duration_ms >= 0

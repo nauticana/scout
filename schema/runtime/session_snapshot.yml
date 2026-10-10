@@ -1,7 +1,7 @@
 table: session_snapshot
 comment: Latest durable checkpoint pointer for a conversation
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: conversation_id
     type: VARCHAR(120)
@@ -18,18 +18,18 @@ columns:
   - name: updated_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, conversation_id]
+primary_key: [partner_id, conversation_id]
 foreign_keys:
   - name: session_snapshots
-    columns: [tenant_id, conversation_id]
+    columns: [partner_id, conversation_id]
     references:
       table: agent_conversation
-      columns: [tenant_id, conversation_id]
+      columns: [partner_id, conversation_id]
   - name: checkpoint_session_snapshots
-    columns: [tenant_id, conversation_id, latest_turn_no, latest_step_no]
+    columns: [partner_id, conversation_id, latest_turn_no, latest_step_no]
     references:
       table: step_checkpoint
-      columns: [tenant_id, conversation_id, turn_no, step_no]
+      columns: [partner_id, conversation_id, turn_no, step_no]
 checks:
   - name: session_snapshot_digest_ck
     expression: CHAR_LENGTH(state_digest) = 64

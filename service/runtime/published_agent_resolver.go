@@ -26,17 +26,17 @@ SELECT p.state_code = 'active', dep.stable_version, dep.canary_version, dep.cana
        stable.definition, canary.definition, p.agent_id
   FROM agent_alias a
   JOIN agent_profile p
-    ON p.tenant_id = a.tenant_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
-  JOIN agent_deployment dep ON dep.tenant_id = p.tenant_id AND dep.agent_id = p.agent_id
+    ON p.partner_id = a.partner_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
+  JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
   JOIN agent_version stable
-    ON stable.tenant_id = dep.tenant_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version
+    ON stable.partner_id = dep.partner_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version
   LEFT JOIN agent_version canary
-    ON canary.tenant_id = dep.tenant_id AND canary.agent_id = dep.agent_id AND canary.agent_version = dep.canary_version
- WHERE a.tenant_id = ? AND a.alias_id = ?`,
+    ON canary.partner_id = dep.partner_id AND canary.agent_id = dep.agent_id AND canary.agent_version = dep.canary_version
+ WHERE a.partner_id = ? AND a.alias_id = ?`,
 	qPublishedAgentVersion: `
 SELECT definition
   FROM agent_version
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ?`,
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 }
 
 // PublishedAgentResolver resolves one active alias to an immutable definition.

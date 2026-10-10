@@ -1,7 +1,7 @@
 table: skill_example
 comment: A request that should select the skill; seeds its selection eval
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: skill_id
     type: VARCHAR(80)
@@ -11,13 +11,13 @@ columns:
     type: INTEGER
   - name: request
     type: TEXT
-primary_key: [tenant_id, skill_id, skill_version, example_no]
+primary_key: [partner_id, skill_id, skill_version, example_no]
 foreign_keys:
   - name: skill_version_examples
-    columns: [tenant_id, skill_id, skill_version]
+    columns: [partner_id, skill_id, skill_version]
     references:
       table: skill_version
-      columns: [tenant_id, skill_id, skill_version]
+      columns: [partner_id, skill_id, skill_version]
 checks:
   - name: skill_example_no_ck
     expression: example_no > 0

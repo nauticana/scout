@@ -33,37 +33,37 @@ const (
 
 var toolRegistryQueries = map[string]string{
 	qToolProfileEnsure: `
-INSERT INTO tool_profile (tenant_id, tool_id, display_name)
+INSERT INTO tool_profile (partner_id, tool_id, display_name)
 VALUES (?, ?, ?)
-ON CONFLICT (tenant_id, tool_id) DO NOTHING`,
+ON CONFLICT (partner_id, tool_id) DO NOTHING`,
 	qToolProfileGet: `
 SELECT display_name
   FROM tool_profile
- WHERE tenant_id = ? AND tool_id = ?`,
+ WHERE partner_id = ? AND tool_id = ?`,
 	qToolVersionGet: `
 SELECT ` + toolVersionColumns + `
   FROM tool_version v
-  JOIN tool_profile p ON p.tenant_id = v.tenant_id AND p.tool_id = v.tool_id
- WHERE v.tenant_id = ? AND v.tool_id = ? AND v.tool_version = ?`,
+  JOIN tool_profile p ON p.partner_id = v.partner_id AND p.tool_id = v.tool_id
+ WHERE v.partner_id = ? AND v.tool_id = ? AND v.tool_version = ?`,
 	qToolVersionInsert: `
-INSERT INTO tool_version (tenant_id, tool_id, tool_version, endpoint_uri, input_schema, output_schema, timeout_ms, max_attempts, verify_effect, retry_effect_absent)
+INSERT INTO tool_version (partner_id, tool_id, tool_version, endpoint_uri, input_schema, output_schema, timeout_ms, max_attempts, verify_effect, retry_effect_absent)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, tool_id, tool_version) DO NOTHING`,
+ON CONFLICT (partner_id, tool_id, tool_version) DO NOTHING`,
 	qToolBoundList: `
 SELECT ` + toolVersionColumns + `
   FROM agent_tool_binding b
-  JOIN tool_version v ON v.tenant_id = b.tenant_id AND v.tool_id = b.tool_id AND v.tool_version = b.tool_version
-  JOIN tool_profile p ON p.tenant_id = v.tenant_id AND p.tool_id = v.tool_id
- WHERE b.tenant_id = ? AND b.agent_id = ? AND b.agent_version = ?
+  JOIN tool_version v ON v.partner_id = b.partner_id AND v.tool_id = b.tool_id AND v.tool_version = b.tool_version
+  JOIN tool_profile p ON p.partner_id = v.partner_id AND p.tool_id = v.tool_id
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ?
  ORDER BY v.tool_id`,
 	qToolBindingGet: `
 SELECT tool_version
   FROM agent_tool_binding
- WHERE tenant_id = ? AND agent_id = ? AND agent_version = ? AND tool_id = ?`,
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND tool_id = ?`,
 	qToolBindingInsert: `
-INSERT INTO agent_tool_binding (tenant_id, agent_id, agent_version, tool_id, tool_version)
+INSERT INTO agent_tool_binding (partner_id, agent_id, agent_version, tool_id, tool_version)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, agent_id, agent_version, tool_id) DO NOTHING`,
+ON CONFLICT (partner_id, agent_id, agent_version, tool_id) DO NOTHING`,
 }
 
 // TableToolRegistry is the ToolRegistry over tool_profile, tool_version, and

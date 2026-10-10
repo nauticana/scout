@@ -1,7 +1,7 @@
 table: agent_capability_package
 comment: Reusable named bundle of scoped resource values a type version requires
 columns:
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: package_id
     type: VARCHAR(80)
@@ -16,10 +16,10 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [tenant_id, package_id, package_version]
+primary_key: [partner_id, package_id, package_version]
 foreign_keys:
   - name: agent_capability_packages
-    columns: [tenant_id]
+    columns: [partner_id]
     references:
       table: agent_tenant
       columns: [partner_id]

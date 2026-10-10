@@ -34,27 +34,28 @@ SELECT conversation.agent_version, snapshot.latest_turn_no, snapshot.latest_step
        conversation.end_user_ref
   FROM agent_conversation conversation
   LEFT JOIN session_snapshot snapshot
-    ON snapshot.tenant_id = conversation.tenant_id
+    ON snapshot.partner_id = conversation.partner_id
    AND snapshot.conversation_id = conversation.conversation_id
   LEFT JOIN step_checkpoint checkpoint
-    ON checkpoint.tenant_id = snapshot.tenant_id
+    ON checkpoint.partner_id = snapshot.partner_id
    AND checkpoint.conversation_id = snapshot.conversation_id
    AND checkpoint.turn_no = snapshot.latest_turn_no
    AND checkpoint.step_no = snapshot.latest_step_no
   LEFT JOIN execution_step step
-    ON step.id = checkpoint.execution_step_id
- WHERE conversation.tenant_id = ? AND conversation.conversation_id = ?`,
+    ON step.partner_id = checkpoint.partner_id
+   AND step.id = checkpoint.execution_step_id
+ WHERE conversation.partner_id = ? AND conversation.conversation_id = ?`,
 
 	qSessionInsertCheckpoint: `
 INSERT INTO step_checkpoint
-       (tenant_id, conversation_id, turn_no, step_no, execution_step_id, idempotency_key,
+       (partner_id, conversation_id, turn_no, step_no, execution_step_id, idempotency_key,
         state_uri, state_digest, fingerprint, input_tokens, output_tokens, tool_calls,
         cost_minor_units, currency_code)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 	qSessionCreateSnapshot: `
 INSERT INTO session_snapshot
-       (tenant_id, conversation_id, latest_turn_no, latest_step_no, state_uri, state_digest, revision)
+       (partner_id, conversation_id, latest_turn_no, latest_step_no, state_uri, state_digest, revision)
 VALUES (?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT DO NOTHING
 RETURNING revision`,
@@ -63,7 +64,7 @@ RETURNING revision`,
 UPDATE session_snapshot
    SET latest_turn_no = ?, latest_step_no = ?, state_uri = ?, state_digest = ?,
        revision = revision + 1, updated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND conversation_id = ? AND revision = ?
+ WHERE partner_id = ? AND conversation_id = ? AND revision = ?
 RETURNING revision`,
 
 	// The oldest non-terminal turn is the executing one; later ones are queued.
@@ -71,9 +72,9 @@ RETURNING revision`,
 SELECT turn.turn_no, COALESCE(snapshot.revision, 0)
   FROM conversation_turn turn
   LEFT JOIN session_snapshot snapshot
-    ON snapshot.tenant_id = turn.tenant_id
+    ON snapshot.partner_id = turn.partner_id
    AND snapshot.conversation_id = turn.conversation_id
- WHERE turn.tenant_id = ? AND turn.conversation_id = ?
+ WHERE turn.partner_id = ? AND turn.conversation_id = ?
    AND turn.status_code IN ('queued', 'running', 'streaming')
  ORDER BY turn.turn_no
  LIMIT 1`,
@@ -84,30 +85,30 @@ WITH completed AS (
 UPDATE conversation_turn turn
    SET status_code = 'completed', response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
- WHERE turn.tenant_id = ? AND turn.conversation_id = ? AND turn.turn_no = ?
+ WHERE turn.partner_id = ? AND turn.conversation_id = ? AND turn.turn_no = ?
    AND turn.status_code IN ('queued', 'running', 'streaming')
    AND COALESCE((SELECT snapshot.revision
                    FROM session_snapshot snapshot
-                  WHERE snapshot.tenant_id = turn.tenant_id
+                  WHERE snapshot.partner_id = turn.partner_id
                     AND snapshot.conversation_id = turn.conversation_id), 0) = ?
-RETURNING turn.tenant_id, turn.conversation_id, turn.turn_no),
+RETURNING turn.partner_id, turn.conversation_id, turn.turn_no),
 mirrored AS (
 UPDATE conversation_turn_detail detail
    SET result_kind = ?, result_payload = ?, error_text = NULL
   FROM completed
- WHERE detail.tenant_id = completed.tenant_id AND detail.conversation_id = completed.conversation_id AND detail.turn_no = completed.turn_no
+ WHERE detail.partner_id = completed.partner_id AND detail.conversation_id = completed.conversation_id AND detail.turn_no = completed.turn_no
 RETURNING detail.turn_no)
 SELECT turn_no FROM completed`,
 
 	qSessionCheckpointDigest: `
 SELECT state_digest
   FROM step_checkpoint
- WHERE tenant_id = ? AND conversation_id = ? AND turn_no = ? AND step_no = ?`,
+ WHERE partner_id = ? AND conversation_id = ? AND turn_no = ? AND step_no = ?`,
 
 	qSessionResponseDigest: `
 SELECT response_digest
   FROM conversation_turn
- WHERE tenant_id = ? AND conversation_id = ? AND turn_no = ?`,
+ WHERE partner_id = ? AND conversation_id = ? AND turn_no = ?`,
 }
 
 // DurableSessionStore is the authoritative session store over conversation_turn,

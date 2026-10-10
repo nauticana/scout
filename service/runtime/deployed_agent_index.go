@@ -21,12 +21,12 @@ SELECT a.alias_id, a.agent_type_id, a.agent_id, p.state_code = 'active', d.enabl
        dep.stable_version, v.definition
   FROM agent_alias a
   JOIN agent_profile p
-    ON p.tenant_id = a.tenant_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
-  JOIN agent_draft d ON d.tenant_id = p.tenant_id AND d.agent_id = p.agent_id
-  LEFT JOIN agent_deployment dep ON dep.tenant_id = p.tenant_id AND dep.agent_id = p.agent_id
+    ON p.partner_id = a.partner_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
+  JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
+  LEFT JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
   LEFT JOIN agent_version v
-    ON v.tenant_id = dep.tenant_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
- WHERE a.tenant_id = ?`,
+    ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
+ WHERE a.partner_id = ?`,
 }
 
 // DeployedAgentIndex lists every alias a tenant owns with its operational

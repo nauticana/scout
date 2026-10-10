@@ -3,7 +3,7 @@ comment: One execution of an evaluation manifest
 columns:
   - name: id
     type: BIGINT
-  - name: tenant_id
+  - name: partner_id
     type: BIGINT
   - name: manifest_id
     type: CHAR(64)
@@ -38,18 +38,21 @@ sequence:
   column: id
 foreign_keys:
   - name: evaluation_runs
-    columns: [manifest_id]
+    columns: [partner_id, manifest_id]
     references:
       table: evaluation_manifest
-      columns: [manifest_id]
+      columns: [partner_id, manifest_id]
   - name: currency_evaluation_runs
     columns: [currency_code]
     references:
       table: currency
       columns: [code]
 indexes:
+  - name: evaluation_run_partner_uq
+    columns: [partner_id, id]
+    unique: true
   - name: evaluation_run_manifest_ix
-    columns: [tenant_id, manifest_id, started_at]
+    columns: [partner_id, manifest_id, started_at]
 checks:
   - name: evaluation_run_scope_ck
     expression: scope_code IN ('dev', 'gate')

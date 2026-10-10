@@ -43,10 +43,10 @@ SELECT v.document_id, v.chunk_no, v.chunk_id, d.source_uri, c.source_version, c.
 const pgVectorMatchFrom = `
   FROM knowledge_chunk_vector v
   JOIN knowledge_chunk c
-    ON c.tenant_id = v.tenant_id AND c.knowledge_base_id = v.knowledge_base_id
+    ON c.partner_id = v.partner_id AND c.knowledge_base_id = v.knowledge_base_id
    AND c.knowledge_version = v.knowledge_version AND c.document_id = v.document_id AND c.chunk_no = v.chunk_no
   JOIN knowledge_document d
-    ON d.tenant_id = v.tenant_id AND d.knowledge_base_id = v.knowledge_base_id
+    ON d.partner_id = v.partner_id AND d.knowledge_base_id = v.knowledge_base_id
    AND d.knowledge_version = v.knowledge_version AND d.document_id = v.document_id`
 
 // pgVectorScope is the authorization predicate both legs compile into the
@@ -54,32 +54,32 @@ const pgVectorMatchFrom = `
 // document manifest, and any-of entitlement labels via jsonb ?| (written ??|
 // so keel's placeholder rewriter keeps it literal).
 const pgVectorScope = `
- WHERE v.tenant_id = ? AND v.knowledge_base_id = ? AND v.knowledge_version = ?
+ WHERE v.partner_id = ? AND v.knowledge_base_id = ? AND v.knowledge_version = ?
    AND v.tombstoned = FALSE
    AND EXISTS (SELECT 1
                  FROM knowledge_document_manifest m
-                WHERE m.tenant_id = v.tenant_id AND m.knowledge_base_id = v.knowledge_base_id
+                WHERE m.partner_id = v.partner_id AND m.knowledge_base_id = v.knowledge_base_id
                   AND m.document_id = v.document_id AND m.active_version = v.knowledge_version
                   AND m.tombstoned = FALSE)
    AND v.entitlements ??| ARRAY(SELECT jsonb_array_elements_text(?::jsonb))`
 
 var pgVectorQueries = map[string]string{
 	qPgVectorUpsertChunk: `
-INSERT INTO knowledge_chunk_vector (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no,
+INSERT INTO knowledge_chunk_vector (partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no,
                                     chunk_id, embedding, dimensions, content_tsv, entitlements, tombstoned)
 VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, to_tsvector(?::regconfig, ?), ?::jsonb, FALSE)
-ON CONFLICT (tenant_id, knowledge_base_id, knowledge_version, document_id, chunk_no) DO UPDATE
+ON CONFLICT (partner_id, knowledge_base_id, knowledge_version, document_id, chunk_no) DO UPDATE
    SET embedding = EXCLUDED.embedding, dimensions = EXCLUDED.dimensions, content_tsv = EXCLUDED.content_tsv,
        entitlements = EXCLUDED.entitlements
  WHERE knowledge_chunk_vector.chunk_id = EXCLUDED.chunk_id
 RETURNING chunk_id`,
 	qPgVectorRemoveDocument: `
 DELETE FROM knowledge_chunk_vector
- WHERE tenant_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND knowledge_version = ? AND document_id = ?`,
 	qPgVectorTombstoneDocument: `
 UPDATE knowledge_chunk_vector
    SET tombstoned = TRUE
- WHERE tenant_id = ? AND knowledge_base_id = ? AND document_id = ? AND tombstoned = FALSE`,
+ WHERE partner_id = ? AND knowledge_base_id = ? AND document_id = ? AND tombstoned = FALSE`,
 	qPgVectorSearchText: `
 WITH q AS (SELECT websearch_to_tsquery(?::regconfig, ?) AS tsq)` +
 		pgVectorMatchSelect + `

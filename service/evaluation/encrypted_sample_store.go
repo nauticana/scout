@@ -25,17 +25,17 @@ const (
 
 var sampleQueries = map[string]string{
 	qSampleInsert: `
-INSERT INTO evaluation_sample (tenant_id, sample_id, request_id, agent_id, agent_version, reason, risk_bp, uncertainty_bp, redacted,
+INSERT INTO evaluation_sample (partner_id, sample_id, request_id, agent_id, agent_version, reason, risk_bp, uncertainty_bp, redacted,
                                payload_uri, payload_digest, retention_class, region_code, sampled_at, expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qSampleGet: `
 SELECT request_id, agent_id, agent_version, reason, risk_bp, uncertainty_bp, redacted, payload_uri, payload_digest,
        retention_class, region_code, sampled_at, expires_at
   FROM evaluation_sample
- WHERE tenant_id = ? AND sample_id = ?`,
+ WHERE partner_id = ? AND sample_id = ?`,
 	qSampleDelete: `
 DELETE FROM evaluation_sample
- WHERE tenant_id = ? AND sample_id = ?
+ WHERE partner_id = ? AND sample_id = ?
 RETURNING payload_uri`,
 }
 

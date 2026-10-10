@@ -293,9 +293,13 @@ if err := srv.RegisterToolBackend(ctx, productToolBackend); err != nil { ... }
 if err := srv.RegisterResourceBackend(ctx, productResourceBackend); err != nil { ... }
 ```
 
-Catalogs are enumerated once at composition time with `mcp.HostCaller()`, so `ListTools` and `ListResources` must return the full catalog for a host-trusted caller and the caller's visible subset for anyone else; a resource outside that subset cannot be read. A resource entry carrying `URITemplate` registers as a template; otherwise it registers as a fixed URI.
+`RegisterToolBackend` registers the tools `MCPToolCatalog.Catalog` returns, independent of any caller; `ListTools` serves `tools/list` only, so a per-caller view that refuses some identity never empties the registered catalog. Resource and prompt catalogs are enumerated once at composition time with `mcp.HostCaller()`, so `ListResources` and `ListPrompts` must return the full catalog for a host-trusted caller and the caller's visible subset for anyone else; a resource outside that subset cannot be read. A resource entry carrying `URITemplate` registers as a template; otherwise it registers as a fixed URI.
 
-An `OutputSchema` tool returns `MCPToolResult.Data` as structured content beside the text envelope. Registration rejects schemas Scout cannot enforce; missing, unencodable, or non-conforming data is a tool error. `ServerConfig.OmitOutputSchemas` keeps the schemas out of `tools/list`, which they otherwise dominate in a large catalog, while every result is still validated against them.
+An `OutputSchema` tool returns `MCPToolResult.Data` as structured content beside the text envelope. Registration rejects schemas Scout cannot enforce; missing, unencodable, or non-conforming data is a tool error. `ServerConfig.OmitOutputSchemas` keeps the schemas out of `tools/list`, which they otherwise dominate in a large catalog, while every result is still validated against them. A tool whose input schema takes `offset` and whose output schema does not name `pagination` gets the `pagination` key (`mcp.PaginationSchema`, the `mcp-v1` `PaginationMeta`), and its `MCPToolResult.Meta.Pagination` is copied into the structured content unless the data carries the key itself. `mcp.PaginationInstructions` explains the key once for the server's instructions.
+
+### Tenant-aware tool listing
+
+A multi-tenant product lists a tool only where the caller could call it. `MCPToolPolicy.Tenant` marks a tool that acts in one tenant; `ActionLevel`, `OwnTenantOnly`, `Grants` (all required, or any one with `AnyGrant` when the call's arguments select the grant), and `Sources` describe what the tenant must admit. `mcp.ToolLister.List(ctx, caller, definitions)` keeps a tool when some tenant from the product's `mcp.TenantView` admits its level, relationship and ready sources, and its principal holds the grants. It reads one keel `GrantSet` per distinct principal through `mcp.GrantReader` (keel's `port.DatabaseRepository`), one readiness per tenant through `mcp.SourceReadiness` (keel's `connect.ReadinessResolver`) only when a tool names sources, and drops grants whose scope `Delegable` refuses in a delegated tenant (keel's `agency.TenantResolver.Delegable`). A host-trusted caller sees every definition; when tenants, grants or sources cannot be read, `List` returns the definitions unchanged with the error, so a failed lookup never hides a tool the call would admit. Listing never authorizes: the backend's `ExecuteTool` checks the tenant, level and grant of every call, and `LookupTool` stays a catalog lookup. The product's `TenantView` resolves its own identities, typically from keel's `agency.TenantResolver`, and maps each tenant's relationship and delegation level to a `Principal` and `ActionLevel`.
 
 A backend reports a failure the client should act on with `MCPToolResult.Error` (`domain.MCPToolError{Code, Message, Details}`) and no other result field. Scout returns an `isError` result whose text and structured content are the same `api.ToolError` object, so a client reads the code and details (a link, choices, a reset time) without parsing prose; error results are exempt from the tool's output schema. A blank code or message, unencodable details, or an error mixed with data is `ErrContractFailed`. `mcp.WrapToolError` renders the same result for directly registered tools.
 
@@ -313,7 +317,7 @@ Protocol frames and manifest entries belong to `mcp-go`; Scout defines only what
 
 An MCP tool call that must not run until a person confirms it is not a turn, so the turn `approval` module cannot hold it. `confirmation.TableStore.Prepare` records the exact payload, a preview, and the product's authorization requirements under an action digest (`confirmation.ActionDigest`); an identical open action returns the maker's own confirmation and is `ErrConflict` for anyone else. `confirmation.ToolResult` then asks the maker through an elicitation form, or returns the status and the product's inbox link. Set `MCPConfirmationDraft.ApprovalRequired` before preparing a maker-checker action; direct decisions then fail closed before and after `AttachApproval`. Wire `TableStore.DecideApprovalTx` into `approval.Service.OnDecided`.
 
-`Executor.Execute` claims an approved confirmation under a store-clock lease and a new fence, re-checks maker and decider through the product's `contract.MCPConfirmationChecker`, and runs the stored payload, never a re-sent one, through `contract.MCPConfirmedRunner`. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be stored, a cancellation, or a lost claim never becomes success or a retry: the confirmation is `unknown` until a person records what happened with `Executor.Reconcile`. A product worker calls `RunApproved`, `TableStore.MarkLapsed`, `ExpireDue`, and `Purge`. `Executor.Store` is a `contract.MCPConfirmationStore`; `confirmationtest.Store` keeps confirmations in memory under the same guards, so product tests run the real executor without a database, and `confirmationtest.RunStoreSuite` is the conformance suite both stores pass. See [Confirmed MCP tool calls](doc/governance.md#confirmed-mcp-tool-calls).
+`Executor.Execute` claims an approved confirmation under a store-clock lease and a new fence, re-checks maker and decider through the product's `contract.MCPConfirmationChecker`, and runs the stored payload, never a re-sent one, through `contract.MCPConfirmedRunner`. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be stored, a cancellation, or a lost claim never becomes success or a retry: the confirmation is `unknown` until a person records what happened with `Executor.Reconcile`. A product worker calls `RunApproved`, `TableStore.MarkLapsed`, `ExpireDue`, and `Purge`. `Executor.Store` is a `contract.MCPConfirmationStore`; `confirmationtest.Store` keeps confirmations in memory under the same guards, so product tests run the real executor without a database, and `confirmationtest.RunStoreSuite` is the conformance suite both stores pass. A confirmed tool declares the result `ToolResult` returns with `confirmation.ResultSchema(preview, result)`, built from the product's preview and executed-result schemas; `confirmation.StatusSchema` is its status enum and `confirmation.Instructions` explains the statuses once for the server's instructions. Credits, tiers and product-specific safety statuses stay in the product's own result schema. See [Confirmed MCP tool calls](doc/governance.md#confirmed-mcp-tool-calls).
 
 ### Migrating an existing MCP server
 
@@ -385,7 +389,7 @@ Use released module coordinates; never use a local `replace` or filesystem depen
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.2.101
+go get github.com/nauticana/keel@v1.2.105
 ```
 
 Import Scout contracts and keel infrastructure directly:
@@ -511,10 +515,23 @@ Tool annotations describe expected behavior to clients but do not grant access. 
 Select transport in the binary:
 
 - `stdio` is appropriate for a locally executed client under host trust.
-- Streamable HTTP or SSE requires authentication, quota middleware, trusted proxy configuration, and a public health endpoint.
+- Streamable HTTP or SSE requires authentication, quota middleware, trusted proxy configuration, and a public health endpoint. `ServeStreamableHTTP` and `ServeSSE` accept mcp-go transport options; Scout keeps its own context hook, so configure request context through `ServerConfig.ClientIPHook`.
 - OAuth-protected MCP routes should use keel's OAuth resource middleware.
 
-Run `mcp/mcptest` conformance checks before publishing a server: manifest and tool-text checks for directly registered providers, and `AssertToolBackend` and `AssertPromptBackend` for backend catalogs (descriptions, object schemas, consistent annotations, a scope on every tool not marked read-only, and prompts naming only published tools).
+Behind a reverse proxy on the same host, mcp-go refuses every request that reaches a loopback listener with a Host other than localhost (DNS-rebinding protection): discovery served elsewhere succeeds, OAuth completes, and every tool call answers 403. Rewrite Host on the MCP path at the proxy rather than disabling the protection:
+
+```caddyfile
+handle /mcp {
+	reverse_proxy 127.0.0.1:8090 {
+		header_up Host localhost
+		flush_interval -1
+	}
+}
+```
+
+nginx uses `proxy_set_header Host localhost;`. Wrap the handler with `mcp.WarnUnrewrittenHost(handler, warn)` to log the fix once when a proxied request arrives with an unrewritten Host.
+
+Run `mcp/mcptest` conformance checks before publishing a server: manifest and tool-text checks for directly registered providers, and `AssertToolBackend` and `AssertPromptBackend` for backend catalogs (descriptions, object schemas, consistent annotations, a scope on every tool not marked read-only, coherent tenant policy, a host listing naming only catalog tools, and prompts naming only published tools). `AssertCatalogBudget(t, catalog, maxBytes)` bounds the encoded `tools/list`, which clients load into every conversation; `CatalogSize` reports the description, input and output schema bytes and the largest tools, and the assertion logs that report, so `go test -v` shows it.
 
 ## Database schema
 

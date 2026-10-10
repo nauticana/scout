@@ -64,28 +64,28 @@ UPDATE platform_current_restriction
  WHERE layer_key = 'platform' AND layer_digest = ?
 RETURNING layer_digest`,
 	qTenantLayerInsert: `
-INSERT INTO tenant_restriction_layer (tenant_id, layer_digest, denials, guardrail_rules)
+INSERT INTO tenant_restriction_layer (partner_id, layer_digest, denials, guardrail_rules)
 VALUES (?, ?, ?, ?)
-ON CONFLICT (tenant_id, layer_digest) DO NOTHING`,
+ON CONFLICT (partner_id, layer_digest) DO NOTHING`,
 	qTenantCurrentRead: `
 SELECT l.layer_digest, l.denials, l.guardrail_rules
   FROM tenant_current_restriction c
-  JOIN tenant_restriction_layer l ON l.tenant_id = c.tenant_id AND l.layer_digest = c.layer_digest
- WHERE c.tenant_id = ?`,
+  JOIN tenant_restriction_layer l ON l.partner_id = c.partner_id AND l.layer_digest = c.layer_digest
+ WHERE c.partner_id = ?`,
 	qTenantCurrentLock: `
 SELECT layer_digest
   FROM tenant_current_restriction
- WHERE tenant_id = ?
+ WHERE partner_id = ?
    FOR UPDATE`,
 	qTenantCurrentInsert: `
-INSERT INTO tenant_current_restriction (tenant_id, layer_digest)
+INSERT INTO tenant_current_restriction (partner_id, layer_digest)
 VALUES (?, ?)
-ON CONFLICT (tenant_id) DO NOTHING
+ON CONFLICT (partner_id) DO NOTHING
 RETURNING layer_digest`,
 	qTenantCurrentSwap: `
 UPDATE tenant_current_restriction
    SET layer_digest = ?, updated_at = CURRENT_TIMESTAMP
- WHERE tenant_id = ? AND layer_digest = ?
+ WHERE partner_id = ? AND layer_digest = ?
 RETURNING layer_digest`,
 }
 
