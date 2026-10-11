@@ -322,6 +322,17 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_evaluation_baseline_max_bytes: "32768",
 		agent_evaluation_max_baselines:      "20",
 		agent_evaluation_compare_page_bytes: "1048576",
+
+		agent_health_period:                   "60",
+		agent_health_batch:                    "100",
+		agent_health_window:                   "60",
+		agent_health_stale_periods:            "3",
+		agent_alert_page_size:                 "50",
+		agent_alert_max_page_size:             "200",
+		agent_evaluation_case_max_turns:       "10",
+		agent_evaluation_case_max_tools:       "20",
+		agent_evaluation_case_tool_max_bytes:  "16384",
+		agent_evaluation_trajectory_max_bytes: "1048576",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

@@ -14,6 +14,13 @@ type DraftFreezer interface {
 	FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string, textModel *domain.ModelReference) (domain.FrozenDraft, error)
 }
 
+// DraftCaseExecutor replays a scripted example against a frozen draft definition through its
+// tool loop, under the limits and per-turn budget of the settings frozen with it, as a release
+// replays: turn by turn, with every tool call answered by the example's sandbox.
+type DraftCaseExecutor interface {
+	ExecuteDraft(ctx context.Context, tenantID int64, draft domain.AgentDefinition, settings []domain.EffectiveResource, example domain.GoldenExample) (domain.EvaluationCase, error)
+}
+
 // GoldenCaseStore keeps the editable working copy of golden sets and which set
 // each agent uses. Gate cases are invisible and immutable in the dev scope;
 // Freeze snapshots every case of both scopes into a new immutable set version.
@@ -42,6 +49,9 @@ type AgentEvaluationStore interface {
 	Comparisons(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64, before string, limit int) ([]domain.AgentCaseComparison, error)
 	// Tally counts a comparison run's examples visible in the scope by verdict.
 	Tally(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64) (domain.ComparisonTally, error)
+	// Trajectory returns where one result visible in the scope stored its trajectory as role ran
+	// it; a result without one is domain.ErrNotFound.
+	Trajectory(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64, exampleID string, role domain.EvaluationRole) (domain.ObjectRef, error)
 }
 
 // AgentEvaluationQueue is the worker side of queued agent evaluations. Every
@@ -64,4 +74,6 @@ type StudioEvaluationBackend interface {
 	FreezeCases(ctx context.Context, actor domain.StudioActor, agentID string, expectedRevision int64) (domain.GoldenCaseSet, domain.GoldenSetVersion, error)
 	Evaluate(ctx context.Context, actor domain.StudioActor, request domain.AgentEvaluationRequest) (domain.AgentEvaluationRun, error)
 	Evaluation(ctx context.Context, actor domain.StudioActor, runID int64, before string, limit int) (domain.AgentEvaluationPage, error)
+	// Trajectory reads one dev result's stored trajectory as role ran it, checked against its digest.
+	Trajectory(ctx context.Context, actor domain.StudioActor, runID int64, exampleID string, role domain.EvaluationRole) (domain.CaseTrajectory, error)
 }

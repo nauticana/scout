@@ -23,20 +23,67 @@ type StudioEvaluationHandler struct {
 
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts these routes.
 func (h *StudioEvaluationHandler) Feature() api.StudioFeature {
-	return api.StudioFeature{ID: StudioFeatureEvaluation, Version: 1, Actions: []string{
+	return api.StudioFeature{ID: StudioFeatureEvaluation, Version: 2, Actions: []string{
 		string(domain.StudioView), string(domain.StudioEdit), string(domain.StudioTest),
 	}}
 }
 
 // Routes returns GET cases?agent_name=, POST cases, POST cases/freeze, POST evaluate,
-// and GET evaluation?run_id=&before=&limit=.
+// GET evaluation?run_id=&before=&limit=, and GET evaluation/trajectory?run_id=&case_id=&arm=.
 func (h *StudioEvaluationHandler) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		api.StudioCasesPath:       h.casesRoute(),
-		api.StudioCasesFreezePath: command(&h.AbstractHandler, h.freeze),
-		api.StudioEvaluatePath:    command(&h.AbstractHandler, h.evaluate),
-		api.StudioEvaluationPath:  query(&h.AbstractHandler, h.evaluation),
+		api.StudioCasesPath:                h.casesRoute(),
+		api.StudioCasesFreezePath:          command(&h.AbstractHandler, h.freeze),
+		api.StudioEvaluatePath:             command(&h.AbstractHandler, h.evaluate),
+		api.StudioEvaluationPath:           query(&h.AbstractHandler, h.evaluation),
+		api.StudioEvaluationTrajectoryPath: query(&h.AbstractHandler, h.trajectory),
 	}
+}
+
+// trajectory reads arm b of a run, or with arm=a arm a of a comparison.
+func (h *StudioEvaluationHandler) trajectory(ctx context.Context, actor domain.StudioActor, query url.Values) (any, error) {
+	runID, err := optionalInt(query.Get("run_id"), 0)
+	if err != nil {
+		return nil, badRequest("run_id must be an integer")
+	}
+	arm, role := query.Get("arm"), domain.RoleCandidate
+	switch arm {
+	case "", "b":
+		arm = "b"
+	case "a":
+		role = domain.RoleBaseline
+	default:
+		return nil, badRequest("arm must be a or b")
+	}
+	trajectory, err := h.Backend.Trajectory(ctx, actor, runID, query.Get("case_id"), role)
+	if err != nil {
+		return nil, err
+	}
+	result := api.CaseTrajectory{RunID: trajectory.RunID, CaseID: trajectory.ExampleID, Arm: arm, Events: make([]api.TrajectoryEvent, 0, len(trajectory.Events))}
+	for _, event := range trajectory.Events {
+		item := api.TrajectoryEvent{
+			Sequence: event.Sequence, Kind: string(event.Kind), Name: event.Name, Payload: event.Payload,
+			OffsetMs: event.Offset.Milliseconds(), Failed: event.Failed, Recovered: event.Recovered,
+		}
+		if usage := event.Usage; usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.ToolCalls != 0 || usage.SearchQueries != 0 || usage.CostMinorUnits != 0 {
+			item.Usage = &api.TrajectoryUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, ToolCalls: usage.ToolCalls,
+				SearchQueries: usage.SearchQueries, CostMinorUnits: usage.CostMinorUnits, Currency: usage.Currency}
+		}
+		result.Events = append(result.Events, item)
+	}
+	return result, nil
+}
+
+// caseScript maps a case's API turns and tools onto its script.
+func caseScript(goldenCase api.GoldenCase) domain.CaseScript {
+	var script domain.CaseScript
+	for _, input := range goldenCase.Turns {
+		script.Turns = append(script.Turns, domain.CaseTurn{Input: input})
+	}
+	for _, tool := range goldenCase.Tools {
+		script.Tools = append(script.Tools, domain.CaseTool{ToolID: tool.ToolID, Output: tool.Output, IsError: tool.IsError})
+	}
+	return script
 }
 
 // casesRoute reads with GET and changes with POST on one path.
@@ -62,6 +109,7 @@ func (h *StudioEvaluationHandler) changeCases(ctx context.Context, actor domain.
 		Case: domain.GoldenCase{
 			CaseID: request.Case.CaseID, Name: request.Case.Name, Input: []byte(request.Case.Input), Language: request.Case.Language,
 			ExpectedBehavior: optionalBytes(request.Case.ExpectedBehavior), RubricRef: request.Case.Rubric, RiskTier: request.Case.RiskTier,
+			Script: caseScript(request.Case),
 		},
 	}))
 }
@@ -99,6 +147,7 @@ func (h *StudioEvaluationHandler) evaluation(ctx context.Context, actor domain.S
 		result.Results = append(result.Results, api.AgentCaseResult{
 			CaseID: item.ExampleID, Scores: apiScores(item.Scores), LatencyMs: item.Latency.Milliseconds(), Cost: apiCost(item.Usage, item.Exponent),
 			EvaluatorCost: apiCost(item.EvaluatorUsage, item.Exponent), NeedsHumanReview: item.NeedsHumanReview, Reason: item.Reason,
+			HasTrajectory: item.Trajectory.URI != "",
 		})
 	}
 	return result, nil
@@ -138,11 +187,18 @@ func toCaseSet(set domain.GoldenCaseSet) api.GoldenCaseSet {
 		if goldenCase.Hidden {
 			continue
 		}
-		result.Cases = append(result.Cases, api.GoldenCase{
+		item := api.GoldenCase{
 			CaseID: goldenCase.CaseID, Name: goldenCase.Name, Input: string(goldenCase.Input), Language: goldenCase.Language,
 			ExpectedBehavior: string(goldenCase.ExpectedBehavior), Rubric: goldenCase.RubricRef, RiskTier: goldenCase.RiskTier,
 			ModifiedAt: goldenCase.ModifiedAt, ReviewItemID: goldenCase.ReviewItemID, InputWithheld: goldenCase.InputWithheld,
-		})
+		}
+		for _, turn := range goldenCase.Script.Turns {
+			item.Turns = append(item.Turns, turn.Input)
+		}
+		for _, tool := range goldenCase.Script.Tools {
+			item.Tools = append(item.Tools, api.GoldenCaseTool{ToolID: tool.ToolID, Output: tool.Output, IsError: tool.IsError})
+		}
+		result.Cases = append(result.Cases, item)
 	}
 	for _, version := range set.Versions {
 		result.Versions = append(result.Versions, apiSetVersion(version))

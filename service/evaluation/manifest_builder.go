@@ -63,9 +63,12 @@ func (builder *ManifestBuilder) Verify(manifest domain.EvaluationManifest) error
 func DatasetRevision(examples []domain.GoldenExample) string {
 	lines := make([]string, 0, len(examples))
 	for _, example := range examples {
-		lines = append(lines, strings.Join([]string{
-			example.ExampleID, example.Payload.Digest, sha256Hex(example.ExpectedBehavior), fmt.Sprint(example.Hidden),
-		}, "\x1f"))
+		fields := []string{example.ExampleID, example.Payload.Digest, sha256Hex(example.ExpectedBehavior), fmt.Sprint(example.Hidden)}
+		// A script joins the line only when present, so an unscripted example digests as before.
+		if example.Script.Digest != "" {
+			fields = append(fields, example.Script.Digest)
+		}
+		lines = append(lines, strings.Join(fields, "\x1f"))
 	}
 	sort.Strings(lines)
 	return sha256Hex([]byte(strings.Join(lines, "\x1e")))

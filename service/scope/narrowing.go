@@ -31,6 +31,8 @@ const (
 	NarrowRouting NarrowingRule = "routing"
 	// NarrowGate lets a child only raise an evaluation gate's requirements.
 	NarrowGate NarrowingRule = "gate"
+	// NarrowAlerts lets a child only tighten an alert policy: lower its thresholds, keep its window.
+	NarrowAlerts NarrowingRule = "alerts"
 )
 
 // PlatformNarrowingRules mirrors the seeded resource_kind.narrowing_rule column.
@@ -47,6 +49,7 @@ var PlatformNarrowingRules = map[domain.ResourceKind]NarrowingRule{
 	domain.ResourceLimits:          NarrowAtMost,
 	domain.ResourceApprovalRouting: NarrowRouting,
 	domain.ResourceEvaluationGate:  NarrowGate,
+	domain.ResourceHealthAlerts:    NarrowAlerts,
 }
 
 // LatticeChecker rejects any effective value that broadens what it inherits. An
@@ -83,6 +86,8 @@ func (c *LatticeChecker) CheckNarrowing(_ context.Context, kind domain.ResourceK
 		return checkRouting(kind, inherited, candidate)
 	case NarrowGate:
 		return checkEvaluationGate(kind, inherited, candidate)
+	case NarrowAlerts:
+		return checkHealthAlerts(kind, inherited, candidate)
 	default:
 		return fmt.Errorf("%w: unsupported narrowing rule %q for kind %q", domain.ErrValidation, rule, kind)
 	}

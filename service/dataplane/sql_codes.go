@@ -24,4 +24,12 @@ const (
 	sqlReservationSettled  = "'" + string(domain.ReservationSettled) + "'"
 	sqlReservationReleased = "'" + string(domain.ReservationReleased) + "'"
 	sqlReservationExpired  = "'" + string(domain.ReservationExpired) + "'"
+
+	sqlAgentActive   = "'" + string(domain.AgentStateActive) + "'"
+	sqlAlertOpen     = "'" + string(domain.AlertOpen) + "'"
+	sqlAlertResolved = "'" + string(domain.AlertResolved) + "'"
+	sqlAlertFailure  = "'" + string(domain.AlertFailureRate) + "'"
+	sqlAlertLatency  = "'" + string(domain.AlertLatency) + "'"
+	sqlAlertSafety   = "'" + string(domain.AlertSafety) + "'"
+	sqlAlertSilence  = "'" + string(domain.AlertSilence) + "'"
 )

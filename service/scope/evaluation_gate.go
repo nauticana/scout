@@ -146,11 +146,12 @@ func checkEvaluationGate(kind domain.ResourceKind, inherited, candidate []byte) 
 
 var _ contract.ResourceMerger = EvaluationGateMerger{}
 
-// WithoutEvaluationGate returns release without its evaluation_gate resource, re-digested. The gate
-// governs whether a release may be published, not how it runs, so no release freezes it.
-func WithoutEvaluationGate(release domain.EffectiveRelease) domain.EffectiveRelease {
+// WithoutOperationalSettings returns release without its evaluation_gate and health_alerts
+// resources, re-digested. They govern whether a release may be published and when its health
+// alerts, not how it runs, so no release freezes them.
+func WithoutOperationalSettings(release domain.EffectiveRelease) domain.EffectiveRelease {
 	release.Resources = slices.DeleteFunc(slices.Clone(release.Resources), func(resource domain.EffectiveResource) bool {
-		return resource.ResourceKind == domain.ResourceEvaluationGate
+		return resource.ResourceKind == domain.ResourceEvaluationGate || resource.ResourceKind == domain.ResourceHealthAlerts
 	})
 	release.Digest = Digest(release)
 	return release

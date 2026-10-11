@@ -1,0 +1,40 @@
+table: agent_health_state
+comment: The health evaluator's last measurement of one agent, replaced at every evaluation
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: evaluated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: window_minutes
+    type: INTEGER
+  - name: turns
+    type: BIGINT
+    comment: Turns queued in the window
+  - name: judged_turns
+    type: BIGINT
+    comment: Completed and failed turns, the failure rate's denominator
+  - name: failure_rate_bp
+    type: INTEGER
+    nullable: true
+  - name: p95_latency_ms
+    type: BIGINT
+    nullable: true
+  - name: hard_safety_events
+    type: BIGINT
+primary_key: [partner_id, agent_id]
+foreign_keys:
+  - name: agent_health_states
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+checks:
+  - name: agent_health_state_counts_ck
+    expression: window_minutes > 0 AND judged_turns >= 0 AND judged_turns <= turns AND hard_safety_events >= 0
+  - name: agent_health_state_rate_ck
+    expression: failure_rate_bp IS NULL OR failure_rate_bp BETWEEN 0 AND 10000
+  - name: agent_health_state_latency_ck
+    expression: p95_latency_ms IS NULL OR p95_latency_ms >= 0

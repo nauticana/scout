@@ -192,11 +192,10 @@ func TestAgentEvaluationWorkerComparesWithARecordedBaseline(t *testing.T) {
 
 func TestAgentEvaluationWorkerRefusesAnUncomposedComparison(t *testing.T) {
 	for name, mutate := range map[string]func(*AgentEvaluationWorker, *queueFake){
-		"no pair judge":   func(w *AgentEvaluationWorker, _ *queueFake) { w.PairJudge = nil },
-		"no output store": func(w *AgentEvaluationWorker, _ *queueFake) { w.Outputs = nil },
-		"no requester":    func(_ *AgentEvaluationWorker, q *queueFake) { q.claim.Run.RequestedBy = domain.PrincipalRef{} },
-		"arm a unpinned":  func(_ *AgentEvaluationWorker, q *queueFake) { q.claim.Baseline = nil },
-		"no releases":     func(w *AgentEvaluationWorker, _ *queueFake) { w.Releases = nil },
+		"no pair judge":  func(w *AgentEvaluationWorker, _ *queueFake) { w.PairJudge = nil },
+		"no requester":   func(_ *AgentEvaluationWorker, q *queueFake) { q.claim.Run.RequestedBy = domain.PrincipalRef{} },
+		"arm a unpinned": func(_ *AgentEvaluationWorker, q *queueFake) { q.claim.Baseline = nil },
+		"no releases":    func(w *AgentEvaluationWorker, _ *queueFake) { w.Releases = nil },
 	} {
 		queue := &queueFake{claim: comparisonClaim(nil)}
 		w, _, pairs := comparisonWorker(t, queue, nil)
@@ -208,8 +207,14 @@ func TestAgentEvaluationWorkerRefusesAnUncomposedComparison(t *testing.T) {
 			t.Fatalf("%s: judged %d, finished %v", name, len(*pairs), queue.finished)
 		}
 	}
+	unstored := &queueFake{claim: comparisonClaim(nil)}
+	w, _, _ := comparisonWorker(t, unstored, nil)
+	w.Outputs = nil
+	if err := w.Execute(context.Background(), testLease); err == nil || len(unstored.finished) != 0 {
+		t.Fatalf("a worker without output storage is not composed: %v, %v", err, unstored.finished)
+	}
 	queue := &queueFake{claim: comparisonClaim(nil), recordErr: errors.New("store down")}
-	w, _, _ := comparisonWorker(t, queue, nil)
+	w, _, _ = comparisonWorker(t, queue, nil)
 	if err := w.Execute(context.Background(), testLease); err == nil || len(queue.finished) != 0 {
 		t.Fatalf("a store failure must leave the run for reclaim: %v, %v", err, queue.finished)
 	}

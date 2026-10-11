@@ -62,6 +62,8 @@ indexes:
     columns: [partner_id, release_version, severity_code]
   - name: safety_event_agent_ix
     columns: [partner_id, agent_id, id]
+  - name: safety_event_agent_time_ix
+    columns: [partner_id, agent_id, occurred_at]
 checks:
   - name: safety_event_duration_ck
     expression: duration_ms >= 0

@@ -39,6 +39,9 @@ const (
 	DefaultStudioMaxPageSize = 200
 )
 
+// DefaultTrajectoryMaxBytes is the largest stored trajectory Studio reads when no flag names one.
+const DefaultTrajectoryMaxBytes = 1 << 20
+
 // StudioEvaluation serves an agent's saved test cases and evaluations to Studio. Every
 // Studio actor works in the dev golden scope: gate cases are never returned, written,
 // or executed for them, and a run's gate results are only counted.
@@ -63,6 +66,9 @@ type StudioEvaluation struct {
 	// MaxPageAnswerBytes bounds the stored answers one comparison page returns; answers past it
 	// are omitted and marked. Zero takes DefaultComparisonPageAnswerBytes.
 	MaxPageAnswerBytes int
+	// MaxTrajectoryBytes bounds the stored trajectory Trajectory reads, through Outputs; zero
+	// takes DefaultTrajectoryMaxBytes.
+	MaxTrajectoryBytes int
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -83,8 +89,8 @@ func (s *StudioEvaluation) init(ctx context.Context) error {
 	if s.MaxOpenRuns < 0 {
 		return fmt.Errorf("%w: max open runs cannot be negative", domain.ErrValidation)
 	}
-	if s.MaxPageAnswerBytes < 0 {
-		return fmt.Errorf("%w: comparison page answer bytes cannot be negative", domain.ErrValidation)
+	if s.MaxPageAnswerBytes < 0 || s.MaxTrajectoryBytes < 0 {
+		return fmt.Errorf("%w: comparison page answer bytes and trajectory bytes cannot be negative", domain.ErrValidation)
 	}
 	if s.PageSize < 0 || s.MaxPageSize < 0 || s.pageSize() > s.maxPageSize() {
 		return fmt.Errorf("%w: result page size %d must be non-negative and within the largest page %d", domain.ErrValidation, s.pageSize(), s.maxPageSize())
@@ -321,4 +327,46 @@ func (s *StudioEvaluation) viewableRun(ctx context.Context, actor domain.StudioA
 		return domain.AgentEvaluationRun{}, err
 	}
 	return run, nil
+}
+
+// Trajectory reads one dev result's stored trajectory as role ran it: arm b (the candidate) of
+// any run, or arm a (the baseline) of a comparison. A run of an agent the actor cannot VIEW, a
+// gate example, and a result without a trajectory read as not found.
+func (s *StudioEvaluation) Trajectory(ctx context.Context, actor domain.StudioActor, runID int64, exampleID string, role domain.EvaluationRole) (domain.CaseTrajectory, error) {
+	if err := s.init(ctx); err != nil {
+		return domain.CaseTrajectory{}, err
+	}
+	if runID <= 0 || strings.TrimSpace(exampleID) == "" || !role.Valid() {
+		return domain.CaseTrajectory{}, fmt.Errorf("%w: run_id, case_id, and an arm are required", domain.ErrValidation)
+	}
+	if s.Outputs == nil {
+		return domain.CaseTrajectory{}, fmt.Errorf("%w: reading trajectories is not composed", domain.ErrNotReady)
+	}
+	run, err := s.viewableRun(ctx, actor, runID)
+	if err != nil {
+		return domain.CaseTrajectory{}, err
+	}
+	if role == domain.RoleBaseline && run.Baseline == nil {
+		return domain.CaseTrajectory{}, fmt.Errorf("%w: evaluation run %d has no arm a", domain.ErrNotFound, runID)
+	}
+	ref, err := s.Runs.Trajectory(ctx, domain.GoldenScopeDev, actor.TenantID, runID, exampleID, role)
+	if err != nil {
+		return domain.CaseTrajectory{}, err
+	}
+	content, err := s.Outputs.Read(ctx, ref)
+	if err != nil {
+		return domain.CaseTrajectory{}, fmt.Errorf("read trajectory of case %q: %w", exampleID, err)
+	}
+	if maxBytes := orDefault(s.MaxTrajectoryBytes, DefaultTrajectoryMaxBytes); len(content) > maxBytes {
+		return domain.CaseTrajectory{}, fmt.Errorf("%w: trajectory of case %q exceeds %d bytes", domain.ErrValidation, exampleID, maxBytes)
+	}
+	if sha256Hex(content) != strings.ToLower(ref.Digest) {
+		return domain.CaseTrajectory{}, fmt.Errorf("trajectory of case %q does not match its digest", exampleID)
+	}
+	events, err := decodeTrajectory(content)
+	if err != nil {
+		// A stored trajectory that does not decode is a server fault, so its validation class is not kept.
+		return domain.CaseTrajectory{}, fmt.Errorf("stored trajectory of case %q is malformed: %v", exampleID, err)
+	}
+	return domain.CaseTrajectory{RunID: runID, ExampleID: exampleID, Role: role, Events: events}, nil
 }

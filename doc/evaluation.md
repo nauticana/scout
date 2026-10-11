@@ -33,6 +33,18 @@ owned by its agent (`golden_set.owner_agent_id`); sharing an existing set needs
 EDIT on its owning agent, and a set no agent owns belongs to the product and is
 refused.
 
+A case may be scripted. Its input is turn 1; `turns` lists the inputs of turns 2..n
+(`golden_case_turn`), each submitted once the previous turn completes, and `tools` the
+sandboxed response every call of one tool gets while the case replays (`golden_case_tool`):
+JSON output, or a failure, which carries no output and reaches the model as a failed call of
+class `contract_failed`, as a live tool failure would. A tool is scripted at most once, and
+`GoldenCaseStore` bounds a case's turns, input included (`MaxTurns`), its tool responses
+(`MaxTools`), and each output (`MaxToolOutputBytes`). `Freeze` stores each scripted case's
+canonical script — tool ids sorted, outputs compact — in object storage under its content key
+and names it from the example (`golden_example.script_uri`, `script_digest`); an unscripted
+example has no script. Every replay reads the script back strictly and checks it against its
+digest.
+
 Studio actors always work in the dev scope: gate cases are never returned,
 written, or run for them, only counted (`hidden_cases`, `hidden_results`). The
 product writes gate cases through `GoldenCaseStore` in the gate scope.
@@ -60,10 +72,22 @@ release's output guardrails when composed. The example payload is the turn input
 verified against its digest. An agent that exhausts a limit, loops, or answers
 invalidly ends its trajectory in a failed state instead of failing the run.
 
+`Sandboxes` is an `evaluation.SandboxFactory` that builds each replay's sandbox from the
+example's script. `ScriptSandbox`, the production one, is a strict `RecordingSandbox`: it
+answers each scripted tool with its response, fails every call of a tool scripted to fail,
+and fails a call of any other tool, so an unscripted example gets an empty strict sandbox and
+no replay reaches a live tool. A scripted example replays turn by turn as one conversation:
+one conversation id, a request id per turn, and the previous turn's final state carried
+forward. Limits, the per-turn budget, and the output guardrails apply to every turn, a `state`
+event named `turn` marks where each turn after the first starts, and a turn that ends
+suspended, blocked, or failed ends the case. The case's answer is the last turn's, its usage
+and trajectory span every turn, and retrieval runs on each turn's input; preserved retrieval
+answers a single-turn example only.
+
 The release's frozen `limits` binding, read through `ReleaseLimits` (required: the
 data plane's `PrincipalLimits`) before the payload or a sandbox, only narrows the
 executor's ceilings: `max_tool_calls` and the step deadline narrow the tool loop,
-`max_steps` lowers `MaxSteps`, and `max_duration_seconds` bounds the whole graph
+`max_steps` lowers `MaxSteps`, and `max_duration_seconds` bounds each turn's graph
 walk, guardrails included. A per-turn budget bounds every step's spend as it does a
 live turn's. `turns_per_minute` does not apply to a replay. Limits or a budget
 that cannot be read fail the case before any model call; running out of the
@@ -131,10 +155,28 @@ detected — a gate that costs more than the incidents it prevents is misconfigu
 ratio.
 
 `AgentEvaluationWorker` (`NewAgentEvaluationWorker`) is the keel leased queue worker
-(queue `agent-evaluation`) for queued agent runs. A draft subject runs each example
-input, checked against its digest, through the governed
+(queue `agent-evaluation`) for queued agent runs. A draft subject runs each unscripted
+example input, checked against its digest, through the governed
 `contract.AgentDraftTestExecutor` with the pinned definition and the limits of its
 pinned settings; a release subject replays through `contract.CaseExecutor`.
+
+A scripted example on a draft subject replays through `DraftReplays`, a
+`contract.DraftCaseExecutor`; `evaluation.DraftCaseExecutor` is Scout's. It compiles the
+frozen definition's graph and runs it through the tool loop a release runs, with no release
+behind it: requests read only the frozen definition, the loop lists exactly the tool and skill
+versions the draft binds, the example's sandbox answers every tool call, and the limits and
+per-turn budget come from the settings frozen with the draft, checked against its settings
+digest. No output guardrails apply. Turns replay as a release's do, and comparisons use it
+for a draft arm too. A run with scripted examples and a draft arm fails before any example
+runs when no `DraftReplays` is composed or the draft declares no tool loop.
+
+`Outputs` is required: the worker stores every executed case's trajectory there under its
+content digest (`evaluation_result.trajectory_uri`, `trajectory_digest`), detached from
+cancellation so that a trajectory paid for is kept, and a case with no trajectory stores
+nothing. A storage failure records the case's usage with a reason and fails the run. An
+optional `Trajectory` (`contract.TrajectoryEvaluator`, such as `evaluation.TrajectoryScorer`)
+scores each case of a single-subject run that has a trajectory, after the heuristic
+evaluators and before the rubric judge; its failure fails the run as any evaluator's does.
 Examples run with bounded concurrency. A draft makes one model call, so only
 `max_duration_seconds` applies to it; settings that do not match their digest,
 or limits that cannot be read, fail the run before any example runs. A draft
@@ -154,6 +196,22 @@ it as unsettled. A lost lease, a store failure, or cancellation leaves the run f
 reclaim, and a lease that expires on the `agent_evaluation_max_attempts`-th claim
 fails it. Reasons carry only the error class and never name a gate example.
 Authorization is checked at enqueue, not again when the worker executes.
+
+The worker refuses a trajectory larger than `AgentEvaluationWorker.MaxTrajectoryBytes` before
+storage. Studio reads one through `GET evaluation/trajectory?run_id=&case_id=&arm=`
+(`VIEW`, `StudioEvaluation.Trajectory`): arm `b` (the default) of any run, or arm `a` of a
+comparison, in the dev scope only, so a gate example, a run of an agent the actor cannot VIEW,
+and a result without a trajectory read as not found. It reads through `StudioEvaluation.Outputs`,
+refuses a trajectory larger than `MaxTrajectoryBytes`, and checks it against its digest; a
+stored trajectory that does not decode is a server fault. Results mark a case whose trajectory
+the route returns with `has_trajectory`, and the `evaluation` feature is at version 2.
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `agent_evaluation_case_max_turns` | 10 | Turns one case may script, its input included (`GoldenCaseStore.MaxTurns`) |
+| `agent_evaluation_case_max_tools` | 20 | Sandboxed tool responses one case may script (`GoldenCaseStore.MaxTools`) |
+| `agent_evaluation_case_tool_max_bytes` | 16384 | Bytes of one scripted tool output (`GoldenCaseStore.MaxToolOutputBytes`) |
+| `agent_evaluation_trajectory_max_bytes` | 1048576 | Bytes of one stored trajectory (`AgentEvaluationWorker.MaxTrajectoryBytes`, `StudioEvaluation.MaxTrajectoryBytes`) |
 
 ## Rubric judge
 
@@ -212,17 +270,18 @@ same definition are refused. The comparison is an `evaluation_run` with two
 open-run cap as any evaluation and recorded as a `COMPARE` Studio event.
 
 `AgentEvaluationWorker` answers each example with `a`, then `b`: a draft through the draft tester,
-a release through the case executor, and a baseline with its recorded output, read and checked
-against its digest. It writes each executed answer to `Outputs` under its content digest
-(`evaluation_result.output_uri` and `output_digest`) and records one `evaluation_comparison` row
+or through `DraftReplays` for a scripted example, a release through the case executor, and a
+baseline with its recorded output, read and checked against its digest. It writes each executed
+answer and trajectory to `Outputs` under its content digest (`evaluation_result.output_uri` and
+`output_digest`, `trajectory_uri` and `trajectory_digest`) and records one `evaluation_comparison` row
 per example. An arm that ended in a failed state loses without a judge call, and two such arms
 tie; otherwise `PairJudge`, the strict `GatewayJudge`, decides as the run's requester. Comparison
 runs apply neither the heuristic evaluators nor the rubric judge. Both arms' spend and the judge's
 count in the run totals and against `MaxRunCostMinorUnits`, and are recorded even when an arm, the
-answer storage, or the judge then fails; that record carries a reason and fails the run, so a
+answer or trajectory storage, or the judge then fails; that record carries a reason and fails the run, so a
 reclaimed attempt never pays for the example again. A judge call cut off by shutdown records
-nothing and the example is compared again. A comparison with no `PairJudge`, no `Outputs`, or no
-requester to charge fails before any example runs.
+nothing and the example is compared again. A comparison with no `PairJudge` or no requester to charge
+fails before any example runs.
 
 `GET compare` (`VIEW`) returns the run, a tally of verdicts (`a`, `b`, `tie`, and `failed` for an
 example with none), and a page of dev examples with both stored answers, each checked against its

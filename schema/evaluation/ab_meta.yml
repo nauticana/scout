@@ -17,3 +17,5 @@ tables:
   - agent_gate_decision
   - agent_gate_decision_run
   - evaluation_comparison
+  - golden_case_turn
+  - golden_case_tool

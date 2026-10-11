@@ -16,6 +16,7 @@ import (
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/service/confirmation"
+	"github.com/nauticana/scout/service/dataplane"
 	"github.com/nauticana/scout/service/evaluation"
 	"github.com/nauticana/scout/service/observability"
 	"github.com/nauticana/scout/service/scope"
@@ -164,6 +165,17 @@ const (
 	agent_evaluation_baseline_max_bytes = "agent_evaluation_baseline_max_bytes"
 	agent_evaluation_max_baselines      = "agent_evaluation_max_baselines"
 	agent_evaluation_compare_page_bytes = "agent_evaluation_compare_page_bytes"
+
+	agent_health_period                   = "agent_health_period"
+	agent_health_batch                    = "agent_health_batch"
+	agent_health_window                   = "agent_health_window"
+	agent_health_stale_periods            = "agent_health_stale_periods"
+	agent_alert_page_size                 = "agent_alert_page_size"
+	agent_alert_max_page_size             = "agent_alert_max_page_size"
+	agent_evaluation_case_max_turns       = "agent_evaluation_case_max_turns"
+	agent_evaluation_case_max_tools       = "agent_evaluation_case_max_tools"
+	agent_evaluation_case_tool_max_bytes  = "agent_evaluation_case_tool_max_bytes"
+	agent_evaluation_trajectory_max_bytes = "agent_evaluation_trajectory_max_bytes"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -340,6 +352,17 @@ type ScoutConfig struct {
 	AgentEvaluationBaselineMaxBytes int // agent_evaluation_baseline_max_bytes 32768 Bytes of one recorded human baseline output; 0 uses Scout's default
 	AgentEvaluationMaxBaselines     int // agent_evaluation_max_baselines 20 Human baselines one golden set version may hold; 0 uses Scout's default
 	AgentEvaluationComparePageBytes int // agent_evaluation_compare_page_bytes 1048576 Bytes of stored answers one comparison page returns; 0 uses Scout's default
+
+	AgentHealthPeriod                 int // agent_health_period 60 Seconds between health evaluator passes (1..86400); 0 takes 60
+	AgentHealthBatch                  int // agent_health_batch 100 Active agents one page of a health pass reads (1..10000); 0 takes 100
+	AgentHealthWindow                 int // agent_health_window 60 Minutes a health measure covers when the policy names no window (1..10080); 0 takes 60
+	AgentHealthStalePeriods           int // agent_health_stale_periods 3 Evaluator periods an agent may go unevaluated before its telemetry is stale (1..1000); 0 takes 3
+	AgentAlertPageSize                int // agent_alert_page_size 50 Alerts one Studio page returns when the caller names no limit (0..agent_alert_max_page_size); 0 takes 50
+	AgentAlertMaxPageSize             int // agent_alert_max_page_size 200 Largest alert page a Studio caller may ask for (1..1000); 0 takes 200
+	AgentEvaluationCaseMaxTurns       int // agent_evaluation_case_max_turns 10 Turns one golden case scripts, its input included (1..100); 0 uses Scout's default
+	AgentEvaluationCaseMaxTools       int // agent_evaluation_case_max_tools 20 Sandboxed tool responses one golden case scripts (1..200); 0 uses Scout's default
+	AgentEvaluationCaseToolMaxBytes   int // agent_evaluation_case_tool_max_bytes 16384 Bytes of one scripted tool output (2..1048576); 0 uses Scout's default
+	AgentEvaluationTrajectoryMaxBytes int // agent_evaluation_trajectory_max_bytes 1048576 Bytes of one stored case trajectory (1024..16777216); 0 uses Scout's default
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -570,6 +593,16 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentEvaluationBaselineMaxBytes = c.Int(rows, agent_evaluation_baseline_max_bytes)
 	c.AgentEvaluationMaxBaselines = c.Int(rows, agent_evaluation_max_baselines)
 	c.AgentEvaluationComparePageBytes = c.Int(rows, agent_evaluation_compare_page_bytes)
+	c.AgentHealthPeriod = c.Int(rows, agent_health_period)
+	c.AgentHealthBatch = c.Int(rows, agent_health_batch)
+	c.AgentHealthWindow = c.Int(rows, agent_health_window)
+	c.AgentHealthStalePeriods = c.Int(rows, agent_health_stale_periods)
+	c.AgentAlertPageSize = c.Int(rows, agent_alert_page_size)
+	c.AgentAlertMaxPageSize = c.Int(rows, agent_alert_max_page_size)
+	c.AgentEvaluationCaseMaxTurns = c.Int(rows, agent_evaluation_case_max_turns)
+	c.AgentEvaluationCaseMaxTools = c.Int(rows, agent_evaluation_case_max_tools)
+	c.AgentEvaluationCaseToolMaxBytes = c.Int(rows, agent_evaluation_case_tool_max_bytes)
+	c.AgentEvaluationTrajectoryMaxBytes = c.Int(rows, agent_evaluation_trajectory_max_bytes)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -579,7 +612,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 			judgeErr = fmt.Errorf("agent_evaluation_judge_*: %w", judgeErr)
 		}
 	}
-	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors())
+	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors())
 }
 
 // runtimeRangeErr refuses a negative data plane or runtime tuning flag; zero takes Scout's default.
@@ -733,6 +766,57 @@ func (c *ScoutConfig) reviewFlagErrors() error {
 	size, maxSize := cmp.Or(c.AgentReviewPageSize, evaluation.DefaultReviewPageSize), cmp.Or(c.AgentReviewMaxPageSize, evaluation.DefaultReviewMaxPageSize)
 	if size > maxSize {
 		errs = append(errs, fmt.Errorf("%s: %d exceeds the largest page %d", agent_review_page_size, size, maxSize))
+	}
+	return errors.Join(errs...)
+}
+
+// AgentHealthSettings is what the agent_health_* and agent_alert_* flags configure for
+// dataplane.AgentHealth and its worker.
+func (c *ScoutConfig) AgentHealthSettings() domain.AgentHealthSettings {
+	return domain.AgentHealthSettings{
+		Period: time.Duration(c.AgentHealthPeriod) * time.Second, Batch: c.AgentHealthBatch, WindowMinutes: int64(c.AgentHealthWindow),
+		StalePeriods: c.AgentHealthStalePeriods, AlertPageSize: c.AgentAlertPageSize, AlertMaxPageSize: c.AgentAlertMaxPageSize,
+	}
+}
+
+// healthFlagErrors refuses a health or alert flag outside its range and a default alert page
+// larger than the largest page; zero takes each default.
+func (c *ScoutConfig) healthFlagErrors() error {
+	var errs []error
+	for _, flag := range []struct {
+		name       string
+		value, max int
+	}{
+		{agent_health_period, c.AgentHealthPeriod, 86400}, {agent_health_batch, c.AgentHealthBatch, 10000},
+		{agent_health_window, c.AgentHealthWindow, domain.MaxHealthWindowMinutes}, {agent_health_stale_periods, c.AgentHealthStalePeriods, 1000},
+		{agent_alert_page_size, c.AgentAlertPageSize, 1000}, {agent_alert_max_page_size, c.AgentAlertMaxPageSize, 1000},
+	} {
+		if flag.value < 0 || flag.value > flag.max {
+			errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", flag.name, flag.value, flag.max))
+		}
+	}
+	size, maxSize := cmp.Or(c.AgentAlertPageSize, dataplane.DefaultAlertPageSize), cmp.Or(c.AgentAlertMaxPageSize, dataplane.DefaultAlertMaxPageSize)
+	if size > maxSize {
+		errs = append(errs, fmt.Errorf("%s: %d exceeds the largest page %d", agent_alert_page_size, size, maxSize))
+	}
+	return errors.Join(errs...)
+}
+
+// caseScriptFlagErrors refuses a golden case script or trajectory bound outside its range; zero takes Scout's default.
+func (c *ScoutConfig) caseScriptFlagErrors() error {
+	var errs []error
+	for _, flag := range []struct {
+		name          string
+		value, lo, hi int
+	}{
+		{agent_evaluation_case_max_turns, c.AgentEvaluationCaseMaxTurns, 1, 100},
+		{agent_evaluation_case_max_tools, c.AgentEvaluationCaseMaxTools, 1, 200},
+		{agent_evaluation_case_tool_max_bytes, c.AgentEvaluationCaseToolMaxBytes, 2, 1 << 20},
+		{agent_evaluation_trajectory_max_bytes, c.AgentEvaluationTrajectoryMaxBytes, 1 << 10, 16 << 20},
+	} {
+		if flag.value != 0 && (flag.value < flag.lo || flag.value > flag.hi) {
+			errs = append(errs, fmt.Errorf("%s: %d is outside %d..%d; 0 takes the default", flag.name, flag.value, flag.lo, flag.hi))
+		}
 	}
 	return errors.Join(errs...)
 }

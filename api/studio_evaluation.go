@@ -1,12 +1,17 @@
 package api
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	StudioCasesPath       = StudioBasePath + "cases"
 	StudioCasesFreezePath = StudioBasePath + "cases/freeze"
 	StudioEvaluatePath    = StudioBasePath + "evaluate"
 	StudioEvaluationPath  = StudioBasePath + "evaluation"
+
+	StudioEvaluationTrajectoryPath = StudioBasePath + "evaluation/trajectory"
 )
 
 // GoldenCase is one saved test case of an agent's golden set.
@@ -23,6 +28,18 @@ type GoldenCase struct {
 	// (input_withheld) from a reader without REVIEW on that turn's agent.
 	ReviewItemID  int64 `json:"review_item_id,omitempty"`
 	InputWithheld bool  `json:"input_withheld,omitempty"`
+	// Turns are the inputs of turns 2..n, each submitted once the previous turn completes.
+	Turns []string `json:"turns,omitempty"`
+	// Tools are the sandboxed responses tool calls get while the case replays.
+	Tools []GoldenCaseTool `json:"tools,omitempty"`
+}
+
+// GoldenCaseTool answers every call of one tool: output is JSON; a failure (is_error) carries
+// none and reaches the model as a failed tool call.
+type GoldenCaseTool struct {
+	ToolID  string          `json:"tool_id"`
+	Output  json.RawMessage `json:"output,omitempty"`
+	IsError bool            `json:"is_error,omitempty"`
 }
 
 // GoldenSetVersion is one frozen, immutable version of a golden set.
@@ -134,6 +151,40 @@ type AgentCaseResult struct {
 	EvaluatorCost    EvaluationCost    `json:"evaluator_cost"`
 	NeedsHumanReview bool              `json:"needs_human_review"`
 	Reason           string            `json:"reason,omitempty"`
+	// HasTrajectory marks a case whose trajectory GET evaluation/trajectory returns.
+	HasTrajectory bool `json:"has_trajectory,omitempty"`
+}
+
+// TrajectoryUsage is one trajectory event's spend; cost is in minor units of currency.
+type TrajectoryUsage struct {
+	InputTokens    int64  `json:"input_tokens,omitempty"`
+	OutputTokens   int64  `json:"output_tokens,omitempty"`
+	ToolCalls      int    `json:"tool_calls,omitempty"`
+	SearchQueries  int64  `json:"search_queries,omitempty"`
+	CostMinorUnits int64  `json:"cost_minor_units,omitempty"`
+	Currency       string `json:"currency,omitempty"`
+}
+
+// TrajectoryEvent is one sequenced event: kind is token, tool_call, observation, state, or
+// policy; a state event named turn marks where each turn after the first starts.
+type TrajectoryEvent struct {
+	Sequence  int64            `json:"sequence"`
+	Kind      string           `json:"kind"`
+	Name      string           `json:"name,omitempty"`
+	Payload   json.RawMessage  `json:"payload,omitempty"`
+	OffsetMs  int64            `json:"offset_ms"`
+	Failed    bool             `json:"failed,omitempty"`
+	Recovered bool             `json:"recovered,omitempty"`
+	Usage     *TrajectoryUsage `json:"usage,omitempty"`
+}
+
+// CaseTrajectory is GET evaluation/trajectory?run_id=&case_id=&arm=: one case's trajectory as
+// arm b (the default) or arm a of a comparison ran it.
+type CaseTrajectory struct {
+	RunID  int64             `json:"run_id"`
+	CaseID string            `json:"case_id"`
+	Arm    string            `json:"arm"`
+	Events []TrajectoryEvent `json:"events"`
 }
 
 // AgentEvaluationPage is GET evaluation: the run and one page of results in descending

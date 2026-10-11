@@ -206,7 +206,7 @@ func (s *StudioService) freeze(ctx context.Context, tenantID int64, draft domain
 	if err = validateSingletonSettings(release.Resources); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
-	release = scope.WithoutEvaluationGate(release)
+	release = scope.WithoutOperationalSettings(release)
 	if err = s.init(ctx); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
@@ -401,7 +401,7 @@ func singletonSetting(kind domain.ResourceKind) bool {
 	switch kind {
 	case domain.ResourceTool, domain.ResourceKnowledge, domain.ResourceModel, domain.ResourceEntitlement,
 		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill, domain.ResourceLimits, domain.ResourceApprovalRouting,
-		domain.ResourceEvaluationGate:
+		domain.ResourceEvaluationGate, domain.ResourceHealthAlerts:
 		return true
 	default:
 		return false

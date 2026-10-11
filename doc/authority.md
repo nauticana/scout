@@ -75,6 +75,7 @@ Binding values are canonical JSON, fixed per kind:
 | `limits` | `{"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}` | `LimitsMerger` | `at_most` |
 | `approval_routing` | `{"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}` | `RoutingMerger` | `routing` |
 | `evaluation_gate` | `{"metric":"rubric_score","min_score_bp":8000,"max_regression_bp":200,"min_samples":20,"required_scopes":["dev","gate"]}` | `EvaluationGateMerger` | `gate` |
+| `health_alerts` | `{"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120}` | `HealthAlertsMerger` | `alerts` |
 
 A set cannot express deny-wins, so `policy` has its own merger and rule: a child may drop an allow or
 add a deny, never add an allow, and an allow it keeps may not widen the parent's actions, resources,
@@ -87,13 +88,19 @@ over the parent's period, window, timezone, and currency unit (see
 [release budgets](governance.md#release-budgets)). `approval_routing` overlays its parent route by
 route and may only tighten each inherited route (see [approval routing](governance.md#approval-routing)).
 `evaluation_gate` keeps the inherited metric and may only raise `min_score_bp` and `min_samples`, lower
-`max_regression_bp` (never unset it once a parent sets it), and add `required_scopes`. It governs
-publication rather than execution, so no release freezes it (see
+`max_regression_bp` (never unset it once a parent sets it), and add `required_scopes`.
+`health_alerts` binds by replace only and may only tighten an alert policy: a child keeps the
+window once a parent sets one, may lower a threshold, the sample floor `min_turns`, or the
+silence span its parent sets, never raise or unset it, and may set one its parent leaves at 0
+(see [agent health](observability.md#agent-health-and-alerts)). `evaluation_gate` and
+`health_alerts` are operational settings: the gate governs publication and health alerts govern
+alerting, not runtime behavior, so publication and draft freezes drop both
+(`scope.WithoutOperationalSettings`) and no release freezes either (see
 [evaluation gate](governance.md#evaluation-gate)).
 
 `config_resource_kind.narrowing_rule` is the seeded source of that last column; `PlatformNarrowingRules`
 mirrors it in code. An unregistered kind fails compilation and an unmapped rule fails the check —
-both closed, never permissive. Set, budget, autonomy, limits, approval routing, and evaluation gate
+both closed, never permissive. Set, budget, autonomy, limits, approval routing, evaluation gate, and health alerts
 bindings use their kind as `resource_id`, while policy may use several ids.
 
 A release's `limits` only lower the tenant runtime policy and the executor's flag ceilings.
@@ -120,7 +127,7 @@ For each resource, per binding in chain order:
 
 `sealed` is set by the binding's own scope, so a company safety clause genuinely cannot be
 overridden — unlike a child-controlled override flag. `BudgetMerger`, `AutonomyMerger`,
-`LimitsMerger`, and `EvaluationGateMerger` clamp to the tighter inherited value, so a raised ceiling is silently impossible as
+`LimitsMerger`, `EvaluationGateMerger`, and `HealthAlertsMerger` clamp to the tighter inherited value, so a raised ceiling is silently impossible as
 well as explicitly checked.
 
 Compilation is deterministic: resources sort by `(kind, id)`, bindings by scope depth, and `Digest`

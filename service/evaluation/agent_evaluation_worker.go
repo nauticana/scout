@@ -52,14 +52,23 @@ type AgentEvaluationWorker struct {
 	// Currency is the ISO code every priced result must carry; another currency fails the run.
 	Currency string
 	// PairJudge decides each example of a comparison run as the run's requester; its spend
-	// counts against the run's cost ceiling. Without it, and Outputs, comparisons fail.
+	// counts against the run's cost ceiling. Without it, comparisons fail.
 	PairJudge contract.JudgeEvaluator
-	// Outputs stores each executed answer of a comparison under its content digest.
+	// Outputs stores each executed case's trajectory and each executed answer of a comparison
+	// under its content digest; required.
 	Outputs storage.ObjectStorage
+	// MaxTrajectoryBytes bounds a stored trajectory; zero takes DefaultTrajectoryMaxBytes.
+	MaxTrajectoryBytes int
 	// OutputScheme prefixes stored output URIs; empty means "object".
 	OutputScheme string
 	// ExtraQueries joins the worker's named SQL, for services sharing its query service.
 	ExtraQueries map[string]string
+	// DraftReplays runs a scripted example on a draft subject; a run that needs it without it
+	// fails before any example runs. Unscripted draft examples keep using Drafts.
+	DraftReplays contract.DraftCaseExecutor
+	// Trajectory, when set, scores every case of a single-subject run that has a trajectory,
+	// after the heuristic evaluators and before the judge.
+	Trajectory contract.TrajectoryEvaluator
 
 	lease                   time.Duration
 	queries                 map[string]string
@@ -103,10 +112,10 @@ func (w *AgentEvaluationWorker) validate() error {
 	switch {
 	case w.lease < time.Second || w.queries == nil:
 		return fmt.Errorf("agent evaluation worker: build it with NewAgentEvaluationWorker")
-	case w.Queue == nil || w.Examples == nil:
-		return fmt.Errorf("agent evaluation worker: queue and golden set store are required")
-	case w.Concurrency < 0:
-		return fmt.Errorf("%w: concurrency cannot be negative", domain.ErrValidation)
+	case w.Queue == nil || w.Examples == nil || w.Outputs == nil:
+		return fmt.Errorf("agent evaluation worker: queue, golden set store, and output storage are required")
+	case w.Concurrency < 0 || w.MaxTrajectoryBytes < 0:
+		return fmt.Errorf("%w: concurrency and trajectory size cannot be negative", domain.ErrValidation)
 	case w.MaxRunCostMinorUnits <= 0 || len(w.Currency) != 3:
 		return fmt.Errorf("%w: agent evaluation worker needs a positive run cost ceiling and its ISO currency", domain.ErrValidation)
 	}
@@ -151,7 +160,7 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 		switch {
 		case claim.Baseline == nil:
 			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "comparison arm a is not pinned")
-		case w.PairJudge == nil || w.Outputs == nil:
+		case w.PairJudge == nil:
 			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "comparison is not composed")
 		case strings.TrimSpace(run.RequestedBy.ID) == "":
 			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "comparison has no requester to charge")
@@ -184,6 +193,9 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 	}
 	if len(claim.Unscored) > 0 {
 		return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "a recorded example was not scored")
+	}
+	if reason := w.unreplayable(arms, examples); reason != "" {
+		return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, reason)
 	}
 	var spent int64
 	for _, usage := range claim.Recorded {
@@ -245,7 +257,17 @@ func (w *AgentEvaluationWorker) evaluateExample(ctx context.Context, claim domai
 	if err = w.settleable(evalCase); err != nil {
 		return 0, &caseFailure{example: example, err: err, unsettled: true}
 	}
-	result, scoreErr := w.score(ctx, claim.Run.RequestedBy, example, evalCase)
+	var result domain.EvaluationResult
+	var scoreErr error
+	trajectory, storeErr := w.storedTrajectory(ctx, claim.Run, evalCase)
+	if storeErr != nil {
+		result = domain.EvaluationResult{ExampleID: example.ExampleID, Role: domain.RoleCandidate, Latency: evalCase.Latency, Usage: evalCase.Usage,
+			Reason: "storing trajectory failed: " + stage.ErrorClass(storeErr)}
+		scoreErr = storeErr
+	} else {
+		result, scoreErr = w.score(ctx, claim.Run.RequestedBy, example, evalCase)
+		result.Trajectory = trajectory
+	}
 	// An executed example's usage is settled even when a sibling's failure cancelled the run.
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claim.Lease.TTL)
 	err = w.Queue.Record(recordCtx, claim.Lease, result)
@@ -297,10 +319,12 @@ func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentE
 	}
 	var evalCase domain.EvaluationCase
 	var err error
-	switch arm.Subject.Kind {
-	case domain.SubjectDraft:
+	switch {
+	case arm.Subject.Kind == domain.SubjectDraft && example.Script.URI != "":
+		evalCase, err = w.DraftReplays.ExecuteDraft(ctx, claim.Run.TenantID, *arm.Draft, arm.DraftSettings, example)
+	case arm.Subject.Kind == domain.SubjectDraft:
 		evalCase, err = w.executeDraft(ctx, claim, *arm.Draft, draftLimits, example)
-	case domain.SubjectBaseline:
+	case arm.Subject.Kind == domain.SubjectBaseline:
 		evalCase, err = w.recordedOutput(ctx, arm, example)
 	default:
 		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version}, example, nil)
@@ -330,7 +354,7 @@ func (w *AgentEvaluationWorker) recordedOutput(ctx context.Context, arm domain.E
 // settleable refuses an outcome the run's totals cannot hold: negative usage or latency, or a priced result in another currency.
 func (w *AgentEvaluationWorker) settleable(evalCase domain.EvaluationCase) error {
 	usage := evalCase.Usage
-	if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 || evalCase.Latency < 0 ||
+	if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || evalCase.Latency < 0 ||
 		usage.CostMinorUnits > 0 && usage.Currency != w.Currency {
 		return fmt.Errorf("%w: example usage of %d %s is not a non-negative amount in %s", domain.ErrValidation, usage.CostMinorUnits, usage.Currency, w.Currency)
 	}
@@ -346,6 +370,14 @@ func (w *AgentEvaluationWorker) score(ctx context.Context, principal domain.Prin
 		if err != nil {
 			result.Scores, result.Reason = nil, "scoring failed: "+stage.ErrorClass(err)
 			return result, fmt.Errorf("evaluator %s: %w", evaluator.Version().Version, err)
+		}
+		result.Scores = append(result.Scores, found...)
+	}
+	if w.Trajectory != nil && len(evalCase.Trajectory) > 0 {
+		found, err := w.Trajectory.Score(ctx, evalCase)
+		if err != nil {
+			result.Scores, result.Reason = nil, "scoring failed: "+stage.ErrorClass(err)
+			return result, fmt.Errorf("trajectory evaluator %s: %w", w.Trajectory.Version().Version, err)
 		}
 		result.Scores = append(result.Scores, found...)
 	}
@@ -422,4 +454,46 @@ func stopped(evalCase domain.EvaluationCase) bool {
 		}
 	}
 	return false
+}
+
+// unreplayable is why the run's draft arms cannot answer its scripted examples, before any
+// example runs: no draft replay composed, or a draft without a tool loop to replay one through.
+func (w *AgentEvaluationWorker) unreplayable(arms []domain.EvaluationArm, examples []domain.GoldenExample) string {
+	scripted := false
+	for _, example := range examples {
+		scripted = scripted || example.Script.URI != ""
+	}
+	if !scripted {
+		return ""
+	}
+	for _, arm := range arms {
+		switch {
+		case arm.Subject.Kind != domain.SubjectDraft:
+		case w.DraftReplays == nil:
+			return "scripted draft evaluation is not composed"
+		case arm.Draft.ToolLoop == nil:
+			return "draft cannot replay a scripted example: " + stage.ErrorClass(domain.ErrCapabilityUnsupported)
+		}
+	}
+	return ""
+}
+
+// storedTrajectory writes the case's trajectory under its content digest, detached from
+// cancellation so that a trajectory paid for is kept; a case without one stores nothing.
+func (w *AgentEvaluationWorker) storedTrajectory(ctx context.Context, run domain.AgentEvaluationRun, evalCase domain.EvaluationCase) (domain.ObjectRef, error) {
+	if len(evalCase.Trajectory) == 0 {
+		return domain.ObjectRef{}, nil
+	}
+	document, err := encodeTrajectory(evalCase.Trajectory)
+	if err != nil {
+		return domain.ObjectRef{}, err
+	}
+	if limit := orDefault(w.MaxTrajectoryBytes, DefaultTrajectoryMaxBytes); len(document) > limit {
+		return domain.ObjectRef{}, fmt.Errorf("%w: trajectory is %d bytes, limit %d", domain.ErrValidation, len(document), limit)
+	}
+	ref, err := putContent(context.WithoutCancel(ctx), w.Outputs, w.OutputScheme, fmt.Sprintf("evaluation/trajectory/%d/%d", run.TenantID, run.RunID), document)
+	if err != nil {
+		return domain.ObjectRef{}, fmt.Errorf("store trajectory: %w", err)
+	}
+	return ref, nil
 }

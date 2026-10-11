@@ -144,7 +144,7 @@ func TestAgentEvaluationStoreReadsRunsAndPagesInTheReadersScope(t *testing.T) {
 	scores := `[{"Metric":"correctness","Value":1,"Evaluator":{"Kind":"heuristic","Version":"h1"},"Rationale":"ok"}]`
 	query := newQueryFake(map[string][][]any{
 		qAgentEvalRun:     {runRow(domain.EvaluationCompleted, nil)},
-		qAgentEvalResults: {{"refund", scores, int64(250), int64(50), int64(20), int64(6), "EUR", int64(2), false, nil, int64(30), int64(4), int64(2)}},
+		qAgentEvalResults: {{"refund", scores, int64(250), int64(50), int64(20), int64(6), "EUR", int64(2), false, nil, int64(30), int64(4), int64(2), nil, nil}},
 	})
 	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
 	run, err := store.Run(ctx, domain.GoldenScopeDev, 7, 11)
@@ -283,10 +283,11 @@ func TestAgentEvaluationStoreFencesEveryWorkerWrite(t *testing.T) {
 		t.Fatalf("priced evaluator spend on a free subject stored currency %v", args[10])
 	}
 	for name, bad := range map[string]domain.Usage{
-		"another currency": {CostMinorUnits: 7, Currency: "USD"},
-		"no currency":      {CostMinorUnits: 7},
-		"negative":         {InputTokens: -1},
-		"overflow":         {CostMinorUnits: math.MaxInt64, Currency: "EUR"},
+		"another currency":  {CostMinorUnits: 7, Currency: "USD"},
+		"no currency":       {CostMinorUnits: 7},
+		"negative":          {InputTokens: -1},
+		"negative searches": {SearchQueries: -1},
+		"overflow":          {CostMinorUnits: math.MaxInt64, Currency: "EUR"},
 	} {
 		refused := result
 		refused.EvaluatorUsage = bad

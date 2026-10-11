@@ -10,6 +10,7 @@
 //	limits                                                   {"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}
 //	approval_routing                                         {"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}
 //	evaluation_gate                                          {"metric":"rubric_score","min_score_bp":8000,"max_regression_bp":200,"min_samples":20,"required_scopes":["dev","gate"]}
+//	health_alerts                                            {"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120}
 package scope
 
 import (
@@ -257,6 +258,12 @@ func CanonicalValue(kind domain.ResourceKind, raw []byte) ([]byte, error) {
 		return encodeRouting(routing)
 	case NarrowGate:
 		value, err := DecodeEvaluationGate(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(value)
+	case NarrowAlerts:
+		value, err := DecodeHealthAlerts(raw)
 		if err != nil {
 			return nil, err
 		}

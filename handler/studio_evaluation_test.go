@@ -56,12 +56,12 @@ func (f *evaluationBackendFake) Evaluation(_ context.Context, _ domain.StudioAct
 func TestStudioEvaluationRoutes(t *testing.T) {
 	h := &StudioEvaluationHandler{}
 	routes := h.Routes()
-	for _, path := range []string{api.StudioCasesPath, api.StudioCasesFreezePath, api.StudioEvaluatePath, api.StudioEvaluationPath} {
+	for _, path := range []string{api.StudioCasesPath, api.StudioCasesFreezePath, api.StudioEvaluatePath, api.StudioEvaluationPath, api.StudioEvaluationTrajectoryPath} {
 		if routes[path] == nil {
 			t.Fatalf("missing route %s", path)
 		}
 	}
-	if len(routes) != 4 {
+	if len(routes) != 5 {
 		t.Fatalf("routes = %v", routes)
 	}
 	if feature := h.Feature(); feature.ID != StudioFeatureEvaluation || len(feature.Actions) != 3 {

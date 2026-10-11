@@ -13,7 +13,7 @@ import (
 )
 
 func goldenRow(exampleID, scope string) []any {
-	return []any{int64(7), "core", int64(3), exampleID, scope, "curated", "internal", "short", "low", "billing", "en-US", "rubric://r", "expected", "object://b/" + exampleID, sha256Hex([]byte(exampleID)), `[{"Reviewer":"eve","Verdict":"accept"}]`}
+	return []any{int64(7), "core", int64(3), exampleID, scope, "curated", "internal", "short", "low", "billing", "en-US", "rubric://r", "expected", "object://b/" + exampleID, sha256Hex([]byte(exampleID)), `[{"Reviewer":"eve","Verdict":"accept"}]`, nil, nil}
 }
 
 func TestGoldenSetStoreHidesGateExamplesFromDevScope(t *testing.T) {
@@ -53,7 +53,7 @@ func TestGoldenSetStoreWriteArgumentOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := query.args[qGoldenExampleInsert]
-	if len(args) != 16 || args[0] != int64(7) || args[3] != "secret" || args[4] != "gate" || args[14] != hidden.Payload.Digest {
+	if len(args) != 18 || args[0] != int64(7) || args[3] != "secret" || args[4] != "gate" || args[14] != hidden.Payload.Digest {
 		t.Fatalf("example insert args = %v", args)
 	}
 

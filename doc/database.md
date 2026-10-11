@@ -55,14 +55,14 @@ flowchart BT
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
     model["Model<br/>6 tables"]
-    agent["Agent<br/>25 tables"]
+    agent["Agent<br/>27 tables"]
     tool["Tool<br/>5 tables"]
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>9 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
     runtime["Runtime<br/>15 tables"]
     release["Release<br/>16 tables"]
-    evaluation["Evaluation<br/>18 tables"]
+    evaluation["Evaluation<br/>20 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
@@ -72,7 +72,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 60 Scout tables — while the full platform is 143. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 147. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -162,6 +162,8 @@ flowchart RL
         agent_draft_comment["agent_draft_comment"]
         agent_publish_review["agent_publish_review"]
         agent_release_activation["agent_release_activation"]
+        agent_alert["agent_alert"]
+        agent_health_state["agent_health_state"]
     end
     agent_type_version --> agent_type
     agent_type_capability --> agent_type_version
@@ -182,6 +184,8 @@ flowchart RL
     agent_draft_comment --> prompt_section
     agent_publish_review --> agent_version
     agent_release_activation --> agent_version
+    agent_alert --> agent_profile
+    agent_health_state --> agent_profile
     agent_template --> agent_type
     agent_template_version --> agent_template
     agent_template_version --> agent_type_version
@@ -365,6 +369,8 @@ flowchart RL
         agent_gate_decision["agent_gate_decision"]
         agent_gate_decision_run["agent_gate_decision_run"]
         evaluation_comparison["evaluation_comparison"]
+        golden_case_turn["golden_case_turn"]
+        golden_case_tool["golden_case_tool"]
     end
     human_review_item --> golden_set
     golden_set_version --> golden_set
@@ -387,6 +393,8 @@ flowchart RL
     agent_gate_decision_run --> evaluation_run
     evaluation_comparison --> evaluation_run
     evaluation_comparison --> golden_example
+    golden_case_turn --> golden_case
+    golden_case_tool --> golden_case
 
     subgraph skill["Skill"]
         direction BT
@@ -576,6 +584,8 @@ erDiagram
     agent_tenant ||--o{ tool_profile : tool_profiles
     agent_profile ||--o{ guardrail_config : guardrail_configs
     agent_profile ||--o{ safety_event : agent_safety_events
+    agent_profile ||--o{ agent_alert : agent_alerts
+    agent_profile ||--o| agent_health_state : agent_health_states
     agent_profile ||--o{ agent_version : agent_versions
     guardrail_config ||--o{ agent_version : agent_versions_guardrail
     agent_profile ||--o| agent_deployment : agent_deployments
@@ -619,6 +629,30 @@ erDiagram
         varchar action_code
         text rule_ids
         varchar release_version
+        timestamp occurred_at
+    }
+    agent_alert {
+        bigint id PK
+        bigint partner_id FK
+        varchar agent_id FK
+        char kind_code
+        char status_code
+        timestamp opened_at
+        timestamp resolved_at
+        bigint observed_value
+        bigint threshold_value
+        int window_minutes
+    }
+    agent_health_state {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        timestamp evaluated_at
+        int window_minutes
+        bigint turns
+        bigint judged_turns
+        int failure_rate_bp
+        bigint p95_latency_ms
+        bigint hard_safety_events
     }
     agent_version {
         bigint partner_id PK,FK
@@ -693,7 +727,7 @@ erDiagram
     }
 ```
 
-Agent, guardrail, and tool versions are immutable. A release's `guardrail_config` version is the digest of the rule set it froze, so releases with identical rules share one row. `safety_event` records one guardrail intervention — stage, layer, action, rule ids, and the release and policy versions — never the inspected content; `agent_id` is set when the inspected principal is an agent, which is how events are paged per agent. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
+Agent, guardrail, and tool versions are immutable. A release's `guardrail_config` version is the digest of the rule set it froze, so releases with identical rules share one row. `safety_event` records one guardrail intervention — stage, layer, action, rule ids, and the release and policy versions — never the inspected content; `agent_id` is set when the inspected principal is an agent, which is how events are paged per agent (`safety_event_agent_ix`) and counted over an agent's health window (`safety_event_agent_time_ix`). `agent_alert` is one health alert of an agent, `kind_code` `F` (failure rate), `L` (latency), `H` (hard safety events), or `S` (silence) and `status_code` `O` (open) or `R` (resolved), with the measurement that opened it and the threshold it exceeded; the partial unique index `agent_alert_open_uq` holds at most one open alert per agent and kind. The `agent` seed registers both code lists as keel constants. `agent_health_state` is the health evaluator's last measurement of an agent, replaced at every evaluation; its `evaluated_at` is how Studio tells fresh telemetry from stale. The evaluator reaches an agent's turns through `agent_conversation_agent_ix`. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
 
 ### Skills
 
@@ -2018,6 +2052,8 @@ erDiagram
     golden_set ||--o{ golden_set_version : golden_set_versions
     golden_set ||--o{ golden_case : golden_cases
     approval_risk_tier ||--o{ golden_case : risk_tier_golden_cases
+    golden_case ||--o{ golden_case_turn : golden_case_turns
+    golden_case ||--o{ golden_case_tool : golden_case_tools
     golden_set ||--o{ agent_golden_set : golden_set_agents
     golden_set_version ||--o{ golden_example : golden_examples
     golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
@@ -2097,6 +2133,21 @@ erDiagram
         varchar risk_tier_code FK
         bigint review_item_id FK
     }
+    golden_case_turn {
+        bigint partner_id PK,FK
+        varchar golden_set_id PK,FK
+        varchar case_id PK,FK
+        int turn_no PK
+        text input_text
+    }
+    golden_case_tool {
+        bigint partner_id PK,FK
+        varchar golden_set_id PK,FK
+        varchar case_id PK,FK
+        varchar tool_id PK
+        text output_json
+        boolean is_error
+    }
     agent_golden_set {
         bigint partner_id PK,FK
         varchar agent_id PK,FK
@@ -2124,6 +2175,8 @@ erDiagram
         varchar language_code
         text payload_uri
         char payload_digest
+        varchar script_uri
+        char script_digest
     }
     golden_query {
         bigint partner_id PK,FK
@@ -2194,6 +2247,8 @@ erDiagram
         boolean needs_human_review
         varchar output_uri
         char output_digest
+        varchar trajectory_uri
+        char trajectory_digest
     }
     gate_decision {
         char decision_id PK
@@ -2304,7 +2359,7 @@ erDiagram
 ```
  `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring platform verdict, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
 
-Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
+Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. A scripted case keeps its follow-up turns in `golden_case_turn` (`turn_no` from 2; turn 1 is the case input) and the sandboxed response every call of one tool gets in `golden_case_tool`: JSON `output_json`, or `is_error` with no output. `tool_id` is the id calls name, with no foreign key, since a script may answer a tool the registry does not hold. A freeze stores each scripted case's canonical script in object storage and names it from the example (`golden_example.script_uri`, `script_digest`); an unscripted example has neither. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. Every executed case's trajectory is stored in object storage and named from its result (`evaluation_result.trajectory_uri`, `trajectory_digest`), null when the case produced none. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
 
 A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `B` (baseline) is arm a and `C` (candidate) arm b. Either arm may be a draft (`subject_code` `D`), which `provider_id` and `model_id` may pin to another text model, or a release (`R`); arm a may instead be an `evaluation_baseline` (`B`), which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
 
@@ -2322,14 +2377,14 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
-| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_governance`, `agent_draft_guardrail`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_template_catalog`, `agent_template_catalog_version`, `agent_template`, `agent_template_version`, `agent_template_publication`, `agent_draft_origin`, `agent_version`, `agent_deployment`, `agent_release_activation`, `agent_version_quarantine`, `agent_publish_review`, `agent_draft_comment` |
+| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_governance`, `agent_draft_guardrail`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_template_catalog`, `agent_template_catalog_version`, `agent_template`, `agent_template_version`, `agent_template_publication`, `agent_draft_origin`, `agent_version`, `agent_deployment`, `agent_release_activation`, `agent_version_quarantine`, `agent_publish_review`, `agent_draft_comment`, `agent_alert`, `agent_health_state` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
-| `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison` |
+| `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison`, `golden_case_turn`, `golden_case_tool` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |

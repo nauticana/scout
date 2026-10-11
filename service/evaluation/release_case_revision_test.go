@@ -26,8 +26,8 @@ func TestCaseReplayShowsADecidersRevisionBeforeItsObservation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	replay := &caseReplay{journal: journal, principal: domain.Principal{TenantID: 7}, requestID: "case-1"}
-	if err := replay.record(context.Background(), domain.ExecutionStep{ExecutionStepID: 3}); err != nil {
+	replay := &caseReplay{journal: journal, principal: domain.Principal{TenantID: 7}}
+	if err := replay.record(context.Background(), "case-1", domain.ExecutionStep{ExecutionStepID: 3}); err != nil {
 		t.Fatal(err)
 	}
 	got := replay.trajectory

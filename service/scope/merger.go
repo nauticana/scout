@@ -178,7 +178,7 @@ type MergerRegistry struct {
 func NewMergerRegistry(extra ...contract.ResourceMerger) (*MergerRegistry, error) {
 	registry := &MergerRegistry{mergers: map[domain.ResourceKind]contract.ResourceMerger{}}
 	platform := []contract.ResourceMerger{
-		PromptMerger{}, BudgetMerger{}, AutonomyMerger{}, PolicyMerger{}, LimitsMerger{}, RoutingMerger{}, EvaluationGateMerger{},
+		PromptMerger{}, BudgetMerger{}, AutonomyMerger{}, PolicyMerger{}, LimitsMerger{}, RoutingMerger{}, EvaluationGateMerger{}, HealthAlertsMerger{},
 		SetMerger{ResourceKind: domain.ResourceTool},
 		SetMerger{ResourceKind: domain.ResourceKnowledge},
 		SetMerger{ResourceKind: domain.ResourceModel},

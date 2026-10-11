@@ -52,6 +52,13 @@ columns:
     type: CHAR(64)
     nullable: true
     comment: With output_uri, the stored answer of a comparison arm
+  - name: trajectory_uri
+    type: VARCHAR(500)
+    nullable: true
+  - name: trajectory_digest
+    type: CHAR(64)
+    nullable: true
+    comment: With trajectory_uri, the stored trajectory of the executed case; null when it produced none
 primary_key: [run_id, example_id, role_code]
 foreign_keys:
   - name: evaluation_results
@@ -81,3 +88,5 @@ checks:
     expression: (cost_minor_units = 0 AND evaluator_cost_minor_units = 0) OR currency_code IS NOT NULL
   - name: evaluation_result_output_ck
     expression: (output_uri IS NULL) = (output_digest IS NULL) AND (output_digest IS NULL OR CHAR_LENGTH(output_digest) = 64)
+  - name: evaluation_result_trajectory_ck
+    expression: (trajectory_uri IS NULL) = (trajectory_digest IS NULL) AND (trajectory_digest IS NULL OR CHAR_LENGTH(trajectory_digest) = 64)

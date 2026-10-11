@@ -12,6 +12,8 @@ seeds:
       - [draft_comment_anchor, Draft Comment Anchor]
       - [draft_comment_status, Draft Comment Status]
       - [release_activation_reason, Release Activation Refusal]
+      - [agent_alert_kind, Agent Alert Kind]
+      - [agent_alert_status, Agent Alert Status]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -46,6 +48,12 @@ seeds:
       - [release_activation_reason, GR, Publish Guard Refused]
       - [release_activation_reason, DC, Deployment Changed]
       - [release_activation_reason, AE, Attempts Exhausted]
+      - [agent_alert_kind, F, Failure Rate]
+      - [agent_alert_kind, L, Latency]
+      - [agent_alert_kind, H, Hard Safety Events]
+      - [agent_alert_kind, S, Silence]
+      - [agent_alert_status, O, Open]
+      - [agent_alert_status, R, Resolved]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:
@@ -57,6 +65,8 @@ seeds:
       - [draft_comment_anchor, agent_draft_comment, anchor_code]
       - [draft_comment_status, agent_draft_comment, status_code]
       - [release_activation_reason, agent_release_activation, reason_code]
+      - [agent_alert_kind, agent_alert, kind_code]
+      - [agent_alert_status, agent_alert, status_code]
   - table: application_config_flag
     columns: [id, data_type, needs_restart, default_value, description]
     rows:
@@ -193,6 +203,16 @@ seeds:
       - [agent_evaluation_baseline_max_bytes, int, true, "32768", "Bytes of one recorded human baseline output, at least 0; 0 uses Scout's default of 32768"]
       - [agent_evaluation_max_baselines, int, true, "20", "Human baselines one golden set version may hold, at least 0; 0 uses Scout's default of 20"]
       - [agent_evaluation_compare_page_bytes, int, true, "1048576", "Bytes of stored answers one Studio comparison page returns, at least 0; answers past it are omitted and marked; 0 uses Scout's default of 1048576"]
+      - [agent_health_period, int, true, "60", "Seconds between passes of the agent health evaluator (1..86400); 0 takes 60"]
+      - [agent_health_batch, int, true, "100", "Active agents one page of a health evaluator pass reads (1..10000); 0 takes 100"]
+      - [agent_health_window, int, true, "60", "Minutes of turns and safety events a health measure covers when the agent's health_alerts setting names no window (1..10080); 0 takes 60"]
+      - [agent_health_stale_periods, int, true, "3", "Evaluator periods an agent with a health_alerts policy may go unevaluated before Studio reports its telemetry stale (1..1000); 0 takes 3"]
+      - [agent_alert_page_size, int, true, "50", "Alerts one Studio page returns when the caller names no limit (0..agent_alert_max_page_size); 0 takes 50"]
+      - [agent_alert_max_page_size, int, true, "200", "Largest alert page a Studio caller may ask for (1..1000); 0 takes 200"]
+      - [agent_evaluation_case_max_turns, int, true, "10", "Turns one golden case may script, its input included (1..100); 0 uses Scout's default of 10"]
+      - [agent_evaluation_case_max_tools, int, true, "20", "Sandboxed tool responses one golden case may script (1..200); 0 uses Scout's default of 20"]
+      - [agent_evaluation_case_tool_max_bytes, int, true, "16384", "Bytes of one scripted tool output (2..1048576); 0 uses Scout's default of 16384"]
+      - [agent_evaluation_trajectory_max_bytes, int, true, "1048576", "Bytes of one stored case trajectory Studio reads; a larger one is refused (1024..16777216); 0 uses Scout's default of 1048576"]
   - table: authorization_object
     columns: [id, caption]
     rows:

@@ -40,7 +40,8 @@ type JudgeEvaluator struct {
 	EvaluatorVersion domain.EvaluatorVersion
 	CompareFunc      func(context.Context, domain.EvaluationPair) (domain.JudgeVerdict, error)
 	// Calls counts Compare invocations so cache behavior is observable.
-	Calls int
+	Calls   int
+	callsMu sync.Mutex
 }
 
 // Version returns the configured judge version.
@@ -48,7 +49,9 @@ func (judge *JudgeEvaluator) Version() domain.EvaluatorVersion { return judge.Ev
 
 // Compare invokes CompareFunc and counts the call.
 func (judge *JudgeEvaluator) Compare(ctx context.Context, pair domain.EvaluationPair) (domain.JudgeVerdict, error) {
+	judge.callsMu.Lock()
 	judge.Calls++
+	judge.callsMu.Unlock()
 	if judge.CompareFunc == nil {
 		return domain.JudgeVerdict{}, nil
 	}

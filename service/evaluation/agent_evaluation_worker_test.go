@@ -107,6 +107,7 @@ func draftWorker(t *testing.T, queue *queueFake, cost int64, currency string) (*
 		},
 	}}
 	w.MaxRunCostMinorUnits, w.Currency = 1000, "EUR"
+	w.Outputs = &fake.ObjectStorage{Name: "outputs"}
 	return w, &requests
 }
 

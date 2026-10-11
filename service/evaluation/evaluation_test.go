@@ -16,6 +16,8 @@ type queryFake struct {
 	args map[string][]any
 	err  map[string]error
 	ids  int64
+	// history keeps every call's arguments per query, in order.
+	history map[string][][]any
 }
 
 func newQueryFake(rows map[string][][]any) *queryFake {
@@ -27,6 +29,10 @@ func newQueryFake(rows map[string][][]any) *queryFake {
 
 func (query *queryFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
 	query.args[name] = append([]any(nil), args...)
+	if query.history == nil {
+		query.history = make(map[string][][]any)
+	}
+	query.history[name] = append(query.history[name], query.args[name])
 	if err := query.err[name]; err != nil {
 		return nil, err
 	}

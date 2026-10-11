@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // GoldenCase is one editable example in a golden set's working copy. Freezing the
 // working copy snapshots every case into an immutable GoldenSetVersion of GoldenExamples.
@@ -26,6 +29,41 @@ type GoldenCase struct {
 	ReviewItemID  int64
 	ReviewAgentID string
 	InputWithheld bool
+	// Script holds the case's follow-up turns and sandboxed tool responses; zero is unscripted.
+	Script CaseScript
+}
+
+// CaseScript is the scripted part of a golden case: the inputs of turns 2..n, each
+// submitted once the previous turn completes, and the sandboxed response every call of a
+// tool is answered with. Turn 1 is the case input. The zero script is a single-turn case
+// whose tool calls no sandbox answers.
+type CaseScript struct {
+	Turns []CaseTurn `json:"turns,omitempty"`
+	Tools []CaseTool `json:"tools,omitempty"`
+}
+
+// Scripted reports whether the script names a follow-up turn or a tool response.
+func (script CaseScript) Scripted() bool { return len(script.Turns) > 0 || len(script.Tools) > 0 }
+
+// CaseTurn is one follow-up turn's input exactly as a conversation would submit it.
+type CaseTurn struct {
+	Input string `json:"input"`
+}
+
+// CaseTool is the sandboxed response to every call of one tool: its JSON output, or a
+// failure (IsError) that carries no output, since the model sees only a failure's class.
+type CaseTool struct {
+	ToolID  string          `json:"tool_id"`
+	Output  json.RawMessage `json:"output,omitempty"`
+	IsError bool            `json:"is_error,omitempty"`
+}
+
+// CaseTrajectory is the stored trajectory of one executed case of a run as one arm ran it.
+type CaseTrajectory struct {
+	RunID     int64
+	ExampleID string
+	Role      EvaluationRole
+	Events    []TrajectoryEvent
 }
 
 // GoldenCaseSet is an agent's golden set as one scope sees it: the working copy,
@@ -233,6 +271,8 @@ type AgentCaseResult struct {
 	Answer []byte
 	// AnswerOmitted marks a stored answer left out to keep a page within its byte budget.
 	AnswerOmitted bool
+	// Trajectory is where the case's trajectory was stored; empty when it has none.
+	Trajectory ObjectRef
 }
 
 // AgentEvaluationPage is one page of a run's results in descending example id

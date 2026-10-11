@@ -433,6 +433,12 @@ func releaseGuardrails(definition domain.AgentDefinition) (domain.GuardrailConfi
 	return domain.GuardrailConfig{Version: section.RulesDigest, RulesDigest: section.RulesDigest, Rules: section.Rules}, set.Rules, true, nil
 }
 
+// FrozenGuardrailConfig reads and verifies the guardrails frozen into a definition.
+func FrozenGuardrailConfig(definition domain.AgentDefinition) (domain.GuardrailConfig, error) {
+	config, _, _, err := releaseGuardrails(definition)
+	return config, err
+}
+
 // releaseRules is what a release enforces in its own layer: the type's rules, each replaced in
 // place by the agent's rule of the same id, then the agent's other rules in their order.
 func releaseRules(typeRules, own []domain.GuardrailRule) []domain.GuardrailRule {

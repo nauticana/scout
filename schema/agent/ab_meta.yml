@@ -24,3 +24,5 @@ tables:
   - agent_version_quarantine
   - agent_publish_review
   - agent_draft_comment
+  - agent_alert
+  - agent_health_state

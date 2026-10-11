@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,26 +11,28 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
-	"github.com/nauticana/scout/internal/stage"
 	"github.com/nauticana/scout/service/dataplane"
 )
 
 // ReleaseCaseExecutor replays a golden example against a published agent
 // version — its compiled graph, prompt, tools and tool loop — with every tool
-// call answered by a sandbox, so a replay has no path to a live tool.
+// call answered by a sandbox, so a replay has no path to a live tool. A scripted
+// example replays turn by turn as one conversation.
 type ReleaseCaseExecutor struct {
 	Graphs   contract.DefinitionResolver
 	Requests contract.ToolLoopRequestBuilder
 	Router   contract.ModelRouter
 	Models   contract.ModelGateway
 	Registry contract.ToolRegistry
-	// Payloads reads an example's payload, which is the turn input exactly as a conversation would submit it.
+	// Payloads reads an example's payload, which is the turn input exactly as a conversation
+	// would submit it, and its script; both are verified against their digests.
 	Payloads contract.ObjectReader
-	// Sandboxes returns a fresh sandbox per replay, primed with that example's tool results.
-	Sandboxes func(ctx context.Context, example domain.GoldenExample) (contract.ToolSandbox, error)
+	// Sandboxes returns a fresh sandbox per replay built from the example's script; ScriptSandbox
+	// is the production one.
+	Sandboxes SandboxFactory
 	Limits    domain.ToolLoopLimits
 	// ReleaseLimits reads the limits frozen into the replayed release, which only narrow Limits,
-	// MaxSteps, and the replay's duration; pass the data plane's PrincipalLimits.
+	// MaxSteps, and each turn's duration; pass the data plane's PrincipalLimits.
 	ReleaseLimits contract.PrincipalLimits
 	// Pricer, Evidence and Retrieval are optional as they are in the runtime.
 	Pricer    contract.ModelPricer
@@ -40,32 +41,12 @@ type ReleaseCaseExecutor struct {
 	// Guardrails and GuardrailConfigs apply the release's output guardrails; set both or neither.
 	Guardrails       contract.GuardrailEnforcer
 	GuardrailConfigs contract.GuardrailConfigRepository
-	// MaxSteps bounds the graph walk; zero allows as many steps as the graph has.
+	// MaxSteps bounds each turn's graph walk; zero allows as many steps as the graph has.
 	MaxSteps int
 	Now      func() time.Time
 }
 
 var _ contract.CaseExecutor = (*ReleaseCaseExecutor)(nil)
-
-// Trajectory state names a replay ends in.
-const (
-	ReplayCompleted = "completed"
-	ReplaySuspended = "suspended"
-	ReplayBlocked   = "blocked"
-)
-
-// replayOutcomes are failures of the agent under test rather than of the
-// replay: they are scored as a failed trajectory, not returned as errors.
-var replayOutcomes = []error{
-	domain.ErrExecutionLimit, domain.ErrBudgetExceeded, domain.ErrLoopDetected, domain.ErrInvalidModelOutput, domain.ErrUnsupportedClaim,
-}
-
-func (executor *ReleaseCaseExecutor) now() time.Time {
-	if executor.Now != nil {
-		return executor.Now()
-	}
-	return time.Now()
-}
 
 func (executor *ReleaseCaseExecutor) validate() error {
 	switch {
@@ -109,15 +90,21 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("read budget of %s@%s: %w", subject.AgentID, subject.AgentVersion, err)
 	}
-	input, err := executor.payload(ctx, example)
+	inputs, script, err := caseInputs(ctx, executor.Payloads, example)
 	if err != nil {
 		return domain.EvaluationCase{}, err
 	}
 	var matches []domain.KnowledgeMatch
 	switch {
+	case len(preserved) > 0 && len(inputs) > 1:
+		return domain.EvaluationCase{}, fmt.Errorf("%w: preserved retrieval answers a single turn", domain.ErrCapabilityUnsupported)
 	case executor.Retrieval != nil:
-		if input, matches, err = executor.Retrieval.Retrieve(ctx, subject, example, input, preserved); err != nil {
-			return domain.EvaluationCase{}, fmt.Errorf("retrieve for example %q: %w", example.ExampleID, err)
+		for i := range inputs {
+			var found []domain.KnowledgeMatch
+			if inputs[i], found, err = executor.Retrieval.Retrieve(ctx, subject, example, inputs[i], preserved); err != nil {
+				return domain.EvaluationCase{}, fmt.Errorf("retrieve for example %q: %w", example.ExampleID, err)
+			}
+			matches = append(matches, found...)
 		}
 	case len(preserved) > 0:
 		return domain.EvaluationCase{}, fmt.Errorf("%w: preserved retrieval needs a case retriever", domain.ErrCapabilityUnsupported)
@@ -126,7 +113,7 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("resolve %s@%s: %w", subject.AgentID, subject.AgentVersion, err)
 	}
-	sandbox, err := executor.Sandboxes(ctx, example)
+	sandbox, err := executor.Sandboxes(ctx, example, script)
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("sandbox for example %q: %w", example.ExampleID, err)
 	}
@@ -148,232 +135,35 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 		}
 	}
 	replay := &caseReplay{
-		executor: executor, loop: loop, journal: journal, graph: graph, guardrails: guardrails, input: input, started: executor.now(),
-		principal: principal, limits: limits, budget: budget, requestID: "evaluation/" + subject.AgentVersion + "/" + example.ExampleID,
+		loop: loop, journal: journal, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails, principal: principal,
+		limits: limits, budget: budget, maxSteps: executor.MaxSteps, now: executor.Now,
+		conversationID: "evaluation/" + subject.AgentVersion + "/" + example.ExampleID,
 	}
-	if err := replay.run(ctx); err != nil {
+	if err := replay.run(ctx, inputs); err != nil {
 		return domain.EvaluationCase{}, err
 	}
-	return domain.EvaluationCase{
-		Example: example, Output: replay.output, Retrieval: matches, Trajectory: replay.trajectory,
-		Latency: executor.now().Sub(replay.started), Usage: replay.usage,
-	}, nil
+	return replay.evaluationCase(example, matches), nil
 }
 
-func (executor *ReleaseCaseExecutor) payload(ctx context.Context, example domain.GoldenExample) ([]byte, error) {
-	input, err := executor.Payloads.Read(ctx, example.Payload)
+// caseInputs reads the example's payload and script, each checked against its digest, and
+// returns every turn's input in order: the payload, then the script's follow-up turns.
+func caseInputs(ctx context.Context, reader contract.ObjectReader, example domain.GoldenExample) ([][]byte, domain.CaseScript, error) {
+	input, err := reader.Read(ctx, example.Payload)
 	if err != nil {
-		return nil, fmt.Errorf("read payload of example %q: %w", example.ExampleID, err)
+		return nil, domain.CaseScript{}, fmt.Errorf("read payload of example %q: %w", example.ExampleID, err)
 	}
 	if digest := sha256Hex(input); digest != strings.ToLower(example.Payload.Digest) {
-		return nil, fmt.Errorf("%w: payload of example %q has digest %s, not %s", domain.ErrValidation, example.ExampleID, digest, example.Payload.Digest)
+		return nil, domain.CaseScript{}, fmt.Errorf("%w: payload of example %q has digest %s, not %s", domain.ErrValidation, example.ExampleID, digest, example.Payload.Digest)
 	}
-	return input, nil
-}
-
-// caseReplay walks one release graph for one example.
-type caseReplay struct {
-	executor   *ReleaseCaseExecutor
-	loop       *dataplane.ToolLoopExecutor
-	journal    contract.LoopJournal
-	graph      domain.ExecutionGraph
-	guardrails domain.GuardrailConfig
-	principal  domain.Principal
-	limits     domain.ExecutionLimits
-	budget     domain.ReleaseBudget
-	requestID  string
-	input      []byte
-	started    time.Time
-
-	output     []byte
-	usage      domain.Usage
-	trajectory []domain.TrajectoryEvent
-}
-
-// run walks the graph within the release's duration; ctx is the caller's, whose own end is
-// never scored as the agent's.
-func (replay *caseReplay) run(ctx context.Context) error {
-	steps := make(map[string]domain.ExecutionStep, len(replay.graph.Steps))
-	for _, step := range replay.graph.Steps {
-		steps[step.StepID] = step
-	}
-	maxSteps := replay.executor.MaxSteps
-	if maxSteps == 0 {
-		maxSteps = len(replay.graph.Steps)
-	}
-	if limit := replay.limits.MaxSteps; limit > 0 && limit < maxSteps {
-		maxSteps = limit
-	}
-	walkCtx := ctx
-	if duration := replay.limits.MaxDuration; duration > 0 {
-		var cancel context.CancelFunc
-		walkCtx, cancel = context.WithTimeoutCause(ctx, duration, errReplayDuration)
-		defer cancel()
-	}
-	snapshot := domain.SessionSnapshot{ConversationID: replay.requestID, AgentVersion: replay.principal.Release}
-	stepID := replay.graph.EntryStepID
-	for stepNo := 1; ; stepNo++ {
-		if stepNo > maxSteps {
-			return replay.end(ctx, fmt.Errorf("%w: replay exceeded %d steps", domain.ErrExecutionLimit, maxSteps))
-		}
-		if duration := replay.limits.MaxDuration; duration > 0 && replay.offset() >= duration {
-			return replay.end(ctx, fmt.Errorf("%w: replay exceeded its %s duration", domain.ErrExecutionLimit, duration))
-		}
-		step, found := steps[stepID]
-		if !found {
-			return fmt.Errorf("%w: execution step %q of agent %q", domain.ErrNotFound, stepID, replay.graph.AgentID)
-		}
-		if step.Kind != domain.StepKindToolLoop {
-			return fmt.Errorf("%w: replay runs %s steps, not %q", domain.ErrCapabilityUnsupported, domain.StepKindToolLoop, step.Kind)
-		}
-		// The release's per-turn budget bounds a replay as it bounds a live turn.
-		spend, err := replay.budget.StepSpend(replay.usage)
-		if err != nil {
-			return replay.end(ctx, err)
-		}
-		result, err := replay.loop.Execute(walkCtx, domain.StepInput{
-			Step: step, Snapshot: snapshot, Principal: replay.principal, RequestID: replay.requestID, Input: replay.input,
-			Limits: replay.limits, Spend: spend,
-		})
-		if recordErr := replay.record(ctx, step); recordErr != nil {
-			return errors.Join(err, recordErr)
-		}
-		var spent interface{ SpentUsage() domain.Usage }
-		if errors.As(err, &spent) {
-			replay.usage = addUsage(replay.usage, spent.SpentUsage())
-		}
-		if err != nil {
-			return replay.end(ctx, durationOutcome(walkCtx, err))
-		}
-		replay.usage = addUsage(replay.usage, result.Usage)
-		state, blocked, err := replay.guard(walkCtx, result.State)
-		if err != nil && errors.Is(context.Cause(walkCtx), errReplayDuration) {
-			return replay.end(ctx, durationOutcome(walkCtx, err))
-		}
-		if err != nil || blocked {
-			return err
-		}
-		snapshot.State, snapshot.LastCompletedStepID = state, step.StepID
-		if strings.TrimSpace(result.NextStepID) == "" {
-			replay.output = state
-			replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryState, Name: ReplayCompleted, Payload: state, Offset: replay.offset()})
-			return nil
-		}
-		stepID = result.NextStepID
-	}
-}
-
-// guard applies the release's output guardrails; a blocked output ends the replay.
-func (replay *caseReplay) guard(ctx context.Context, state []byte) ([]byte, bool, error) {
-	if replay.executor.Guardrails == nil {
-		return state, false, nil
-	}
-	guarded, err := replay.executor.Guardrails.AfterModelChunk(ctx, replay.guardrails, domain.GuardrailSubject{
-		TenantID: replay.principal.TenantID, Principal: domain.PrincipalRef{Kind: replay.principal.Kind, ID: replay.principal.ID},
-		RequestID: replay.requestID, ConversationID: replay.requestID, ReleaseVersion: replay.principal.Release,
-	}, domain.ModelChunk{Payload: state})
-	if errors.Is(err, domain.ErrForbidden) {
-		replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryPolicy, Name: "guardrail", Failed: true, Offset: replay.offset()})
-		replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryState, Name: ReplayBlocked, Failed: true, Offset: replay.offset()})
-		return nil, true, nil
-	}
+	script, err := readScript(ctx, reader, example)
 	if err != nil {
-		return nil, false, fmt.Errorf("apply output guardrails: %w", err)
+		return nil, domain.CaseScript{}, err
 	}
-	return guarded.Payload, false, nil
-}
-
-// errReplayDuration is the cause of a replay stopped by its release's max duration.
-var errReplayDuration = errors.New("replay duration elapsed")
-
-// durationOutcome marks a failure caused by the release's duration running out as the
-// agent's execution limit.
-func durationOutcome(walkCtx context.Context, err error) error {
-	if errors.Is(context.Cause(walkCtx), errReplayDuration) && !errors.Is(err, domain.ErrExecutionLimit) {
-		return fmt.Errorf("%w: replay exceeded its duration: %w", domain.ErrExecutionLimit, err)
+	inputs := [][]byte{input}
+	for _, turn := range script.Turns {
+		inputs = append(inputs, []byte(turn.Input))
 	}
-	return err
-}
-
-// end records a failure of the agent under test as the trajectory's final
-// state and returns every other failure, including the caller's own cancellation.
-func (replay *caseReplay) end(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return err
-	}
-	if errors.Is(err, domain.ErrApprovalPending) {
-		replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryState, Name: ReplaySuspended, Offset: replay.offset()})
-		return nil
-	}
-	for _, outcome := range replayOutcomes {
-		if errors.Is(err, outcome) {
-			replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryState, Name: stage.ErrorClass(err), Failed: true, Offset: replay.offset()})
-			return nil
-		}
-	}
-	return err
-}
-
-// record reads the step's loop journal onto the trajectory, which also keeps
-// the calls of a loop that failed before returning its events.
-func (replay *caseReplay) record(ctx context.Context, step domain.ExecutionStep) error {
-	entries, err := replay.journal.Load(ctx, domain.LoopKey{TenantID: replay.principal.TenantID, RequestID: replay.requestID, ExecutionStepID: step.ExecutionStepID})
-	if err != nil {
-		return fmt.Errorf("read replay journal: %w", err)
-	}
-	toolIDs := make(map[string]string)
-	for _, entry := range entries {
-		if entry.Kind == domain.LoopEntryObservation && entry.Observation != nil {
-			toolIDs[entry.Observation.CallID] = entry.Tool.ToolID
-		}
-	}
-	failed := make(map[string]bool)
-	for _, entry := range entries {
-		switch entry.Kind {
-		case domain.LoopEntryModel:
-			if entry.Model == nil {
-				continue
-			}
-			if len(entry.Model.ToolCalls) == 0 {
-				replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryState, Name: "answer", Payload: entry.Model.Output, Offset: entry.Offset, Usage: entry.Usage})
-			}
-			for i, call := range entry.Model.ToolCalls {
-				name := toolIDs[call.CallID]
-				if name == "" {
-					name = call.Name
-				}
-				usage := entry.Usage
-				if i > 0 {
-					usage = domain.Usage{}
-				}
-				replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryToolCall, Name: name, Payload: call.Arguments, Offset: entry.Offset, Usage: usage})
-			}
-		case domain.LoopEntryApprovalPending:
-			replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryPolicy, Name: entry.Tool.ToolID, Offset: entry.Offset})
-		case domain.LoopEntryRevision:
-			if entry.Revision != nil {
-				replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryPolicy, Name: entry.Tool.ToolID, Payload: entry.Revision.Arguments, Offset: entry.Offset})
-			}
-		case domain.LoopEntryObservation:
-			if entry.Observation == nil {
-				continue
-			}
-			toolID, observation := entry.Tool.ToolID, entry.Observation
-			replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryObservation, Name: toolID, Payload: observation.Output, Offset: entry.Offset,
-				Usage: entry.Usage, Failed: observation.IsError, Recovered: !observation.IsError && failed[toolID]})
-			failed[toolID] = observation.IsError
-		}
-	}
-	return nil
-}
-
-func (replay *caseReplay) event(event domain.TrajectoryEvent) {
-	event.Sequence = int64(len(replay.trajectory) + 1)
-	replay.trajectory = append(replay.trajectory, event)
-}
-
-func (replay *caseReplay) offset() time.Duration {
-	return replay.executor.now().Sub(replay.started)
+	return inputs, script, nil
 }
 
 // replayDecoding is the part of a subject's decoding a replay can apply; any

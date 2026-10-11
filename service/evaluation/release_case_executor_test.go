@@ -81,7 +81,7 @@ func newReplayHarness(t *testing.T, script ...domain.ModelResult) *replayHarness
 			return []domain.ToolDefinition{{ToolID: "catalog.search", Version: "1", InputSchema: []byte(`{"type":"object"}`)}}, nil
 		}},
 		Payloads: objectReaderFunc(func(context.Context, domain.ObjectRef) ([]byte, error) { return []byte(replayInput), nil }),
-		Sandboxes: func(context.Context, domain.GoldenExample) (contract.ToolSandbox, error) {
+		Sandboxes: func(context.Context, domain.GoldenExample, domain.CaseScript) (contract.ToolSandbox, error) {
 			return harness.sandbox, nil
 		},
 		Limits:        domain.ToolLoopLimits{MaxIterations: 3, MaxToolCalls: 4, MaxTokens: 10_000, MaxRepeatedCalls: 3, Deadline: time.Minute},
@@ -165,6 +165,28 @@ func TestReleaseCaseExecutorRecordsABlockedOutput(t *testing.T) {
 	evalCase, err := harness.executor.Execute(context.Background(), replaySubject(), replayExample(), nil)
 	if err != nil || evalCase.Output != nil || evalCase.Trajectory[len(evalCase.Trajectory)-1].Name != ReplayBlocked {
 		t.Fatalf("blocked = %+v, %v", evalCase, err)
+	}
+	for _, event := range evalCase.Trajectory {
+		if string(event.Payload) == "unsafe" {
+			t.Fatalf("blocked output remained in the trajectory: %+v", event)
+		}
+	}
+}
+
+func TestReleaseCaseExecutorStoresOnlyTheGuardedAnswer(t *testing.T) {
+	harness := newReplayHarness(t, domain.ModelResult{Output: []byte("secret")})
+	harness.executor.Guardrails = guardrailFunc{after: func(domain.ModelChunk) (domain.ModelChunk, error) {
+		return domain.ModelChunk{Payload: []byte("[redacted]")}, nil
+	}}
+	harness.executor.GuardrailConfigs = guardrailConfigs{}
+	evalCase, err := harness.executor.Execute(context.Background(), replaySubject(), replayExample(), nil)
+	if err != nil || string(evalCase.Output) != "[redacted]" {
+		t.Fatalf("guarded case = %+v, %v", evalCase, err)
+	}
+	for _, event := range evalCase.Trajectory {
+		if string(event.Payload) == "secret" {
+			t.Fatalf("raw output remained in the trajectory: %+v", event)
+		}
 	}
 }
 

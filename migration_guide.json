@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.5",
+      "title": "Scripted cases, trajectories, and agent health alerts",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "Golden cases script multi-turn conversations and sandboxed tool responses, every evaluated case keeps its trajectory, and agents gain a health view and alerts with silence alerting on its own.",
+      "body_markdown": "**Scripted golden cases and trajectories.** A golden case may script follow-up turns and sandboxed tool responses (`golden_case_turn`, `golden_case_tool`); freezing stores the canonical script in object storage (`golden_example.script_uri`, `script_digest`). A scripted example replays turn by turn as one conversation, with per-turn limits, budget, and guardrails; its tools are answered only by the script. Every executed case's trajectory is stored (`evaluation_result.trajectory_uri`, `trajectory_digest`) and read through Studio `GET evaluation/trajectory`; results carry `has_trajectory`, cases carry `turns` and `tools`, and the evaluation feature is version 2.\n\n| Before | After |\n|---|---|\n| `ReleaseCaseExecutor.Sandboxes func(ctx, example)` | `SandboxFactory func(ctx, example, script)`; pass `evaluation.ScriptSandbox` |\n| `AgentEvaluationWorker.Outputs` only for comparisons | required for every run |\n| — | `AgentEvaluationWorker.DraftReplays` (`contract.DraftCaseExecutor`, `evaluation.DraftCaseExecutor` with the runtime guardrail enforcer) runs scripted draft examples; without it a run with one fails |\n| — | optional `AgentEvaluationWorker.Trajectory` (`contract.TrajectoryEvaluator`) |\n| — | `contract.AgentEvaluationStore.Trajectory`, `contract.StudioEvaluationBackend.Trajectory`; `AgentEvaluationWorker.MaxTrajectoryBytes`, `StudioEvaluation.MaxTrajectoryBytes` |\n\nFlags: `agent_evaluation_case_max_turns`, `agent_evaluation_case_max_tools`, `agent_evaluation_case_tool_max_bytes`, `agent_evaluation_trajectory_max_bytes`.\n\n**Agent health and alerts.** The `health_alerts` setting kind (narrowing rule `alerts`, never frozen) sets an agent's window, sample floor, and failure-rate, p95-latency, hard-safety, and silence thresholds. Studio `GET health` reports the agent's measures and telemetry `fresh`, `stale`, or `missing`; `GET alerts` lists its alerts. `dataplane.AgentHealthWorker` evaluates active agents, opens one alert per kind (`agent_alert`, kinds `F`, `L`, `H`, `S`; status `O`, `R`), resolves on a healthy measure past the sample floor or when its threshold is disabled, records `agent_health_state`, and delivers new alerts through the optional `contract.AgentAlertNotifier`. Compose `dataplane.AgentHealth`, `handler.StudioHealthHandler`, and the worker; without the worker a policy-bound agent reports stale telemetry. `scope.WithoutEvaluationGate` is `scope.WithoutOperationalSettings`. Flags: `agent_health_period`, `agent_health_batch`, `agent_health_window`, `agent_health_stale_periods`, `agent_alert_page_size`, `agent_alert_max_page_size`."
+    },
+    {
       "version": "v1.2.4",
       "title": "Remaining short constant codes",
       "tags": [

@@ -70,6 +70,16 @@ type runStoreFake struct {
 	run         domain.AgentEvaluationRun
 	comparisons []domain.AgentCaseComparison
 	tally       domain.ComparisonTally
+	trajectory  domain.ObjectRef
+	roles       []domain.EvaluationRole
+}
+
+func (store *runStoreFake) Trajectory(_ context.Context, scope domain.GoldenScope, _ int64, _ int64, _ string, role domain.EvaluationRole) (domain.ObjectRef, error) {
+	store.scopes, store.roles = append(store.scopes, scope), append(store.roles, role)
+	if store.trajectory.URI == "" {
+		return domain.ObjectRef{}, domain.ErrNotFound
+	}
+	return store.trajectory, nil
 }
 
 func (store *runStoreFake) Enqueue(_ context.Context, request domain.AgentEvaluationEnqueue) (domain.AgentEvaluationRun, error) {

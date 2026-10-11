@@ -41,6 +41,13 @@ columns:
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
+  - name: script_uri
+    type: VARCHAR(500)
+    nullable: true
+  - name: script_digest
+    type: CHAR(64)
+    nullable: true
+    comment: With script_uri, the canonical JSON script of a scripted example's follow-up turns and sandboxed tool responses
 primary_key: [partner_id, golden_set_id, set_version, example_id]
 foreign_keys:
   - name: golden_examples
@@ -56,3 +63,5 @@ checks:
     expression: scope_code IN ('dev', 'gate')
   - name: golden_example_digest_ck
     expression: CHAR_LENGTH(payload_digest) = 64
+  - name: golden_example_script_ck
+    expression: (script_uri IS NULL) = (script_digest IS NULL) AND (script_digest IS NULL OR CHAR_LENGTH(script_digest) = 64)

@@ -226,7 +226,7 @@ func TestReleaseCaseExecutorFailsTheCaseClosedWithoutReleaseLimits(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			harness := newReplayHarness(t)
 			sandboxes := 0
-			harness.executor.Sandboxes = func(context.Context, domain.GoldenExample) (contract.ToolSandbox, error) {
+			harness.executor.Sandboxes = func(context.Context, domain.GoldenExample, domain.CaseScript) (contract.ToolSandbox, error) {
 				sandboxes++
 				return harness.sandbox, nil
 			}

@@ -37,6 +37,13 @@ const (
 	qCaseNextVersion   = "scout_evaluation_case_next_version"
 	qCaseVersionInsert = "scout_evaluation_case_version_insert"
 	qCaseExampleInsert = "scout_evaluation_case_example_insert"
+
+	qCaseTurns       = "scout_evaluation_case_turns"
+	qCaseTools       = "scout_evaluation_case_tools"
+	qCaseDeleteTurns = "scout_evaluation_case_delete_turns"
+	qCaseDeleteTools = "scout_evaluation_case_delete_tools"
+	qCaseInsertTurn  = "scout_evaluation_case_insert_turn"
+	qCaseInsertTool  = "scout_evaluation_case_insert_tool"
 )
 
 // Classification every frozen Studio case carries in golden_example.
@@ -119,6 +126,27 @@ RETURNING case_id`,
 SELECT COALESCE(MAX(set_version), 0) + 1 FROM golden_set_version WHERE partner_id = ? AND golden_set_id = ?`,
 	qCaseVersionInsert: goldenQueries[qGoldenVersionInsert],
 	qCaseExampleInsert: goldenQueries[qGoldenExampleInsert],
+	qCaseTurns: `
+SELECT t.case_id, t.turn_no, t.input_text
+  FROM golden_case_turn t
+  JOIN golden_case c ON c.partner_id = t.partner_id AND c.golden_set_id = t.golden_set_id AND c.case_id = t.case_id
+ WHERE t.partner_id = ? AND t.golden_set_id = ? AND (c.scope_code = ? OR ? = ` + sqlScopeGate + `)
+ ORDER BY t.case_id, t.turn_no`,
+	qCaseTools: `
+SELECT t.case_id, t.tool_id, t.output_json, t.is_error
+  FROM golden_case_tool t
+  JOIN golden_case c ON c.partner_id = t.partner_id AND c.golden_set_id = t.golden_set_id AND c.case_id = t.case_id
+ WHERE t.partner_id = ? AND t.golden_set_id = ? AND (c.scope_code = ? OR ? = ` + sqlScopeGate + `)
+ ORDER BY t.case_id, t.tool_id`,
+	// Script deletes share the transaction of the scope-checked case write, which rolls them back when it refuses.
+	qCaseDeleteTurns: `
+DELETE FROM golden_case_turn WHERE partner_id = ? AND golden_set_id = ? AND case_id = ?`,
+	qCaseDeleteTools: `
+DELETE FROM golden_case_tool WHERE partner_id = ? AND golden_set_id = ? AND case_id = ?`,
+	qCaseInsertTurn: `
+INSERT INTO golden_case_turn (partner_id, golden_set_id, case_id, turn_no, input_text) VALUES (?, ?, ?, ?, ?)`,
+	qCaseInsertTool: `
+INSERT INTO golden_case_tool (partner_id, golden_set_id, case_id, tool_id, output_json, is_error) VALUES (?, ?, ?, ?, ?, ?)`,
 }
 
 var goldenIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -138,7 +166,13 @@ type GoldenCaseStore struct {
 	MaxCases int
 	// VersionsShown bounds the frozen versions Cases returns, newest first; zero means 20.
 	VersionsShown int
-	Now           func() time.Time
+	// MaxTurns bounds the turns one case scripts, its input included; zero means DefaultCaseMaxTurns.
+	MaxTurns int
+	// MaxTools bounds the tool responses one case scripts; zero means DefaultCaseMaxTools.
+	MaxTools int
+	// MaxToolOutputBytes bounds one scripted tool output; zero means DefaultCaseToolOutputSize.
+	MaxToolOutputBytes int
+	Now                func() time.Time
 }
 
 var _ contract.GoldenCaseStore = (*GoldenCaseStore)(nil)
@@ -165,7 +199,7 @@ func validIdentifier(field, value string, maxLength int) error {
 }
 
 func (store *GoldenCaseStore) validateLimits() error {
-	if store.MaxInputBytes < 0 || store.MaxCases < 0 || store.VersionsShown < 0 {
+	if store.MaxInputBytes < 0 || store.MaxCases < 0 || store.VersionsShown < 0 || store.MaxTurns < 0 || store.MaxTools < 0 || store.MaxToolOutputBytes < 0 {
 		return fmt.Errorf("%w: golden case store limits cannot be negative", domain.ErrValidation)
 	}
 	return nil
@@ -345,7 +379,54 @@ func (store *GoldenCaseStore) list(ctx context.Context, qs keelport.QueryService
 		}
 		cases = append(cases, goldenCase)
 	}
+	if err = attachScripts(ctx, qs, scope, tenantID, goldenSetID, cases); err != nil {
+		return nil, err
+	}
 	return cases, nil
+}
+
+// attachScripts reads the follow-up turns and tool responses of the cases visible in scope.
+func attachScripts(ctx context.Context, qs keelport.QueryService, scope domain.GoldenScope, tenantID int64, goldenSetID string, cases []domain.GoldenCase) error {
+	index := make(map[string]*domain.GoldenCase, len(cases))
+	for i := range cases {
+		index[cases[i].CaseID] = &cases[i]
+	}
+	turns, err := qs.Query(ctx, qCaseTurns, tenantID, goldenSetID, string(scope), string(scope))
+	if err != nil {
+		return fmt.Errorf("list golden case turns: %w", err)
+	}
+	for _, row := range turns.Rows {
+		if len(row) < 3 {
+			return fmt.Errorf("golden case turn row: expected 3 columns, got %d", len(row))
+		}
+		goldenCase, found := index[common.AsString(row[0])]
+		if !found {
+			return fmt.Errorf("%w: turn of a golden case outside the scope", domain.ErrForbidden)
+		}
+		if common.AsInt64(row[1]) != int64(len(goldenCase.Script.Turns)+2) {
+			return fmt.Errorf("%w: golden case %q has a gap in its turns", domain.ErrConflict, goldenCase.CaseID)
+		}
+		goldenCase.Script.Turns = append(goldenCase.Script.Turns, domain.CaseTurn{Input: common.AsString(row[2])})
+	}
+	tools, err := qs.Query(ctx, qCaseTools, tenantID, goldenSetID, string(scope), string(scope))
+	if err != nil {
+		return fmt.Errorf("list golden case tools: %w", err)
+	}
+	for _, row := range tools.Rows {
+		if len(row) < 4 {
+			return fmt.Errorf("golden case tool row: expected 4 columns, got %d", len(row))
+		}
+		goldenCase, found := index[common.AsString(row[0])]
+		if !found {
+			return fmt.Errorf("%w: tool response of a golden case outside the scope", domain.ErrForbidden)
+		}
+		tool := domain.CaseTool{ToolID: common.AsString(row[1]), IsError: common.AsBool(row[3])}
+		if output := common.AsString(row[2]); output != "" {
+			tool.Output = []byte(output)
+		}
+		goldenCase.Script.Tools = append(goldenCase.Script.Tools, tool)
+	}
+	return nil
 }
 
 func (store *GoldenCaseStore) validCase(scope domain.GoldenScope, goldenCase domain.GoldenCase) (domain.GoldenCase, error) {
@@ -382,7 +463,47 @@ func (store *GoldenCaseStore) validCase(scope domain.GoldenScope, goldenCase dom
 	case len(goldenCase.Language) > 20 || len(goldenCase.RubricRef) > 200:
 		return goldenCase, fmt.Errorf("%w: language is at most 20 and rubric at most 200 characters", domain.ErrValidation)
 	}
+	script, err := normalizeScript(goldenCase.Script, scriptBounds{
+		maxTurns: store.MaxTurns, maxTools: store.MaxTools, maxToolOutputBytes: store.MaxToolOutputBytes, maxInputBytes: maxBytes,
+	})
+	if err != nil {
+		return goldenCase, err
+	}
+	goldenCase.Script = script
 	return goldenCase, nil
+}
+
+// writeScript replaces the case's follow-up turns and tool responses with its script.
+func writeScript(ctx context.Context, tx keelport.TxQueryService, goldenCase domain.GoldenCase) error {
+	key := []any{goldenCase.TenantID, goldenCase.GoldenSetID, goldenCase.CaseID}
+	if err := deleteScript(ctx, tx, key); err != nil {
+		return err
+	}
+	for i, turn := range goldenCase.Script.Turns {
+		if _, err := tx.Query(ctx, qCaseInsertTurn, append(key, i+2, turn.Input)...); err != nil {
+			return fmt.Errorf("write golden case turn %d: %w", i+2, err)
+		}
+	}
+	for _, tool := range goldenCase.Script.Tools {
+		var output any
+		if !tool.IsError {
+			output = string(tool.Output)
+		}
+		if _, err := tx.Query(ctx, qCaseInsertTool, append(key, tool.ToolID, output, tool.IsError)...); err != nil {
+			return fmt.Errorf("write golden case tool %q: %w", tool.ToolID, err)
+		}
+	}
+	return nil
+}
+
+func deleteScript(ctx context.Context, tx keelport.TxQueryService, key []any) error {
+	if _, err := tx.Query(ctx, qCaseDeleteTurns, key...); err != nil {
+		return fmt.Errorf("remove golden case turns: %w", err)
+	}
+	if _, err := tx.Query(ctx, qCaseDeleteTools, key...); err != nil {
+		return fmt.Errorf("remove golden case tools: %w", err)
+	}
+	return nil
 }
 
 // PutCase adds or replaces one case behind the set's working revision and returns the new revision.
@@ -420,7 +541,7 @@ func (store *GoldenCaseStore) PutCase(ctx context.Context, scope domain.GoldenSc
 		if len(written.Rows) == 0 {
 			return fmt.Errorf("%w: case id %q is not available in this scope", domain.ErrConflict, goldenCase.CaseID)
 		}
-		return nil
+		return writeScript(ctx, tx, goldenCase)
 	})
 }
 
@@ -433,6 +554,9 @@ func (store *GoldenCaseStore) RemoveCase(ctx context.Context, scope domain.Golde
 		return 0, fmt.Errorf("%w: tenant, golden set, and case are required", domain.ErrValidation)
 	}
 	return store.change(ctx, tenantID, goldenSetID, expectedRevision, func(tx keelport.TxQueryService) error {
+		if err := deleteScript(ctx, tx, []any{tenantID, goldenSetID, caseID}); err != nil {
+			return err
+		}
 		removed, err := tx.Query(ctx, qCaseDelete, tenantID, goldenSetID, caseID, string(scope), string(scope))
 		if err != nil {
 			return fmt.Errorf("remove golden case: %w", err)
@@ -520,9 +644,19 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 		return domain.GoldenSetVersion{}, 0, fmt.Errorf("%w: golden set %q has no cases to freeze", domain.ErrValidation, goldenSetID)
 	}
 	// Uploads are content-addressed, so a freeze that later loses its revision race leaves only reusable objects.
-	payloads := make([]domain.ObjectRef, len(cases))
+	payloads, scripts := make([]domain.ObjectRef, len(cases)), make([]domain.ObjectRef, len(cases))
 	for i, goldenCase := range cases {
 		if payloads[i], err = store.upload(ctx, tenantID, goldenSetID, goldenCase.Input); err != nil {
+			return domain.GoldenSetVersion{}, 0, err
+		}
+		if !goldenCase.Script.Scripted() {
+			continue
+		}
+		script, err := canonicalScript(goldenCase.Script)
+		if err != nil {
+			return domain.GoldenSetVersion{}, 0, err
+		}
+		if scripts[i], err = store.upload(ctx, tenantID, goldenSetID, script); err != nil {
 			return domain.GoldenSetVersion{}, 0, err
 		}
 	}
@@ -551,7 +685,7 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 			TenantID: tenantID, GoldenSetID: goldenSetID, SetVersion: version.SetVersion, ExampleID: goldenCase.CaseID,
 			Provenance: GoldenCaseProvenance, ConsentClass: GoldenCaseConsent, RetentionClass: GoldenCaseRetention,
 			RiskTier: goldenCase.RiskTier, Language: goldenCase.Language, RubricRef: goldenCase.RubricRef,
-			ExpectedBehavior: goldenCase.ExpectedBehavior, Payload: payloads[i], Hidden: goldenCase.Hidden,
+			ExpectedBehavior: goldenCase.ExpectedBehavior, Payload: payloads[i], Hidden: goldenCase.Hidden, Script: scripts[i],
 		}
 	}
 	version.DatasetRevision = DatasetRevision(examples)
@@ -563,6 +697,7 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 			tenantID, goldenSetID, version.SetVersion, example.ExampleID, string(scopeOf(example.Hidden)),
 			example.Provenance, example.ConsentClass, example.RetentionClass, example.RiskTier, nil, nullable(example.Language),
 			nullable(example.RubricRef), nullable(string(example.ExpectedBehavior)), example.Payload.URI, example.Payload.Digest, "[]",
+			nullable(example.Script.URI), nullable(example.Script.Digest),
 		); err != nil {
 			return domain.GoldenSetVersion{}, 0, fmt.Errorf("insert golden example %q: %w", example.ExampleID, err)
 		}
@@ -579,7 +714,7 @@ var errNoRow = errors.New("no row returned")
 func (store *GoldenCaseStore) upload(ctx context.Context, tenantID int64, goldenSetID string, input []byte) (domain.ObjectRef, error) {
 	ref, err := putContent(ctx, store.Storage, store.Scheme, fmt.Sprintf("evaluation/golden/%d/%s", tenantID, goldenSetID), input)
 	if err != nil {
-		return domain.ObjectRef{}, fmt.Errorf("upload golden case input: %w", err)
+		return domain.ObjectRef{}, fmt.Errorf("upload golden case content: %w", err)
 	}
 	return ref, nil
 }

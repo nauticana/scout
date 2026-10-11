@@ -40,6 +40,8 @@ const (
 	qAgentEvalPutArm          = "scout_agent_evaluation_put_arm"
 	qAgentEvalComparisons     = "scout_agent_evaluation_comparisons"
 	qAgentEvalTally           = "scout_agent_evaluation_tally"
+
+	qAgentEvalTrajectory = "scout_agent_evaluation_trajectory"
 )
 
 // The run and results reads take the reader's scope: a dev reader never sees a
@@ -85,7 +87,7 @@ SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_
 	qAgentEvalResults: `
 SELECT x.example_id, x.scores, x.latency_ms, x.input_tokens, x.output_tokens, x.cost_minor_units, x.currency_code,
        COALESCE(c.exponent, 0), x.needs_human_review, x.reason,
-       x.evaluator_input_tokens, x.evaluator_output_tokens, x.evaluator_cost_minor_units
+       x.evaluator_input_tokens, x.evaluator_output_tokens, x.evaluator_cost_minor_units, x.trajectory_uri, x.trajectory_digest
   FROM evaluation_result x
   JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
                        AND e.set_version = x.set_version AND e.example_id = x.example_id
@@ -110,8 +112,8 @@ RETURNING golden_set_id, set_version`,
 	qAgentEvalPutResult: `
 INSERT INTO evaluation_result (run_id, partner_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
                                input_tokens, output_tokens, cost_minor_units, currency_code, needs_human_review, reason,
-                               evaluator_input_tokens, evaluator_output_tokens, evaluator_cost_minor_units)
-VALUES (?, ?, ?, ?, ?, ` + sqlRoleCandidate + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               evaluator_input_tokens, evaluator_output_tokens, evaluator_cost_minor_units, trajectory_uri, trajectory_digest)
+VALUES (?, ?, ?, ?, ?, ` + sqlRoleCandidate + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (run_id, example_id, role_code) DO NOTHING
 RETURNING example_id`,
 	qAgentEvalAddTotals: `
@@ -148,8 +150,9 @@ ON CONFLICT (run_id, example_id) DO NOTHING
 RETURNING example_id`,
 	qAgentEvalPutArm: `
 INSERT INTO evaluation_result (run_id, partner_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
-                               input_tokens, output_tokens, cost_minor_units, currency_code, output_uri, output_digest)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                               input_tokens, output_tokens, cost_minor_units, currency_code, output_uri, output_digest,
+                               trajectory_uri, trajectory_digest)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qAgentEvalComparisons: `
 SELECT c.example_id, c.verdict_code, CAST(c.confidence AS DOUBLE PRECISION), c.evaluator_kind, c.evaluator_version, c.rationale, c.reason,
        c.evaluator_input_tokens, c.evaluator_output_tokens, c.evaluator_cost_minor_units, c.currency_code, COALESCE(cc.exponent, 0),
@@ -175,6 +178,13 @@ SELECT COALESCE(c.verdict_code, ''), COUNT(*)
                        AND e.set_version = c.set_version AND e.example_id = c.example_id
  WHERE c.partner_id = ? AND c.run_id = ? AND (e.scope_code = ? OR ? = ` + sqlScopeGate + `)
  GROUP BY c.verdict_code`,
+	qAgentEvalTrajectory: `
+SELECT x.trajectory_uri, x.trajectory_digest
+  FROM evaluation_result x
+  JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
+                       AND e.set_version = x.set_version AND e.example_id = x.example_id
+ WHERE x.partner_id = ? AND x.run_id = ? AND x.example_id = ? AND x.role_code = ?
+   AND (e.scope_code = ? OR ? = ` + sqlScopeGate + `)`,
 }
 
 // AgentEvaluationQueueQueries builds the keel leased-queue SQL that claims queued agent
@@ -505,8 +515,8 @@ func (store *AgentEvaluationStore) Results(ctx context.Context, scope domain.Gol
 	}
 	results := make([]domain.AgentCaseResult, 0, len(rows.Rows))
 	for _, row := range rows.Rows {
-		if len(row) < 13 {
-			return nil, fmt.Errorf("evaluation result row: expected 13 columns, got %d", len(row))
+		if len(row) < 15 {
+			return nil, fmt.Errorf("evaluation result row: expected 15 columns, got %d", len(row))
 		}
 		result := domain.AgentCaseResult{
 			ExampleID: common.AsString(row[0]), Latency: time.Duration(common.AsInt64(row[2])) * time.Millisecond,
@@ -515,6 +525,7 @@ func (store *AgentEvaluationStore) Results(ctx context.Context, scope domain.Gol
 			Exponent: int(common.AsInt64(row[7])), NeedsHumanReview: common.AsBool(row[8]), Reason: common.AsString(row[9]),
 		}
 		result.EvaluatorUsage = domain.Usage{InputTokens: common.AsInt64(row[10]), OutputTokens: common.AsInt64(row[11]), CostMinorUnits: common.AsInt64(row[12])}
+		result.Trajectory = domain.ObjectRef{URI: common.AsString(row[13]), Digest: strings.TrimSpace(common.AsString(row[14]))}
 		if result.EvaluatorUsage.CostMinorUnits > 0 {
 			result.EvaluatorUsage.Currency = result.Usage.Currency
 		}
@@ -637,6 +648,9 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 	if strings.TrimSpace(result.ExampleID) == "" || result.Latency < 0 {
 		return fmt.Errorf("%w: a result needs an example id and a non-negative latency", domain.ErrValidation)
 	}
+	if err := validStoredRef(result.Trajectory); err != nil {
+		return err
+	}
 	total, err := resultTotal(result)
 	if err != nil {
 		return err
@@ -671,7 +685,8 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 	evaluator := result.EvaluatorUsage
 	inserted, err := tx.Query(ctx, qAgentEvalPutResult, lease.RunID, lease.TenantID, goldenSetID, setVersion, result.ExampleID, string(scores),
 		result.Latency.Milliseconds(), result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits, currency,
-		result.NeedsHumanReview, nullable(truncate(result.Reason, 400)), evaluator.InputTokens, evaluator.OutputTokens, evaluator.CostMinorUnits)
+		result.NeedsHumanReview, nullable(truncate(result.Reason, 400)), evaluator.InputTokens, evaluator.OutputTokens, evaluator.CostMinorUnits,
+		nullable(result.Trajectory.URI), nullable(result.Trajectory.Digest))
 	if err != nil {
 		return fmt.Errorf("insert evaluation result %q: %w", result.ExampleID, err)
 	}
@@ -698,7 +713,7 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 func resultTotal(result domain.EvaluationResult) (domain.Usage, error) {
 	subject, evaluator := result.Usage, result.EvaluatorUsage
 	for _, usage := range []domain.Usage{subject, evaluator} {
-		if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 {
+		if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 {
 			return domain.Usage{}, fmt.Errorf("%w: a result needs non-negative usage", domain.ErrValidation)
 		}
 		if usage.CostMinorUnits > 0 && len(usage.Currency) != 3 {
@@ -738,6 +753,37 @@ func (store *AgentEvaluationStore) Finish(ctx context.Context, lease domain.Agen
 	}
 	if len(finished.Rows) == 0 {
 		return fmt.Errorf("%w: run %d is no longer held by this lease", domain.ErrConflict, lease.RunID)
+	}
+	return nil
+}
+
+// Trajectory returns where one result of the run visible in scope stored its trajectory, as role
+// ran it; a result without one, or outside the scope, is domain.ErrNotFound.
+func (store *AgentEvaluationStore) Trajectory(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64, exampleID string, role domain.EvaluationRole) (domain.ObjectRef, error) {
+	if err := validScope(scope); err != nil {
+		return domain.ObjectRef{}, err
+	}
+	if tenantID <= 0 || runID <= 0 || strings.TrimSpace(exampleID) == "" || !role.Valid() {
+		return domain.ObjectRef{}, fmt.Errorf("%w: tenant, run id, case id, and arm are required", domain.ErrValidation)
+	}
+	qs, err := store.queries(ctx, "agent evaluation store", agentEvaluationQueries)
+	if err != nil {
+		return domain.ObjectRef{}, err
+	}
+	rows, err := qs.Query(ctx, qAgentEvalTrajectory, tenantID, runID, exampleID, string(role), string(scope), string(scope))
+	if err != nil {
+		return domain.ObjectRef{}, fmt.Errorf("load trajectory reference: %w", err)
+	}
+	if len(rows.Rows) == 0 || len(rows.Rows[0]) < 2 || common.AsString(rows.Rows[0][0]) == "" {
+		return domain.ObjectRef{}, fmt.Errorf("%w: trajectory of case %q in run %d", domain.ErrNotFound, exampleID, runID)
+	}
+	return domain.ObjectRef{URI: common.AsString(rows.Rows[0][0]), Digest: strings.TrimSpace(common.AsString(rows.Rows[0][1]))}, nil
+}
+
+// validStoredRef accepts no object, or a URI of at most 500 bytes with a SHA-256 digest.
+func validStoredRef(ref domain.ObjectRef) error {
+	if (ref.URI == "") != (ref.Digest == "") || ref.Digest != "" && !isSHA256Hex(ref.Digest) || len(ref.URI) > 500 {
+		return fmt.Errorf("%w: a stored object has a URI of at most 500 bytes and a SHA-256 digest", domain.ErrValidation)
 	}
 	return nil
 }

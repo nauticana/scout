@@ -1,0 +1,29 @@
+table: golden_case_tool
+comment: The sandboxed response every call of one tool gets while a scripted golden case replays
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: case_id
+    type: VARCHAR(120)
+  - name: tool_id
+    type: VARCHAR(80)
+    comment: The tool id calls name; a script may answer a tool the registry does not hold, so no foreign key
+  - name: output_json
+    type: TEXT
+    nullable: true
+    comment: The JSON output a successful call returns; a failure carries none
+  - name: is_error
+    type: BOOLEAN
+    default: FALSE
+primary_key: [partner_id, golden_set_id, case_id, tool_id]
+foreign_keys:
+  - name: golden_case_tools
+    columns: [partner_id, golden_set_id, case_id]
+    references:
+      table: golden_case
+      columns: [partner_id, golden_set_id, case_id]
+checks:
+  - name: golden_case_tool_output_ck
+    expression: is_error = (output_json IS NULL)

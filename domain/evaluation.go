@@ -125,6 +125,8 @@ type GoldenExample struct {
 	// Hidden marks a gate example that dev-scope reads never return.
 	Hidden  bool
 	Reviews []ExampleReview
+	// Script is the canonical JSON CaseScript in object storage; empty for an unscripted example.
+	Script ObjectRef
 }
 
 // GoldenQuery is one retrieval example with the principal it must be answered for.
@@ -239,6 +241,8 @@ type EvaluationResult struct {
 	Reason           string
 	// Output is where the arm's answer was stored; empty when it was not.
 	Output ObjectRef
+	// Trajectory is where the arm's trajectory was stored; empty when it has none.
+	Trajectory ObjectRef
 }
 
 // EvaluationRun is one execution of a manifest.

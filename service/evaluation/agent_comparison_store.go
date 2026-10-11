@@ -72,7 +72,8 @@ func (store *AgentEvaluationStore) RecordComparison(ctx context.Context, lease d
 			usage := arm.result.Usage
 			if _, err = tx.Query(ctx, qAgentEvalPutArm, lease.RunID, lease.TenantID, goldenSetID, setVersion, comparison.ExampleID, string(arm.role),
 				string(arm.scores), arm.result.Latency.Milliseconds(), usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, pricedCurrency(usage),
-				nullable(arm.result.Output.URI), nullable(arm.result.Output.Digest)); err != nil {
+				nullable(arm.result.Output.URI), nullable(arm.result.Output.Digest),
+				nullable(arm.result.Trajectory.URI), nullable(arm.result.Trajectory.Digest)); err != nil {
 				return fmt.Errorf("insert %s arm of %q: %w", arm.role, comparison.ExampleID, err)
 			}
 		}
@@ -123,9 +124,9 @@ func validComparison(comparison domain.CaseComparison) error {
 	if (comparison.Evaluator.Kind == "") != (comparison.Evaluator.Version == "") || comparison.InputDigest != "" && !isSHA256Hex(comparison.InputDigest) {
 		return fmt.Errorf("%w: a judged comparison names its evaluator kind and version and a SHA-256 input digest", domain.ErrValidation)
 	}
-	for _, output := range []domain.ObjectRef{comparison.A.Output, comparison.B.Output} {
-		if (output.URI == "") != (output.Digest == "") || output.Digest != "" && !isSHA256Hex(output.Digest) || len(output.URI) > 500 {
-			return fmt.Errorf("%w: a stored output has a URI of at most 500 bytes and a SHA-256 digest", domain.ErrValidation)
+	for _, stored := range []domain.ObjectRef{comparison.A.Output, comparison.B.Output, comparison.A.Trajectory, comparison.B.Trajectory} {
+		if err := validStoredRef(stored); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -136,7 +137,7 @@ func validComparison(comparison domain.CaseComparison) error {
 func comparisonTotal(comparison domain.CaseComparison) (domain.Usage, error) {
 	var total domain.Usage
 	for _, usage := range []domain.Usage{comparison.A.Usage, comparison.B.Usage, comparison.EvaluatorUsage} {
-		if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 {
+		if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 {
 			return domain.Usage{}, fmt.Errorf("%w: a comparison needs non-negative usage", domain.ErrValidation)
 		}
 		if usage.CostMinorUnits > 0 {

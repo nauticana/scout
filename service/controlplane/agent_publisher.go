@@ -77,7 +77,7 @@ func (publisher *AgentPublisher) compile(ctx context.Context, tenantID int64, de
 	if err := publisher.checkBudget(ctx, release.Resources); err != nil {
 		return domain.EffectiveRelease{}, fmt.Errorf("budget of %q version %q: %w", definition.AgentID, definition.Version, err)
 	}
-	return scope.WithoutEvaluationGate(release), nil
+	return scope.WithoutOperationalSettings(release), nil
 }
 
 // checkBudget refuses a cost ceiling whose currency or frozen exponent the catalog does not match.

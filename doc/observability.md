@@ -73,6 +73,72 @@ Fleet series carry no tenant, agent, or person, so per-agent views read exact re
   apart, with cost counted only in the budget's currency. A budget the ledger cannot enforce reports its
   `problem` code instead of spend; see [release budgets](governance.md#release-budgets).
 
+## Agent health and alerts
+
+`dataplane.AgentHealth` measures one agent's production health from the same exact records, by the
+database clock: its turns, through `agent_conversation`, counted by queue time, and its `safety_event`
+rows. A measure counts turns per status, the failure rate in basis points as failed over completed
+plus failed turns (cancelled turns are not judged), the p50 and p95 duration and time to first
+response from queueing over completed turns, the latest completion and failure, and safety events per
+severity.
+
+When a measure alerts is the agent's `health_alerts` setting, compiled from the `health_alerts`
+bindings on its scope chain alone (see [scope hierarchy](authority.md#scope-hierarchy)):
+
+```json
+{"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120}
+```
+
+Every field is a non-negative integer and 0 is not evaluated. `window_minutes` (at most a week; 0
+takes `agent_health_window`) is the measurement window, and `min_turns` the sample floor: the
+fewest judged turns, never below one, on which a failure rate or latency is read. A measure must
+exceed a `max_*` threshold to open an alert; `max_silence_minutes` (at most a week) is the longest an
+active agent with a stable release may serve no turn. No release freezes the setting, so a change
+applies at the next evaluation without a publish.
+
+Studio's `health` feature (`handler.StudioHealthHandler` over `AgentHealth`, `VIEW`) serves the
+health detail and the alert list. `GET health` returns the measure over the policy window, the
+effective `policy` or the `policy_problem` that keeps the chain from compiling, `insufficient_samples`
+when the judged turns are below the sample floor, so no rate or latency verdict may be read, the open
+alerts, `last_evaluated_at`, and `telemetry`: `stale` when the agent is active, its policy evaluates
+something, and the evaluator has not measured it within `agent_health_stale_periods` ×
+`agent_health_period`; else `missing` when the window holds no turn; else `fresh`. `GET alerts` pages
+an agent's alerts newest first, optionally by status. An agent the actor cannot VIEW is not found.
+
+`agent_alert` holds the alerts: `kind_code` `F` (failure rate, in basis points), `L` (p95 latency, in
+milliseconds), `H` (hard safety events), or `S` (silence: turns in the span and the span's minutes),
+with the measured value, the threshold it exceeded, and the window. `AgentHealth.EvaluateAll` opens
+and resolves them in passes:
+
+- It pages active agents by (tenant, agent) and skips one whose policy evaluates nothing.
+- An alert opens only on a measure that breaches its threshold. Opening inserts only when no alert of
+  that kind is open, under the partial unique index on open alerts, so a replayed pass or a concurrent
+  replica never opens one twice; only a newly inserted alert counts as opened.
+- An alert resolves only on a measure with at least the sample floor of judged turns that no
+  longer breaches; latency also needs that many completed turns and a p95. The absence of data never
+  resolves a failure rate, latency, or safety alert.
+- Removing a policy or disabling one threshold resolves any open alert for that threshold.
+- Silence is judged only for an agent with a stable release that has been serving, active under its
+  current deployment, for the whole span: no turn queued in the span opens it, and a turn resolves it.
+- Each write names one tenant and agent and is a conditional insert or update; nothing takes a lock.
+  The measure is recorded in `agent_health_state`, whose `evaluated_at` decides staleness.
+
+`AgentHealth.Notifier` (`contract.AgentAlertNotifier`) delivers each newly opened alert to the people or
+systems the product routes it to. A failed delivery leaves the alert open, is not retried, and is
+counted as undelivered. One agent's failure does not stop the pass; the pass reports agents
+evaluated, skipped, and failed, and alerts opened, resolved, and undelivered.
+`dataplane.NewAgentHealthWorker` is the keel `JobWorker` a product runs from its own worker binary:
+it composes `AgentHealth` on its first pass, takes its interval from `agent_health_period` once
+configuration loads, and journals each pass. `ScoutConfig.AgentHealthSettings()` returns the flags.
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `agent_health_period` | 60 | Seconds between evaluator passes |
+| `agent_health_batch` | 100 | Active agents one page of a pass reads |
+| `agent_health_window` | 60 | Minutes a measure covers when the policy names no window |
+| `agent_health_stale_periods` | 3 | Periods an agent with a policy may go unevaluated before its telemetry is stale |
+| `agent_alert_page_size`, `agent_alert_max_page_size` | 50, 200 | Alert page when the caller names no limit, and the largest one |
+
 ## Audit trail
 
 `AuditingObservationRecorder` wraps any recorder and writes a `domain.DecisionRecord` for every `rejected` or

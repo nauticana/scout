@@ -233,6 +233,7 @@ func TestAgentEvaluationStoreRecordsComparisonsUnderTheLease(t *testing.T) {
 	for name, mutate := range map[string]func(*domain.CaseComparison){
 		"mixed currencies":     func(c *domain.CaseComparison) { c.B.Usage.Currency = "USD" },
 		"negative spend":       func(c *domain.CaseComparison) { c.EvaluatorUsage.InputTokens = -1 },
+		"negative tool calls":  func(c *domain.CaseComparison) { c.A.Usage.ToolCalls = -1 },
 		"unknown verdict":      func(c *domain.CaseComparison) { c.Verdict = "both" },
 		"verdict with failure": func(c *domain.CaseComparison) { c.Reason = "judging failed" },
 		"silent failure":       func(c *domain.CaseComparison) { c.Verdict = "" },

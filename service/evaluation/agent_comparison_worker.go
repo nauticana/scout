@@ -47,6 +47,13 @@ func (w *AgentEvaluationWorker) compareExample(ctx context.Context, claim domain
 		comparison.Reason = "storing answers failed: " + stage.ErrorClass(err)
 		return w.settle(ctx, claim, example, comparison, &caseFailure{example: example, err: err})
 	}
+	if comparison.A.Trajectory, err = w.storedTrajectory(ctx, claim.Run, a); err == nil {
+		comparison.B.Trajectory, err = w.storedTrajectory(ctx, claim.Run, b)
+	}
+	if err != nil {
+		comparison.Reason = "storing trajectories failed: " + stage.ErrorClass(err)
+		return w.settle(ctx, claim, example, comparison, &caseFailure{example: example, err: err})
+	}
 	judgeErr := w.decide(ctx, claim.Run.RequestedBy, example, a, b, &comparison)
 	if judgeErr != nil && ctx.Err() != nil {
 		// Shutdown cut the judge off: nothing is recorded, so the reclaimed attempt compares the example again.

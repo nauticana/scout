@@ -92,6 +92,7 @@ seeds:
       - [limits, at_most, "Turn rate, step, tool-call, and duration ceilings"]
       - [approval_routing, routing, "Approval routes: who decides, by when, and how overdue work escalates"]
       - [evaluation_gate, gate, "What a draft's evaluations must show before it may be published"]
+      - [health_alerts, alerts, "When an agent's production health opens an alert"]
   # Governance catalogs. audit_decision_outcome classifies every audit_event; the
   # approval catalogs order and label the work a human owes.
   - table: audit_decision_outcome

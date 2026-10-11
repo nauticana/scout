@@ -1,0 +1,23 @@
+table: golden_case_turn
+comment: One follow-up turn of a scripted golden case, submitted once the previous turn completes; turn 1 is the case input
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: case_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: INTEGER
+  - name: input_text
+    type: TEXT
+primary_key: [partner_id, golden_set_id, case_id, turn_no]
+foreign_keys:
+  - name: golden_case_turns
+    columns: [partner_id, golden_set_id, case_id]
+    references:
+      table: golden_case
+      columns: [partner_id, golden_set_id, case_id]
+checks:
+  - name: golden_case_turn_no_ck
+    expression: turn_no >= 2

@@ -195,6 +195,10 @@ validates them at load.
 | `agent_evaluation_baseline_max_bytes` | int | 32768 | 0 | — | Bytes of one recorded human baseline output (`EvaluationBaselineStore.MaxOutputBytes`); 0 uses the default 32768. |
 | `agent_evaluation_max_baselines` | int | 20 | 0 | — | Human baselines one golden set version may hold (`EvaluationBaselineStore.MaxBaselines`); 0 uses the default 20. |
 | `agent_evaluation_compare_page_bytes` | int | 1048576 | 0 | — | Bytes of stored answers one Studio comparison page returns (`StudioEvaluation.MaxPageAnswerBytes`); an answer past it is omitted and marked; 0 uses the default 1048576. |
+| `agent_evaluation_case_max_turns` | int | 10 | 0, else 1 | 100 | Turns one golden case may script, its input included (`GoldenCaseStore.MaxTurns`); 0 uses the default 10. |
+| `agent_evaluation_case_max_tools` | int | 20 | 0, else 1 | 200 | Sandboxed tool responses one golden case may script (`GoldenCaseStore.MaxTools`); 0 uses the default 20. |
+| `agent_evaluation_case_tool_max_bytes` | int | 16384 | 0, else 2 | 1048576 | Bytes of one scripted tool output (`GoldenCaseStore.MaxToolOutputBytes`); 0 uses the default 16384. |
+| `agent_evaluation_trajectory_max_bytes` | int | 1048576 | 0, else 1024 | 16777216 | Bytes of one stored case trajectory (`AgentEvaluationWorker.MaxTrajectoryBytes`, `StudioEvaluation.MaxTrajectoryBytes`); a larger one is refused; 0 uses the default 1048576. |
 | `agent_review_feedback_threshold` | int | 2 | 0 | 5 | Highest turn rating that queues a rated turn for Studio review (`ReviewIntake.FeedbackThreshold`); 0 queues none. |
 | `agent_review_max_pending` | int | 1000 | 0 | — | Pending sampled and rated turns one agent's review queue holds before new ones are skipped (`ReviewQueueStore.MaxPending`); concurrent enqueues may overshoot it slightly; 0 uses the default 1000. |
 | `agent_review_page_size` | int | 50 | 0 | `agent_review_max_page_size` | Review items one Studio page returns when the caller names no limit; 0 uses the default 50. |
@@ -224,6 +228,19 @@ validates them at load.
 | `agent_metric_label_max_length` | int | 64 | 0 | — | Bytes of one fleet metric label value (`observability.LabelPolicy.MaxValueLength`); a longer value is refused, which keeps free text out of metric dimensions; 0 uses the default 64. |
 | `agent_knowledge_max_source_bytes` | int | 33554432 | 0 | — | Bytes of one knowledge source object the ingestion loader reads (`knowledge.ObjectStorageLoader.MaxBytes`); 0 uses the default 33554432. |
 | `agent_knowledge_rrf_offset` | int | 60 | 0 | — | Reciprocal rank fusion constant k of hybrid retrieval (`knowledge.HybridRetriever.RRFOffset`), scoring rank r as 1/(k+r); a larger k flattens the advantage of top ranks; 0 uses the default 60. |
+
+### Agent health and alerts
+
+`ScoutConfig.AgentHealthSettings()` feeds `dataplane.AgentHealth` and `AgentHealthWorker`.
+
+| Flag | Type | Default | Min | Max | Meaning |
+|---|---|---|---|---|---|
+| `agent_health_period` | int | 60 | 0 | 86400 | Seconds between passes of the agent health evaluator; 0 uses the default 60. |
+| `agent_health_batch` | int | 100 | 0 | 10000 | Active agents one page of a health evaluator pass reads; 0 uses the default 100. |
+| `agent_health_window` | int | 60 | 0 | 10080 | Minutes of turns and safety events a health measure covers when the agent's `health_alerts` setting names no window; 0 uses the default 60. |
+| `agent_health_stale_periods` | int | 3 | 0 | 1000 | Evaluator periods an active agent whose `health_alerts` policy evaluates something may go unevaluated before Studio reports its telemetry stale; 0 uses the default 3. |
+| `agent_alert_page_size` | int | 50 | 0 | 1000, ≤ `agent_alert_max_page_size` | Alerts one Studio page returns when the caller names no limit; 0 uses the default 50. |
+| `agent_alert_max_page_size` | int | 200 | 0, else ≥ `agent_alert_page_size` | 1000 | Largest alert page a Studio caller may ask for; a larger limit is refused; 0 uses the default 200. |
 
 ### Defaults
 
@@ -313,11 +330,15 @@ truncation.
 | `policy.StudioRestrictions.MaxEntries` | `agent_studio_max_restriction_entries` | non-negative; zero takes 256. Bounds a tenant layer's denials and, separately, its guardrail rules |
 | `evaluation.StudioEvaluation.MaxOpenRuns` | `agent_evaluation_max_open_runs` | non-negative; zero refuses every evaluation |
 | `evaluation.GoldenCaseStore.{MaxInputBytes,MaxCases,VersionsShown}` | `agent_evaluation_case_max_bytes`, `agent_evaluation_max_cases`, `--evaluation_versions_shown` | non-negative; zero takes 32 KiB / 500 / 20 |
+| `evaluation.GoldenCaseStore.{MaxTurns,MaxTools,MaxToolOutputBytes}` | `agent_evaluation_case_max_turns`, `agent_evaluation_case_max_tools`, `agent_evaluation_case_tool_max_bytes` | non-negative; zero takes 10 / 20 / 16 KiB |
 | `evaluation.NewAgentEvaluationWorker(lease, batch, maxAttempts)` | `agent_evaluation_lease`, `agent_evaluation_batch`, `agent_evaluation_max_attempts` | lease at least 1s and longer than the slowest example; batch and attempts positive |
-| `evaluation.AgentEvaluationWorker.{Concurrency,MaxRunCostMinorUnits,Currency}` | `agent_evaluation_concurrency`, `agent_evaluation_max_run_cost`, `agent_evaluation_currency` | concurrency non-negative, below 2 sequential; cost positive minor units, counting judge spend; a three-letter currency, so an empty flag refuses the worker |
+| `evaluation.AgentEvaluationWorker.{Concurrency,MaxRunCostMinorUnits,Currency,MaxTrajectoryBytes}` | `agent_evaluation_concurrency`, `agent_evaluation_max_run_cost`, `agent_evaluation_currency`, `agent_evaluation_trajectory_max_bytes` | concurrency non-negative, below 2 sequential; cost positive minor units, counting judge spend; a three-letter currency; trajectory bytes non-negative, zero takes 1 MiB |
 | `evaluation.NewGatewayRubricJudge(gateway, inputs, pricer, settings)` as `AgentEvaluationWorker.Judge` | `agent_evaluation_judge_*` through `ScoutConfig.RubricJudgeSettings()` | compose only when `Configured()`; settings must `Validate()`; the judge route must declare `SO` (structured output) or every graded run fails |
-| `evaluation.AgentEvaluationWorker.{PairJudge,Outputs}` | — | both required for comparison runs, which otherwise fail; `evaluation.GatewayJudge` calls its route strictly through `SO` (structured output) and charges the run's requester |
-| `evaluation.StudioEvaluation.{BaselineStore,Outputs,MaxPageAnswerBytes}` | `agent_evaluation_compare_page_bytes` | the store and reader are required by the `compare` feature only; bytes non-negative, zero takes 1 MiB |
+| `evaluation.AgentEvaluationWorker.PairJudge` | — | required for comparison runs, which otherwise fail; `evaluation.GatewayJudge` calls its route strictly through `SO` (structured output) and charges the run's requester |
+| `evaluation.AgentEvaluationWorker.Outputs` | — | required: every executed case's trajectory and every comparison answer is stored there |
+| `evaluation.AgentEvaluationWorker.{DraftReplays,Trajectory}` | — | `DraftReplays` (`evaluation.DraftCaseExecutor`, with the runtime guardrail enforcer) is required by a run with scripted examples and a draft arm, which otherwise fails; `Trajectory` is optional |
+| `evaluation.StudioEvaluation.{BaselineStore,Outputs,MaxPageAnswerBytes}` | `agent_evaluation_compare_page_bytes` | the store is required by the `compare` feature and the reader by `compare` and `evaluation/trajectory`; bytes non-negative, zero takes 1 MiB |
+| `evaluation.StudioEvaluation.MaxTrajectoryBytes` | `agent_evaluation_trajectory_max_bytes` | non-negative; zero takes 1 MiB |
 | `evaluation.EvaluationBaselineStore.{MaxOutputBytes,MaxBaselines}` | `agent_evaluation_baseline_max_bytes`, `agent_evaluation_max_baselines` | non-negative; zero takes 32 KiB / 20 |
 | `controlplane.StudioEvaluationGate.{MaxResults,Audit}` | `agent_evaluation_gate_max_results` | non-negative, zero takes 2000; overrides are refused without `Audit`. Compose it in `StudioService.Guards`, or a publish or restore of a gated agent is refused |
 | `controlplane.StudioService.Audit` | — | required to remove or loosen an evaluation gate |
@@ -326,6 +347,7 @@ truncation.
 | `evaluation.ReviewIntake.FeedbackThreshold` | `agent_review_feedback_threshold` | 0 to 5; zero queues no rated turn. Set the intake as `BaseDataPlane.Review` and `TurnFeedback.Review`; both offer turns best-effort |
 | `evaluation.ReleaseCaseExecutor.ReleaseLimits` | — | required: the data plane's `PrincipalLimits`; the replayed release's frozen `limits` only narrow the executor's tool-call, step, and deadline ceilings |
 | `controlplane.StudioService.TemplateLimits.{MaxPerType,MaxVersions}` | `agent_studio_max_templates_per_type`, `agent_studio_max_template_versions` | non-negative; a zero `MaxPerType` refuses every new template and a zero `MaxVersions` every save |
+| `dataplane.AgentHealth.Settings`, `dataplane.NewAgentHealthWorker(caption, compose, settings, loadConfig)` | `agent_health_*`, `agent_alert_*` through `ScoutConfig.AgentHealthSettings()` | non-negative, the window at most 10080 minutes; zero takes each default; the worker's period at least 1s |
 | `controlplane.ReleaseActivationWorker.Settings` | `agent_activation_batch`, `agent_activation_poll`, `agent_activation_max_attempts` through `ScoutConfig.ReleaseActivationSettings()` | all positive; poll at least 1s; a transient failure retries after attempts × poll |
 | `domain.ReleaseActivationSettings.Timeout` | `agent_activation_timeout` through `ScoutConfig.ReleaseActivationSettings()` | negative refused; zero takes 2m; bounds one activation's checks and swap |
 

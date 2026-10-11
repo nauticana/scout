@@ -237,6 +237,8 @@ func finalState(events []domain.TrajectoryEvent) string {
 type RecordingSandbox struct {
 	// Responses maps tool id to its canned result; a missing tool is an error.
 	Responses map[string]domain.ToolResult
+	// Failures are tool ids every call of which fails with ErrSandboxToolFailed.
+	Failures map[string]bool
 	// Strict fails on an unknown tool instead of returning an empty result.
 	Strict bool
 	// MaxCalls bounds recorded calls; zero means 256.
@@ -264,6 +266,9 @@ func (sandbox *RecordingSandbox) Invoke(_ context.Context, call domain.ToolCall)
 	}
 	sandbox.calls = append(sandbox.calls, call)
 	sandbox.mu.Unlock()
+	if sandbox.Failures[call.ToolID] {
+		return domain.ToolResult{}, fmt.Errorf("%w: tool %q", ErrSandboxToolFailed, call.ToolID)
+	}
 	result, ok := sandbox.Responses[call.ToolID]
 	if !ok && sandbox.Strict {
 		return domain.ToolResult{}, fmt.Errorf("%w: sandbox has no response for tool %q", domain.ErrNotFound, call.ToolID)

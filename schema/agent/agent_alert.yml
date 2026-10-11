@@ -1,0 +1,54 @@
+table: agent_alert
+comment: One health alert of an agent, opened and resolved by the health evaluator; at most one open alert per kind
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: kind_code
+    type: CHAR(1)
+  - name: status_code
+    type: CHAR(1)
+    default: O
+  - name: opened_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: resolved_at
+    type: TIMESTAMP
+    nullable: true
+  - name: observed_value
+    type: BIGINT
+    comment: The measurement that opened the alert, in the kind's unit
+  - name: threshold_value
+    type: BIGINT
+    comment: The policy threshold the measurement exceeded
+  - name: window_minutes
+    type: INTEGER
+primary_key: [id]
+sequence:
+  name: agent_alert_seq
+  column: id
+foreign_keys:
+  - name: agent_alerts
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+indexes:
+  - name: agent_alert_open_uq
+    columns: [partner_id, agent_id, kind_code]
+    unique: true
+    where: status_code = 'O'
+  - name: agent_alert_agent_ix
+    columns: [partner_id, agent_id, id]
+checks:
+  - name: agent_alert_kind_ck
+    expression: kind_code IN ('F', 'L', 'H', 'S')
+  - name: agent_alert_status_ck
+    expression: status_code IN ('O', 'R')
+  - name: agent_alert_resolved_ck
+    expression: (status_code = 'R') = (resolved_at IS NOT NULL) AND (resolved_at IS NULL OR resolved_at >= opened_at)
+  - name: agent_alert_values_ck
+    expression: observed_value >= 0 AND threshold_value >= 0 AND window_minutes > 0

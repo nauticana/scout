@@ -22,6 +22,9 @@ const (
 	// ResourceEvaluationGate is what a draft's evaluations must show before it may be published.
 	// It governs publication, so it is not frozen into a release.
 	ResourceEvaluationGate ResourceKind = "evaluation_gate"
+	// ResourceHealthAlerts is when an agent's production health opens an alert. It is
+	// operational, so it is not frozen into a release.
+	ResourceHealthAlerts ResourceKind = "health_alerts"
 )
 
 // MergeMode is how a child binding combines with the value it inherits.
