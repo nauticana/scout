@@ -14,6 +14,8 @@ type DelegationGrantRepository interface {
 	Revoke(ctx context.Context, tenantID int64, grantID, reason string) error
 	// ForGrantee lists the grants a principal currently holds.
 	ForGrantee(ctx context.Context, tenantID int64, grantee domain.PrincipalRef) ([]domain.DelegationGrant, error)
+	// ForAgent lists the grants in force that an agent holds or conveys.
+	ForAgent(ctx context.Context, tenantID int64, agentID string) ([]domain.DelegationGrant, error)
 }
 
 // DelegationAuthorizer decides whether one principal may delegate a specific

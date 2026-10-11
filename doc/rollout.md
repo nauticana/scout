@@ -41,7 +41,9 @@ The shadow stage mirrors a bounded share of authenticated, redacted traffic thro
 3. experiment cohort by stable hash of tenant, agent, experiment, salt, and subject,
 4. deployment default: canary by stable hash, else stable.
 
-A pin whose `CompatiblePolicyVersions`/`CompatibleIndexVersions` exclude the running policy or index is rejected with `ErrConflict` — a pinned request never silently drifts onto another version. Every resolution is audited with the rule that won (`domain.AgentVersionResolution.Source`). `PinAwareGarbageCollector.Collectable` refuses to drop a version that is deployed, pinned, in a cohort, or held by an open conversation.
+A pin whose `CompatiblePolicyVersions`/`CompatibleIndexVersions` exclude the running policy or index is rejected with `ErrConflict` — a pinned request never silently drifts onto another version. A manager with an audit sink records every resolution with the rule that won (`domain.AgentVersionResolution.Source`).
+
+The data plane resolves once, when a conversation starts: `TableTurnRecordStore.Versions` (by default a `PinnedTrafficManager` over the agent's deployment; a product with the `release` module adds its pins and cohorts) chooses the release, and `agent_conversation` records it with `version_source`. A caller holding `AGENT_CONVERSATION` `PIN_RELEASE` may instead pin a new conversation to one unquarantined release with a reason (`request_pin`). Studio publication deploys a release as stable or, with a canary percentage, beside it; Studio's `traffic` feature then canaries, promotes, and rolls back, and `explain` reports which release a conversation runs on and why. `PinAwareGarbageCollector.Collectable` refuses to drop a version that is deployed, pinned, in a cohort, or held by an open conversation.
 
 ## Stickiness and drain
 

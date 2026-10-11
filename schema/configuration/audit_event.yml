@@ -25,6 +25,10 @@ columns:
     type: VARCHAR(200)
     nullable: true
     comment: Client application the principal acted through; external issuers prevent a foreign key
+  - name: work_ref
+    type: VARCHAR(200)
+    nullable: true
+    comment: The product work item the decision served; products own its meaning, which prevents a foreign key
   - name: scope_id
     type: VARCHAR(80)
     nullable: true

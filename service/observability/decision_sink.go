@@ -33,13 +33,13 @@ var decisionQueries = map[string]string{
 INSERT INTO audit_event
        (id, partner_id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id, client_ref,
         scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
-        obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, decision_key)
-VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, work_ref, decision_key)
+VALUES (nextval('audit_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, decision_key) DO NOTHING`,
 	qDecisionPage: `
 SELECT id, category, principal_kind, principal_id, grant_id, grantor_kind, grantor_id,
        scope_id, performed_action, resource_ref, release_version, policy_id, policy_version, outcome_code,
-       obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, client_ref
+       obligations, reason, request_id, conversation_id, payload_uri, payload_digest, occurred_at, client_ref, work_ref
   FROM audit_event
  WHERE ((? > 0 AND partner_id = ?) OR (? = 0 AND partner_id IS NULL))
    AND (? = '' OR category = ?)
@@ -147,7 +147,7 @@ func (sink *TableAuditSink) insert(ctx context.Context, qs keelport.QueryService
 		nullable(strings.Join(obligations, ",")), nullable(decision.Reason),
 		nullable(decision.RequestID), nullable(decision.ConversationID),
 		nullable(decision.Evidence.URI), nullable(decision.Evidence.Digest), occurred,
-		nullable(domain.DecisionKeyFor(ctx, decision)))
+		nullable(decision.WorkRef), nullable(domain.DecisionKeyFor(ctx, decision)))
 	if err != nil {
 		return fmt.Errorf("record decision: %w", err)
 	}
@@ -196,7 +196,7 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 			Outcome: domain.DecisionOutcome(common.AsString(row[13])), Reason: common.AsString(row[15]),
 			RequestID: common.AsString(row[16]), ConversationID: common.AsString(row[17]),
 			Evidence:   domain.ObjectRef{URI: common.AsString(row[18]), Digest: common.AsString(row[19])},
-			OccurredAt: common.AsTime(row[20]), ClientRef: common.AsString(row[21]),
+			OccurredAt: common.AsTime(row[20]), ClientRef: common.AsString(row[21]), WorkRef: common.AsString(row[22]),
 		}
 		for _, obligation := range strings.Split(common.AsString(row[14]), ",") {
 			if obligation != "" {

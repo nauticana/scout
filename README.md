@@ -52,10 +52,10 @@ Add released module versions; never use local filesystem replacements:
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.2.106
+go get github.com/nauticana/keel@v1.2.107
 ```
 
-Continue with [Create a downstream platform](doc/engineering-reference.md#create-a-downstream-platform) for composition, HTTP handlers, workers, MCP, and schema generation. Agent Studio clients use the [Studio API surface](doc/api_surface.md).
+Continue with [Create a downstream platform](doc/engineering-reference.md#create-a-downstream-platform) for composition, HTTP handlers, workers, MCP, and schema generation. HTTP clients use the [API surface](doc/api_surface.md).
 
 ## Ownership boundary
 
@@ -71,7 +71,7 @@ The detailed [repository contract](doc/engineering-reference.md#repository-contr
 
 | Topic | Contents |
 |---|---|
-| [Agent Studio API](doc/api_surface.md) | Authenticated routes, payload mappings, mutation contracts, responses, and errors |
+| [HTTP API](doc/api_surface.md) | Agent Studio, conversation, and approval routes, payload mappings, mutation contracts, and errors |
 | [Engineering reference](doc/engineering-reference.md) | Package map, services, Studio, runtime, MCP, schema, providers, reliability, composition, and testing |
 | [Database reference](doc/database.md) | Module dependencies, ER diagrams, tables, relationships, and storage boundaries |
 | [Configuration](doc/configuration.md) | Flags, limits, admission, budgets, latency, and data-plane settings |

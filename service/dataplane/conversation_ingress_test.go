@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -21,6 +22,12 @@ func newTestIngress(t *testing.T, recorder *ingressRecorder, enqueueErr error) *
 	t.Helper()
 	recorder.subscription = &fake.TurnReplySubscription{RouteValue: "route:request-1"}
 	return &TurnIngress{
+		Roles: fake.PrincipalAuthorizerFunc(func(context.Context, domain.Principal, string, string, string) (domain.AuthorizationGrant, error) {
+			return domain.AuthorizationGrant{Allowed: true}, nil
+		}),
+		Principals: fake.PrincipalResolverFunc(func(_ context.Context, tenantID int64, ref domain.PrincipalRef) (domain.Principal, error) {
+			return domain.Principal{Kind: ref.Kind, ID: ref.ID, TenantID: tenantID, Release: "v1"}, nil
+		}),
 		Limiter: &fake.TenantRateLimiter{AllowTurnFunc: func(context.Context, domain.TenantContext) error {
 			recorder.calls = append(recorder.calls, "limit")
 			return nil
@@ -147,6 +154,95 @@ func TestTurnIngressRequiresCompleteRequest(t *testing.T) {
 	ingress := newTestIngress(t, &ingressRecorder{}, nil)
 	request := ingressRequest()
 	request.Input = nil
+	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("error = %v, want validation", err)
+	}
+}
+
+func TestTurnIngressResolvesTheAliasAndAuthorizesThePerson(t *testing.T) {
+	recorder := &ingressRecorder{}
+	ingress := newTestIngress(t, recorder, nil)
+	ingress.Records.(*fake.TurnRecordStore).AddressFunc = func(_ context.Context, _ int64, aliasID, agentID, _ string) (string, error) {
+		if aliasID != "writer" || agentID != "" {
+			t.Fatalf("address(%q, %q)", aliasID, agentID)
+		}
+		return "writer-b", nil
+	}
+	var checked []string
+	ingress.Roles = fake.PrincipalAuthorizerFunc(func(_ context.Context, principal domain.Principal, object, action, value string) (domain.AuthorizationGrant, error) {
+		checked = append(checked, principal.ID+" "+object+"/"+action+"/"+value)
+		return domain.AuthorizationGrant{Allowed: true}, nil
+	})
+	var opened domain.TurnRequest
+	ingress.Records.(*fake.TurnRecordStore).OpenFunc = func(_ context.Context, request domain.TurnRequest, _ domain.ObjectRef) (int64, error) {
+		opened = request
+		return 1, nil
+	}
+	request := ingressRequest()
+	request.AliasID, request.AgentID = "writer", ""
+	request.OnBehalfOf = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}
+	if _, err := ingress.OpenTurn(context.Background(), request); err != nil {
+		t.Fatalf("OpenTurn: %v", err)
+	}
+	if opened.AgentID != "writer-b" || opened.Principal.ID != "writer-b" || opened.Principal.Kind != domain.PrincipalAgent {
+		t.Fatalf("opened = %+v", opened)
+	}
+	if len(checked) != 1 || checked[0] != "42 AGENT_CONVERSATION/USE/agent:writer-b" {
+		t.Fatalf("checked = %v", checked)
+	}
+}
+
+func TestTurnIngressRefusesUnauthorizedAndUngrantedPins(t *testing.T) {
+	recorder := &ingressRecorder{}
+	ingress := newTestIngress(t, recorder, nil)
+	ingress.Roles = fake.PrincipalAuthorizerFunc(func(_ context.Context, _ domain.Principal, _, action, _ string) (domain.AuthorizationGrant, error) {
+		return domain.AuthorizationGrant{Allowed: action == ConversationActionUse}, nil
+	})
+	request := ingressRequest()
+	request.OnBehalfOf = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}
+	request.Release, request.ReleaseReason = "3", "audit replay"
+	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("pin error = %v, want forbidden", err)
+	}
+	request.ReleaseReason = ""
+	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("reasonless pin = %v, want validation", err)
+	}
+	request = ingressRequest()
+	request.Release, request.ReleaseReason = "3", "no person"
+	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("pin without a person = %v, want forbidden", err)
+	}
+	request = ingressRequest()
+	request.Principal = domain.Principal{Kind: domain.PrincipalAgent, ID: "other", TenantID: 7}
+	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("mismatched principal = %v, want forbidden", err)
+	}
+	for _, call := range recorder.calls {
+		if call == "open" {
+			t.Fatal("a refused turn must not be opened")
+		}
+	}
+}
+
+func TestTurnIngressSelectableFiltersByGrant(t *testing.T) {
+	ingress := newTestIngress(t, &ingressRecorder{}, nil)
+	ingress.Records.(*fake.TurnRecordStore).SelectableFunc = func(context.Context, int64, string) ([]domain.SelectableAgent, error) {
+		return []domain.SelectableAgent{{AgentID: "writer-a", Default: true}, {AgentID: "writer-b"}}, nil
+	}
+	ingress.Roles = fake.PrincipalAuthorizerFunc(func(_ context.Context, _ domain.Principal, _, _, value string) (domain.AuthorizationGrant, error) {
+		return domain.AuthorizationGrant{Allowed: value == "agent:writer-b"}, nil
+	})
+	agents, err := ingress.Selectable(context.Background(), domain.TenantContext{TenantID: 7}, domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, "writer")
+	if err != nil || len(agents) != 1 || agents[0].AgentID != "writer-b" {
+		t.Fatalf("agents = %+v, error = %v", agents, err)
+	}
+}
+
+func TestTurnIngressRefusesOversizedReferences(t *testing.T) {
+	ingress := newTestIngress(t, &ingressRecorder{}, nil)
+	request := ingressRequest()
+	request.WorkRef = strings.Repeat("w", 201)
 	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}

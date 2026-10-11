@@ -146,12 +146,11 @@ func TestPromptCompilerDefinitionDigestIsCanonical(t *testing.T) {
 	english, _ := compiler.Compile("en-US", []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""))})
 	german, _ := compiler.Compile("de-DE", []domain.PromptSectionSource{layered(1, 1, baseLayer("basis", ""))})
 	definition := domain.AgentDefinition{
-		AgentTypeID:    "assistant",
-		Enabled:        true,
-		Models:         domain.AgentModelSelection{Text: modelReference("provider", "model")},
-		ApprovalPolicy: domain.AgentApprovalPolicy{RequireApproval: true},
-		Languages:      []domain.CompiledPrompt{english, german},
-		Extension:      []byte(`{"b":2,"a":1}`),
+		AgentTypeID: "assistant",
+		Enabled:     true,
+		Models:      domain.AgentModelSelection{Text: modelReference("provider", "model")},
+		Languages:   []domain.CompiledPrompt{english, german},
+		Extension:   []byte(`{"b":2,"a":1}`),
 	}
 	a, err := compiler.DefinitionDigest(definition)
 	if err != nil {
@@ -166,7 +165,7 @@ func TestPromptCompilerDefinitionDigestIsCanonical(t *testing.T) {
 	if a != b {
 		t.Fatalf("canonical digests differ: %q != %q", a, b)
 	}
-	const want = "1237ed589c0ecccc268aa016ea1ec73e05f494185ddb1d0a4ccd19002846ef25"
+	const want = "7aa57ec2d07fee6b296f13763d837567d8dbdff592ea5cdcb80b93640983fd0c"
 	if a != want {
 		t.Fatalf("digest = %q, want %q", a, want)
 	}

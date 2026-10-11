@@ -81,6 +81,7 @@ seeds:
       - [agent_guardrail_max_input_bytes, int, true, "262144", "Baseline byte ceiling on turn input, tool arguments, and retrieved content"]
       - [agent_guardrail_max_output_bytes, int, true, "1048576", "Baseline byte ceiling on model and tool output"]
       - [agent_model_region, string, true, "", "Residency region stamped on a candidate model with no route row; empty leaves it unknown"]
+      - [agent_studio_max_agents_per_type, int, false, "20", "Agents of one type a tenant may keep, archived ones included; 0 refuses every Studio create"]
   - table: authorization_object
     columns: [id, caption]
     rows:
@@ -90,7 +91,9 @@ seeds:
     columns: [authorization_object_id, action, caption]
     rows:
       - [AGENT_STUDIO, VIEW, View agents and drafts]
-      - [AGENT_STUDIO, EDIT, Edit and reset drafts]
+      - [AGENT_STUDIO, CREATE, Create agents of a type]
+      - [AGENT_STUDIO, EDIT, "Edit, rename and reset drafts"]
+      - [AGENT_STUDIO, ARCHIVE, Archive and restore agents]
       - [AGENT_STUDIO, TEST, Run draft tests]
       - [AGENT_STUDIO, PUBLISH, Publish releases and set defaults]
       - [AGENT_STUDIO, RESTORE, Restore published versions]
@@ -120,11 +123,13 @@ seeds:
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
-      - [AGENT_ADMIN, AGENT_STUDIO, VIEW, agent_studio]
-      - [AGENT_ADMIN, AGENT_STUDIO, EDIT, agent_studio]
-      - [AGENT_ADMIN, AGENT_STUDIO, TEST, agent_studio]
-      - [AGENT_ADMIN, AGENT_STUDIO, PUBLISH, agent_studio]
-      - [AGENT_ADMIN, AGENT_STUDIO, RESTORE, agent_studio]
+      - [AGENT_ADMIN, AGENT_STUDIO, VIEW, "*"]
+      - [AGENT_ADMIN, AGENT_STUDIO, CREATE, "*"]
+      - [AGENT_ADMIN, AGENT_STUDIO, EDIT, "*"]
+      - [AGENT_ADMIN, AGENT_STUDIO, TEST, "*"]
+      - [AGENT_ADMIN, AGENT_STUDIO, PUBLISH, "*"]
+      - [AGENT_ADMIN, AGENT_STUDIO, RESTORE, "*"]
+      - [AGENT_ADMIN, AGENT_STUDIO, ARCHIVE, "*"]
       - [AGENT_ADMIN, AGENT_APPROVAL, DECIDE, "*"]
       - [AGENT_ADMIN, PAGE, ACCESS, agent_studio]
       - [AGENT_ADMIN, TABLE, SELECT, agent_profile]
@@ -142,7 +147,7 @@ seeds:
       - [AGENT_ADMIN, TABLE, SELECT, agent_version]
       - [AGENT_ADMIN, TABLE, SELECT, agent_deployment]
       - [AGENT_ADMIN, TABLE, SELECT, agent_studio_event]
-      - [AGENT_OPER, AGENT_STUDIO, VIEW, agent_studio]
+      - [AGENT_OPER, AGENT_STUDIO, VIEW, "*"]
       - [AGENT_OPER, PAGE, ACCESS, agent_studio]
       - [AGENT_OPER, TABLE, SELECT, agent_profile]
       - [AGENT_OPER, TABLE, SELECT, agent_draft]

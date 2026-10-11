@@ -21,7 +21,7 @@ Scout is licensed under the [Apache License 2.0](../LICENSE).
 
 | Path | Purpose |
 |---|---|
-| `api/` | Versioned wire DTOs for the `studio-v1` HTTP and `mcp-v1` envelope profiles |
+| `api/` | Versioned wire DTOs for the `studio-v2` HTTP and `mcp-v1` envelope profiles |
 | `domain/` | Provider-neutral values exchanged across platform boundaries |
 | `contract/` | Interfaces implemented or composed by downstream applications |
 | `service/` | Product-neutral implementations of Scout contracts, injected by downstream composition |
@@ -46,7 +46,7 @@ Scout owns agent-platform vocabulary and invariants. [keel](https://github.com/n
 | Product-specific behavior, prompt content, baseline selection, workflows, and approval rules | Downstream application |
 | Database repository, named query service, transactions, ID generation | keel |
 | HTTP server, authentication, authorization, envelopes, generic REST | keel |
-| Agent Studio lifecycle service, handler contract, and `studio-v1` adapter | Scout |
+| Agent Studio lifecycle service, handler contract, and `studio-v2` adapter | Scout |
 | Worker lifecycle, polling, leases, health endpoints | keel |
 | MCP server, transports, protocol DTO projection, envelopes, and provider registration | Scout |
 | MCP authentication, authorization, quota, client IP, secrets, and HTTP infrastructure | keel |
@@ -110,10 +110,10 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 |---|---|---|
 | `contract/control_plane.go` | `AgentVersionRepository`, `AgentCompiler`, `AgentPublisher`, registries, traffic manager | Validate, compile, publish, and activate immutable definitions |
 | `contract/studio.go` | Prompt compiler, baseline selector, draft validator/tester, kind/model catalogs, published resolver | Inject product rules and governed test execution |
-| `contract/studio_http.go` | `AgentStudioHTTPBackend` | Extend the shared service only where product behavior is required |
+| `contract/studio_http.go` | `AgentStudioHTTPBackend`, `StudioAuthorizer`, traffic, delegation, and usage backends | Extend the shared service only where product behavior is required |
 | `contract/agent_runtime.go` | `AgentExecutor`, `PricedAgent`, `ModelPricer`, provider factory, prompt renderer, run recorder/query/purger | Execute, price, and record one published agent's work |
 | `contract/mcp.go` | Server description, tool/resource/prompt operations, field catalog | Expose product capabilities through Scout MCP adapters |
-| `contract/data_plane.go` | `ConversationIngress`, `ConversationRuntime`, dispatcher, scheduler, weights, session, reply, step, record ports | Admit and execute turns with replay and streaming |
+| `contract/data_plane.go` | `ConversationIngress`, `ConversationRuntime`, dispatcher, requeuer, scheduler, weights, session, reply, step, record ports | Admit and execute turns with replay and streaming |
 | `contract/model_runtime.go` | Router, candidate catalog, capacity snapshots, gateway, provider registry, stream, serving signals | Govern provider selection and inference |
 | `contract/tool_gateway.go` | Authorization, credentials, egress, transport, retry, fenced circuit breaker | Govern every external tool effect |
 | `contract/guardrail.go` | `GuardrailEnforcer`, streaming sessions, classifiers, rule compiler, approval gate | Apply pinned policy at model and tool boundaries |
@@ -126,7 +126,7 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/scope.go` | `ScopeRepository`, `ResourceMerger`, `NarrowingChecker`, `EffectiveConfigCompiler`, `PrincipalLimits`, release repository | Bind versioned configuration to a scope and freeze its compiled result |
 | `contract/policy.go` | `PolicyDecisionPoint`, `PolicyResolver`, `ObligationEnforcer` | Decide whether a governed action is allowed, and enforce what rides along |
 | `contract/restriction.go` | `RestrictionLayerReader`, `RestrictionLayerWriter` | Hold platform- and tenant-wide prohibitions that apply on top of every release |
-| `contract/approval.go` | `ApprovalStore`, `ApprovalInbox`, `EscalationPolicy`, `Notifier` | Park work a human owes, route it, and resume on the verdict |
+| `contract/approval.go` | `ApprovalStore`, `ApprovalInbox`, `ApprovalDesk`, `EscalationPolicy`, `Notifier` | Park work a human owes, route it, and resume on the verdict |
 | `contract/mcp_confirmation.go` | `MCPConfirmationChecker`, `MCPConfirmedRunner`, `MCPConfirmationStore` | Re-authorize, run, and record an MCP tool call a person confirmed |
 | `contract/agent_type.go` | `AgentTypeRepository`, `AgentTypeService`, `AgentLifecycle`, `AgentVersionQuarantine`, capability packages | Publish templates, instantiate agents from them, and own their state |
 | `contract/delegation.go` | `DelegationGrantRepository`, `DelegationAuthorizer`, `AgentInvoker`, `WorkItemStore` | Bound who may hand work to whom, and address work to a principal |
@@ -140,14 +140,14 @@ The `contract` package remains flat so consumers use one stable import path. Con
 
 | Package | Contract | Implementations | Injected boundaries |
 |---|---|---|---|
-| `service/controlplane` | `control_plane.go`, `studio*.go`, `agent_type.go` | `StudioService`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `ModelAccess`, `AgentProvisioner`, `AgentTypeStore` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
-| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `ToolLoopExecutor`, `TableLoopJournal`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `AgentStepExecutor`, `TableWorkItemStore`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
+| `service/controlplane` | `control_plane.go`, `studio*.go`, `agent_type.go` | `StudioService`, `StudioDelegations`, `PromptRepository`, `AgentPublisher`, `PromptCompiler`, `PromptDraftAssembler`, `ModelCatalog`, `ModelAccess`, `AgentProvisioner`, `AgentTypeStore` | Keel database, baseline selection, product validation/testing, kind/model catalogs |
+| `service/dataplane` | `data_plane.go` | `TurnRuntime`, `ToolLoopExecutor`, `TableLoopJournal`, `TurnIngress`, `QueueTurnDispatcher`, `FairTurnScheduler`, `DurableSessionStore`, `StepIdempotencyStore`, `ObjectStateStore`, `SessionCoordinator`, `DefinitionResolver`, `StepExecutorRegistry`, `AgentStepExecutor`, `TableWorkItemStore`, `StudioUsage`, memory caches, `MemoryReplyHub`, `StreamPump`, `MemoryTurnCanceller`, `TurnLedger` | Durable stores, object storage, non-authoritative caches, metrics, guardrails, and step executors |
 | `service/charter` | `runtime.go` | `Runtime`, `Admission`, `Directory`, `IdentityBinding`, `CapabilityGateway`, `Transport`, `TriggerHandler`, `Adapter`, `Claim` | Charter governed runtime over Scout tools and keel: admission, capability invocation, evidence, event delivery, conformance |
 | `service/isolation` | `isolation.go` | `ExecutionGovernor`, keel-backed rate-limiter factories, `DistributedTenantRateLimiter`, `LatencyBudgetAllocator`, `BudgetLedger`, `WindowedCostBreaker`, `MemoryLoopDetector`, `ReleaseLimits` | Keel database and cache, admission policy, budget policy, stage latency model, loop detection, and cost circuit breaking |
 | `service/knowledge` | `knowledge.go` | `IngestPipeline`, `SectionChunker`, `PlainTextDecoder`, `DocumentDecoder`, `ObjectStorageLoader`, `PolicyRedactor`, `ManifestStore`, `VersionAliaser`, `GarbageCollector`, `PgVectorIndex`, `CachedRetriever`, `ShardedRetriever`, `BatchingEmbedder`, `HybridRetriever`, `TablePinnedKnowledge`, `ReleaseEntitlements` | Object storage, vector database, batch embedding providers, retrieval legs, and rerankers |
 | `service/modelgateway` | `model_runtime.go` | `PolicyRouter`, `TableCandidateCatalog`, `MemoryCapacitySnapshotSource`, `SnapshotCache`, `Gateway`, `ResilientGateway`, `HedgingGateway`, `BudgetedGateway`, `GovernedEmbedder`, `ServingSignalCollector`, `ProviderRegistry`, `AdaptiveCapacityScheduler`, lease-owning streams | Rate limiting, capacity scheduling, model providers, and serving-signal export |
 | `service/guardrail` | `guardrail.go` | `LayeredEnforcer`, `RuleSetCompiler`, `EvidenceValidator`, bounded output sessions | Classifier providers, approval gates, and safety event sinks |
-| `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
+| `service/release` | `release.go` | `RolloutController`, `TableRolloutStateStore`, `PinnedTrafficManager`, `StudioTraffic`, `TableConversationReleaseStore`, `SessionDrainer`, `BoundedShadowSampler`, `RollbackDrillHarness`, `ContractTestRunner` | Governed test execution, health evidence, alias switching, and capacity restoration |
 | `service/evaluation` | `evaluation.go` | `Runner`, `ReleaseCaseExecutor`, `ManifestBuilder`, `PairedScorer`, `GatewayJudge`, heuristic evaluators, `SkillSelection`, `GateIssuer`, `GateHealthEvaluator`, `RetrievalScorer`, samplers and calibration | Golden sets, rubrics, judge models, human review, and business outcomes |
 | `service/skill` | `control_plane.go` | `TableSkillRegistry` (also the release writer that binds skills), `TableSkillCatalog`, `UseSkill`, `UseSkillTool`, `Index` | Procedure content, the tenant's tool catalog, and the selection threshold |
 | `service/observability` | `observability.go` | `BoundedRuntimeMetrics`, `LabelPolicy`, `TenantHeavyHitters`, `AuditingObservationRecorder`, `TableAuditSink`, `KeelMetricSink` | Metric backends, tenant ledger, and audit sink |
@@ -174,9 +174,9 @@ Studio separates mutable authoring state from immutable runtime state:
 3. Prompt compilation folds the platform baseline and the `prompt_section` bindings of every scope on the agent's chain, widest first.
 4. `agent_alias` maps a logical tenant role to one named agent and carries the shared prompt-profile revision.
 5. Publication freezes compiled prompts, each section with the provenance of the layer that decided it, into canonical `agent_version.definition` JSON.
-6. `agent_deployment` selects stable and optional canary versions for the aliased agent.
+6. `agent_deployment` selects each agent's stable and optional canary versions; publication deploys every agent, and a conversation addresses its type's alias target or a named agent of that type.
 
-`controlplane.StudioService` implements `AgentStudioHTTPBackend`. It owns named SQL, prompt resolution, common validation, optimistic revisions, kill-switch updates, publication, restore, reset, history, release sections, and lifecycle audit. `handler.StudioHandler` authenticates through keel, derives `domain.StudioActor`, calls one backend method, and maps `studio-v2` DTOs and errors.
+`controlplane.StudioService` implements `AgentStudioHTTPBackend` and `StudioAuthorizer`. It owns named SQL, per-agent authorization, prompt resolution, common validation, optimistic revisions, creation, rename, archive, kill-switch updates, publication, restore, reset, history, release sections, and lifecycle audit. `handler.StudioHandler` authenticates through keel, derives `domain.StudioActor`, calls one backend method, and maps `studio-v2` DTOs and errors.
 
 Product applications implement `PromptBaselineSelector`, `AgentDraftValidator`, `AgentDraftTestExecutor`, `AgentTypeCatalog`, and `StudioModelCatalog`, and may implement `AgentActivityReporter`. Scout owns the inheritance vocabulary and lifecycle contract but never hard-codes product agent types, prompt text, capability catalogs, or provider construction.
 
@@ -320,7 +320,7 @@ A backend tool call is checked once, in its handler: the caller must be resolved
 
 Scout owns `mcp.BaseServer`, `ToolProvider`, `ResourceProvider`, caller resolution, policy authorization, protocol projection, stdio/SSE/Streamable HTTP setup, envelopes, resources, text bundles, field discovery, and manifest conformance checks. Keel remains responsible for authentication middleware, authorization, quota, secrets, trusted client-IP context, and HTTP infrastructure.
 
-Protocol frames and manifest entries belong to `mcp-go`; Scout defines only what a frame carries. That payload is the `mcp-v1` profile in `api/` — `Envelope`, `EnvelopeMeta`, `ProvenanceMeta`, `SourceAttrib`, `PaginationMeta`, and `FieldDescriptor` — projected from the tag-free `domain/` values by `mcp/wire.go`, exactly as `handler/` projects `studio-v1`.
+Protocol frames and manifest entries belong to `mcp-go`; Scout defines only what a frame carries. That payload is the `mcp-v1` profile in `api/` — `Envelope`, `EnvelopeMeta`, `ProvenanceMeta`, `SourceAttrib`, `PaginationMeta`, and `FieldDescriptor` — projected from the tag-free `domain/` values by `mcp/wire.go`, as `handler/` projects the HTTP profiles.
 
 ### Confirmed tool calls
 
@@ -469,7 +469,9 @@ backend.Run(ctx)
 
 Keep `controller.go` as wiring only. If an operation is meaningful without `http.ResponseWriter`, it belongs in a service. Use keel's metadata-driven REST support for ordinary table CRUD; write a custom handler only for a business operation.
 
-For Agent Studio, construct `controlplane.StudioService`, then mount every route returned by `handler.StudioHandler.Routes()`. The handler owns no SQL or lifecycle rule. Products retaining a legacy display-credit scale set the handler's model and test-result mappers. Scout seeds the `AGENT_STUDIO` verbs and the `AGENT_ADMIN` and `AGENT_OPER` roles; the application assigns those roles to users.
+For Agent Studio, construct `controlplane.StudioService` with its `Principals` and `Roles` (`principal.TableResolver` and `principal.RoleAuthorizer`), `MaxAgentsPerType` from `agent_studio_max_agents_per_type`, and, with delegation, `Delegations`; then mount every route returned by `handler.StudioHandler.Routes()`. Each optional feature — `StudioTrafficHandler` over `release.StudioTraffic`, `StudioDelegationHandler` over `controlplane.StudioDelegations`, `StudioUsageHandler` over `dataplane.StudioUsage` — takes the Studio service as its `contract.StudioAuthorizer`; mount its routes and append its `Feature()` to `StudioHandler.Features`. Handlers own no SQL or lifecycle rule. Products retaining a legacy display-credit scale set the handler's model and test-result mappers. Scout seeds the `AGENT_STUDIO` and `AGENT_CONVERSATION` actions and the `AGENT_ADMIN` and `AGENT_OPER` roles; the application assigns roles to users. [API surface](api_surface.md) lists every route.
+
+For approvals, construct `approval.Resumer` over the approval `TableStore` (store and inbox), `approval.RoleAuthorizer`, the turn record store, and the `dataplane.QueueTurnDispatcher` as its `Queue`, and mount `handler.ApprovalHandler`. Decision links need keel's `action_token` schema group, `Resumer.Links` (`actiontoken.Service` with a keel idempotency ledger), and `LinkMaxRisk`.
 
 ### 5. Add workers
 
@@ -562,12 +564,12 @@ Scout's schema is seventeen modules so a downstream installs only what its produ
 | `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
 | `prompt` | 2 | Prompt sections and platform baselines | — |
 | `model` | 6 | Providers, model definitions, capabilities, routes, pricing, tenant access | `catalog`, `tenancy` |
-| `agent` | 13 | Types and type versions, capability packages, profiles, drafts, aliases, guardrail config and safety events, published versions, deployments, version quarantine, Studio audit | `tenancy`, `model` |
+| `agent` | 14 | Types and type versions, capability packages, profiles, drafts, aliases, guardrail config and safety events, published versions, deployments, version quarantine, Studio audit and create idempotency | `tenancy`, `model` |
 | `tool` | 5 | Tool profiles, immutable versions, egress rules, agent bindings, principal credential bindings | `tenancy`, `agent`, `agent_authorization` |
 | `execution_graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
 | `knowledge` | 9 | Knowledge bases, versions, documents, chunks, agent bindings and their whole-read documents, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
-| `runtime` | 14 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
+| `runtime` | 15 | Conversations, turns, checkpoints, replay, tool-loop journal, durable turn queue and dead letters, budgets, usage, turn feedback, activity, principal-addressed work items | `catalog`, `tenancy`, `agent`, `execution_graph`, `agent_authorization`, `configuration` |
 | `release` | 15 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, cohorts, conversation release identity, compatibility results | `catalog`, `tenancy`, `agent`, `runtime` |
 | `evaluation` | 10 | Manifests, golden sets and queries, runs, results, gate decisions, review queue, production samples | `catalog`, `tenancy`, `agent`, `knowledge`, `release` |
 | `skill` | 10 | Platform skill catalog, tenant skill profiles, immutable procedure versions, the tools and skills each uses, selection examples, agent bindings | `tenancy`, `agent`, `tool` |
@@ -599,20 +601,20 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_s
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 48 selected keel tables and 123 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
+That full set is 48 selected keel tables and 125 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 50 |
-| … plus agent principals and delegation | `+ agent_authorization` | 52 |
-| … plus compiled execution graphs | `+ execution_graph` | 56 |
-| … plus governed tools and credential bindings | `+ tool` | 61 |
-| … plus durable human approvals | `+ approval` (and keel `outbox`) | 63 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 73 |
-| … plus the durable turn runtime | `+ runtime` | 87 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 112 |
-| … plus versioned skills | `+ skill` | 122 |
-| … plus confirmed MCP tool calls | `+ mcp_confirmation` (and keel `approval`, `outbox`) | 123 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 51 |
+| … plus agent principals and delegation | `+ agent_authorization` | 53 |
+| … plus compiled execution graphs | `+ execution_graph` | 57 |
+| … plus governed tools and credential bindings | `+ tool` | 62 |
+| … plus durable human approvals | `+ approval` (and keel `outbox`; keel `action_token` for decision links) | 64 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 74 |
+| … plus the durable turn runtime | `+ runtime` | 89 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 114 |
+| … plus versioned skills | `+ skill` | 124 |
+| … plus confirmed MCP tool calls | `+ mcp_confirmation` (and keel `approval`, `outbox`) | 125 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `execution_graph`, `runtime`, and `release`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -861,9 +863,12 @@ Every limit in both services is a validated constructor input; [Configuration](c
 
 `handler.ConversationHandler` exposes the common HTTP transport over any composed
 `contract.DataPlane`: `POST <base>/turn`, `GET <base>/turn/stream?request_id=&cursor=`
-as SSE, and `POST <base>/turn/cancel`. Inject its `PrincipalResolver` to map the
-authenticated product session to the acting agent and human authority, and set `BasePath`
-when mounting it outside `/api/conversation/`. An expired replay cursor is answered with
+as SSE, `POST <base>/turn/cancel`, and `GET <base>/agents?agent_type=`. Inject its
+`CallerResolver` to map the authenticated product session to the tenant context and the
+person a turn acts for (`handler.SessionCaller` takes the session's partner and user), and
+set `BasePath` when mounting it outside `/api/conversation/`. The data plane resolves the
+serving agent from `agent_type` and an optional `agent_name`, resolves its principal, and
+authorizes the person; see [API surface](api_surface.md#conversation). An expired replay cursor is answered with
 the terminal frame rebuilt from the durable turn record; admission and cancellation errors
 retain their typed 4xx/5xx status and limiter `Retry-After` advice. `cursor` is the next
 sequence wanted (the last rendered sequence plus one; sequences start at 0). Frames are
@@ -1051,15 +1056,15 @@ Agents and humans resolve through **one** authorization model. Keel's authorizat
 
 An allow may carry obligations — `require_approval`, `redact`, `cap_spend`, `record_evidence`, `notify`. `GovernedGateway` applies them before egress, and an obligation with no registered enforcer fails the call: silently skipping one would turn a conditional allow into an unconditional one. The operating modes from an agent's configuration are enforced here, never in prompt text.
 
-`service/approval` makes human review durable. `Gate` opens a `turn_approval_request` and returns pending; `TurnRuntime` then **suspends** the turn instead of failing it, holding the budget reservation and acking the delivery. `ProposalDigest` binds a verdict to the exact call, and the resolve statement matches on it, so approving a changed action updates nothing. `Resumer` records the verdict, returns the turn to `queued`, and re-dispatches it — all three, because resolving without re-dispatching would park the turn forever. `Sweeper` with `BackupEscalation` routes overdue work to a backup and expires it when none is configured; a backup needs its own grant.
+`service/approval` makes human review durable. `Gate` opens a `turn_approval_request` and returns pending; `TurnRuntime` then **suspends** the turn instead of failing it, holding the budget reservation and acking the delivery. `ProposalDigest` binds a verdict to the exact call, and the resolve statement matches on it, so approving a changed action updates nothing. `Resumer` records the verdict, returns the turn to `queued`, and requeues its acknowledged delivery — all three, because resolving without requeueing would park the turn forever. It is also the decider's inbox and redeems single-use decision links. `Sweeper` with `BackupEscalation` routes overdue work to a backup and expires it when none is configured; a backup needs its own grant.
 
 `ToolCredentialProvider` is keyed on the principal, not the tenant. `tool_credential_binding` maps `(tenant, principal, tool, purpose)` to a reference into keel's secret or OAuth-connection store — never secret material — and `BoundCredentialProvider` resolves it just in time, after policy, guardrails, egress, and admission. Two agents on one tool version therefore resolve different identities, and the returned `AuthorityRef` records whose authority was exercised while the secret is recorded nowhere.
 
-`domain.DecisionRecord` replaces the opaque audit event: principal, authority, client application, scope, action, resource, release, policy, outcome, obligations, reason, and a reference to redacted evidence. `observability.TableAuditSink` is both sides — `Record` writes, `Decisions` reads exactly one tenant, or with `TenantID` zero only the platform-wide records that name no tenant. Reading across tenants is not expressible. Evidence is not telemetry and never derives from it. A decision is recorded once: `domain.WithDecisionScope` marks the replay-stable position it is made at — the turn, the step, the loop iteration, the tool call — `DecisionKeyFor` derives `audit_event.decision_key` from it, and the sink keeps the first record of a key, so a redelivered turn cannot write a second row. A turn's chain opens with `turn_admitted` at ingress, carries `tool_invoke` for every governed call, and closes with one terminal state; a failed audit write fails the delivery and the terminal replay offers the record again. `observability.VerifyTurnChain` checks a request's records for exactly that, and `MemoryAuditSink` is the in-process sink with the same semantics. `usage_event` carries the principal and scope that spent it, so cost is reportable per agent and per organizational unit. See [Governance](governance.md).
+`domain.DecisionRecord` carries principal, authority, client application, scope, action, resource, release, policy, outcome, obligations, reason, and a reference to redacted evidence. `observability.TableAuditSink` is both sides — `Record` writes, `Decisions` reads exactly one tenant, or with `TenantID` zero only the platform-wide records that name no tenant. Reading across tenants is not expressible. Evidence is not telemetry and never derives from it. A decision is recorded once: `domain.WithDecisionScope` marks the replay-stable position it is made at — the turn, the step, the loop iteration, the tool call — `DecisionKeyFor` derives `audit_event.decision_key` from it, and the sink keeps the first record of a key, so a redelivered turn cannot write a second row. A turn's chain opens with `turn_admitted` at ingress, carries `tool_invoke` for every governed call, and closes with one terminal state; a failed audit write fails the delivery and the terminal replay offers the record again. `observability.VerifyTurnChain` checks a request's records for exactly that, and `MemoryAuditSink` is the in-process sink with the same semantics. `usage_event` carries the principal and scope that spent it, the person it acted for, and the product's `work_ref`, so cost is reportable per agent, organizational unit, person, and product work item. See [Governance](governance.md).
 
 ## Agent types, lifecycle, and delegation
 
-`agent_type` and `agent_type_version` make the template a first-class, publishable resource: `agent_profile.agent_type_id` is now a real foreign key where `agent_kind` was a bare string referencing nothing. `agent_capability_package` is a named bundle of resource values a type version requires, and `controlplane.AgentTypeStore.Instantiate` expands it into scope bindings — narrowing-checked, so an instance can never be born broader than its type. `Conformance` reports instances pinned to an older type version and never upgrades one: the pinned version is the contract that already-approved work was allowed under.
+`agent_type` and `agent_type_version` are first-class, publishable templates, and `agent_profile.agent_type_id` references them. `agent_capability_package` is a named bundle of resource values a type version requires, and `controlplane.AgentTypeStore.Instantiate` expands it into scope bindings — narrowing-checked, so an instance can never be born broader than its type. `Conformance` reports instances pinned to an older type version and never upgrades one: the pinned version is the contract that already-approved work was allowed under.
 
 `agent_profile.is_active` is now `state_code` over the `agent_state` catalog with a reason, actor, and timestamp. `Transition` refuses an illegal move, compare-and-swaps on the current state so a concurrent change cannot be lost, and emits a decision record. `agent_version_quarantine` withdraws one version from all traffic while leaving the deployment pointers a team will want back after the incident untouched.
 

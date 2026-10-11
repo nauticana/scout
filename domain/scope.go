@@ -15,6 +15,7 @@ const (
 	ResourceEntitlement   ResourceKind = "entitlement"
 	ResourceBudget        ResourceKind = "budget"
 	ResourceAutonomy      ResourceKind = "autonomy"
+	ResourceSkill         ResourceKind = "skill"
 )
 
 // MergeMode is how a child binding combines with the value it inherits.

@@ -34,6 +34,8 @@ type ValidationPhase string
 const (
 	ValidateDraft   ValidationPhase = "draft"
 	ValidateRelease ValidationPhase = "release"
+	// ValidateArchive lets a product refuse to archive an agent its own records still name, such as a schedule.
+	ValidateArchive ValidationPhase = "archive"
 )
 
 // PromptResetScope selects the editable prompt levels removed by a reset.
@@ -45,10 +47,25 @@ const (
 	ResetToBaseline    PromptResetScope = "platform_baseline"
 )
 
-// StudioActor identifies the tenant and actor responsible for a Studio mutation.
+// StudioAction is an AGENT_STUDIO authorization action. Studio checks it at the
+// value "agent:<id>", or "agent_type:<id>" when creating an agent that has no id yet.
+type StudioAction string
+
+const (
+	StudioView    StudioAction = "VIEW"
+	StudioCreate  StudioAction = "CREATE"
+	StudioEdit    StudioAction = "EDIT"
+	StudioTest    StudioAction = "TEST"
+	StudioPublish StudioAction = "PUBLISH"
+	StudioRestore StudioAction = "RESTORE"
+	StudioArchive StudioAction = "ARCHIVE"
+)
+
+// StudioActor identifies the tenant and the principal responsible for a Studio
+// mutation: a person, or a service such as a product installer.
 type StudioActor struct {
-	TenantID int64
-	ActorID  int64
+	TenantID  int64
+	Principal PrincipalRef
 }
 
 // ModelReference identifies one provider model without exposing an SDK type.
@@ -62,11 +79,6 @@ type AgentModelSelection struct {
 	Text  *ModelReference `json:"text,omitempty"`
 	Image *ModelReference `json:"image,omitempty"`
 	Video *ModelReference `json:"video,omitempty"`
-}
-
-// AgentApprovalPolicy is structured policy enforced outside model prompts.
-type AgentApprovalPolicy struct {
-	RequireApproval bool `json:"require_approval"`
 }
 
 // PromptValue is an instruction and its optional output contract.
@@ -161,15 +173,15 @@ type AgentDrift struct {
 
 // AgentDraft is the revision-checked mutable Studio representation of an agent.
 type AgentDraft struct {
-	AgentID        string
-	AgentTypeID    string
-	DisplayName    string
-	Active         bool
-	Enabled        bool
-	Default        bool
-	ApprovalPolicy AgentApprovalPolicy
-	Models         AgentModelSelection
-	Languages      []AgentLanguageDraft
+	AgentID     string
+	AgentTypeID string
+	DisplayName string
+	Active      bool
+	Archived    bool
+	Enabled     bool
+	Default     bool
+	Models      AgentModelSelection
+	Languages   []AgentLanguageDraft
 	// PromptScopes are the two scopes a layer may be written at; set on read, ignored on save.
 	PromptScopes                  PromptScopes
 	Extension                     json.RawMessage
@@ -187,6 +199,7 @@ type AgentSummary struct {
 	Active                bool
 	Enabled               bool
 	Default               bool
+	Archived              bool
 	Readiness             AgentReadiness
 	ReadinessReason       string
 	DraftRevision         int64
@@ -222,16 +235,92 @@ type AgentTestResult struct {
 	Sections     []string
 }
 
+// AgentCreateRequest creates a disabled, unpublished agent of an existing type. Its
+// settings come from CopyFrom, an agent of the same tenant and type, or from
+// TemplateID, or else from the type's tenant defaults. A replay of IdempotencyKey by
+// the same actor returns the agent it created.
+type AgentCreateRequest struct {
+	AgentTypeID    string
+	DisplayName    string
+	CopyFrom       string
+	TemplateID     string
+	IdempotencyKey string
+}
+
+// AgentArchiveRequest archives or restores an agent behind its draft revision.
+type AgentArchiveRequest struct {
+	AgentID               string
+	ExpectedDraftRevision int64
+}
+
+// AgentRenameRequest changes only the display name; the agent id is permanent.
+type AgentRenameRequest struct {
+	AgentID               string
+	DisplayName           string
+	ExpectedDraftRevision int64
+}
+
 // AgentPublishRequest carries optimistic revisions and release notes.
 type AgentPublishRequest struct {
 	AgentID                       string
 	ChangeSummary                 string
 	ExpectedDraftRevision         int64
 	ExpectedPromptProfileRevision int64
-	// Tools and ToolLoop, and Skills, are frozen into the definition; each falls back to the agent type's declaration when unset.
-	Tools    []ToolReference
-	ToolLoop *ToolLoopConfig
-	Skills   []SkillReference
+	// CanaryPercentage between 1 and 99 gives the release that share of new conversations
+	// beside the current stable release; 0 or 100 makes it stable.
+	CanaryPercentage int
+}
+
+// PublishCandidate is a release about to be written: its frozen definition, the settings
+// compiled with it (empty for a restore, which copies its source's), and who publishes it.
+type PublishCandidate struct {
+	Actor      StudioActor
+	Definition AgentDefinition
+	Settings   EffectiveRelease
+	// RestoredFrom is the version a restore copies; empty for a publish.
+	RestoredFrom string
+}
+
+// AgentSetting is one binding in force at a scope on an agent's chain. Editable marks the
+// agent's own scope and its type's tenant-default scope, the two Studio writes.
+type AgentSetting struct {
+	ScopeID         string
+	ScopeKind       string
+	Editable        bool
+	ResourceKind    ResourceKind
+	ResourceID      string
+	ResourceVersion string
+	MergeMode       MergeMode
+	Sealed          bool
+	Value           json.RawMessage
+}
+
+// AgentSettings are the bindings on an agent's chain, other than prompt sections, and what
+// they resolve to. Problem names why they do not compile; publication refuses them then.
+type AgentSettings struct {
+	AgentID               string
+	Scopes                PromptScopes
+	Bindings              []AgentSetting
+	Effective             []ResourceExplanation
+	Problem               string
+	DraftRevision         int64
+	PromptProfileRevision int64
+}
+
+// AgentSettingChange binds, or with Remove ends, one resource at the agent's scope or its
+// type's scope. Other resources are untouched. The agent scope is behind the draft revision
+// and the type scope behind the prompt profile revision.
+type AgentSettingChange struct {
+	AgentID                       string
+	ScopeID                       string
+	ResourceKind                  ResourceKind
+	ResourceID                    string
+	MergeMode                     MergeMode
+	Sealed                        bool
+	Value                         json.RawMessage
+	Remove                        bool
+	ExpectedDraftRevision         int64
+	ExpectedPromptProfileRevision int64
 }
 
 // AgentRestoreRequest identifies the immutable version copied into a new release.
@@ -256,11 +345,35 @@ type AgentSetDefaultRequest struct {
 	ExpectedAliasRevision int64
 }
 
-// AgentSetEnabledRequest changes only the operational switch.
+// AgentSetEnabledRequest changes only the operational switch; Reason is recorded with it.
 type AgentSetEnabledRequest struct {
 	AgentID               string
 	Enabled               bool
+	Reason                string
 	ExpectedDraftRevision int64
+}
+
+// PausePolicy says what happens to an agent's live turns when it is paused: they
+// finish, or they are asked to stop. Either way no turn starts after the pause.
+type PausePolicy string
+
+const (
+	PauseFinish PausePolicy = "finish"
+	PauseCancel PausePolicy = "cancel"
+)
+
+// AgentPauseRequest disables an agent and applies Policy to its live turns.
+type AgentPauseRequest struct {
+	AgentID               string
+	Policy                PausePolicy
+	Reason                string
+	ExpectedDraftRevision int64
+}
+
+// AgentPauseResult is the disabled agent's revision and the live turns asked to stop.
+type AgentPauseResult struct {
+	DraftRevision int64
+	Cancelled     int
 }
 
 // AgentEnabledState is the revision returned by a kill-switch update.
@@ -276,7 +389,6 @@ type AgentRelease struct {
 	Version               string
 	Enabled               bool
 	Models                AgentModelSelection
-	ApprovalPolicy        AgentApprovalPolicy
 	DefinitionDigest      string
 	DraftRevision         int64
 	PromptProfileRevision int64
@@ -298,7 +410,7 @@ type AgentReleaseSection struct {
 type AgentStudioEvent struct {
 	Event      string
 	Detail     string
-	ActorID    *int64
+	Actor      PrincipalRef
 	OccurredAt time.Time
 }
 
@@ -313,13 +425,14 @@ type TenantIdentity struct {
 // AgentSeed is one idempotent agent provisioning request: the identity, its
 // mutable draft configuration, and the logical alias it should serve.
 type AgentSeed struct {
-	AgentID         string
-	AgentTypeID     string
-	AliasID         string
-	DisplayName     string
-	Enabled         bool
-	RequireApproval bool
-	Models          AgentModelSelection
+	AgentID     string
+	AgentTypeID string
+	AliasID     string
+	DisplayName string
+	Enabled     bool
+	// Autonomy, when set, is bound at the agent's scope as its operating mode.
+	Autonomy AutonomyMode
+	Models   AgentModelSelection
 }
 
 // DeployedAgent is one tenant alias with its operational state and the
@@ -355,7 +468,8 @@ type AgentTypeDescriptor struct {
 	AgentTypeID string
 	DisplayName string
 	Purpose     string
-	// Tools and ToolLoop, and Skills, are frozen into every release of the type whose publish request leaves them unset.
+	// Tools and ToolLoop, and Skills, are the most a release of the type binds; the agent's
+	// tool and skill settings narrow them.
 	Tools    []ToolReference
 	ToolLoop *ToolLoopConfig
 	Skills   []SkillReference

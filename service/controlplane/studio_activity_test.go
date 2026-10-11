@@ -17,13 +17,13 @@ var (
 )
 
 func listAgentsService(query *studioQueryFake) *StudioService {
-	return &StudioService{
+	return &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
 		DB: studioDBFake{qs: query}, Sources: unusedSources{}, Assembler: unusedAssembler{}, Compiler: unusedCompiler{},
 	}
 }
 
 func agentRow() []any {
-	return []any{"writer-a", "writer", "Writer", true, true, int64(4), int64(2), true, "3", nil, nil}
+	return []any{"writer-a", "writer", "Writer", "active", true, int64(4), int64(2), true, "3", nil, nil}
 }
 
 // Recorded execution history and Studio's own test events are both "last
@@ -38,7 +38,7 @@ func TestListAgentsMergesRuntimeActivityWithStudioTests(t *testing.T) {
 		return map[string]time.Time{"writer-a": ranAt}, nil
 	}}
 
-	summaries, err := service.ListAgents(context.Background(), 8)
+	summaries, err := service.ListAgents(context.Background(), humanActor(8, 9))
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestListAgentsFallsBackToStudioTests(t *testing.T) {
 		qStudioLastTest:   {{"writer-a", testedAt}},
 	}, args: map[string][]any{}}
 
-	summaries, err := listAgentsService(query).ListAgents(context.Background(), 8)
+	summaries, err := listAgentsService(query).ListAgents(context.Background(), humanActor(8, 9))
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestListAgentsFallsBackToStudioTests(t *testing.T) {
 // An agent that has never run reports no time rather than a zero timestamp.
 func TestListAgentsWithoutActivity(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{qStudioListAgents: {agentRow()}}, args: map[string][]any{}}
-	summaries, err := listAgentsService(query).ListAgents(context.Background(), 8)
+	summaries, err := listAgentsService(query).ListAgents(context.Background(), humanActor(8, 9))
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestListAgentsFailsLoudlyOnActivityError(t *testing.T) {
 	service.Activity = fake.ActivityReporter{LastRunFunc: func(context.Context, int64) (map[string]time.Time, error) {
 		return nil, broken
 	}}
-	if _, err := service.ListAgents(context.Background(), 8); !errors.Is(err, broken) {
+	if _, err := service.ListAgents(context.Background(), humanActor(8, 9)); !errors.Is(err, broken) {
 		t.Fatalf("want the activity failure surfaced, got %v", err)
 	}
 }

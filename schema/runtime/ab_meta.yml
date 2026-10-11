@@ -8,6 +8,7 @@ tables:
   - budget_reservation
   - conversation_turn_detail
   - usage_event
+  - turn_feedback
   - agent_run
   - agent_ops_event
   - turn_queue

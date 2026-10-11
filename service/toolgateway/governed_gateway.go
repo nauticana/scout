@@ -41,6 +41,10 @@ type GovernedGateway struct {
 	// Audit is optional; when set every call records its outcome and every credential
 	// resolution which authority it exercised, never the secret.
 	Audit contract.AuditSink
+	// Limits reads the operating mode frozen into the calling agent's release, and Approvals
+	// decides the calls that mode routes to a person; see autonomy.
+	Limits    contract.PrincipalLimits
+	Approvals contract.ToolApprovalGate
 	// CredentialPurpose labels why the credential is requested; it selects the binding.
 	CredentialPurpose string
 	Timeout           time.Duration
@@ -83,6 +87,9 @@ func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall
 		return domain.ToolResult{}, err
 	}
 	if err := gateway.decide(ctx, call, definition); err != nil {
+		return domain.ToolResult{}, err
+	}
+	if err := gateway.autonomy(ctx, call, definition); err != nil {
 		return domain.ToolResult{}, err
 	}
 	// Guardrails run before egress and credentials so blocked arguments never leave the platform.
@@ -178,7 +185,7 @@ func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall
 }
 
 func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
-	if gateway.Registry == nil || gateway.RateLimiter == nil || gateway.Authorizer == nil || gateway.Credentials == nil || gateway.Egress == nil || gateway.Circuit == nil || gateway.Transport == nil || gateway.Retry == nil || gateway.Validator == nil {
+	if gateway.Registry == nil || gateway.RateLimiter == nil || gateway.Authorizer == nil || gateway.Credentials == nil || gateway.Egress == nil || gateway.Circuit == nil || gateway.Transport == nil || gateway.Retry == nil || gateway.Validator == nil || gateway.Limits == nil {
 		return fmt.Errorf("tool gateway: every governance dependency is required")
 	}
 	if gateway.Guardrails != nil && gateway.GuardrailConfigs == nil {
@@ -227,6 +234,46 @@ func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall
 		}
 	}
 	return nil
+}
+
+// AutonomyRule is the approval rule id under which an operating mode routes a call to a person.
+const AutonomyRule = "autonomy"
+
+// autonomy applies the agent's operating mode: human_only acts on nothing; advise and draft
+// call only read-only tools; execute_with_approval calls read-only tools and asks a person
+// for every other call; bounded_autonomous acts within policy, and outside its window the
+// mode has already degraded to execute_with_approval. An unbound mode is human_only.
+func (gateway *GovernedGateway) autonomy(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) error {
+	now := time.Now()
+	if gateway.Clock != nil {
+		now = gateway.Clock.Now()
+	}
+	mode, err := gateway.Limits.AutonomyMode(ctx, call.Principal, now)
+	if err != nil {
+		return fmt.Errorf("resolve operating mode of %q: %w", call.Principal.ID, err)
+	}
+	switch {
+	case mode == domain.AutonomyBounded:
+		return nil
+	case definition.ReadOnly && (mode == domain.AutonomyAdvise || mode == domain.AutonomyDraft || mode == domain.AutonomyExecuteWithApproval):
+		return nil
+	case mode != domain.AutonomyExecuteWithApproval:
+		return fmt.Errorf("%w: operating mode %q does not let %q call %q", domain.ErrForbidden, mode, call.Principal.ID, call.ToolID)
+	case gateway.Approvals == nil:
+		return fmt.Errorf("%w: operating mode %q needs a tool approval gate", domain.ErrDegraded, mode)
+	}
+	decision, err := gateway.Approvals.Decide(ctx, call, AutonomyRule)
+	if err != nil {
+		return err
+	}
+	switch decision {
+	case domain.ApprovalApproved:
+		return nil
+	case domain.ApprovalPending:
+		return fmt.Errorf("%w: tool %q awaits a person's approval", domain.ErrApprovalPending, call.ToolID)
+	default:
+		return fmt.Errorf("%w: a person refused tool call %q", domain.ErrForbidden, call.ToolID)
+	}
 }
 
 func (gateway *GovernedGateway) enforcerFor(kind domain.ObligationKind) contract.ObligationEnforcer {

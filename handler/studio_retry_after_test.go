@@ -17,7 +17,7 @@ import (
 func TestMapStudioError_KeepsRetryAfterOnRateLimit(t *testing.T) {
 	limit := &keellimiter.LimitError{Err: domain.ErrRateLimited, Scope: "tenant", After: 1500 * time.Millisecond}
 
-	_, mapped := mapStudioError(nil, limit)
+	_, mapped := mapServiceError(nil, limit)
 
 	var apiErr *keelhandler.APIError
 	if !errors.As(mapped, &apiErr) || apiErr.Status != http.StatusTooManyRequests {
@@ -30,7 +30,7 @@ func TestMapStudioError_KeepsRetryAfterOnRateLimit(t *testing.T) {
 }
 
 func TestMapStudioError_NoRetryHeaderWithoutAdvice(t *testing.T) {
-	_, mapped := mapStudioError(nil, domain.ErrRateLimited)
+	_, mapped := mapServiceError(nil, domain.ErrRateLimited)
 
 	var apiErr *keelhandler.APIError
 	if !errors.As(mapped, &apiErr) {
@@ -43,7 +43,7 @@ func TestMapStudioError_NoRetryHeaderWithoutAdvice(t *testing.T) {
 
 func TestMapStudioError_KeepsRetryAfterOnCircuitOpen(t *testing.T) {
 	limit := &keellimiter.LimitError{Err: domain.ErrCircuitOpen, Scope: "tool", After: time.Second}
-	_, mapped := mapStudioError(nil, limit)
+	_, mapped := mapServiceError(nil, limit)
 	var apiErr *keelhandler.APIError
 	if !errors.As(mapped, &apiErr) || apiErr.Status != http.StatusServiceUnavailable || apiErr.Header.Get("Retry-After") != "1" {
 		t.Fatalf("mapped = %#v", mapped)

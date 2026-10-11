@@ -19,7 +19,7 @@ import (
 
 const (
 	promptDigestVersion     = "scout.prompt.v1"
-	definitionDigestVersion = "scout.agent_definition.v1"
+	definitionDigestVersion = "scout.agent_definition.v2"
 )
 
 // PromptCompiler folds each section's layers, widest first, through the scope
@@ -153,7 +153,6 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 	writeModelReference(&payload, definition.Models.Image)
 	writeModelReference(&payload, definition.Models.Video)
 	writeDigestField(&payload, boolDigestField(definition.Enabled))
-	writeDigestField(&payload, boolDigestField(definition.ApprovalPolicy.RequireApproval))
 	writeDigestField(&payload, string(extension))
 	for _, language := range languages {
 		writeDigestField(&payload, language.LanguageCode)
@@ -174,6 +173,22 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 			return "", fmt.Errorf("%w: invalid tool loop configuration: %v", domain.ErrValidation, err)
 		}
 		writeDigestField(&payload, string(loop))
+	}
+	if definition.SettingsDigest != "" {
+		payload.WriteByte(0x1c)
+		writeDigestField(&payload, definition.SettingsDigest)
+	}
+	if len(definition.Sections) > 0 {
+		payload.WriteByte(0x1b)
+		names := make([]string, 0, len(definition.Sections))
+		for name := range definition.Sections {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			writeDigestField(&payload, name)
+			writeDigestField(&payload, string(definition.Sections[name]))
+		}
 	}
 	if len(definition.Skills) > 0 {
 		payload.WriteByte(0x1d)

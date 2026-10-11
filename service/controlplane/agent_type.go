@@ -167,10 +167,11 @@ func (s *AgentTypeStore) GetPackage(ctx context.Context, tenantID int64, package
 // agentStateTransitions is the legal state machine. Retirement is terminal, and
 // nothing reaches active without passing through draft or suspension.
 var agentStateTransitions = map[domain.AgentState][]domain.AgentState{
-	domain.AgentStateDraft:     {domain.AgentStateActive, domain.AgentStateRetired},
-	domain.AgentStateActive:    {domain.AgentStateSuspended, domain.AgentStateDraining},
-	domain.AgentStateSuspended: {domain.AgentStateActive, domain.AgentStateDraining, domain.AgentStateRetired},
+	domain.AgentStateDraft:     {domain.AgentStateActive, domain.AgentStateArchived, domain.AgentStateRetired},
+	domain.AgentStateActive:    {domain.AgentStateSuspended, domain.AgentStateDraining, domain.AgentStateArchived},
+	domain.AgentStateSuspended: {domain.AgentStateActive, domain.AgentStateDraining, domain.AgentStateArchived, domain.AgentStateRetired},
 	domain.AgentStateDraining:  {domain.AgentStateSuspended, domain.AgentStateRetired},
+	domain.AgentStateArchived:  {domain.AgentStateSuspended, domain.AgentStateRetired},
 	domain.AgentStateRetired:   nil,
 }
 

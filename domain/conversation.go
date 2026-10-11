@@ -13,8 +13,27 @@ type TurnRequest struct {
 	OnBehalfOf       PrincipalRef
 	RequestID        string
 	ConversationID   string
-	AgentID          string
-	Input            []byte
+	// AliasID is the agent type alias the caller asked for; AgentID is the agent that
+	// serves the turn: the alias target unless the caller named an agent of that type.
+	AliasID string
+	AgentID string
+	// Release pins a new conversation to one immutable release instead of the agent's
+	// traffic policy; it needs its own grant and ReleaseReason.
+	Release       string
+	ReleaseReason string
+	// WorkRef is the product's opaque reference to the work the turn serves, such as a
+	// task; usage and decision records carry it so cost reports per work item.
+	WorkRef string
+	Input   []byte
+}
+
+// SelectableAgent is one agent a caller may address through an agent type alias.
+type SelectableAgent struct {
+	AgentID     string
+	DisplayName string
+	// Default marks the alias target, which serves a turn that names no agent.
+	Default bool
+	Release string
 }
 
 // TurnDispatch couples a durable turn with its short-lived reply route.

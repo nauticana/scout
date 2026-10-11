@@ -3,8 +3,10 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
@@ -12,6 +14,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
+	"github.com/nauticana/scout/service/scope"
 )
 
 type studioQueryFake struct {
@@ -73,14 +76,14 @@ func (f studioSourcesFake) Languages(context.Context, int64, string) ([]string, 
 
 func TestStudioSetEnabledIsTargeted(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
-		qStudioGetDraft:        {{"writer", "Writer", true, true, false, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft:        {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 		qStudioSetDraftEnabled: {{int64(5)}},
 	}, args: map[string][]any{}}
-	service := &StudioService{
+	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
 		DB: studioDBFake{qs: query}, Sources: unusedSources{}, Assembler: unusedAssembler{}, Compiler: unusedCompiler{},
 	}
 
-	state, err := service.SetEnabled(context.Background(), domain.StudioActor{TenantID: 8, ActorID: 9}, domain.AgentSetEnabledRequest{
+	state, err := service.SetEnabled(context.Background(), humanActor(8, 9), domain.AgentSetEnabledRequest{
 		AgentID: "writer-a", Enabled: false, ExpectedDraftRevision: 4,
 	})
 	if err != nil {
@@ -127,7 +130,7 @@ func TestSyncPromptBindingsEndsWhatChangedAndBindsTheNewValue(t *testing.T) {
 		{1, "en-US"}: kept,
 		{2, "en-US"}: {mode: domain.MergeReplace, sealed: true, value: promptBindingValue{Instruction: "new"}},
 	}
-	if err := syncPromptBindings(context.Background(), query, domain.StudioActor{TenantID: 8, ActorID: 9}, "a:writer-a", desired, persisted); err != nil {
+	if err := syncPromptBindings(context.Background(), query, humanActor(8, 9), "a:writer-a", desired, persisted); err != nil {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
@@ -145,7 +148,7 @@ func TestSyncPromptBindingsEndsWhatChangedAndBindsTheNewValue(t *testing.T) {
 
 func TestStudioRefusesALayerUnderASealedOne(t *testing.T) {
 	company := domain.PromptLayer{ScopeID: "company", ScopeKind: "company", MergeMode: domain.MergeAppend, Sealed: true, Instruction: "never promise a refund"}
-	service := &StudioService{Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
+	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil), Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
 		LanguageCode: "en-US", Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""), company)},
 	}}}
 	scopes := domain.PromptScopes{AgentScopeID: "a:writer-a", TypeScopeID: "t:writer"}
@@ -164,7 +167,7 @@ func TestStudioRefusesALayerUnderASealedOne(t *testing.T) {
 		t.Fatalf("a save that writes no layer of the section is fine: %v", err)
 	}
 
-	open := &StudioService{Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
+	open := &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil), Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
 		LanguageCode: "en-US", Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("base", ""))},
 	}}}
 	sealedType := typeLayer(domain.MergeAppend, "tenant rule", "")
@@ -179,7 +182,7 @@ func TestStudioRefusesALayerUnderASealedOne(t *testing.T) {
 
 func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
-		qStudioGetDraft:    {{"writer", "Writer", true, true, false, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft:    {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 		qStudioLockDraft:   {{int64(4), "writer"}},
 		qStudioLockAlias:   {{"writer-a", int64(2)}},
 		qStudioNextVersion: {{int64(1)}},
@@ -188,12 +191,12 @@ func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 		AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
 		Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))},
 	}}
-	service := &StudioService{
+	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
 		DB: studioDBFake{qs: query}, Sources: sources,
 		Assembler: &PromptDraftAssembler{Compiler: &PromptCompiler{}}, Compiler: &PromptCompiler{}, Catalog: studioModelCatalogFake{},
 	}
 
-	release, err := service.Publish(context.Background(), domain.StudioActor{TenantID: 8, ActorID: 9}, domain.AgentPublishRequest{
+	release, err := service.Publish(context.Background(), humanActor(8, 9), domain.AgentPublishRequest{
 		AgentID: "writer-a", ChangeSummary: "initial", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2,
 	})
 	if err != nil {
@@ -228,7 +231,7 @@ func (recorder *releaseWriterRecorder) WriteRelease(_ context.Context, _ keelpor
 func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testing.T) {
 	newService := func(writers ...ReleaseWriter) (*StudioService, *studioQueryFake) {
 		query := &studioQueryFake{rows: map[string][][]any{
-			qStudioGetDraft:    {{"writer", "Writer", true, true, false, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+			qStudioGetDraft:    {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 			qStudioLockDraft:   {{int64(4), "writer"}},
 			qStudioLockAlias:   {{"writer-a", int64(2)}},
 			qStudioNextVersion: {{int64(1)}},
@@ -237,23 +240,25 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 			AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global", LanguageCode: "en-US",
 			Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))},
 		}}
-		return &StudioService{
+		return &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
 			DB: studioDBFake{qs: query}, Sources: sources, ReleaseWriters: writers,
 			Assembler: &PromptDraftAssembler{Compiler: &PromptCompiler{}}, Compiler: &PromptCompiler{}, Catalog: studioModelCatalogFake{},
 		}, query
 	}
-	request := domain.AgentPublishRequest{
-		AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2,
-		Tools: []domain.ToolReference{{ToolID: "search", Version: "1"}}, ToolLoop: &domain.ToolLoopConfig{MaxIterations: 4},
-	}
-	actor := domain.StudioActor{TenantID: 8, ActorID: 9}
+	request := domain.AgentPublishRequest{AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2}
+	typeTools := fake.KindCatalog{GetFunc: func(_ context.Context, kind string) (domain.AgentTypeDescriptor, error) {
+		return domain.AgentTypeDescriptor{AgentTypeID: kind, ToolLoop: &domain.ToolLoopConfig{MaxIterations: 4},
+			Tools: []domain.ToolReference{{ToolID: "search", Version: "1"}, {ToolID: "crawl", Version: "2"}}}, nil
+	}}
+	actor := humanActor(8, 9)
 
 	recorder := &releaseWriterRecorder{}
 	service, query := newService(recorder)
+	service.Kinds = typeTools
+	service.Scopes = studioScopes([]domain.ScopedBinding{{ScopeID: "a:writer-a", ResourceKind: domain.ResourceTool,
+		ResourceID: "tool", ResourceVersion: "v1", MergeMode: domain.MergeReplace, Value: []byte(`["search"]`)}})
 	plain, _ := newService()
-	plainRequest := request
-	plainRequest.Tools, plainRequest.ToolLoop = nil, nil
-	baseline, err := plain.Publish(context.Background(), actor, plainRequest)
+	baseline, err := plain.Publish(context.Background(), actor, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,35 +266,86 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The type declares search and crawl; the agent's tool setting narrows them to search.
 	if len(recorder.definitions) != 1 || recorder.definitions[0].Version != "1" || len(recorder.definitions[0].Tools) != 1 {
 		t.Fatalf("writer saw %+v", recorder.definitions)
 	}
 	if release.DefinitionDigest == baseline.DefinitionDigest {
-		t.Fatal("tools and the tool loop are part of the release and must change its digest")
+		t.Fatal("tools, the tool loop, and settings are part of the release and must change its digest")
 	}
-	if encoded := query.args[qStudioInsertVersion][3].(string); !strings.Contains(encoded, `"tools":[{"tool_id":"search","version":"1"}]`) || !strings.Contains(encoded, `"tool_loop":{"max_iterations":4}`) {
-		t.Fatalf("definition JSON lacks the frozen tools: %s", encoded)
+	encoded := query.args[qStudioInsertVersion][3].(string)
+	if !strings.Contains(encoded, `"tools":[{"tool_id":"search","version":"1"}]`) || !strings.Contains(encoded, `"tool_loop":{"max_iterations":4}`) ||
+		!strings.Contains(encoded, `"settings_digest":"`) {
+		t.Fatalf("definition JSON lacks the frozen tools and settings: %s", encoded)
 	}
-
-	// A republish that names no tools keeps the ones its agent type declares; an explicit request still wins.
-	typed := &releaseWriterRecorder{}
-	typedService, _ := newService(typed)
-	typedService.Kinds = fake.KindCatalog{GetFunc: func(_ context.Context, kind string) (domain.AgentTypeDescriptor, error) {
-		return domain.AgentTypeDescriptor{AgentTypeID: kind, Tools: []domain.ToolReference{{ToolID: "crawl", Version: "2"}}}, nil
-	}}
-	if _, err = typedService.Publish(context.Background(), actor, plainRequest); err != nil || typed.definitions[0].Tools[0].ToolID != "crawl" {
-		t.Fatalf("type tools were not frozen: %+v, %v", typed.definitions, err)
-	}
-	if _, err = typedService.Publish(context.Background(), actor, request); err != nil || typed.definitions[1].Tools[0].ToolID != "search" {
-		t.Fatalf("request tools must win: %+v, %v", typed.definitions, err)
+	if frozen := query.args[qEffectivePutName()]; frozen == nil || frozen[2] != "1" {
+		t.Fatalf("effective release was not frozen for version 1: %v", frozen)
 	}
 
 	unwired, _ := newService()
+	unwired.Kinds = typeTools
 	if _, err := unwired.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("want ErrNotReady without a release writer, got %v", err)
 	}
 	failing, failed := newService(&releaseWriterRecorder{err: domain.ErrNotFound})
+	failing.Kinds = typeTools
 	if _, err := failing.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotFound) || failed.commits != 0 {
 		t.Fatalf("a failed binding must fail the publish before commit: %v, commits %d", err, failed.commits)
+	}
+}
+
+// A model outside the agent's model setting cannot be published.
+func TestStudioPublishRefusesAModelOutsideTheSetting(t *testing.T) {
+	query := &studioQueryFake{rows: map[string][][]any{
+		qStudioGetDraft:  {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioLockDraft: {{int64(4), "writer"}},
+	}, args: map[string][]any{}}
+	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, DB: studioDBFake{qs: query},
+		Scopes: studioScopes([]domain.ScopedBinding{{ScopeID: "t:writer", ResourceKind: domain.ResourceModel,
+			ResourceID: "model", ResourceVersion: "v1", MergeMode: domain.MergeReplace, Value: []byte(`["provider-b/model-b"]`)}}),
+		Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{AgentID: "writer-a", AgentTypeID: "writer", LanguageCode: "en-US",
+			Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))}}},
+		Assembler: &PromptDraftAssembler{Compiler: &PromptCompiler{}}, Compiler: &PromptCompiler{}, Catalog: studioModelCatalogFake{},
+	}
+	_, err := service.Publish(context.Background(), humanActor(8, 9), domain.AgentPublishRequest{AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2})
+	if !errors.Is(err, domain.ErrValidation) || query.commits != 0 {
+		t.Fatalf("error = %v, commits = %d", err, query.commits)
+	}
+}
+
+func qEffectivePutName() string {
+	for name := range scope.ReleaseWriteQueries {
+		return name
+	}
+	return ""
+}
+
+func humanActor(tenantID, userID int64) domain.StudioActor {
+	return domain.StudioActor{TenantID: tenantID, Principal: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.FormatInt(userID, 10)}}
+}
+
+// studioPrincipals and studioRoles admit every actor with a wildcard grant.
+var (
+	studioPrincipals = fake.PrincipalResolverFunc(func(_ context.Context, tenantID int64, ref domain.PrincipalRef) (domain.Principal, error) {
+		return domain.Principal{Kind: ref.Kind, ID: ref.ID, TenantID: tenantID}, nil
+	})
+	studioRoles = fake.PrincipalAuthorizerFunc(func(context.Context, domain.Principal, string, string, string) (domain.AuthorizationGrant, error) {
+		return domain.AuthorizationGrant{Allowed: true, LowLimit: "*", BypassScope: true}, nil
+	})
+)
+
+// studioScopes is the base layout's chain for writer-a with the given bindings in force.
+func studioScopes(bindings []domain.ScopedBinding) *fake.ScopeRepository {
+	return &fake.ScopeRepository{
+		ChainFunc: func(_ context.Context, tenantID int64, scopeID string) (domain.ScopeChain, error) {
+			return domain.ScopeChain{
+				{TenantID: tenantID, ScopeID: RootPromptScopeID, ScopeKind: "tenant"},
+				{TenantID: tenantID, ScopeID: "t:writer", ParentScopeID: RootPromptScopeID, ScopeKind: "agent_type"},
+				{TenantID: tenantID, ScopeID: scopeID, ParentScopeID: "t:writer", ScopeKind: "agent"},
+			}, nil
+		},
+		BindingsFunc: func(context.Context, int64, []string, time.Time) ([]domain.ScopedBinding, error) {
+			return bindings, nil
+		},
 	}
 }

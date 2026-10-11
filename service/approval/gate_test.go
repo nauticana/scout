@@ -139,3 +139,30 @@ func TestEscalationDoesNotReassignToTheCurrentApprover(t *testing.T) {
 		t.Fatalf("step = %+v, want no self-escalation", step)
 	}
 }
+
+type routerFunc func(context.Context, domain.ApprovalRequest) (domain.PrincipalRef, error)
+
+func (function routerFunc) Route(ctx context.Context, request domain.ApprovalRequest) (domain.PrincipalRef, error) {
+	return function(ctx, request)
+}
+
+func TestGateRecordsTheRoutedApproverAndRefusesAnUnroutableRequest(t *testing.T) {
+	store := &stubStore{}
+	g := gate(store)
+	g.Router = routerFunc(func(_ context.Context, request domain.ApprovalRequest) (domain.PrincipalRef, error) {
+		if request.RuleID != "autonomy" {
+			t.Fatalf("rule = %q", request.RuleID)
+		}
+		return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "77"}, nil
+	})
+	if decision, err := g.Decide(context.Background(), toolCall(`{"amount":1}`), "autonomy"); err != nil || decision != domain.ApprovalPending || store.stored.Approver.ID != "77" {
+		t.Fatalf("decision = %q, error = %v, approver = %+v", decision, err, store.stored.Approver)
+	}
+	unrouted := gate(&stubStore{})
+	unrouted.Router = routerFunc(func(context.Context, domain.ApprovalRequest) (domain.PrincipalRef, error) {
+		return domain.PrincipalRef{}, nil
+	})
+	if decision, err := unrouted.Decide(context.Background(), toolCall(`{"amount":1}`), "autonomy"); !errors.Is(err, domain.ErrForbidden) || decision != domain.ApprovalDenied {
+		t.Fatalf("unrouted = %q, %v", decision, err)
+	}
+}

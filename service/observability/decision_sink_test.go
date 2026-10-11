@@ -46,12 +46,12 @@ func TestTableAuditSinkStoresAndReadsTheClientApplication(t *testing.T) {
 	if !strings.Contains(decisionQueries[qDecisionInsert], "grantor_id, client_ref,") || query.args[0][7] != decision.ClientRef {
 		t.Fatalf("client_ref insert = %v", query.args[0][7])
 	}
-	row := make([]any, 22)
-	row[21] = decision.ClientRef
+	row := make([]any, 23)
+	row[21], row[22] = decision.ClientRef, "task-9"
 	query.rows = [][]any{row}
 	page, err := sink.Decisions(context.Background(), domain.DecisionQuery{TenantID: 7})
 	if !strings.Contains(decisionQueries[qDecisionPage], "occurred_at, client_ref") ||
-		err != nil || len(page.Records) != 1 || page.Records[0].ClientRef != decision.ClientRef {
+		err != nil || len(page.Records) != 1 || page.Records[0].ClientRef != decision.ClientRef || page.Records[0].WorkRef != "task-9" {
 		t.Fatalf("Decisions = %+v, %v", page, err)
 	}
 	decision.ClientRef = ""

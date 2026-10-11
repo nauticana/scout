@@ -2,32 +2,77 @@ package approval
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
+
+	"github.com/nauticana/keel/actiontoken"
+	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
 
-// Resumer closes the human-in-the-loop cycle: it records the verdict, returns
-// the suspended turn to the queue, and re-dispatches it. Resolving without
-// re-dispatching would leave the turn parked forever, so the three steps belong
-// together rather than in the store.
+// Resumer is the reviewer's side of human-in-the-loop: it lists what a decider may
+// decide, records a verdict, and returns an approved turn to the queue or fails a
+// refused one. Recording a verdict without requeueing would leave the turn parked.
 type Resumer struct {
 	Store      contract.ApprovalStore
+	Inbox      contract.ApprovalInbox
 	Authorizer contract.ApprovalAuthorizer
 	Records    contract.TurnRecordStore
-	Dispatcher contract.TurnDispatcher
+	Queue      contract.TurnRequeuer
 	// Audit is optional; when set every verdict becomes evidence.
 	Audit contract.AuditSink
-	Now   func() time.Time
+	// Links mints and redeems single-use decision links for email and chat; nil offers none.
+	Links *actiontoken.Service
+	// LinkMaxRisk is the riskiest tier a link may decide; riskier requests are decided only
+	// in an authenticated view. Empty allows no link.
+	LinkMaxRisk domain.RiskTier
+	Now         func() time.Time
 }
 
-// Resolve records the verdict and, when it permits the action, resumes the turn.
-// A rejection fails the turn instead: the work must not continue unapproved.
-func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict, dispatch domain.TurnDispatch) (domain.ApprovalRequest, error) {
-	if r.Store == nil || r.Authorizer == nil || r.Records == nil || r.Dispatcher == nil {
-		return domain.ApprovalRequest{}, fmt.Errorf("approval resumer: store, authorizer, turn records, and dispatcher are required")
+var _ contract.ApprovalDesk = (*Resumer)(nil)
+
+var errSpentLink = fmt.Errorf("%w: the decision link is spent, expired, or not for this decision", domain.ErrNotFound)
+
+var riskRank = map[domain.RiskTier]int{domain.RiskLow: 1, domain.RiskMedium: 2, domain.RiskHigh: 3, domain.RiskCritical: 4}
+
+// Pending returns the open requests decider may decide now, soonest deadline first.
+func (r *Resumer) Pending(ctx context.Context, tenantID int64, decider domain.PrincipalRef, limit int) ([]domain.ApprovalRequest, error) {
+	if r.Inbox == nil || r.Authorizer == nil {
+		return nil, fmt.Errorf("approval resumer: inbox and authorizer are required")
+	}
+	requests, err := r.Inbox.Pending(ctx, domain.ApprovalFilter{TenantID: tenantID, Approver: decider, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	decidable := requests[:0]
+	for _, request := range requests {
+		err := r.Authorizer.AuthorizeApproval(ctx, request, decider)
+		if errors.Is(err, domain.ErrForbidden) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		decidable = append(decidable, request)
+	}
+	return decidable, nil
+}
+
+// Resolve records an approval, rejection, or edit once and moves the parked turn: an
+// approved turn is requeued, any other verdict fails it, since the work must not
+// continue unapproved. An edit refuses the proposal; a changed action is proposed anew.
+func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (domain.ApprovalRequest, error) {
+	if r.Store == nil || r.Authorizer == nil || r.Records == nil || r.Queue == nil {
+		return domain.ApprovalRequest{}, fmt.Errorf("approval resumer: store, authorizer, turn records, and queue are required")
+	}
+	switch verdict.Status {
+	case domain.ApprovalStatusApproved, domain.ApprovalStatusRejected, domain.ApprovalStatusEdited:
+	default:
+		return domain.ApprovalRequest{}, fmt.Errorf("%w: a decider approves, rejects, or edits; %q is not a verdict", domain.ErrValidation, verdict.Status)
 	}
 	request, err := r.Store.Get(ctx, verdict.RequestKey)
 	if err != nil {
@@ -35,6 +80,9 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict, d
 	}
 	if err := r.Authorizer.AuthorizeApproval(ctx, request, verdict.Decider); err != nil {
 		return domain.ApprovalRequest{}, err
+	}
+	if verdict.Authority.Subject.ID == "" {
+		verdict.Authority.Subject = verdict.Decider
 	}
 	request, err = r.Store.Resolve(ctx, verdict)
 	if err != nil {
@@ -44,20 +92,113 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict, d
 		return request, err
 	}
 	key := verdict.RequestKey
-	switch verdict.Status {
-	case domain.ApprovalStatusApproved:
-		if err := r.Records.Resume(ctx, key.TenantID, key.RequestID); err != nil {
-			return request, err
-		}
-		if err := r.Dispatcher.Enqueue(ctx, dispatch); err != nil {
-			return request, fmt.Errorf("re-dispatch resumed turn %q: %w", key.RequestID, err)
-		}
-	default:
-		if err := r.Records.Fail(ctx, key.TenantID, key.RequestID, "failed", string(verdict.Status)); err != nil {
-			return request, err
-		}
+	if verdict.Status != domain.ApprovalStatusApproved {
+		return request, r.failRefused(ctx, key, verdict.Status)
+	}
+	if err := r.Records.Resume(ctx, key.TenantID, key.RequestID); err != nil {
+		return request, err
+	}
+	if err := r.Queue.Requeue(ctx, key.TenantID, key.RequestID); err != nil {
+		return request, fmt.Errorf("requeue resumed turn %q: %w", key.RequestID, err)
 	}
 	return request, nil
+}
+
+func (r *Resumer) failRefused(ctx context.Context, key domain.ApprovalKey, status domain.ApprovalStatus) error {
+	err := r.Records.Fail(ctx, key.TenantID, key.RequestID, "failed", string(status))
+	if !errors.Is(err, domain.ErrConflict) {
+		return err
+	}
+	_, turnStatus, payload, findErr := r.Records.Find(ctx, key.TenantID, key.RequestID)
+	if findErr == nil && turnStatus == "failed" && string(payload) == string(status) {
+		return nil
+	}
+	return errors.Join(err, findErr)
+}
+
+// MintLink returns a single-use token by which one person decides one request with one
+// verdict, for the product's notifier to deliver. It lapses at the request's deadline.
+func (r *Resumer) MintLink(ctx context.Context, key domain.ApprovalKey, userID int64, status domain.ApprovalStatus, ttl time.Duration) (string, error) {
+	request, binding, err := r.linkBinding(ctx, key, status)
+	if err != nil {
+		return "", err
+	}
+	if r.Authorizer == nil {
+		return "", fmt.Errorf("approval resumer: authorizer is required")
+	}
+	if err := r.Authorizer.AuthorizeApproval(ctx, request, humanRef(userID)); err != nil {
+		return "", err
+	}
+	if !request.DeadlineAt.IsZero() {
+		ttl = min(ttl, request.DeadlineAt.Sub(r.now()))
+	}
+	return r.Links.Mint(ctx, keelport.UserRef{UserID: userID, PartnerID: key.TenantID}, binding, ttl)
+}
+
+// RedeemLink decides the request with the verdict a link was minted for, authorizing its
+// person afresh. A spent, expired, or mismatched link is ErrNotFound.
+func (r *Resumer) RedeemLink(ctx context.Context, token string, key domain.ApprovalKey, status domain.ApprovalStatus, reason string) (domain.ApprovalRequest, error) {
+	request, binding, err := r.linkBinding(ctx, key, status)
+	if errors.Is(err, domain.ErrNotReady) {
+		return domain.ApprovalRequest{}, err
+	}
+	if err != nil {
+		// Redemption needs no session, so nothing about the request shows before its token does.
+		return domain.ApprovalRequest{}, errSpentLink
+	}
+	run := func(ctx context.Context, claim actiontoken.Claim) ([]byte, error) {
+		if claim.User.PartnerID != key.TenantID {
+			return nil, &actiontoken.Failure{Reason: "link belongs to another tenant"}
+		}
+		_, err := r.Resolve(ctx, domain.ApprovalVerdict{
+			RequestKey: key, Status: status, Decider: humanRef(claim.User.UserID),
+			ProposedDigest: request.ProposedDigest, Reason: reason, DecidedAt: r.now(),
+		})
+		if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrConflict) {
+			return nil, &actiontoken.Failure{Reason: err.Error()}
+		}
+		return []byte(status), err
+	}
+	_, err = r.Links.Redeem(ctx, token, binding, run)
+	var unknown *actiontoken.UnknownOutcome
+	if errors.As(err, &unknown) {
+		// Resolve replays to the stored verdict, so settling the claim at once is safe.
+		_, err = r.Links.Reconcile(ctx, unknown.ClaimID, run)
+	}
+	var failure *actiontoken.Failure
+	switch {
+	case errors.Is(err, actiontoken.ErrInvalid):
+		return domain.ApprovalRequest{}, errSpentLink
+	case errors.Is(err, actiontoken.ErrInFlight):
+		return domain.ApprovalRequest{}, fmt.Errorf("%w: the decision link is being redeemed", domain.ErrConflict)
+	case errors.As(err, &failure):
+		return domain.ApprovalRequest{}, fmt.Errorf("%w: %s", domain.ErrForbidden, failure.Reason)
+	case err != nil:
+		return domain.ApprovalRequest{}, err
+	}
+	return r.Store.Get(ctx, key)
+}
+
+// linkBinding ties a link to the request, its verdict, and the exact proposal it decides.
+func (r *Resumer) linkBinding(ctx context.Context, key domain.ApprovalKey, status domain.ApprovalStatus) (domain.ApprovalRequest, actiontoken.Binding, error) {
+	if r.Links == nil || r.Store == nil {
+		return domain.ApprovalRequest{}, actiontoken.Binding{}, fmt.Errorf("%w: decision links are not composed", domain.ErrNotReady)
+	}
+	if status != domain.ApprovalStatusApproved && status != domain.ApprovalStatusRejected {
+		return domain.ApprovalRequest{}, actiontoken.Binding{}, fmt.Errorf("%w: a link approves or rejects", domain.ErrValidation)
+	}
+	request, err := r.Store.Get(ctx, key)
+	if err != nil {
+		return domain.ApprovalRequest{}, actiontoken.Binding{}, err
+	}
+	if limit, ok := riskRank[r.LinkMaxRisk]; !ok || riskRank[request.RiskTier] > limit {
+		return domain.ApprovalRequest{}, actiontoken.Binding{}, fmt.Errorf("%w: a %s-risk decision is made in an authenticated view", domain.ErrForbidden, request.RiskTier)
+	}
+	return request, actiontoken.Binding{
+		Action:      "approval/" + string(status),
+		ResourceKey: fmt.Sprintf("%d/%s/%d", key.TenantID, key.RequestID, key.ExecutionStepID),
+		Digest:      request.ProposedDigest,
+	}, nil
 }
 
 func (r *Resumer) record(ctx context.Context, request domain.ApprovalRequest, verdict domain.ApprovalVerdict) error {
@@ -68,6 +209,7 @@ func (r *Resumer) record(ctx context.Context, request domain.ApprovalRequest, ve
 	if verdict.Status == domain.ApprovalStatusApproved {
 		outcome = domain.DecisionAllow
 	}
+	ctx = domain.WithDecisionScope(ctx, "approval/", request.RequestID, "/", request.ExecutionStepID)
 	return r.Audit.Record(ctx, domain.DecisionRecord{
 		TenantID: request.TenantID, Principal: verdict.Decider, Authority: verdict.Authority,
 		ScopeID: request.ScopeID, Category: domain.DecisionCategoryApproval, Action: string(verdict.Status),
@@ -81,4 +223,8 @@ func (r *Resumer) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
+}
+
+func humanRef(userID int64) domain.PrincipalRef {
+	return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.FormatInt(userID, 10)}
 }

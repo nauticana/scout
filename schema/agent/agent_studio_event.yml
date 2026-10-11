@@ -12,9 +12,13 @@ columns:
   - name: detail
     type: VARCHAR(400)
     nullable: true
-  - name: actor_id
-    type: BIGINT
+  - name: principal_kind
+    type: VARCHAR(20)
     nullable: true
+  - name: principal_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The acting person's user_account id or the service's id; a mixed subject prevents a foreign key
   - name: occurred_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -28,11 +32,9 @@ foreign_keys:
     references:
       table: agent_profile
       columns: [partner_id, agent_id]
-  - name: actor_agent_studio_events
-    columns: [actor_id]
-    references:
-      table: user_account
-      columns: [id]
 indexes:
   - name: agent_studio_event_agent_time_ix
     columns: [partner_id, agent_id, occurred_at]
+checks:
+  - name: agent_studio_event_principal_ck
+    expression: (principal_kind IS NULL) = (principal_id IS NULL)

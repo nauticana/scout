@@ -146,6 +146,7 @@ flowchart RL
         agent_draft["agent_draft"]
         agent_alias["agent_alias"]
         agent_studio_event["agent_studio_event"]
+        agent_create_request["agent_create_request"]
         agent_version["agent_version"]
         agent_deployment["agent_deployment"]
     end
@@ -156,6 +157,7 @@ flowchart RL
     agent_version_quarantine --> agent_version
     agent_version --> guardrail_config
     agent_studio_event --> agent_profile
+    agent_create_request --> agent_profile
     agent_alias --> agent_profile
     agent_draft --> agent_profile
     agent_deployment --> agent_version
@@ -569,6 +571,7 @@ erDiagram
         bigint partner_id PK,FK
         varchar tool_id PK,FK
         varchar tool_version PK
+        boolean read_only
         text endpoint_uri
         text credential_ref
     }
@@ -715,19 +718,25 @@ erDiagram
     agent_profile ||--o{ agent_alias : agent_aliases
     prompt_baseline }o--|| prompt_section : prompt_baselines
     agent_profile ||--o{ agent_studio_event : agent_studio_events
-    user_account ||--o{ agent_studio_event : actor_agent_studio_events
+    agent_profile ||--o{ agent_create_request : agent_create_requests
 
-    user_account {
-        int id PK
-    }
     agent_studio_event {
         bigint id PK
         bigint partner_id FK
         varchar agent_id FK
         varchar event
         text detail
-        int actor_id FK
+        varchar principal_kind
+        varchar principal_id
         timestamp occurred_at
+    }
+    agent_create_request {
+        bigint partner_id PK,FK
+        varchar principal_kind PK
+        varchar principal_id PK
+        varchar idempotency_key PK
+        char request_digest
+        varchar agent_id FK
     }
     agent_profile {
         bigint partner_id PK,FK
@@ -739,7 +748,6 @@ erDiagram
         varchar agent_id PK,FK
         bigint draft_revision
         boolean enabled
-        boolean require_approval
         text extension
     }
     agent_alias {
@@ -765,7 +773,7 @@ erDiagram
 
 `agent_alias.revision` guards both alias changes and tenant defaults for that logical kind, preserving one shared optimistic token. Agent overrides are guarded by `agent_draft.draft_revision`. Platform baseline selection is supplied by `PromptBaselineSelector`; baseline data remains product-owned.
 
-Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions and actor/time metadata; it is omitted from the ER layout to preserve the authoring flow.
+Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions with the acting principal — a person's `user_account.id` or a service's id, so it has no foreign key — and their time. `agent_create_request` is a Studio create's idempotency record: the request digest and the agent it created, keyed by tenant, principal, and key. An archived agent has `agent_profile.state_code` `archived`: it admits no work, keeps its releases, and can return to `suspended`.
 
 ## Principals, scopes, and effective configuration
 
@@ -946,6 +954,7 @@ erDiagram
         varchar grant_id
         varchar grantor_id
         varchar client_ref
+        varchar work_ref
         varchar scope_id FK
         varchar performed_action
         varchar resource_ref
@@ -1066,12 +1075,11 @@ erDiagram
     }
 ```
 
-`agent_profile.agent_type_id` is a real foreign key; it was a bare `VARCHAR` naming nothing. The
-column is called `agent_type_id` everywhere now, replacing `agent_kind`, which also matches the
-`agent_type` field the studio-v1 wire format already used.
+`agent_profile.agent_type_id` is a foreign key to `agent_type`; Go and the Studio wire format use
+the matching `agent_type` name.
 
-`state_code` replaces the old `is_active` boolean and carries the reason, actor, and time of the last
-change. `agent_version_quarantine` withdraws one version from all traffic without editing the
+`state_code` carries the reason, actor, and time of the last change. `agent_version_quarantine`
+withdraws one version from all traffic without editing the
 deployment pointers that would otherwise select it.
 
 `delegation_grant` records who may assign or approve what, for how deep, under what budget, and until
@@ -1291,7 +1299,10 @@ erDiagram
         varchar conversation_id PK
         varchar agent_id FK
         varchar agent_version FK
+        varchar version_source
         varchar end_user_ref
+        varchar alias_id FK
+        varchar pin_reason
     }
     conversation_turn {
         bigint partner_id PK,FK
@@ -1374,6 +1385,9 @@ erDiagram
         varchar conversation_id FK
         bigint turn_no FK
         varchar category_code FK
+        varchar principal_id
+        varchar on_behalf_id
+        varchar work_ref
         char currency_code FK
     }
     usage_category {
@@ -1421,6 +1435,10 @@ erDiagram
         timestamp created_at
     }
 ```
+
+`agent_conversation` pins the release a conversation runs on and records why: `version_source` names the rule (`stable`, `canary`, `experiment_cohort`, a pin, or `request_pin` with its `pin_reason`), null when the product supplied the version, and `alias_id` is the agent type it was requested through. `usage_event` attributes settled usage to the spending principal, the person it acted for (`on_behalf_kind`, `on_behalf_id`), and the product's opaque `work_ref`; `audit_event.work_ref` carries the same reference.
+
+`turn_feedback` holds one person's rating, 1 to 5, of one completed turn; the person is kept for audit, and reports count ratings per release, never per person.
 
 `step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of a `tool_loop` step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
 
@@ -1785,12 +1803,12 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
-| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
+| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
-| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `agent_run`, `agent_ops_event`, `agent_work_item` |
+| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release` |
 | `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |

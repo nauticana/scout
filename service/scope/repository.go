@@ -160,11 +160,22 @@ func (s *TableEffectiveReleaseStore) init(ctx context.Context) error {
 	return nil
 }
 
-// Put stores a compiled release; the digest is recomputed and must match.
+// Put stores a compiled release; the digest is recomputed and must match. The agent
+// version is already committed by the time a release is frozen, so a client disconnect
+// must not leave a published version without one.
 func (s *TableEffectiveReleaseStore) Put(ctx context.Context, release domain.EffectiveRelease) error {
 	if err := s.init(ctx); err != nil {
 		return err
 	}
+	return PutRelease(context.WithoutCancel(ctx), s.qs, release)
+}
+
+// ReleaseWriteQueries holds the statement PutRelease runs; a caller writing a release
+// inside its own transaction includes it in the transaction's query map.
+var ReleaseWriteQueries = map[string]string{qEffectivePut: scopeQueries[qEffectivePut]}
+
+// PutRelease stores a compiled release through qs, which may be a transaction.
+func PutRelease(ctx context.Context, qs keelport.QueryService, release domain.EffectiveRelease) error {
 	if expected := Digest(release); release.Digest != expected {
 		return fmt.Errorf("%w: effective release digest does not match its content", domain.ErrValidation)
 	}
@@ -176,9 +187,7 @@ func (s *TableEffectiveReleaseStore) Put(ctx context.Context, release domain.Eff
 	if release.CompiledBy != nil {
 		compiledBy = *release.CompiledBy
 	}
-	// The agent version is already committed by the time a release is frozen, so a
-	// client disconnect must not leave a published version without one.
-	if _, err := s.qs.Query(context.WithoutCancel(ctx), qEffectivePut, release.TenantID, release.AgentID, release.AgentVersion,
+	if _, err := qs.Query(ctx, qEffectivePut, release.TenantID, release.AgentID, release.AgentVersion,
 		release.ScopeID, string(payload), release.Digest, compiledBy, release.CompiledAt); err != nil {
 		return fmt.Errorf("put effective release: %w", err)
 	}

@@ -1,0 +1,28 @@
+table: agent_create_request
+comment: The idempotency record of one Studio create; a replay by the same principal and key returns the agent it created
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: principal_kind
+    type: VARCHAR(20)
+  - name: principal_id
+    type: VARCHAR(120)
+  - name: idempotency_key
+    type: VARCHAR(120)
+  - name: request_digest
+    type: CHAR(64)
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, principal_kind, principal_id, idempotency_key]
+foreign_keys:
+  - name: agent_create_requests
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+checks:
+  - name: agent_create_request_digest_ck
+    expression: CHAR_LENGTH(request_digest) = 64

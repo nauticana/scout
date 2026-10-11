@@ -108,6 +108,8 @@ func (estimator *TurnBudgetEstimator) Estimate(ctx context.Context, request doma
 
 // TurnRecordStore contains configurable durable turn identity callbacks.
 type TurnRecordStore struct {
+	AddressFunc     func(context.Context, int64, string, string, string) (string, error)
+	SelectableFunc  func(context.Context, int64, string) ([]domain.SelectableAgent, error)
 	OpenFunc        func(context.Context, domain.TurnRequest, domain.ObjectRef) (int64, error)
 	FindFunc        func(context.Context, int64, string) (int64, string, []byte, error)
 	StartFunc       func(context.Context, int64, string) error
@@ -115,6 +117,25 @@ type TurnRecordStore struct {
 	SuspendFunc     func(context.Context, int64, string, string) error
 	ResumeFunc      func(context.Context, int64, string) error
 	RecordUsageFunc func(context.Context, int64, string, int64, string, domain.UsageAttribution, domain.Usage) error
+}
+
+// Address invokes AddressFunc when configured; the default serves the named agent, else the alias.
+func (store *TurnRecordStore) Address(ctx context.Context, tenantID int64, aliasID, agentID, conversationID string) (string, error) {
+	if store.AddressFunc != nil {
+		return store.AddressFunc(ctx, tenantID, aliasID, agentID, conversationID)
+	}
+	if agentID != "" {
+		return agentID, nil
+	}
+	return aliasID, nil
+}
+
+// Selectable invokes SelectableFunc when configured; the default lists none.
+func (store *TurnRecordStore) Selectable(ctx context.Context, tenantID int64, aliasID string) ([]domain.SelectableAgent, error) {
+	if store.SelectableFunc != nil {
+		return store.SelectableFunc(ctx, tenantID, aliasID)
+	}
+	return nil, nil
 }
 
 // Open invokes OpenFunc when configured; the default assigns turn 1.

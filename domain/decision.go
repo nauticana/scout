@@ -59,10 +59,12 @@ type Decision struct {
 // redacted content in object storage and never holds the content itself.
 type DecisionRecord struct {
 	// TenantID is zero only for platform-wide decisions such as global rollouts.
-	TenantID       int64
-	Principal      PrincipalRef
-	Authority      AuthorityRef
-	ClientRef      string
+	TenantID  int64
+	Principal PrincipalRef
+	Authority AuthorityRef
+	ClientRef string
+	// WorkRef is the product work item the decision served, when the turn named one.
+	WorkRef        string
 	ScopeID        string
 	Category       string
 	Action         string

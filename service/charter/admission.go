@@ -8,6 +8,8 @@ import (
 	"github.com/nauticana/charter/sdk/agent"
 	"github.com/nauticana/charter/sdk/model"
 	"github.com/nauticana/charter/sdk/process"
+
+	"github.com/nauticana/scout/domain"
 )
 
 // Work is one unit a runtime is asked to perform: a task instance under exactly one assignment.
@@ -17,7 +19,25 @@ type Work struct {
 	Runtime      model.Ref
 	TaskInstance model.Ref
 	Capability   *model.Ref
-	At           time.Time
+	// Autonomy is the operating mode frozen into the agent's release; work that needs a
+	// higher participation level than the mode reaches is refused. Empty skips the check.
+	Autonomy domain.AutonomyMode
+	At       time.Time
+}
+
+// participation maps Scout's ordered operating modes onto Charter's participation levels (CHR-PROC-008).
+var participation = map[domain.AutonomyMode]string{
+	domain.AutonomyHumanOnly:           model.ParticipationObserves,
+	domain.AutonomyAdvise:              model.ParticipationRecommends,
+	domain.AutonomyDraft:               model.ParticipationPrepares,
+	domain.AutonomyExecuteWithApproval: model.ParticipationPerforms,
+	domain.AutonomyBounded:             model.ParticipationExecutes,
+}
+
+// Participation is the Charter participation level an operating mode reaches.
+func Participation(mode domain.AutonomyMode) (string, bool) {
+	level, ok := participation[mode]
+	return level, ok
 }
 
 // Admission resolves the execution context for a piece of work and admits it through Charter. The execution
@@ -43,6 +63,13 @@ func (a *Admission) Admit(ctx context.Context, work Work) (agent.ExecutionContex
 	rc, err := charterkeel.RuntimeContext(ctx, work.Runtime)
 	if err != nil {
 		return agent.ExecutionContext{}, agent.Decision{Result: agent.Error, Reason: err.Error(), Requirement: "CHR-AGENT-006"}
+	}
+	if work.Autonomy != "" {
+		level, known := Participation(work.Autonomy)
+		if !known || process.Exceeds(task.Instance.Participation, level) {
+			return agent.ExecutionContext{}, agent.Decision{Result: agent.Refused, Requirement: "CHR-PROC-008",
+				Reason: "the task needs participation " + task.Instance.Participation + ", above what operating mode " + string(work.Autonomy) + " reaches"}
+		}
 	}
 	ec := agent.ExecutionContext{
 		Namespace:          work.Namespace,

@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -9,16 +11,18 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 const (
-	qProvisionTenant  = "scout_provision_tenant"
-	qProvisionType    = "scout_provision_agent_type"
-	qProvisionProfile = "scout_provision_profile"
-	qProvisionDraft   = "scout_provision_draft"
-	qProvisionAlias   = "scout_provision_alias"
-	qProvisionAccess  = "scout_provision_model_access"
-	qProvisionScope   = "scout_provision_prompt_scope"
+	qProvisionTenant   = "scout_provision_tenant"
+	qProvisionType     = "scout_provision_agent_type"
+	qProvisionProfile  = "scout_provision_profile"
+	qProvisionDraft    = "scout_provision_draft"
+	qProvisionAlias    = "scout_provision_alias"
+	qProvisionAccess   = "scout_provision_model_access"
+	qProvisionScope    = "scout_provision_prompt_scope"
+	qProvisionAutonomy = "scout_provision_autonomy"
 )
 
 // Every statement is idempotent, so a repeated provision run is a no-op.
@@ -36,11 +40,18 @@ INSERT INTO agent_profile (partner_id, agent_id, agent_type_id, display_name, st
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, agent_id) DO NOTHING`,
 	qProvisionDraft: `
-INSERT INTO agent_draft (partner_id, agent_id, enabled, require_approval,
+INSERT INTO agent_draft (partner_id, agent_id, enabled,
        text_model_provider, text_model_id, image_model_provider, image_model_id,
        video_model_provider, video_model_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, agent_id) DO NOTHING`,
+	// An agent that already has an operating mode keeps it.
+	qProvisionAutonomy: `
+INSERT INTO config_scope_binding (partner_id, scope_id, resource_kind_code, resource_id, resource_version,
+                                  merge_mode_code, sealed, resource_value, resource_value_digest)
+SELECT ?, ?, 'autonomy', 'autonomy', ?, 'replace', FALSE, ?, ?
+ WHERE NOT EXISTS (SELECT 1 FROM config_scope_binding
+                    WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'autonomy' AND endda IS NULL)`,
 	qProvisionAccess: `
 INSERT INTO tenant_model_access (partner_id, provider_id, model_id, priority_class_code)
 VALUES (?, ?, ?, 'standard')
@@ -128,11 +139,23 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 		if _, err = tx.Query(ctx, qProvisionProfile, tenantID, seed.AgentID, seed.AgentTypeID, seed.DisplayName, string(domain.AgentStateActive)); err != nil {
 			return fmt.Errorf("seed agent profile %q: %w", seed.AgentID, err)
 		}
-		if _, err = tx.Query(ctx, qProvisionDraft, tenantID, seed.AgentID, seed.Enabled, seed.RequireApproval,
+		if _, err = tx.Query(ctx, qProvisionDraft, tenantID, seed.AgentID, seed.Enabled,
 			modelProvider(seed.Models.Text), modelID(seed.Models.Text),
 			modelProvider(seed.Models.Image), modelID(seed.Models.Image),
 			modelProvider(seed.Models.Video), modelID(seed.Models.Video)); err != nil {
 			return fmt.Errorf("seed agent draft %q: %w", seed.AgentID, err)
+		}
+		if seed.Autonomy != "" {
+			value, valueErr := scope.CanonicalValue(domain.ResourceAutonomy, []byte(`{"mode":"`+string(seed.Autonomy)+`"}`))
+			if valueErr != nil {
+				return valueErr
+			}
+			sum := sha256.Sum256(value)
+			digest := hex.EncodeToString(sum[:])
+			if _, err = tx.Query(ctx, qProvisionAutonomy, tenantID, scopes.AgentScopeID, digest[:12], string(value), digest,
+				tenantID, scopes.AgentScopeID); err != nil {
+				return fmt.Errorf("seed operating mode of %q: %w", seed.AgentID, err)
+			}
 		}
 		// Routing reads tenant_model_access, so a model a definition names must be granted with it.
 		for _, reference := range selectedModels(seed.Models) {

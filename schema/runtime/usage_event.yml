@@ -22,6 +22,17 @@ columns:
   - name: scope_id
     type: VARCHAR(80)
     nullable: true
+  - name: on_behalf_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: on_behalf_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The person the spending principal acted for
+  - name: work_ref
+    type: VARCHAR(200)
+    nullable: true
+    comment: The product work item the turn served; products own its meaning, which prevents a foreign key
   - name: input_tokens
     type: BIGINT
     default: "0"

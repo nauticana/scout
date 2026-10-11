@@ -17,6 +17,9 @@ type ToolDefinition struct {
 	// RetryWhenEffectAbsent declares that a call whose effect is proven absent may be sent again
 	// under the same idempotency key, within MaxAttempts; it requires VerifyEffect.
 	RetryWhenEffectAbsent bool
+	// ReadOnly declares the tool changes nothing, so an agent that may only advise or draft
+	// may call it; every other tool is treated as acting.
+	ReadOnly bool
 }
 
 // ToolReference names one registered tool version.

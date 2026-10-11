@@ -98,6 +98,7 @@ type DelegationGrantRepository struct {
 	GetFunc        func(context.Context, int64, string) (domain.DelegationGrant, error)
 	RevokeFunc     func(context.Context, int64, string, string) error
 	ForGranteeFunc func(context.Context, int64, domain.PrincipalRef) ([]domain.DelegationGrant, error)
+	ForAgentFunc   func(context.Context, int64, string) ([]domain.DelegationGrant, error)
 }
 
 // Put invokes PutFunc when configured.
@@ -128,6 +129,14 @@ func (r *DelegationGrantRepository) Revoke(ctx context.Context, tenantID int64, 
 func (r *DelegationGrantRepository) ForGrantee(ctx context.Context, tenantID int64, grantee domain.PrincipalRef) ([]domain.DelegationGrant, error) {
 	if r.ForGranteeFunc != nil {
 		return r.ForGranteeFunc(ctx, tenantID, grantee)
+	}
+	return nil, nil
+}
+
+// ForAgent invokes ForAgentFunc when configured.
+func (r *DelegationGrantRepository) ForAgent(ctx context.Context, tenantID int64, agentID string) ([]domain.DelegationGrant, error) {
+	if r.ForAgentFunc != nil {
+		return r.ForAgentFunc(ctx, tenantID, agentID)
 	}
 	return nil, nil
 }

@@ -25,7 +25,7 @@ const (
 	qToolBindingGet    = "scout_tool_binding_get"
 	qToolBindingInsert = "scout_tool_binding_insert"
 
-	toolVersionColumns = `v.tool_id, v.tool_version, p.display_name, v.endpoint_uri, v.input_schema, v.output_schema, v.timeout_ms, v.max_attempts, v.verify_effect, v.retry_effect_absent`
+	toolVersionColumns = `v.tool_id, v.tool_version, p.display_name, v.endpoint_uri, v.input_schema, v.output_schema, v.timeout_ms, v.max_attempts, v.verify_effect, v.retry_effect_absent, v.read_only`
 
 	maxToolIdentifier  = 80
 	maxToolDisplayName = 200
@@ -46,8 +46,8 @@ SELECT ` + toolVersionColumns + `
   JOIN tool_profile p ON p.partner_id = v.partner_id AND p.tool_id = v.tool_id
  WHERE v.partner_id = ? AND v.tool_id = ? AND v.tool_version = ?`,
 	qToolVersionInsert: `
-INSERT INTO tool_version (partner_id, tool_id, tool_version, endpoint_uri, input_schema, output_schema, timeout_ms, max_attempts, verify_effect, retry_effect_absent)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO tool_version (partner_id, tool_id, tool_version, endpoint_uri, input_schema, output_schema, timeout_ms, max_attempts, verify_effect, retry_effect_absent, read_only)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, tool_id, tool_version) DO NOTHING`,
 	qToolBoundList: `
 SELECT ` + toolVersionColumns + `
@@ -130,7 +130,7 @@ func (registry *TableToolRegistry) Register(ctx context.Context, tenantID int64,
 		return nil
 	}
 	if _, err = tx.Query(ctx, qToolVersionInsert, tenantID, tool.ToolID, tool.Version, tool.Endpoint,
-		string(tool.InputSchema), string(tool.OutputSchema), tool.Timeout.Milliseconds(), tool.MaxAttempts, tool.VerifyEffect, tool.RetryWhenEffectAbsent); err != nil {
+		string(tool.InputSchema), string(tool.OutputSchema), tool.Timeout.Milliseconds(), tool.MaxAttempts, tool.VerifyEffect, tool.RetryWhenEffectAbsent, tool.ReadOnly); err != nil {
 		return fmt.Errorf("insert tool version %s@%s: %w", tool.ToolID, tool.Version, err)
 	}
 	stored, err := tx.Query(ctx, qToolVersionGet, tenantID, tool.ToolID, tool.Version)
@@ -285,6 +285,8 @@ func (registry *TableToolRegistry) normalize(tenantID int64, tool domain.ToolDef
 		return tool, fmt.Errorf("%w: tool timeout must be at least one millisecond", domain.ErrValidation)
 	case tool.MaxAttempts < 1 || tool.MaxAttempts > 10:
 		return tool, fmt.Errorf("%w: tool max attempts must be between 1 and 10", domain.ErrValidation)
+	case tool.ReadOnly && tool.VerifyEffect:
+		return tool, fmt.Errorf("%w: a read-only tool has no effect to verify", domain.ErrValidation)
 	case tool.RetryWhenEffectAbsent && !tool.VerifyEffect:
 		return tool, fmt.Errorf("%w: retrying an absent effect requires effect verification", domain.ErrValidation)
 	}
@@ -307,7 +309,7 @@ func canonicalSchema(raw []byte) ([]byte, error) {
 }
 
 func sameToolContract(stored, offered domain.ToolDefinition) bool {
-	return stored.DisplayName == offered.DisplayName && stored.Endpoint == offered.Endpoint && stored.Timeout == offered.Timeout && stored.MaxAttempts == offered.MaxAttempts && stored.VerifyEffect == offered.VerifyEffect && stored.RetryWhenEffectAbsent == offered.RetryWhenEffectAbsent &&
+	return stored.DisplayName == offered.DisplayName && stored.Endpoint == offered.Endpoint && stored.Timeout == offered.Timeout && stored.MaxAttempts == offered.MaxAttempts && stored.VerifyEffect == offered.VerifyEffect && stored.RetryWhenEffectAbsent == offered.RetryWhenEffectAbsent && stored.ReadOnly == offered.ReadOnly &&
 		bytes.Equal(stored.InputSchema, offered.InputSchema) && bytes.Equal(stored.OutputSchema, offered.OutputSchema)
 }
 
@@ -315,7 +317,7 @@ func scanToolDefinition(row []any) domain.ToolDefinition {
 	return domain.ToolDefinition{
 		ToolID: common.AsString(row[0]), Version: common.AsString(row[1]), DisplayName: common.AsString(row[2]),
 		Endpoint: common.AsString(row[3]), InputSchema: []byte(common.AsString(row[4])), OutputSchema: []byte(common.AsString(row[5])),
-		Timeout: time.Duration(common.AsInt64(row[6])) * time.Millisecond, MaxAttempts: int(common.AsInt64(row[7])), VerifyEffect: common.AsBool(row[8]), RetryWhenEffectAbsent: common.AsBool(row[9]),
+		Timeout: time.Duration(common.AsInt64(row[6])) * time.Millisecond, MaxAttempts: int(common.AsInt64(row[7])), VerifyEffect: common.AsBool(row[8]), RetryWhenEffectAbsent: common.AsBool(row[9]), ReadOnly: common.AsBool(row[10]),
 	}
 }
 

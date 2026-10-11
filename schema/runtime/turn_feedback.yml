@@ -1,0 +1,34 @@
+table: turn_feedback
+comment: One person's rating of one turn, kept for audit; ratings are reported per release, never per person
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: BIGINT
+  - name: principal_kind
+    type: VARCHAR(20)
+  - name: principal_id
+    type: VARCHAR(120)
+  - name: rating
+    type: SMALLINT
+  - name: reason
+    type: VARCHAR(400)
+    nullable: true
+  - name: recorded_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, conversation_id, turn_no, principal_kind, principal_id]
+foreign_keys:
+  - name: turn_feedbacks
+    columns: [partner_id, conversation_id, turn_no]
+    references:
+      table: conversation_turn
+      columns: [partner_id, conversation_id, turn_no]
+indexes:
+  - name: turn_feedback_recorded_ix
+    columns: [partner_id, recorded_at]
+checks:
+  - name: turn_feedback_rating_ck
+    expression: rating BETWEEN 1 AND 5

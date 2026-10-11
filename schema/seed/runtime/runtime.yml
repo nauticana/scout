@@ -1,4 +1,4 @@
-comment: REST lookup metadata for runtime activity relations
+comment: REST lookup metadata for runtime activity relations and the conversation authorization object
 order: 40
 seeds:
   - table: foreign_key_lookup
@@ -6,3 +6,18 @@ seeds:
     rows:
       - [agent_run_versions, S, "*"]
       - [tenant_agent_ops_events, S, "*"]
+  - table: authorization_object
+    columns: [id, caption]
+    rows:
+      - [AGENT_CONVERSATION, Agent conversations]
+  - table: authorization_object_action
+    columns: [authorization_object_id, action, caption]
+    rows:
+      - [AGENT_CONVERSATION, USE, Converse with an agent]
+      - [AGENT_CONVERSATION, PIN_RELEASE, Pin a conversation to one agent release]
+  - table: authorization_role_permission
+    columns: [role_id, authorization_object_id, action, low_limit]
+    rows:
+      - [AGENT_ADMIN, AGENT_CONVERSATION, USE, "*"]
+      - [AGENT_ADMIN, AGENT_CONVERSATION, PIN_RELEASE, "*"]
+      - [AGENT_OPER, AGENT_CONVERSATION, USE, "*"]

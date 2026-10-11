@@ -57,6 +57,31 @@ type Usage struct {
 type UsageAttribution struct {
 	Principal PrincipalRef
 	ScopeID   string
+	// OnBehalfOf is the person the spending principal acted for; WorkRef the product work it served.
+	OnBehalfOf PrincipalRef
+	WorkRef    string
+}
+
+// UsageLine is settled usage of one agent release for one person and work item in one
+// currency. Cost is in minor units of Currency, which has Exponent decimal places.
+type UsageLine struct {
+	Release        string
+	OnBehalfOf     PrincipalRef
+	WorkRef        string
+	Currency       string
+	Exponent       int
+	Turns          int64
+	InputTokens    int64
+	OutputTokens   int64
+	ToolCalls      int64
+	CostMinorUnits int64
+}
+
+// FeedbackSummary counts the ratings one release received; Counts[r-1] holds rating r.
+// Ratings are never reported per person.
+type FeedbackSummary struct {
+	Release string
+	Counts  [5]int64
 }
 
 // BudgetRequest asks for a hold on one request's tokens and cost. Principal is who

@@ -23,6 +23,10 @@ columns:
   - name: retry_effect_absent
     type: BOOLEAN
     default: FALSE
+  - name: read_only
+    type: BOOLEAN
+    default: FALSE
+    comment: The tool changes nothing, so an agent that may only advise or draft may call it
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -43,3 +47,5 @@ checks:
     expression: max_attempts BETWEEN 1 AND 10
   - name: tool_version_effect_retry_ck
     expression: verify_effect OR NOT retry_effect_absent
+  - name: tool_version_read_only_ck
+    expression: NOT (read_only AND verify_effect)

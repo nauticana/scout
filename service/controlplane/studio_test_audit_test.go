@@ -11,7 +11,7 @@ import (
 
 func testDraftService(query *studioQueryFake, tester fake.DraftTester) *StudioService {
 	compiler := &PromptCompiler{}
-	return &StudioService{
+	return &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
 		DB: studioDBFake{qs: query}, Compiler: compiler,
 		Assembler: &PromptDraftAssembler{Compiler: compiler},
 		Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{
@@ -24,7 +24,7 @@ func testDraftService(query *studioQueryFake, tester fake.DraftTester) *StudioSe
 
 func draftRows() map[string][][]any {
 	return map[string][][]any{
-		qStudioGetDraft: {{"writer", "Writer", true, true, false, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft: {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 	}
 }
 
@@ -36,7 +36,7 @@ func TestTestDraftRecordsItsOwnAudit(t *testing.T) {
 			return domain.AgentTestResult{AgentID: definition.AgentID, LanguageCode: "en-US", Output: "sample"}, nil
 		},
 	})
-	result, err := service.TestDraft(context.Background(), domain.StudioActor{TenantID: 8, ActorID: 9},
+	result, err := service.TestDraft(context.Background(), humanActor(8, 9),
 		domain.AgentTestRequest{AgentID: "writer-a", LanguageCode: "en-US"})
 	if err != nil {
 		t.Fatalf("TestDraft: %v", err)
@@ -48,7 +48,7 @@ func TestTestDraftRecordsItsOwnAudit(t *testing.T) {
 	if !recorded {
 		t.Fatal("a successful test must leave a TEST event")
 	}
-	if args[2] != "TEST" || args[1] != "writer-a" || args[4] != int64(9) {
+	if args[2] != "TEST" || args[1] != "writer-a" || args[4] != "human" || args[5] != "9" {
 		t.Fatalf("audit args = %v", args)
 	}
 }
@@ -62,7 +62,7 @@ func TestTestDraftFailureRecordsNoAudit(t *testing.T) {
 			return domain.AgentTestResult{}, broken
 		},
 	})
-	if _, err := service.TestDraft(context.Background(), domain.StudioActor{TenantID: 8, ActorID: 9},
+	if _, err := service.TestDraft(context.Background(), humanActor(8, 9),
 		domain.AgentTestRequest{AgentID: "writer-a"}); !errors.Is(err, broken) {
 		t.Fatalf("want the tester failure surfaced, got %v", err)
 	}

@@ -21,6 +21,9 @@ type Gate struct {
 	Notifier contract.Notifier
 	// Deadline is how long a reviewer has before escalation applies; zero leaves the request open.
 	Deadline time.Duration
+	// Router is optional; when set it names each request's approver, and a request it cannot
+	// route is refused. Without it a request is routed by scope to whoever holds DECIDE there.
+	Router contract.ApproverRouter
 	// RiskTier and Class label requests this gate opens.
 	RiskTier domain.RiskTier
 	Class    domain.OutputClass
@@ -37,11 +40,21 @@ func (g *Gate) Decide(ctx context.Context, call domain.ToolCall, ruleID string) 
 		ExecutionStepID: stepIDFor(call), ScopeID: call.Principal.ScopeID, RuleID: ruleID,
 		Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
 		Action:    "tool:" + call.ToolID, Resource: call.ToolID,
-		Class: g.class(), RiskTier: g.riskTier(), Summary: "irreversible tool call " + call.ToolID,
+		Class: g.class(), RiskTier: g.riskTier(), Summary: "tool call " + call.ToolID + " under rule " + ruleID,
 		ProposedDigest: ProposalDigest(call),
 	}
 	if g.Deadline > 0 {
 		request.DeadlineAt = g.now().Add(g.Deadline)
+	}
+	if g.Router != nil {
+		approver, err := g.Router.Route(ctx, request)
+		if err != nil {
+			return domain.ApprovalDenied, fmt.Errorf("route approval of %s: %w", request.Action, err)
+		}
+		if approver.Kind == "" || approver.ID == "" {
+			return domain.ApprovalDenied, fmt.Errorf("%w: no approver for %s", domain.ErrForbidden, request.Action)
+		}
+		request.Approver = approver
 	}
 	stored, err := g.Store.Open(ctx, request)
 	if err != nil {

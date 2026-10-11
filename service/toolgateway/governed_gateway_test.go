@@ -25,6 +25,7 @@ func validToolCall() domain.ToolCall {
 
 func governedGateway(calls *[]string, transport fake.ToolTransportFunc) *GovernedGateway {
 	return &GovernedGateway{
+		Limits: boundedAgent,
 		Registry: &fake.ToolRegistry{GetFunc: func(context.Context, int64, string, string) (domain.ToolDefinition, error) {
 			*calls = append(*calls, "registry")
 			return domain.ToolDefinition{ToolID: "search", Version: "v1", Endpoint: "https://example.invalid/tool"}, nil
@@ -264,6 +265,7 @@ func TestNewGovernedGatewayBuildsDefaults(t *testing.T) {
 		return domain.ToolResult{Output: []byte("ok")}, nil
 	}))
 	config := GovernedGatewayConfig{
+		Limits:   boundedAgent,
 		Registry: base.Registry, RateLimiter: base.RateLimiter, Authorizer: base.Authorizer,
 		Credentials: base.Credentials, Egress: base.Egress, Transport: base.Transport,
 		Validator: base.Validator, RetryAttempts: 2, RetryBaseDelay: time.Millisecond, Timeout: time.Second,
@@ -299,3 +301,8 @@ func TestNewGovernedGatewayBuildsDefaults(t *testing.T) {
 		t.Fatal("expected a guardrail resolver validation error")
 	}
 }
+
+// boundedAgent acts within policy without asking a person.
+var boundedAgent = &fake.PrincipalLimits{AutonomyModeFunc: func(context.Context, domain.Principal, time.Time) (domain.AutonomyMode, error) {
+	return domain.AutonomyBounded, nil
+}}

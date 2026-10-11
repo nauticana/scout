@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +18,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 // StudioValidationError carries field-level validation failures.
@@ -28,9 +29,30 @@ type StudioValidationError struct {
 func (e *StudioValidationError) Error() string { return domain.ErrValidation.Error() }
 func (e *StudioValidationError) Unwrap() error { return domain.ErrValidation }
 
+// StudioAuthorizationObject is the keel authorization object Studio actions are granted on.
+const StudioAuthorizationObject = "AGENT_STUDIO"
+
 // StudioService implements the shared authoring and release lifecycle.
 type StudioService struct {
-	DB         keelport.DatabaseRepository
+	DB keelport.DatabaseRepository
+	// Principals and Roles authorize every call at the agent's scope; both are required.
+	Principals contract.PrincipalResolver
+	Roles      contract.PrincipalAuthorizer
+	// MaxAgentsPerType caps the agents of one type a tenant may create; 0 refuses every create.
+	MaxAgentsPerType int
+	// Entropy generates new agent ids; nil uses crypto/rand.
+	Entropy io.Reader
+	// Delegations is optional; when set an agent named by an open delegation grant cannot be archived.
+	Delegations contract.DelegationGrantRepository
+	// Scopes reads the scope chain settings compile over and Mergers folds it; nil uses
+	// scope.TableScopeRepository over DB and the platform mergers. MaxScopeDepth is
+	// agent_max_scope_depth; zero takes scope.DefaultMaxScopeDepth.
+	Scopes        contract.ScopeRepository
+	Mergers       contract.ResourceMergerRegistry
+	MaxScopeDepth int
+	// Guards may refuse a publish or restore; Sections freeze named parts into each release.
+	Guards     []contract.PublishGuard
+	Sections   []contract.DefinitionSection
 	Sources    contract.PromptSourceRepository
 	Assembler  contract.PromptDraftAssembler
 	Compiler   contract.PromptCompiler
@@ -89,11 +111,19 @@ func (s *StudioService) init(ctx context.Context) error {
 	return nil
 }
 
-// ListAgents returns tenant agents with generic readiness and product labels.
-func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domain.AgentSummary, error) {
+// ListAgents returns the tenant agents the actor may view, with generic readiness and product labels.
+func (s *StudioService) ListAgents(ctx context.Context, actor domain.StudioActor) ([]domain.AgentSummary, error) {
 	if err := s.init(ctx); err != nil {
 		return nil, err
 	}
+	viewable, err := s.viewFilter(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	return s.summaries(ctx, actor.TenantID, viewable)
+}
+
+func (s *StudioService) summaries(ctx context.Context, tenantID int64, keep func(agentID string) (bool, error)) ([]domain.AgentSummary, error) {
 	res, err := s.qs.Query(ctx, qStudioListAgents, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list studio agents: %w", err)
@@ -114,11 +144,18 @@ func (s *StudioService) ListAgents(ctx context.Context, tenantID int64) ([]domai
 	}
 	summaries := make([]domain.AgentSummary, 0, len(res.Rows))
 	for _, row := range res.Rows {
+		state := domain.AgentState(common.AsString(row[3]))
 		summary := domain.AgentSummary{
 			AgentID: common.AsString(row[0]), AgentTypeID: common.AsString(row[1]),
-			DisplayName: common.AsString(row[2]), Active: common.AsBool(row[3]), Enabled: common.AsBool(row[4]),
+			DisplayName: common.AsString(row[2]), Active: state == domain.AgentStateActive,
+			Archived: state == domain.AgentStateArchived, Enabled: common.AsBool(row[4]),
 			DraftRevision: common.AsInt64(row[5]), PromptProfileRevision: common.AsInt64(row[6]),
 			Default: common.AsBool(row[7]), PublishedVersion: common.AsString(row[8]),
+		}
+		if kept, keepErr := keep(summary.AgentID); keepErr != nil {
+			return nil, keepErr
+		} else if !kept {
+			continue
 		}
 		if value, ok := row[9].(time.Time); ok {
 			summary.PublishedAt = &value
@@ -184,7 +221,14 @@ func readiness(summary domain.AgentSummary, encodedDefinition any) (domain.Agent
 }
 
 // GetDraft returns mutable configuration with resolved prompt provenance.
-func (s *StudioService) GetDraft(ctx context.Context, tenantID int64, agentID string) (domain.AgentDraft, error) {
+func (s *StudioService) GetDraft(ctx context.Context, actor domain.StudioActor, agentID string) (domain.AgentDraft, error) {
+	if err := s.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
+		return domain.AgentDraft{}, err
+	}
+	return s.draft(ctx, actor.TenantID, agentID)
+}
+
+func (s *StudioService) draft(ctx context.Context, tenantID int64, agentID string) (domain.AgentDraft, error) {
 	draft, err := s.getDraft(ctx, tenantID, agentID)
 	if err != nil {
 		return domain.AgentDraft{}, err
@@ -226,15 +270,15 @@ func (s *StudioService) getDraft(ctx context.Context, tenantID int64, agentID st
 		return domain.AgentDraft{}, domain.ErrNotFound
 	}
 	row := res.Rows[0]
+	state := domain.AgentState(common.AsString(row[2]))
 	return domain.AgentDraft{
 		AgentID: agentID, AgentTypeID: common.AsString(row[0]), DisplayName: common.AsString(row[1]),
-		Active: common.AsBool(row[2]), Enabled: common.AsBool(row[3]),
-		ApprovalPolicy: domain.AgentApprovalPolicy{RequireApproval: common.AsBool(row[4])},
+		Active: state == domain.AgentStateActive, Archived: state == domain.AgentStateArchived, Enabled: common.AsBool(row[3]),
 		Models: domain.AgentModelSelection{
-			Text: dbModelReference(row[5], row[6]), Image: dbModelReference(row[7], row[8]), Video: dbModelReference(row[9], row[10]),
+			Text: dbModelReference(row[4], row[5]), Image: dbModelReference(row[6], row[7]), Video: dbModelReference(row[8], row[9]),
 		},
-		Extension: json.RawMessage(common.AsString(row[11])), ExpectedDraftRevision: common.AsInt64(row[12]),
-		ExpectedPromptProfileRevision: common.AsInt64(row[13]), Default: common.AsBool(row[14]),
+		Extension: json.RawMessage(common.AsString(row[10])), ExpectedDraftRevision: common.AsInt64(row[11]),
+		ExpectedPromptProfileRevision: common.AsInt64(row[12]), Default: common.AsBool(row[13]),
 	}, nil
 }
 
@@ -243,10 +287,7 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 	if err := s.init(ctx); err != nil {
 		return domain.AgentDraft{}, err
 	}
-	if err := validateActor(actor); err != nil {
-		return domain.AgentDraft{}, err
-	}
-	current, err := s.getDraft(ctx, actor.TenantID, draft.AgentID)
+	current, err := s.editable(ctx, actor, domain.StudioEdit, draft.AgentID)
 	if err != nil {
 		return domain.AgentDraft{}, err
 	}
@@ -281,9 +322,9 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 		return domain.AgentDraft{}, fmt.Errorf("update agent profile: %w", err)
 	}
 	updated, err := tx.Query(ctx, qStudioUpdateDraft,
-		draft.Enabled, draft.ApprovalPolicy.RequireApproval,
+		draft.Enabled,
 		modelProvider(draft.Models.Text), modelID(draft.Models.Text), modelProvider(draft.Models.Image), modelID(draft.Models.Image),
-		modelProvider(draft.Models.Video), modelID(draft.Models.Video), nullableJSON(draft.Extension), actor.ActorID,
+		modelProvider(draft.Models.Video), modelID(draft.Models.Video), nullableJSON(draft.Extension), actorUser(actor),
 		actor.TenantID, draft.AgentID, draft.ExpectedDraftRevision)
 	if err != nil {
 		return domain.AgentDraft{}, fmt.Errorf("update agent draft: %w", err)
@@ -313,18 +354,12 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 		return domain.AgentDraft{}, fmt.Errorf("commit draft: %w", err)
 	}
 	committed = true
-	return s.GetDraft(ctx, actor.TenantID, draft.AgentID)
+	return s.draft(ctx, actor.TenantID, draft.AgentID)
 }
 
 // SetEnabled changes the kill switch without invoking draft validators.
 func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor, request domain.AgentSetEnabledRequest) (domain.AgentEnabledState, error) {
-	if err := s.init(ctx); err != nil {
-		return domain.AgentEnabledState{}, err
-	}
-	if err := validateActor(actor); err != nil {
-		return domain.AgentEnabledState{}, err
-	}
-	if _, err := s.getDraft(ctx, actor.TenantID, request.AgentID); err != nil {
+	if _, err := s.editable(ctx, actor, domain.StudioEdit, request.AgentID); err != nil {
 		return domain.AgentEnabledState{}, err
 	}
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
@@ -337,22 +372,29 @@ func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	res, err := tx.Query(ctx, qStudioSetDraftEnabled, request.Enabled, actor.ActorID, actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
+	res, err := tx.Query(ctx, qStudioSetDraftEnabled, request.Enabled, actorUser(actor), actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
 	if err != nil {
 		return domain.AgentEnabledState{}, fmt.Errorf("set draft enabled: %w", err)
 	}
 	if len(res.Rows) == 0 {
 		return domain.AgentEnabledState{}, domain.ErrRevisionConflict
 	}
-	if _, err = tx.Query(ctx, qStudioSetProfileActive, agentState(request.Enabled), "kill_switch",
-		strconv.FormatInt(actor.ActorID, 10), actor.TenantID, request.AgentID); err != nil {
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		reason = "kill_switch"
+	}
+	if len(reason) > 400 {
+		return domain.AgentEnabledState{}, validationError("reason", "must not exceed 400 characters")
+	}
+	if _, err = tx.Query(ctx, qStudioSetProfileActive, agentState(request.Enabled), reason,
+		actorRef(actor), actor.TenantID, request.AgentID); err != nil {
 		return domain.AgentEnabledState{}, fmt.Errorf("set profile state: %w", err)
 	}
 	event := "ENABLE"
 	if !request.Enabled {
 		event = "DISABLE"
 	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, event, "kill_switch"); err != nil {
+	if err = auditStudio(ctx, tx, actor, request.AgentID, event, reason); err != nil {
 		return domain.AgentEnabledState{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -364,13 +406,13 @@ func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor
 
 // TestDraft executes the current saved draft through the injected governed tester.
 func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor, request domain.AgentTestRequest) (domain.AgentTestResult, error) {
-	if err := validateActor(actor); err != nil {
-		return domain.AgentTestResult{}, err
-	}
 	if s.Tester == nil {
 		return domain.AgentTestResult{}, domain.ErrNotReady
 	}
-	draft, err := s.GetDraft(ctx, actor.TenantID, request.AgentID)
+	if err := s.Authorize(ctx, actor, domain.StudioTest, request.AgentID); err != nil {
+		return domain.AgentTestResult{}, err
+	}
+	draft, err := s.draft(ctx, actor.TenantID, request.AgentID)
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
@@ -383,7 +425,7 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	if err = s.freezeBindings(ctx, &definition, domain.AgentPublishRequest{}); err != nil {
+	if _, err = s.freeze(ctx, actor.TenantID, draft, &definition, nil); err != nil {
 		return domain.AgentTestResult{}, err
 	}
 	result, err := s.Tester.Execute(ctx, actor, request, definition)
@@ -392,18 +434,18 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	}
 	// The lifecycle audit is Studio's, not the product tester's.
 	if _, auditErr := s.qs.Query(ctx, qStudioAudit, actor.TenantID, request.AgentID, "TEST",
-		nullableString("language "+result.LanguageCode), actor.ActorID); auditErr != nil {
+		nullableString("language "+result.LanguageCode), string(actor.Principal.Kind), actor.Principal.ID); auditErr != nil {
 		return domain.AgentTestResult{}, fmt.Errorf("record studio test audit: %w", auditErr)
 	}
 	return result, nil
 }
 
-// Publish freezes the saved draft and promotes it when the agent owns its alias.
+// Publish freezes the saved draft and deploys its new release.
 func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, request domain.AgentPublishRequest) (domain.AgentRelease, error) {
-	if err := validateActor(actor); err != nil {
+	if _, err := s.editable(ctx, actor, domain.StudioPublish, request.AgentID); err != nil {
 		return domain.AgentRelease{}, err
 	}
-	draft, err := s.GetDraft(ctx, actor.TenantID, request.AgentID)
+	draft, err := s.draft(ctx, actor.TenantID, request.AgentID)
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
@@ -416,13 +458,17 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	if err = s.freezeBindings(ctx, &definition, request); err != nil {
+	settings, err := s.freeze(ctx, actor.TenantID, draft, &definition, actorUserID(actor))
+	if err != nil {
 		return domain.AgentRelease{}, err
 	}
 	definition.ChangeSummary = request.ChangeSummary
 	definition.DraftRevision = request.ExpectedDraftRevision
 	definition.PromptProfileRevision = request.ExpectedPromptProfileRevision
-	definition.PublishedBy = &actor.ActorID
+	definition.PublishedBy = actorUserID(actor)
+	if err = s.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings}); err != nil {
+		return domain.AgentRelease{}, err
+	}
 
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
 	if err != nil {
@@ -449,10 +495,8 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 		return domain.AgentRelease{}, fmt.Errorf("lock publish alias: %w", err)
 	}
 	aliasRevision := int64(0)
-	active := false
 	if len(alias.Rows) > 0 {
 		aliasRevision = common.AsInt64(alias.Rows[0][1])
-		active = common.AsString(alias.Rows[0][0]) == request.AgentID
 	}
 	if aliasRevision != request.ExpectedPromptProfileRevision {
 		return domain.AgentRelease{}, domain.ErrRevisionConflict
@@ -469,8 +513,11 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	}
 	if _, err = tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
 		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
-		nullableString(definition.ChangeSummary), actor.ActorID, nil); err != nil {
+		nullableString(definition.ChangeSummary), actorUser(actor), nil); err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("insert agent version: %w", err)
+	}
+	if err = storeSettings(ctx, tx, settings, version); err != nil {
+		return domain.AgentRelease{}, err
 	}
 	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
 		return domain.AgentRelease{}, err
@@ -480,12 +527,11 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 			return domain.AgentRelease{}, fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
 		}
 	}
-	if active {
-		if _, err = tx.Query(ctx, qStudioDeployVersion, actor.TenantID, request.AgentID, version); err != nil {
-			return domain.AgentRelease{}, fmt.Errorf("deploy agent version: %w", err)
-		}
+	active, detail, err := deploy(ctx, tx, actor.TenantID, request.AgentID, version, request.CanaryPercentage)
+	if err != nil {
+		return domain.AgentRelease{}, err
 	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, "PUBLISH", "version "+version); err != nil {
+	if err = auditStudio(ctx, tx, actor, request.AgentID, "PUBLISH", "version "+version+detail); err != nil {
 		return domain.AgentRelease{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -497,10 +543,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 
 // Restore copies an immutable release into a new version.
 func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, request domain.AgentRestoreRequest) (domain.AgentRelease, error) {
-	if err := validateActor(actor); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err := s.init(ctx); err != nil {
+	if _, err := s.editable(ctx, actor, domain.StudioRestore, request.AgentID); err != nil {
 		return domain.AgentRelease{}, err
 	}
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
@@ -520,11 +563,6 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if len(lock.Rows) == 0 {
 		return domain.AgentRelease{}, domain.ErrNotFound
 	}
-	agentTypeID := common.AsString(lock.Rows[0][1])
-	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, agentTypeID)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("lock restore alias: %w", err)
-	}
 	source, err := tx.Query(ctx, qStudioGetVersion, actor.TenantID, request.AgentID, request.Version)
 	if err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("load restore version: %w", err)
@@ -536,6 +574,9 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
+	if err = s.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version}); err != nil {
+		return domain.AgentRelease{}, err
+	}
 	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
 	if err != nil {
 		return domain.AgentRelease{}, err
@@ -543,7 +584,7 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	definition.Version = version
 	definition.RestoredFromVersion = request.Version
 	definition.ChangeSummary = "Restored from version " + request.Version
-	definition.PublishedBy = &actor.ActorID
+	definition.PublishedBy = actorUserID(actor)
 	definition.PublishedAt = s.now()
 	encoded, err := json.Marshal(definition)
 	if err != nil {
@@ -551,17 +592,18 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	}
 	if _, err = tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
 		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
-		definition.ChangeSummary, actor.ActorID, request.Version); err != nil {
+		definition.ChangeSummary, actorUser(actor), request.Version); err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("insert restored version: %w", err)
+	}
+	if err = restoreSettings(ctx, tx, actor.TenantID, request.AgentID, request.Version, version); err != nil {
+		return domain.AgentRelease{}, err
 	}
 	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
 		return domain.AgentRelease{}, err
 	}
-	active := len(alias.Rows) > 0 && common.AsString(alias.Rows[0][0]) == request.AgentID
-	if active {
-		if _, err = tx.Query(ctx, qStudioDeployVersion, actor.TenantID, request.AgentID, version); err != nil {
-			return domain.AgentRelease{}, fmt.Errorf("deploy restored version: %w", err)
-		}
+	active, _, err := deploy(ctx, tx, actor.TenantID, request.AgentID, version, 0)
+	if err != nil {
+		return domain.AgentRelease{}, err
 	}
 	if err = auditStudio(ctx, tx, actor, request.AgentID, "RESTORE", definition.ChangeSummary); err != nil {
 		return domain.AgentRelease{}, err
@@ -575,10 +617,7 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 
 // Reset removes selected editable prompt levels with revision checks.
 func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, request domain.AgentResetRequest) (domain.AgentDraft, error) {
-	if err := validateActor(actor); err != nil {
-		return domain.AgentDraft{}, err
-	}
-	current, err := s.getDraft(ctx, actor.TenantID, request.AgentID)
+	current, err := s.editable(ctx, actor, domain.StudioEdit, request.AgentID)
 	if err != nil {
 		return domain.AgentDraft{}, err
 	}
@@ -602,7 +641,7 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 		}
 	}()
 	if resetAgent {
-		res, bumpErr := tx.Query(ctx, qStudioBumpDraft, actor.ActorID, actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
+		res, bumpErr := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
 		if bumpErr != nil {
 			return domain.AgentDraft{}, fmt.Errorf("bump draft revision: %w", bumpErr)
 		}
@@ -614,7 +653,7 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 		}
 	}
 	if resetTenant {
-		res, bumpErr := tx.Query(ctx, qStudioBumpAlias, actor.ActorID, actor.TenantID, current.AgentTypeID, request.ExpectedPromptProfileRevision)
+		res, bumpErr := tx.Query(ctx, qStudioBumpAlias, actorUser(actor), actor.TenantID, current.AgentTypeID, request.ExpectedPromptProfileRevision)
 		if bumpErr != nil {
 			return domain.AgentDraft{}, fmt.Errorf("bump prompt profile revision: %w", bumpErr)
 		}
@@ -632,15 +671,12 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 		return domain.AgentDraft{}, fmt.Errorf("commit reset: %w", err)
 	}
 	committed = true
-	return s.GetDraft(ctx, actor.TenantID, request.AgentID)
+	return s.draft(ctx, actor.TenantID, request.AgentID)
 }
 
 // SetDefault moves the logical kind alias with optimistic revision checking.
 func (s *StudioService) SetDefault(ctx context.Context, actor domain.StudioActor, request domain.AgentSetDefaultRequest) ([]domain.AgentSummary, error) {
-	if err := validateActor(actor); err != nil {
-		return nil, err
-	}
-	current, err := s.getDraft(ctx, actor.TenantID, request.AgentID)
+	current, err := s.editable(ctx, actor, domain.StudioPublish, request.AgentID)
 	if err != nil {
 		return nil, err
 	}
@@ -654,7 +690,7 @@ func (s *StudioService) SetDefault(ctx context.Context, actor domain.StudioActor
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	res, err := tx.Query(ctx, qStudioSetAlias, request.AgentID, actor.ActorID, actor.TenantID, current.AgentTypeID, request.ExpectedAliasRevision)
+	res, err := tx.Query(ctx, qStudioSetAlias, request.AgentID, actorUser(actor), actor.TenantID, current.AgentTypeID, request.ExpectedAliasRevision)
 	if err != nil {
 		return nil, fmt.Errorf("set agent alias: %w", err)
 	}
@@ -668,15 +704,18 @@ func (s *StudioService) SetDefault(ctx context.Context, actor domain.StudioActor
 		return nil, fmt.Errorf("commit alias: %w", err)
 	}
 	committed = true
-	return s.ListAgents(ctx, actor.TenantID)
+	return s.ListAgents(ctx, actor)
 }
 
 // History returns immutable releases newest first.
-func (s *StudioService) History(ctx context.Context, tenantID int64, agentID string) ([]domain.AgentRelease, error) {
-	if _, err := s.getDraft(ctx, tenantID, agentID); err != nil {
+func (s *StudioService) History(ctx context.Context, actor domain.StudioActor, agentID string) ([]domain.AgentRelease, error) {
+	if err := s.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return nil, err
 	}
-	res, err := s.qs.Query(ctx, qStudioHistory, tenantID, agentID)
+	if _, err := s.getDraft(ctx, actor.TenantID, agentID); err != nil {
+		return nil, err
+	}
+	res, err := s.qs.Query(ctx, qStudioHistory, actor.TenantID, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("list agent history: %w", err)
 	}
@@ -692,11 +731,14 @@ func (s *StudioService) History(ctx context.Context, tenantID int64, agentID str
 }
 
 // AuditLog returns queryable lifecycle events newest first.
-func (s *StudioService) AuditLog(ctx context.Context, tenantID int64, agentID string) ([]domain.AgentStudioEvent, error) {
-	if _, err := s.getDraft(ctx, tenantID, agentID); err != nil {
+func (s *StudioService) AuditLog(ctx context.Context, actor domain.StudioActor, agentID string) ([]domain.AgentStudioEvent, error) {
+	if err := s.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return nil, err
 	}
-	res, err := s.qs.Query(ctx, qStudioAuditLog, tenantID, agentID)
+	if _, err := s.getDraft(ctx, actor.TenantID, agentID); err != nil {
+		return nil, err
+	}
+	res, err := s.qs.Query(ctx, qStudioAuditLog, actor.TenantID, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("list studio audit: %w", err)
 	}
@@ -704,10 +746,9 @@ func (s *StudioService) AuditLog(ctx context.Context, tenantID int64, agentID st
 	for _, row := range res.Rows {
 		event := domain.AgentStudioEvent{Event: common.AsString(row[0]), Detail: common.AsString(row[1])}
 		if row[2] != nil {
-			actorID := common.AsInt64(row[2])
-			event.ActorID = &actorID
+			event.Actor = domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[2])), ID: common.AsString(row[3])}
 		}
-		if value, ok := row[3].(time.Time); ok {
+		if value, ok := row[4].(time.Time); ok {
 			event.OccurredAt = value
 		}
 		events = append(events, event)
@@ -716,11 +757,14 @@ func (s *StudioService) AuditLog(ctx context.Context, tenantID int64, agentID st
 }
 
 // ReleaseSections returns compiled sections from one immutable definition.
-func (s *StudioService) ReleaseSections(ctx context.Context, tenantID int64, agentID, version string) ([]domain.AgentReleaseSection, error) {
+func (s *StudioService) ReleaseSections(ctx context.Context, actor domain.StudioActor, agentID, version string) ([]domain.AgentReleaseSection, error) {
 	if err := s.init(ctx); err != nil {
 		return nil, err
 	}
-	res, err := s.qs.Query(ctx, qStudioGetVersion, tenantID, agentID, version)
+	if err := s.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
+		return nil, err
+	}
+	res, err := s.qs.Query(ctx, qStudioGetVersion, actor.TenantID, agentID, version)
 	if err != nil {
 		return nil, fmt.Errorf("load release sections: %w", err)
 	}
@@ -741,17 +785,20 @@ func (s *StudioService) ReleaseSections(ctx context.Context, tenantID int64, age
 }
 
 // Models returns the injected tenant model catalog.
-func (s *StudioService) Models(ctx context.Context, tenantID int64) ([]domain.StudioModel, error) {
+func (s *StudioService) Models(ctx context.Context, actor domain.StudioActor) ([]domain.StudioModel, error) {
+	if err := validateActor(actor); err != nil {
+		return nil, err
+	}
 	if s.Catalog == nil {
 		return nil, fmt.Errorf("studio service: model catalog is required")
 	}
-	return s.Catalog.List(ctx, tenantID)
+	return s.Catalog.List(ctx, actor.TenantID)
 }
 
 func (s *StudioService) definition(ctx context.Context, tenantID int64, draft domain.AgentDraft) (domain.AgentDefinition, error) {
 	definition := domain.AgentDefinition{
 		AgentID: draft.AgentID, AgentTypeID: draft.AgentTypeID, Enabled: draft.Enabled, Models: draft.Models,
-		ApprovalPolicy: draft.ApprovalPolicy, Extension: cloneJSON(draft.Extension),
+		Extension:     cloneJSON(draft.Extension),
 		DraftRevision: draft.ExpectedDraftRevision, PromptProfileRevision: draft.ExpectedPromptProfileRevision,
 	}
 	for _, language := range draft.Languages {
@@ -776,31 +823,12 @@ func (s *StudioService) definition(ctx context.Context, tenantID int64, draft do
 	return definition, nil
 }
 
-// freezeBindings takes the request's tools and loop, and its skills, each falling back to what the
-// agent type declares, so a publish that names none cannot drop a type's tool or skill set.
-func (s *StudioService) freezeBindings(ctx context.Context, definition *domain.AgentDefinition, request domain.AgentPublishRequest) error {
-	tools, loop, skills := request.Tools, request.ToolLoop, request.Skills
-	if s.Kinds != nil && (len(tools) == 0 && loop == nil || len(skills) == 0) {
-		descriptor, err := s.Kinds.Get(ctx, definition.AgentTypeID)
-		if err != nil && !errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("load agent type %q: %w", definition.AgentTypeID, err)
-		}
-		if len(tools) == 0 && loop == nil {
-			tools, loop = descriptor.Tools, descriptor.ToolLoop
-		}
-		if len(skills) == 0 {
-			skills = descriptor.Skills
+func (s *StudioService) guard(ctx context.Context, candidate domain.PublishCandidate) error {
+	for _, guard := range s.Guards {
+		if err := guard.CheckPublish(ctx, candidate); err != nil {
+			return err
 		}
 	}
-	if len(tools) == 0 && loop == nil && len(skills) == 0 {
-		return nil
-	}
-	definition.Tools, definition.ToolLoop, definition.Skills = slices.Clone(tools), loop, slices.Clone(skills)
-	digest, err := s.Compiler.DefinitionDigest(*definition)
-	if err != nil {
-		return err
-	}
-	definition.DefinitionDigest = digest
 	return nil
 }
 
@@ -824,14 +852,27 @@ func (s *StudioService) drift(ctx context.Context, tenantID int64, draft domain.
 	if active.Enabled != draft.Enabled {
 		report.Causes = append(report.Causes, "enabled")
 	}
-	if active.ApprovalPolicy != draft.ApprovalPolicy {
-		report.Causes = append(report.Causes, "approval_policy")
-	}
 	if !modelSelectionsEqual(active.Models, draft.Models) {
 		report.Causes = append(report.Causes, "models")
 	}
 	if !bytes.Equal(compactStudioJSON(active.Extension), compactStudioJSON(draft.Extension)) {
 		report.Causes = append(report.Causes, "extension")
+	}
+	settings, err := s.compileSettingsOf(ctx, tenantID, draft)
+	if err != nil && !settingsProblem(err) {
+		return nil, err
+	}
+	if err != nil || scope.SettingsDigest(settings.Resources) != active.SettingsDigest {
+		report.Causes = append(report.Causes, "settings")
+	}
+	sections, err := s.sections(ctx, tenantID, draft)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range sectionNames(sections, active.Sections) {
+		if !bytes.Equal(sections[name], active.Sections[name]) {
+			report.Causes = append(report.Causes, "section:"+name)
+		}
 	}
 	activeDigests := languageDigests(active.Languages)
 	for language, digest := range languageDigests(current.Languages) {
@@ -887,6 +928,14 @@ func (s *StudioService) validateDraft(ctx context.Context, tenantID int64, draft
 	if publishing {
 		phase = domain.ValidateRelease
 	}
+	if len(fields) > 0 {
+		return &StudioValidationError{Fields: fields}
+	}
+	return s.runValidators(ctx, tenantID, draft, phase)
+}
+
+func (s *StudioService) runValidators(ctx context.Context, tenantID int64, draft domain.AgentDraft, phase domain.ValidationPhase) error {
+	var fields []domain.AgentFieldError
 	for _, validator := range s.Validators {
 		validatorFields, err := validator.Validate(ctx, tenantID, draft, phase)
 		if err != nil {
@@ -972,7 +1021,7 @@ func (s *StudioService) saveDefaults(ctx context.Context, tx keelport.TxQuerySer
 	if common.AsInt64(alias.Rows[0][1]) != draft.ExpectedPromptProfileRevision {
 		return false, domain.ErrRevisionConflict
 	}
-	bumped, err := tx.Query(ctx, qStudioBumpAlias, actor.ActorID, actor.TenantID, draft.AgentTypeID, draft.ExpectedPromptProfileRevision)
+	bumped, err := tx.Query(ctx, qStudioBumpAlias, actorUser(actor), actor.TenantID, draft.AgentTypeID, draft.ExpectedPromptProfileRevision)
 	if err != nil {
 		return false, fmt.Errorf("bump prompt profile: %w", err)
 	}
@@ -1017,10 +1066,32 @@ func validatePromptDraft(draft domain.AgentDraft) []domain.AgentFieldError {
 }
 
 func auditStudio(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, agentID, event, detail string) error {
-	if _, err := tx.Query(ctx, qStudioAudit, actor.TenantID, agentID, event, nullableString(detail), actor.ActorID); err != nil {
+	if _, err := tx.Query(ctx, qStudioAudit, actor.TenantID, agentID, event, nullableString(detail), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
 		return fmt.Errorf("record studio audit: %w", err)
 	}
 	return nil
+}
+
+// deploy makes a new release stable, or with a canary percentage gives it that share of
+// new conversations beside the current stable one. It reports whether the release is stable.
+func deploy(ctx context.Context, tx keelport.TxQueryService, tenantID int64, agentID, version string, canary int) (bool, string, error) {
+	if canary < 0 || canary > 100 {
+		return false, "", validationError("canary_percentage", "must be between 0 and 100")
+	}
+	if canary == 0 || canary == 100 {
+		if _, err := tx.Query(ctx, qStudioDeployVersion, tenantID, agentID, version); err != nil {
+			return false, "", fmt.Errorf("deploy agent version: %w", err)
+		}
+		return true, "", nil
+	}
+	updated, err := tx.Query(ctx, qStudioCanaryVersion, version, canary, tenantID, agentID)
+	if err != nil {
+		return false, "", fmt.Errorf("deploy canary version: %w", err)
+	}
+	if len(updated.Rows) == 0 {
+		return false, "", validationError("canary_percentage", "the first release of an agent deploys as stable")
+	}
+	return false, fmt.Sprintf(" as a %d%% canary", canary), nil
 }
 
 func nextStudioVersion(ctx context.Context, tx keelport.TxQueryService, tenantID int64, agentID string) (string, error) {
@@ -1041,7 +1112,7 @@ func releaseFromDefinition(definition domain.AgentDefinition, active bool) domai
 	}
 	return domain.AgentRelease{
 		AgentID: definition.AgentID, AgentTypeID: definition.AgentTypeID, Version: definition.Version,
-		Enabled: definition.Enabled, Models: definition.Models, ApprovalPolicy: definition.ApprovalPolicy,
+		Enabled: definition.Enabled, Models: definition.Models,
 		DefinitionDigest: definition.DefinitionDigest, DraftRevision: definition.DraftRevision,
 		PromptProfileRevision: definition.PromptProfileRevision, ChangeSummary: definition.ChangeSummary,
 		PublishedBy: definition.PublishedBy, PublishedAt: definition.PublishedAt,
@@ -1110,10 +1181,38 @@ func compactStudioJSON(value json.RawMessage) []byte {
 }
 
 func validateActor(actor domain.StudioActor) error {
-	if actor.TenantID <= 0 || actor.ActorID <= 0 {
+	switch {
+	case actor.TenantID <= 0 || strings.TrimSpace(actor.Principal.ID) == "":
 		return fmt.Errorf("%w: tenant and actor are required", domain.ErrValidation)
+	case actor.Principal.Kind == domain.PrincipalService:
+		return nil
+	case actor.Principal.Kind == domain.PrincipalHuman && actorUserID(actor) != nil:
+		return nil
+	}
+	return fmt.Errorf("%w: a studio actor is a person with a user account id or a service", domain.ErrValidation)
+}
+
+// actorUserID projects a human actor onto the user_account columns; a service has none.
+func actorUserID(actor domain.StudioActor) *int64 {
+	if actor.Principal.Kind != domain.PrincipalHuman {
+		return nil
+	}
+	id, err := strconv.ParseInt(actor.Principal.ID, 10, 64)
+	if err != nil || id <= 0 {
+		return nil
+	}
+	return &id
+}
+
+func actorUser(actor domain.StudioActor) any {
+	if id := actorUserID(actor); id != nil {
+		return *id
 	}
 	return nil
+}
+
+func actorRef(actor domain.StudioActor) string {
+	return string(actor.Principal.Kind) + ":" + actor.Principal.ID
 }
 
 func validationError(field, message string) error {

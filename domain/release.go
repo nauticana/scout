@@ -190,7 +190,8 @@ const (
 	VersionFromCohort        VersionSource = "experiment_cohort"
 	VersionFromCanary        VersionSource = "canary"
 	VersionFromStable        VersionSource = "stable"
-	VersionFromConversation  VersionSource = "conversation"
+	// VersionFromRequest is a release the caller pinned a new conversation to.
+	VersionFromRequest VersionSource = "request_pin"
 )
 
 // AgentVersionResolution is a selected agent version with the rule that chose it.
@@ -216,6 +217,18 @@ type ConversationRelease struct {
 	AgentVersion    string
 	PlatformVersion string
 	ResolvedAt      time.Time
+}
+
+// ConversationVersion is the release a conversation runs on and why it was chosen.
+type ConversationVersion struct {
+	ConversationID   string
+	AgentID          string
+	AliasID          string
+	Version          string
+	Source           VersionSource
+	PinReason        string
+	DefinitionDigest string
+	StartedAt        time.Time
 }
 
 // SessionDrainPolicy bounds how a rolled-back release lets live conversations finish.

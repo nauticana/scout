@@ -60,6 +60,7 @@ const (
 	agent_guardrail_max_input_bytes  = "agent_guardrail_max_input_bytes"
 	agent_guardrail_max_output_bytes = "agent_guardrail_max_output_bytes"
 	agent_model_region               = "agent_model_region"
+	agent_studio_max_agents_per_type = "agent_studio_max_agents_per_type"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -144,6 +145,7 @@ type ScoutConfig struct {
 	AgentGuardrailMaxInputBytes  int      // agent_guardrail_max_input_bytes 262144 Baseline byte ceiling on turn input, tool arguments, and retrieved content
 	AgentGuardrailMaxOutputBytes int      // agent_guardrail_max_output_bytes 1048576 Baseline byte ceiling on model and tool output
 	AgentModelRegion             string   // agent_model_region (none) Residency region stamped on a candidate model with no route row; empty leaves it unknown
+	AgentStudioMaxAgentsPerType  int      // agent_studio_max_agents_per_type 20 Agents of one type a tenant may keep, archived ones included; 0 refuses every Studio create
 }
 
 // ToolLoopLimits is the executor-level ceiling the agent_loop_* flags configure.
@@ -225,5 +227,6 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentGuardrailMaxInputBytes = c.Int(rows, agent_guardrail_max_input_bytes)
 	c.AgentGuardrailMaxOutputBytes = c.Int(rows, agent_guardrail_max_output_bytes)
 	c.AgentModelRegion = c.String(rows, agent_model_region)
+	c.AgentStudioMaxAgentsPerType = c.Int(rows, agent_studio_max_agents_per_type)
 	return c.ParseErr()
 }

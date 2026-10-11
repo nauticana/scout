@@ -18,12 +18,26 @@ type ConversationRuntime interface {
 type ConversationIngress interface {
 	// OpenTurn subscribes the reply route before durably dispatching the turn.
 	OpenTurn(ctx context.Context, request domain.TurnRequest) (TurnReplySubscription, error)
+	// Selectable lists the agents of an agent type alias that admit work and that person may address.
+	Selectable(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, aliasID string) ([]domain.SelectableAgent, error)
 }
 
 // TurnDispatcher writes turns to shuffle-sharded durable partitions.
 type TurnDispatcher interface {
 	// Enqueue durably accepts a turn using its request ID for deduplication.
 	Enqueue(ctx context.Context, dispatch domain.TurnDispatch) error
+}
+
+// TurnFeedbackRecorder records a person's rating, 1 to 5, of a completed turn they may
+// converse about; a second rating by the same person replaces the first.
+type TurnFeedbackRecorder interface {
+	RecordFeedback(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, requestID string, rating int, reason string) error
+}
+
+// TurnRequeuer returns the acknowledged delivery of a resumed turn to the queue, so a
+// worker replays it from its last checkpoint. A repeat is a no-op.
+type TurnRequeuer interface {
+	Requeue(ctx context.Context, tenantID int64, requestID string) error
 }
 
 // FairTurnScheduler leases work using tenant weights and concurrency limits.
@@ -198,7 +212,13 @@ type TurnBudgetEstimator interface {
 // finished one, and fails it on terminal errors; success is completed through
 // DurableSessionStore.Complete.
 type TurnRecordStore interface {
-	// Open assigns the conversation's next turn number on first use and returns it; a reused id with different input is ErrConflict.
+	// Address resolves the agent serving a turn: agentID when it is of aliasID's type, else the
+	// agent the conversation already runs on, else the alias target.
+	Address(ctx context.Context, tenantID int64, aliasID, agentID, conversationID string) (string, error)
+	// Selectable lists the deployed agents of aliasID's type that admit work, the alias target first.
+	Selectable(ctx context.Context, tenantID int64, aliasID string) ([]domain.SelectableAgent, error)
+	// Open assigns the conversation's next turn number on first use and returns it; a reused id with different
+	// input is ErrConflict, and an agent that does not admit work refuses the turn.
 	Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error)
 	// Find returns the turn number, its status code, and once terminal the stored payload: the response of a completed turn or the error code of a failed one; unknown ids are ErrNotFound.
 	Find(ctx context.Context, tenantID int64, requestID string) (turnNo int64, status string, payload []byte, err error)

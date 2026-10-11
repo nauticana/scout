@@ -22,12 +22,25 @@ type ApprovalStore interface {
 	Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (domain.ApprovalRequest, error)
 }
 
+// ApproverRouter names the principal who decides a request. The product maps the request's
+// rule to its own roles or positions and picks an eligible person; Scout records who it was.
+type ApproverRouter interface {
+	Route(ctx context.Context, request domain.ApprovalRequest) (domain.PrincipalRef, error)
+}
+
 // ApprovalInbox is the reviewer-facing read side.
 type ApprovalInbox interface {
 	// Pending returns the requests a principal may actually decide, soonest deadline first.
 	Pending(ctx context.Context, filter domain.ApprovalFilter) ([]domain.ApprovalRequest, error)
 	// DueBy returns requests whose deadline has passed and that still await a verdict.
 	DueBy(ctx context.Context, tenantID int64, deadline domain.ApprovalFilter) ([]domain.ApprovalRequest, error)
+}
+
+// ApprovalDesk is the decider-facing service behind the approval routes.
+type ApprovalDesk interface {
+	Pending(ctx context.Context, tenantID int64, decider domain.PrincipalRef, limit int) ([]domain.ApprovalRequest, error)
+	Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (domain.ApprovalRequest, error)
+	RedeemLink(ctx context.Context, token string, key domain.ApprovalKey, status domain.ApprovalStatus, reason string) (domain.ApprovalRequest, error)
 }
 
 // EscalationPolicy decides what happens when a deadline passes with no verdict.

@@ -53,14 +53,23 @@ An allow may carry obligations — `require_approval`, `redact`, `cap_spend`, `r
 enforcer is a hard failure (`domain.ErrDegraded`). Silently skipping one would turn a conditional
 allow into an unconditional one, which is the whole point of the mechanism.
 
-This is where the operating modes live. `advise`, `draft`, `execute_with_approval`, and
-`bounded_autonomous` are enforced as obligations and limits, never as prompt text.
+## Operating modes
+
+The `autonomy` setting frozen into a release decides what the agent may act on, and
+`GovernedGateway` enforces it on every tool call after policy, never as prompt text:
+`human_only` calls nothing; `advise` and `draft` call only tools whose version is declared
+`read_only`; `execute_with_approval` calls read-only tools and asks a person, through the
+`ToolApprovalGate` under rule `autonomy`, for every other call; `bounded_autonomous` acts within
+policy. A release with no mode is `human_only`. For Charter work, `charter.Participation` maps the
+modes to `observes`, `recommends`, `prepares`, `performs`, and `executes`, and `Admission` refuses a
+task needing more than the agent's mode reaches.
 
 ## Durable approvals
 
 An irreversible action does not fail for lack of a human — it waits.
 
-`approval.Gate` implements `contract.ToolApprovalGate` over durable requests. The first call opens an
+`approval.Gate` implements `contract.ToolApprovalGate` over durable requests; an optional
+`contract.ApproverRouter` names each request's approver, and a request it cannot route is refused. The first call opens an
 `turn_approval_request` and returns pending; later calls return whatever verdict was recorded. Open is
 idempotent on `(tenant, request, execution_step)`, so a replayed turn re-attaches instead of asking
 the same person twice.
@@ -76,18 +85,23 @@ leave `Gate.Notifier` unset, or the approver is told twice. Escalation to a back
 The digest is also a `WHERE` predicate in the resolve statement, so approving a changed action
 updates nothing rather than resolving the wrong proposal.
 
-The turn lifecycle gained `suspended`:
+The turn lifecycle includes `suspended`:
 
 | Step | What happens |
 | --- | --- |
 | Pending approval | `guardrail.ErrApprovalPending` wraps `domain.ErrApprovalPending`, not `ErrForbidden` |
 | `TurnRuntime.suspend` | Records the suspension, publishes a final frame, acks the delivery |
 | Budget | The reservation stays **held** — settling would resume with no budget, releasing would let a tenant park work to dodge its ceiling |
-| Verdict | `approval.Resumer` records it, returns the turn to `queued`, and re-dispatches |
+| Verdict | `approval.Resumer` records it, returns the turn to `queued`, and requeues its delivery |
 | Replay | The worker resumes from the last checkpoint through `StepIdempotencyStore`; committed steps do not re-execute |
 
-Resolving without re-dispatching would leave the turn parked forever, so `Resumer` owns all three
-steps rather than leaving the last one to a caller.
+Resolving without requeueing would leave the turn parked forever, so `Resumer` owns all three
+steps rather than leaving the last one to a caller. It is the decider's whole desk: `Pending` lists
+only what the decider may decide now, `Resolve` takes `approved`, `rejected`, or `edited` (an edit
+refuses the proposal, and the agent proposes the changed action anew), and a single-use decision
+link from keel's `actiontoken` lets a person decide from email or chat. A link is bound to one
+person, request, verdict, and proposal digest, is refused above `LinkMaxRisk`, and authorizes its
+person again when redeemed.
 
 `approval.Sweeper` moves overdue requests on: `BackupEscalation` routes to a configured backup and,
 with none, expires the request. A backup needs its own grant — escalation moves *who decides*, never
@@ -151,7 +165,7 @@ bindings whose delegation ended so bound work can be stopped rather than continu
 
 ## Evidence
 
-`domain.DecisionRecord` replaces the old opaque audit event. It carries principal, authority chain,
+`domain.DecisionRecord` carries principal, authority chain,
 the client application the principal acted through (such as an OAuth client), scope, action,
 resource, release, policy id and version, outcome, obligations, reason, and a reference to redacted
 evidence in object storage.
@@ -185,9 +199,8 @@ all of this over one request's records.
 
 ## Attribution
 
-`usage_event` gained `principal_kind`, `principal_id`, and `scope_id`, and `RecordUsage` takes a
-`domain.UsageAttribution`. Cost is now reportable per agent and per organizational scope, not only
-per tenant — which is what a per-managed-agent price and a cost-per-outcome metric need.
+`usage_event` records `principal_kind`, `principal_id`, and `scope_id`, and `RecordUsage` takes a
+`domain.UsageAttribution`. Cost is reportable per agent and organizational scope.
 
 `isolation.ReleaseLimits` reads the budget and autonomy frozen into the release. Compilation already
 narrowed both against every parent scope, so nothing here re-derives inheritance: it reads one row.

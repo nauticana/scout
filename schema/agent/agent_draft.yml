@@ -11,9 +11,6 @@ columns:
   - name: enabled
     type: BOOLEAN
     default: TRUE
-  - name: require_approval
-    type: BOOLEAN
-    default: FALSE
   - name: text_model_provider
     type: VARCHAR(80)
     nullable: true

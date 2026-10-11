@@ -2,7 +2,7 @@
 // effective release the runtime pins. Bindings carry canonical JSON values whose
 // shape is fixed per resource kind:
 //
-//	set kinds (tool, knowledge, model, entitlement)          ["a","b"]
+//	set kinds (tool, skill, knowledge, model, entitlement)   ["a","b"]
 //	policy                                                   [{"id":"…","effect":"allow","actions":[…],"resources":[…]}]
 //	prompt_section                                           {"instruction":"…","output":"…"}
 //	budget                                                   {"tokens":0,"cost_minor_units":0,"currency":"EUR"}
@@ -82,7 +82,7 @@ func decodeStatements(raw []byte) ([]domain.PolicyStatement, error) {
 		return nil, nil
 	}
 	var statements []domain.PolicyStatement
-	if err := json.Unmarshal(raw, &statements); err != nil {
+	if err := strictDecode(raw, &statements); err != nil {
 		return nil, fmt.Errorf("%w: policy value must be a JSON statement list: %v", domain.ErrValidation, err)
 	}
 	seen := make(map[string]struct{}, len(statements))
@@ -219,4 +219,78 @@ const digestVersion = "scout.effective_release.v1"
 func writeField(payload *strings.Builder, value string) {
 	fmt.Fprintf(payload, "%d:%s", len(value), value)
 	payload.WriteByte(0x1f)
+}
+
+// CanonicalValue validates a binding value of a platform resource kind and returns its
+// canonical encoding, so equal settings store and digest identically.
+func CanonicalValue(kind domain.ResourceKind, raw []byte) ([]byte, error) {
+	switch PlatformNarrowingRules[kind] {
+	case NarrowSubset:
+		items, err := decodeSet(raw)
+		if err != nil {
+			return nil, err
+		}
+		return encodeSet(items)
+	case NarrowPolicy:
+		statements, err := decodeStatements(raw)
+		if err != nil {
+			return nil, err
+		}
+		return encodeStatements(statements)
+	case NarrowText:
+		value, err := decodePrompt(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(value)
+	case NarrowAtMost:
+		value, err := decodeBudget(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(value)
+	case NarrowOrdered:
+		value, err := decodeAutonomy(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(value)
+	default:
+		return nil, fmt.Errorf("%w: unknown resource kind %q", domain.ErrValidation, kind)
+	}
+}
+
+// SettingsDigest digests what a release's settings resolve to — kind, id, and value of
+// every resource — and not when or by whom they were compiled, so two compilations of
+// the same settings compare equal.
+func SettingsDigest(resources []domain.EffectiveResource) string {
+	var payload strings.Builder
+	payload.WriteString("scout.settings.v1\n")
+	for _, resource := range resources {
+		writeField(&payload, string(resource.ResourceKind))
+		writeField(&payload, resource.ResourceID)
+		writeField(&payload, string(resource.Value))
+		payload.WriteByte(0x1e)
+	}
+	sum := sha256.Sum256([]byte(payload.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// SetValue returns the members of a set resource, or false when resources bind none.
+func SetValue(resources []domain.EffectiveResource, kind domain.ResourceKind) (map[string]bool, bool, error) {
+	for _, resource := range resources {
+		if resource.ResourceKind != kind {
+			continue
+		}
+		items, err := decodeSet(resource.Value)
+		if err != nil {
+			return nil, false, err
+		}
+		set := make(map[string]bool, len(items))
+		for _, item := range items {
+			set[item] = true
+		}
+		return set, true, nil
+	}
+	return nil, false, nil
 }

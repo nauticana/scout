@@ -19,6 +19,7 @@ const (
 	qGrantGet      = "scout_delegation_grant_get"
 	qGrantRevoke   = "scout_delegation_grant_revoke"
 	qGrantsGrantee = "scout_delegation_grants_grantee"
+	qGrantsAgent   = "scout_delegation_grants_agent"
 
 	grantColumns = `grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_kind, grantee_agent_id,
        action_scope, max_depth, budget_minor_units, currency_code, approval_required, begda, endda, revoked_at`
@@ -44,6 +45,12 @@ SELECT ` + grantColumns + `
   FROM delegation_grant
  WHERE partner_id = ? AND grantee_kind = ? AND grantee_agent_id = ?
    AND revoked_at IS NULL AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
+	qGrantsAgent: `
+SELECT ` + grantColumns + `
+  FROM delegation_grant
+ WHERE partner_id = ? AND (grantee_agent_id = ? OR grantor_agent_id = ?)
+   AND revoked_at IS NULL AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)
+ ORDER BY begda, grant_id`,
 }
 
 // TableGrants stores delegation bounds through keel named SQL.
@@ -142,7 +149,19 @@ func (g *TableGrants) ForGrantee(ctx context.Context, tenantID int64, grantee do
 	if err := g.init(ctx); err != nil {
 		return nil, err
 	}
-	result, err := g.qs.Query(ctx, qGrantsGrantee, tenantID, string(grantee.Kind), grantee.ID)
+	return g.list(ctx, tenantID, qGrantsGrantee, tenantID, string(grantee.Kind), grantee.ID)
+}
+
+// ForAgent lists the grants in force or still to begin that name an agent on either side.
+func (g *TableGrants) ForAgent(ctx context.Context, tenantID int64, agentID string) ([]domain.DelegationGrant, error) {
+	if err := g.init(ctx); err != nil {
+		return nil, err
+	}
+	return g.list(ctx, tenantID, qGrantsAgent, tenantID, agentID, agentID)
+}
+
+func (g *TableGrants) list(ctx context.Context, tenantID int64, query string, args ...any) ([]domain.DelegationGrant, error) {
+	result, err := g.qs.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list delegation grants: %w", err)
 	}

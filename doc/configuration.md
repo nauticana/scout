@@ -55,6 +55,7 @@ catalog and `ScoutConfig` cannot drift.
 | `agent_guardrail_max_input_bytes` | 262144 | Baseline byte ceiling on turn input, tool arguments, and retrieved content |
 | `agent_guardrail_max_output_bytes` | 1048576 | Baseline byte ceiling on model and tool output |
 | `agent_model_region` | (none) | Residency region stamped on a candidate model with no route row; empty leaves it unknown |
+| `agent_studio_max_agents_per_type` | 20 | Agents of one type a tenant may keep, archived ones included; 0 refuses every Studio create |
 
 ## Admission (`service/isolation`)
 
@@ -109,6 +110,8 @@ catalog and `ScoutConfig` cannot drift.
 | `scope.Compiler.MaxDepth` | `agent_max_scope_depth` | non-negative; zero takes 8. A longer scope chain fails compilation |
 | `principal.ChainVerifier.MaxDepth` | `agent_max_delegation_hops` | non-negative; zero takes 4. Bounds the chain regardless of what a grant conveys |
 | `approval.Gate.Deadline` | `agent_approval_deadline` | seconds; zero leaves a request open with no escalation |
+| `controlplane.StudioService.MaxAgentsPerType` | `agent_studio_max_agents_per_type` | non-negative; zero refuses every create |
+| `controlplane.StudioDelegations.MaxDepth` | `agent_max_delegation_hops` | non-negative; the re-delegation depth a Studio grant may convey |
 | `toolgateway.BoundCredentialProvider.DefaultTTL` | `agent_credential_ttl` | seconds; a binding's own `MaxTTL` always wins when tighter |
 | `observability.TableAuditSink` page size | `agent_audit_page_size` | positive; clamped to `MaxDecisionPageSize` (1000) |
 | `dataplane.ToolLoopExecutor.Limits` | `agent_loop_max_iterations`, `agent_loop_max_tool_calls`, `agent_loop_max_tokens`, `agent_loop_max_repeats`, `agent_loop_deadline` | all positive, or construction fails; a step's configuration may only narrow them |

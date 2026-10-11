@@ -12,6 +12,18 @@ columns:
   - name: end_user_ref
     type: VARCHAR(200)
     nullable: true
+  - name: alias_id
+    type: VARCHAR(80)
+    nullable: true
+    comment: The agent type alias the conversation was requested through
+  - name: version_source
+    type: VARCHAR(30)
+    nullable: true
+    comment: The rule that chose agent_version, such as stable, canary, or request_pin; null when the product supplied it
+  - name: pin_reason
+    type: VARCHAR(400)
+    nullable: true
+    comment: Why the caller pinned agent_version instead of taking the traffic policy
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -30,6 +42,11 @@ foreign_keys:
     references:
       table: agent_version
       columns: [partner_id, agent_id, agent_version]
+  - name: alias_conversations
+    columns: [partner_id, alias_id]
+    references:
+      table: agent_alias
+      columns: [partner_id, alias_id]
 indexes:
   - name: agent_conversation_created_ix
     columns: [partner_id, created_at]

@@ -29,16 +29,23 @@ func (conversationUsers) ParseJWT(string) (*keelmodel.UserSession, error) {
 	return &keelmodel.UserSession{Id: 42, PartnerId: 7}, nil
 }
 
-type conversationPrincipalResolverFunc func(context.Context, *keelmodel.UserSession, string) (domain.Principal, domain.PrincipalRef, error)
+type conversationCallerFunc func(context.Context, *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error)
 
-func (function conversationPrincipalResolverFunc) Resolve(ctx context.Context, session *keelmodel.UserSession, agentID string) (domain.Principal, domain.PrincipalRef, error) {
-	return function(ctx, session, agentID)
+func (function conversationCallerFunc) Resolve(ctx context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+	return function(ctx, session)
 }
 
 type conversationIngressFunc func(context.Context, domain.TurnRequest) (contract.TurnReplySubscription, error)
 
 func (function conversationIngressFunc) OpenTurn(ctx context.Context, request domain.TurnRequest) (contract.TurnReplySubscription, error) {
 	return function(ctx, request)
+}
+
+func (conversationIngressFunc) Selectable(_ context.Context, tenant domain.TenantContext, person domain.PrincipalRef, aliasID string) ([]domain.SelectableAgent, error) {
+	if tenant.TenantID != 7 || person.ID != "42" {
+		return nil, domain.ErrForbidden
+	}
+	return []domain.SelectableAgent{{AgentID: aliasID + "-a", DisplayName: "A", Default: true, Release: "3"}}, nil
 }
 
 type conversationRepliesFunc func(context.Context, int64, string, int64) (contract.TurnReplySubscription, error)
@@ -99,12 +106,11 @@ func newConversationHandler(plane contract.DataPlane) *ConversationHandler {
 	return &ConversationHandler{
 		AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}},
 		Plane:           plane,
-		Principals: conversationPrincipalResolverFunc(func(_ context.Context, session *keelmodel.UserSession, agentID string) (domain.Principal, domain.PrincipalRef, error) {
+		Callers: conversationCallerFunc(func(_ context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 			if session.PartnerId != 7 {
-				return domain.Principal{}, domain.PrincipalRef{}, errors.New("wrong session")
+				return domain.TenantContext{}, domain.PrincipalRef{}, errors.New("wrong session")
 			}
-			return domain.Principal{Kind: domain.PrincipalAgent, ID: agentID, TenantID: 7, ScopeID: "team-a"},
-				domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, nil
+			return domain.TenantContext{TenantID: 7, ScopeID: "team-a"}, domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, nil
 		}),
 		BasePath: "/api/wingmate/",
 	}
@@ -135,14 +141,14 @@ func TestConversationSubmitMapsSessionIdentityAndAdmitsTurn(t *testing.T) {
 	handler := newConversationHandler(plane)
 	recorder := httptest.NewRecorder()
 	handler.Routes()["/api/wingmate/turn"](recorder, authenticatedRequest(http.MethodPost, "/api/wingmate/turn", []byte(`{
-		"request_id":"request-1","conversation_id":"conversation-1","agent_id":"wingmate","input":{"prompt":"hello"}
+		"request_id":"request-1","conversation_id":"conversation-1","agent_type":"wingmate","agent_name":"wingmate-b","input":{"prompt":"hello"}
 	}`)))
 
 	if recorder.Code != http.StatusAccepted || !subscription.closed {
 		t.Fatalf("status = %d, subscription closed = %v, body = %s", recorder.Code, subscription.closed, recorder.Body.String())
 	}
 	if admitted.TenantContext.TenantID != 7 || admitted.TenantContext.ScopeID != "team-a" ||
-		admitted.Principal.ID != "wingmate" || admitted.OnBehalfOf.ID != "42" || string(admitted.Input) != `{"prompt":"hello"}` {
+		admitted.AliasID != "wingmate" || admitted.AgentID != "wingmate-b" || admitted.Principal.ID != "" || admitted.OnBehalfOf.ID != "42" || string(admitted.Input) != `{"prompt":"hello"}` {
 		t.Fatalf("admitted = %+v, input = %s", admitted, admitted.Input)
 	}
 }
@@ -243,12 +249,33 @@ func TestMapConversationErrorPreservesRetryAfter(t *testing.T) {
 
 func TestConversationRoutesUseConfiguredBasePath(t *testing.T) {
 	routes := newConversationHandler(&conversationPlane{}).Routes()
-	for _, path := range []string{"/api/wingmate/turn", "/api/wingmate/turn/stream", "/api/wingmate/turn/cancel"} {
+	for _, path := range []string{"/api/wingmate/turn", "/api/wingmate/turn/stream", "/api/wingmate/turn/cancel", "/api/wingmate/agents", "/api/wingmate/turn/feedback"} {
 		if routes[path] == nil {
 			t.Fatalf("missing route %s", path)
 		}
 	}
-	if len(routes) != 3 || api.ConversationTurnPath != "turn" {
+	if len(routes) != 5 || api.ConversationTurnPath != "turn" {
 		t.Fatalf("routes = %v", routes)
+	}
+}
+
+func TestConversationAgentsListsSelectableAgents(t *testing.T) {
+	handler := newConversationHandler(&conversationPlane{ingress: conversationIngressFunc(nil)})
+	recorder := httptest.NewRecorder()
+	handler.Routes()["/api/wingmate/agents"](recorder, authenticatedRequest(http.MethodGet, "/api/wingmate/agents?agent_type=writer", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"agent_name":"writer-a"`) {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestConversationRefusesASessionWithNoPerson(t *testing.T) {
+	handler := newConversationHandler(&conversationPlane{ingress: conversationIngressFunc(nil)})
+	handler.Callers = conversationCallerFunc(func(context.Context, *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+		return domain.TenantContext{TenantID: 7}, domain.PrincipalRef{}, nil
+	})
+	recorder := httptest.NewRecorder()
+	handler.Routes()["/api/wingmate/agents"](recorder, authenticatedRequest(http.MethodGet, "/api/wingmate/agents?agent_type=writer", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", recorder.Code)
 	}
 }

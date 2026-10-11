@@ -73,7 +73,10 @@ type QueueTurnDispatcher struct {
 	qs   port.QueryService
 }
 
-var _ contract.TurnDispatcher = (*QueueTurnDispatcher)(nil)
+var (
+	_ contract.TurnDispatcher = (*QueueTurnDispatcher)(nil)
+	_ contract.TurnRequeuer   = (*QueueTurnDispatcher)(nil)
+)
 
 func (dispatcher *QueueTurnDispatcher) validate() error {
 	if dispatcher.DB == nil {
@@ -157,6 +160,33 @@ func (dispatcher *QueueTurnDispatcher) Enqueue(ctx context.Context, dispatch dom
 		return fmt.Errorf("%w: turn record for request %q must be opened before dispatch", domain.ErrNotFound, turn.RequestID)
 	}
 	return fmt.Errorf("%w: request %q turn record has different input or conversation", domain.ErrConflict, turn.RequestID)
+}
+
+// Requeue returns a resumed turn's acknowledged delivery to the queue; a delivery that is
+// already queued again is left as it is, and a turn with none is ErrNotFound.
+func (dispatcher *QueueTurnDispatcher) Requeue(ctx context.Context, tenantID int64, requestID string) error {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
+	}
+	if err := dispatcher.validate(); err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
+	requeued, err := dispatcher.queries(ctx).Query(ctx, qQueueRequeue, dispatcher.now().UTC(), tenantID, requestID)
+	if err != nil {
+		return fmt.Errorf("requeue resumed turn %q: %w", requestID, err)
+	}
+	if len(requeued.Rows) > 0 {
+		return nil
+	}
+	existing, err := dispatcher.queries(ctx).Query(ctx, qQueueFindByReq, tenantID, requestID)
+	if err != nil {
+		return fmt.Errorf("requeue resumed turn %q: %w", requestID, err)
+	}
+	if len(existing.Rows) == 0 {
+		return fmt.Errorf("%w: turn %q has no queued delivery", domain.ErrNotFound, requestID)
+	}
+	return nil
 }
 
 func validateDispatch(dispatch domain.TurnDispatch) error {

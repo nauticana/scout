@@ -39,6 +39,7 @@ var PlatformNarrowingRules = map[domain.ResourceKind]NarrowingRule{
 	domain.ResourceEntitlement:   NarrowSubset,
 	domain.ResourceBudget:        NarrowAtMost,
 	domain.ResourceAutonomy:      NarrowOrdered,
+	domain.ResourceSkill:         NarrowSubset,
 }
 
 // LatticeChecker rejects any effective value that broadens what it inherits. An

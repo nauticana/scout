@@ -21,7 +21,10 @@ import (
 	"github.com/nauticana/scout/service/modelgateway"
 	"github.com/nauticana/scout/service/observability"
 	"github.com/nauticana/scout/service/policy"
+	"github.com/nauticana/scout/service/principal"
+	"github.com/nauticana/scout/service/release"
 	agentruntime "github.com/nauticana/scout/service/runtime"
+	"github.com/nauticana/scout/service/scope"
 	"github.com/nauticana/scout/service/skill"
 	"github.com/nauticana/scout/service/toolgateway"
 )
@@ -66,6 +69,16 @@ type BaseDataPlane struct {
 	Knowledge    contract.PinnedKnowledgeResolver
 	Entitlements contract.EntitlementResolver
 	Weights      contract.TenantWeightPolicy
+	// PrincipalLimits reads each agent's frozen budget and operating mode; nil uses isolation.ReleaseLimits over DB.
+	PrincipalLimits contract.PrincipalLimits
+	// Roles authorizes a turn's person and Principals resolves its serving agent; nil uses
+	// principal.RoleAuthorizer and principal.TableResolver over DB.
+	Roles      contract.PrincipalAuthorizer
+	Principals contract.PrincipalResolver
+	// Versions chooses a new conversation's release, which agent_conversation records with the
+	// rule that chose it; nil uses release.PinnedTrafficManager over the agent's canary and
+	// stable deployment. A product with the release module adds its pins and cohorts.
+	Versions contract.AgentVersionResolutionExplainer
 
 	Objects          ObjectStateCodec
 	Records          contract.TurnRecordStore
@@ -207,7 +220,11 @@ func (plane *BaseDataPlane) composeState() error {
 		plane.Objects = &ObjectStateStore{Storage: plane.Storage, MaxBytes: settings.StateMaxBytes}
 	}
 	if plane.Records == nil {
-		plane.Records = &TableTurnRecordStore{DB: plane.DB, Objects: plane.Objects, UsageCategory: plane.UsageCategory, TaskKind: plane.TaskKind}
+		if plane.Versions == nil {
+			plane.Versions = &release.PinnedTrafficManager{Deployments: &release.TableAgentDeploymentStore{DB: plane.DB}}
+		}
+		plane.Records = &TableTurnRecordStore{DB: plane.DB, Objects: plane.Objects, UsageCategory: plane.UsageCategory,
+			TaskKind: plane.TaskKind, Versions: plane.Versions}
 	}
 	if plane.Sessions == nil {
 		sessions, err := NewMemorySessionCache(MemoryCacheConfig{Capacity: settings.SessionCacheSize, TTL: settings.SessionCacheTTL})
@@ -336,6 +353,9 @@ func (plane *BaseDataPlane) composeTools() error {
 	if plane.Egress == nil {
 		plane.Egress = &toolgateway.TableEgressPolicy{DB: plane.DB}
 	}
+	if plane.PrincipalLimits == nil {
+		plane.PrincipalLimits = &isolation.ReleaseLimits{Releases: &scope.TableEffectiveReleaseStore{DB: plane.DB}}
+	}
 	if plane.ToolGateway == nil {
 		gateway, err := toolgateway.NewGovernedGateway(toolgateway.GovernedGatewayConfig{
 			Registry: plane.Tools, RateLimiter: plane.RateLimiter, Authorizer: &toolgateway.BindingAuthorizer{Registry: plane.Tools},
@@ -343,7 +363,7 @@ func (plane *BaseDataPlane) composeTools() error {
 			Validator: toolgateway.SchemaResultValidator{}, Effects: plane.Effects,
 			RetryAttempts: settings.ToolMaxAttempts, RetryBaseDelay: 200 * time.Millisecond, RetryMaxDelay: 5 * time.Second,
 			Guardrails: plane.Guardrails, GuardrailConfigs: &toolgateway.ReleaseGuardrailConfigs{Configs: plane.GuardrailConfigs},
-			Timeout: settings.ToolTimeout,
+			Limits: plane.PrincipalLimits, Approvals: plane.Approvals, Timeout: settings.ToolTimeout,
 		})
 		if err != nil {
 			return err
@@ -436,6 +456,13 @@ func (plane *BaseDataPlane) composeRuntime() error {
 		ingress := &TurnIngress{
 			Limiter: plane.RateLimiter, Records: plane.Records, Objects: plane.Objects, Estimator: plane.Estimator,
 			Budget: plane.Budget, Replies: plane.ReplyHub, Dispatcher: plane.Dispatcher, Audit: plane.Audit,
+			Roles: plane.Roles, Principals: plane.Principals,
+		}
+		if ingress.Roles == nil {
+			ingress.Roles = &principal.RoleAuthorizer{DB: plane.DB}
+		}
+		if ingress.Principals == nil {
+			ingress.Principals = &principal.TableResolver{DB: plane.DB, RootScopeID: controlplane.RootPromptScopeID}
 		}
 		if err := ingress.validate(); err != nil {
 			return err

@@ -195,6 +195,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_guardrail_max_input_bytes:  "262144",
 		agent_guardrail_max_output_bytes: "1048576",
 		agent_model_region:               "",
+		agent_studio_max_agents_per_type: "20",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

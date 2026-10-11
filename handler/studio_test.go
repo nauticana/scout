@@ -41,9 +41,23 @@ func TestStudioDraftLayerMapping(t *testing.T) {
 }
 
 func TestStudioValidationErrorMapping(t *testing.T) {
-	_, err := mapStudioError(nil, &controlplane.StudioValidationError{Fields: []domain.AgentFieldError{{Field: "display_name", Message: "required"}}})
+	_, err := mapServiceError(nil, &controlplane.StudioValidationError{Fields: []domain.AgentFieldError{{Field: "display_name", Message: "required"}}})
 	if err == nil || !strings.Contains(err.Error(), "display_name") {
 		t.Fatalf("field detail was not serialized: %v", err)
+	}
+}
+
+func TestStudioDecodeRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	var target struct {
+		Name string `json:"name"`
+	}
+	for _, body := range []string{`{"name":"agent","extra":true}`, `{"name":"agent"} {}`} {
+		if err := decode([]byte(body), &target); err == nil {
+			t.Fatalf("decode(%q) succeeded", body)
+		}
+	}
+	if err := decode([]byte(`{"name":"agent"}`), &target); err != nil || target.Name != "agent" {
+		t.Fatalf("valid body: target = %+v, error = %v", target, err)
 	}
 }
 
@@ -53,7 +67,8 @@ func TestStudioRoutesCoverCompatibilityContract(t *testing.T) {
 		api.StudioAgentsPath, api.StudioAgentPath, api.StudioDraftPath, api.StudioEnabledPath,
 		api.StudioTestPath, api.StudioPublishPath, api.StudioRestorePath, api.StudioResetPath,
 		api.StudioSetDefaultPath, api.StudioHistoryPath, api.StudioAuditPath, api.StudioSectionsPath,
-		api.StudioModelsPath,
+		api.StudioModelsPath, api.StudioFeaturesPath, api.StudioCreatePath, api.StudioRenamePath,
+		api.StudioArchivePath, api.StudioUnarchivePath, api.StudioSettingsPath, api.StudioSettingPath,
 	}
 	for _, path := range paths {
 		if routes[path] == nil {

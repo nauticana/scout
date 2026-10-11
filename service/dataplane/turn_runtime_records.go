@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
+	keelmodel "github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
@@ -24,6 +25,10 @@ const (
 	qRecordFail         = "scout_turn_record_fail"
 	qRecordSuspend      = "scout_turn_record_suspend"
 	qRecordResume       = "scout_turn_record_resume"
+	qRecordAddress      = "scout_turn_record_address"
+	qRecordAdmits       = "scout_turn_record_admits"
+	qRecordRelease      = "scout_turn_record_release"
+	qRecordSelectable   = "scout_turn_record_selectable"
 )
 
 var turnRecordQueries = map[string]string{
@@ -34,10 +39,44 @@ SELECT turn_no, conversation_id, status_code, input_digest, response_uri, respon
   FROM conversation_turn
  WHERE partner_id = ? AND request_id = ?`,
 
-	// A new conversation pins the agent's deployed stable version; an existing one keeps its pin.
+	// The named agent, else the conversation's agent, else the alias target, when it is of
+	// the alias's type; moving the type's default does not move a live conversation.
+	qRecordAddress: `
+SELECT p.agent_id
+  FROM agent_profile p
+  LEFT JOIN agent_alias a ON a.partner_id = p.partner_id AND a.alias_id = ?
+ WHERE p.partner_id = ?
+   AND p.agent_id = COALESCE(NULLIF(?, ''),
+       (SELECT c.agent_id FROM agent_conversation c WHERE c.partner_id = p.partner_id AND c.conversation_id = ?), a.agent_id)
+   AND (? = '' OR a.agent_type_id = p.agent_type_id)`,
+	// Admission closes when the agent is disabled, suspended, draining, archived, or retired.
+	qRecordAdmits: `
+SELECT s.admits_work AND d.enabled
+  FROM agent_profile p
+  JOIN agent_state s ON s.code = p.state_code
+  JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
+ WHERE p.partner_id = ? AND p.agent_id = ?
+   FOR SHARE OF p`,
+	qRecordSelectable: `
+SELECT p.agent_id, p.display_name, p.agent_id = a.agent_id, dep.stable_version
+  FROM agent_alias a
+  JOIN agent_profile p ON p.partner_id = a.partner_id AND p.agent_type_id = a.agent_type_id
+  JOIN agent_state s ON s.code = p.state_code
+  JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
+  JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
+ WHERE a.partner_id = ? AND a.alias_id = ? AND s.admits_work AND d.enabled
+ ORDER BY p.agent_id = a.agent_id DESC, p.display_name, p.agent_id`,
+	qRecordRelease: `
+SELECT 1 FROM agent_version v
+ WHERE v.partner_id = ? AND v.agent_id = ? AND v.agent_version = ?
+   AND NOT EXISTS (SELECT 1 FROM agent_version_quarantine q
+                    WHERE q.partner_id = v.partner_id AND q.agent_id = v.agent_id
+                      AND q.agent_version = v.agent_version AND q.lifted_at IS NULL)`,
+	// A new conversation pins the chosen release, else the agent's deployed stable version;
+	// an existing one keeps its pin.
 	qRecordConversation: `
-INSERT INTO agent_conversation (partner_id, conversation_id, agent_id, agent_version, end_user_ref)
-SELECT dep.partner_id, ?, dep.agent_id, dep.stable_version, ?
+INSERT INTO agent_conversation (partner_id, conversation_id, agent_id, agent_version, version_source, end_user_ref, alias_id, pin_reason)
+SELECT dep.partner_id, ?, dep.agent_id, COALESCE(NULLIF(?, ''), dep.stable_version), ?, ?, NULLIF(?, ''), NULLIF(?, '')
   FROM agent_deployment dep
  WHERE dep.partner_id = ? AND dep.agent_id = ?
 ON CONFLICT (partner_id, conversation_id) DO NOTHING`,
@@ -112,6 +151,9 @@ type TableTurnRecordStore struct {
 	UsageCategory string
 	// TaskKind labels runtime turns in conversation_turn_detail; empty skips the history row.
 	TaskKind string
+	// Versions chooses a new conversation's release by the agent's traffic policy; nil takes
+	// the stable release.
+	Versions contract.AgentVersionResolutionExplainer
 
 	once sync.Once
 	qs   port.QueryService
@@ -162,6 +204,101 @@ func (store *TableTurnRecordStore) find(ctx context.Context, tenantID int64, req
 	}, true, nil
 }
 
+// Address resolves the agent that serves a turn: agentID when it is of the alias's type,
+// else the agent the conversation runs on, else the alias target. An unknown alias or an
+// agent of another type is ErrNotFound.
+func (store *TableTurnRecordStore) Address(ctx context.Context, tenantID int64, aliasID, agentID, conversationID string) (string, error) {
+	if tenantID <= 0 || strings.TrimSpace(aliasID) == "" && strings.TrimSpace(agentID) == "" {
+		return "", fmt.Errorf("%w: tenant and an agent type or agent are required", domain.ErrValidation)
+	}
+	if err := store.validate(); err != nil {
+		return "", err
+	}
+	result, err := store.queries(ctx).Query(ctx, qRecordAddress, aliasID, tenantID, agentID, conversationID, aliasID)
+	if err != nil {
+		return "", fmt.Errorf("address turn agent: %w", err)
+	}
+	if len(result.Rows) == 0 {
+		return "", fmt.Errorf("%w: no agent %q of type %q", domain.ErrNotFound, agentID, aliasID)
+	}
+	return common.AsString(result.Rows[0][0]), nil
+}
+
+// Selectable lists the deployed agents of aliasID's type that admit work, the alias target first.
+func (store *TableTurnRecordStore) Selectable(ctx context.Context, tenantID int64, aliasID string) ([]domain.SelectableAgent, error) {
+	if tenantID <= 0 || strings.TrimSpace(aliasID) == "" {
+		return nil, fmt.Errorf("%w: tenant and agent type are required", domain.ErrValidation)
+	}
+	if err := store.validate(); err != nil {
+		return nil, err
+	}
+	result, err := store.queries(ctx).Query(ctx, qRecordSelectable, tenantID, aliasID)
+	if err != nil {
+		return nil, fmt.Errorf("list selectable agents: %w", err)
+	}
+	agents := make([]domain.SelectableAgent, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		agents = append(agents, domain.SelectableAgent{
+			AgentID: common.AsString(row[0]), DisplayName: common.AsString(row[1]),
+			Default: common.AsBool(row[2]), Release: common.AsString(row[3]),
+		})
+	}
+	return agents, nil
+}
+
+// pin starts a conversation on the release the caller pinned, else the one the traffic
+// policy chooses, and returns the stored pin.
+func (store *TableTurnRecordStore) pin(ctx context.Context, tx port.TxQueryService, request domain.TurnRequest) (*keelmodel.QueryResult, error) {
+	tenantID := request.TenantContext.TenantID
+	resolution := domain.AgentVersionResolution{Version: request.Release, Source: domain.VersionFromRequest}
+	if request.Release == "" {
+		resolution = domain.AgentVersionResolution{Source: domain.VersionFromStable}
+		if store.Versions != nil {
+			chosen, err := store.Versions.ExplainVersion(ctx, tenantID, request.AgentID, request.ConversationID)
+			if err != nil {
+				return nil, fmt.Errorf("open turn: choose release: %w", err)
+			}
+			resolution = chosen
+		}
+	}
+	if _, err := tx.Query(ctx, qRecordConversation, request.ConversationID, resolution.Version, string(resolution.Source),
+		endUserRef(request), request.AliasID, request.ReleaseReason, tenantID, request.AgentID); err != nil {
+		return nil, fmt.Errorf("open turn: pin conversation: %w", err)
+	}
+	pinned, err := tx.Query(ctx, qRecordPinnedAgent, tenantID, request.ConversationID)
+	if err != nil {
+		return nil, fmt.Errorf("open turn: read conversation pin: %w", err)
+	}
+	return pinned, nil
+}
+
+// admits refuses a turn for an agent that no longer takes work, and a release pin to a
+// version that does not exist or is quarantined.
+func admits(ctx context.Context, tx port.TxQueryService, request domain.TurnRequest) error {
+	tenantID := request.TenantContext.TenantID
+	state, err := tx.Query(ctx, qRecordAdmits, tenantID, request.AgentID)
+	if err != nil {
+		return fmt.Errorf("open turn: read agent state: %w", err)
+	}
+	if len(state.Rows) == 0 {
+		return fmt.Errorf("%w: agent %q", domain.ErrNotFound, request.AgentID)
+	}
+	if !common.AsBool(state.Rows[0][0]) {
+		return fmt.Errorf("%w: agent %q is not accepting work", domain.ErrConflict, request.AgentID)
+	}
+	if request.Release == "" {
+		return nil
+	}
+	release, err := tx.Query(ctx, qRecordRelease, tenantID, request.AgentID, request.Release)
+	if err != nil {
+		return fmt.Errorf("open turn: read pinned release: %w", err)
+	}
+	if len(release.Rows) == 0 {
+		return fmt.Errorf("%w: release %q of agent %q is unknown or quarantined", domain.ErrNotFound, request.Release, request.AgentID)
+	}
+	return nil
+}
+
 // Open inserts the turn under a per-conversation advisory lock so turn numbers
 // stay dense; a replay of the same request id returns the existing turn.
 func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error) {
@@ -188,12 +325,17 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 		return 0, fmt.Errorf("open turn: lock conversation: %w", err)
 	}
 	if strings.TrimSpace(request.AgentID) != "" {
-		if _, err = tx.Query(ctx, qRecordConversation, request.ConversationID, endUserRef(request), tenantID, request.AgentID); err != nil {
-			return 0, fmt.Errorf("open turn: pin conversation: %w", err)
+		if err = admits(ctx, tx, request); err != nil {
+			return 0, err
 		}
 		pinned, pinErr := tx.Query(ctx, qRecordPinnedAgent, tenantID, request.ConversationID)
 		if pinErr != nil {
 			return 0, fmt.Errorf("open turn: read conversation pin: %w", pinErr)
+		}
+		if len(pinned.Rows) == 0 {
+			if pinned, err = store.pin(ctx, tx, request); err != nil {
+				return 0, err
+			}
 		}
 		if len(pinned.Rows) == 0 {
 			return 0, fmt.Errorf("%w: agent %q has no deployed version to pin", domain.ErrNotReady, request.AgentID)
@@ -201,8 +343,12 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 		if pinnedAgent := common.AsString(pinned.Rows[0][0]); pinnedAgent != request.AgentID {
 			return 0, fmt.Errorf("%w: conversation %q is pinned to agent %q, not %q", domain.ErrConflict, request.ConversationID, pinnedAgent, request.AgentID)
 		}
-		if strings.TrimSpace(common.AsString(pinned.Rows[0][1])) == "" {
+		pinnedVersion := strings.TrimSpace(common.AsString(pinned.Rows[0][1]))
+		if pinnedVersion == "" {
 			return 0, fmt.Errorf("%w: conversation %q has no pinned agent version", domain.ErrNotReady, request.ConversationID)
+		}
+		if request.Release != "" && pinnedVersion != request.Release {
+			return 0, fmt.Errorf("%w: conversation %q is pinned to release %q, not %q", domain.ErrConflict, request.ConversationID, pinnedVersion, request.Release)
 		}
 	}
 	inserted, err := tx.Query(ctx, qRecordOpen,
@@ -289,7 +435,7 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, req
 	if err := store.validate(); err != nil {
 		return err
 	}
-	ref, err := store.Objects.Dehydrate(ctx, turnFailureName(tenantID, requestID), []byte(errorCode))
+	ref, err := store.Objects.Dehydrate(ctx, turnFailureName(tenantID, requestID, errorCode), []byte(errorCode))
 	if err != nil {
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
@@ -363,8 +509,10 @@ func turnInputName(tenantID int64, requestID string) string {
 	return fmt.Sprintf("turn-input/%d/%s", tenantID, requestID)
 }
 
-func turnFailureName(tenantID int64, requestID string) string {
-	return fmt.Sprintf("turn-failure/%d/%s", tenantID, requestID)
+// turnFailureName gives each failure code its own object, so a late Fail of a terminal
+// turn cannot overwrite the payload the turn's stored digest names.
+func turnFailureName(tenantID int64, requestID, errorCode string) string {
+	return fmt.Sprintf("turn-failure/%d/%s/%s", tenantID, requestID, DigestBytes([]byte(errorCode))[:12])
 }
 
 func isTerminalTurnStatus(status string) bool {

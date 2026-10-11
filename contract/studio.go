@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/nauticana/scout/domain"
@@ -45,6 +46,20 @@ type AgentDraftValidator interface {
 // agent id. Studio merges them with its own test history.
 type AgentActivityReporter interface {
 	LastRun(ctx context.Context, tenantID int64) (map[string]time.Time, error)
+}
+
+// PublishGuard may refuse a release before it is written, with its own typed error. Guards
+// run on publish and restore, outside the release transaction.
+type PublishGuard interface {
+	CheckPublish(ctx context.Context, candidate domain.PublishCandidate) error
+}
+
+// DefinitionSection contributes one named part of a release, such as governance or triggers.
+// Publication freezes it into AgentDefinition.Sections under Name, the digest covers it, and
+// drift reports it when the draft's section differs from the active release's.
+type DefinitionSection interface {
+	Name() string
+	Section(ctx context.Context, tenantID int64, draft domain.AgentDraft) (json.RawMessage, error)
 }
 
 // AgentDraftTestExecutor runs one saved draft through a downstream governed runtime.

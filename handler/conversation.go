@@ -21,18 +21,32 @@ import (
 
 const defaultCancelReason = "requested by client"
 
-// PrincipalResolver maps an authenticated product session and selected agent
-// onto the acting principal and the human whose authority it exercises. AgentID
-// is empty for stream and cancel, where only the resolved tenant is used.
-type PrincipalResolver interface {
-	Resolve(ctx context.Context, session *keelmodel.UserSession, agentID string) (domain.Principal, domain.PrincipalRef, error)
+// CallerResolver maps an authenticated product session onto its tenant context and the
+// person a turn acts for. The data plane resolves and authorizes the serving agent.
+type CallerResolver interface {
+	Resolve(ctx context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error)
 }
+
+// SessionCaller is the CallerResolver of a product whose session partner is the tenant
+// and whose signed-in user is the person; the scope is the tenant root.
+type SessionCaller struct{}
+
+func (SessionCaller) Resolve(_ context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+	if session == nil || session.PartnerId <= 0 || session.Id <= 0 {
+		return domain.TenantContext{}, domain.PrincipalRef{}, fmt.Errorf("%w: a partner session is required", domain.ErrForbidden)
+	}
+	return domain.TenantContext{TenantID: session.PartnerId}, domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.Itoa(session.Id)}, nil
+}
+
+var _ CallerResolver = SessionCaller{}
 
 // ConversationHandler is the HTTP-only bridge over a composed data plane.
 type ConversationHandler struct {
 	keelhandler.AbstractHandler
-	Plane      contract.DataPlane
-	Principals PrincipalResolver
+	Plane   contract.DataPlane
+	Callers CallerResolver
+	// Feedback records turn ratings; nil answers the feedback route as unavailable.
+	Feedback contract.TurnFeedbackRecorder
 	// BasePath defaults to /api/conversation/. Products can mount the same
 	// routes under a product surface such as /api/wingmate/.
 	BasePath string
@@ -46,15 +60,17 @@ func (h *ConversationHandler) Routes() map[string]http.HandlerFunc {
 	}
 	base = "/" + strings.Trim(strings.TrimSpace(base), "/") + "/"
 	return map[string]http.HandlerFunc{
-		base + api.ConversationTurnPath:   h.submit,
-		base + api.ConversationStreamPath: h.stream,
-		base + api.ConversationCancelPath: h.cancel,
+		base + api.ConversationTurnPath:     h.submit,
+		base + api.ConversationStreamPath:   h.stream,
+		base + api.ConversationCancelPath:   h.cancel,
+		base + api.ConversationAgentsPath:   h.agents,
+		base + api.ConversationFeedbackPath: h.feedback,
 	}
 }
 
 func (h *ConversationHandler) validate() error {
-	if h.Plane == nil || h.Principals == nil {
-		return fmt.Errorf("%w: conversation handler needs a data plane and principal resolver", domain.ErrNotReady)
+	if h.Plane == nil || h.Callers == nil {
+		return fmt.Errorf("%w: conversation handler needs a data plane and caller resolver", domain.ErrNotReady)
 	}
 	return nil
 }
@@ -73,20 +89,21 @@ func (h *ConversationHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.ConversationID) == "" ||
-		strings.TrimSpace(request.AgentID) == "" || len(request.Input) == 0 {
-		h.writeError(w, r, fmt.Errorf("%w: request_id, conversation_id, agent_id, and input are required", domain.ErrValidation))
+		strings.TrimSpace(request.AgentType) == "" || len(request.Input) == 0 {
+		h.writeError(w, r, fmt.Errorf("%w: request_id, conversation_id, agent_type, and input are required", domain.ErrValidation))
 		return
 	}
-	principal, onBehalfOf, err := h.Principals.Resolve(r.Context(), session, request.AgentID)
+	tenant, person, err := h.caller(r.Context(), session)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
 	turn := domain.TurnRequest{
-		TenantContext: domain.TenantContext{TenantID: principal.TenantID, ScopeID: principal.ScopeID},
-		Principal:     principal, OnBehalfOf: onBehalfOf,
+		TenantContext: tenant, OnBehalfOf: person,
 		RequestID: request.RequestID, ConversationID: request.ConversationID,
-		AgentID: request.AgentID, Input: append([]byte(nil), request.Input...),
+		AliasID: request.AgentType, AgentID: request.AgentName,
+		Release: request.Release, ReleaseReason: request.ReleaseReason, WorkRef: request.WorkRef,
+		Input: append([]byte(nil), request.Input...),
 	}
 	ingress := h.Plane.Ingress()
 	if ingress == nil {
@@ -128,7 +145,7 @@ func (h *ConversationHandler) stream(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, fmt.Errorf("%w: request_id and a non-negative cursor are required", domain.ErrValidation))
 		return
 	}
-	principal, _, err := h.Principals.Resolve(r.Context(), session, "")
+	tenant, _, err := h.Callers.Resolve(r.Context(), session)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -138,9 +155,9 @@ func (h *ConversationHandler) stream(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, fmt.Errorf("%w: conversation replies are unavailable", domain.ErrNotReady))
 		return
 	}
-	subscription, err := replies.SubscribeFrom(r.Context(), principal.TenantID, requestID, cursor)
+	subscription, err := replies.SubscribeFrom(r.Context(), tenant.TenantID, requestID, cursor)
 	if errors.Is(err, domain.ErrReplayExpired) {
-		h.writeStoredReply(w, r, principal.TenantID, requestID, cursor)
+		h.writeStoredReply(w, r, tenant.TenantID, requestID, cursor)
 		return
 	}
 	if err != nil {
@@ -169,7 +186,7 @@ func (h *ConversationHandler) stream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(receiveErr, domain.ErrReplayExpired) {
-			reply, receiveErr = h.storedReply(r.Context(), principal.TenantID, requestID, cursor)
+			reply, receiveErr = h.storedReply(r.Context(), tenant.TenantID, requestID, cursor)
 		}
 		if receiveErr != nil {
 			if h.writeSSEError(w, r, receiveErr) == nil {
@@ -205,7 +222,7 @@ func (h *ConversationHandler) cancel(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, fmt.Errorf("%w: request_id is required", domain.ErrValidation))
 		return
 	}
-	principal, _, err := h.Principals.Resolve(r.Context(), session, "")
+	tenant, _, err := h.Callers.Resolve(r.Context(), session)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -219,11 +236,85 @@ func (h *ConversationHandler) cancel(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, fmt.Errorf("%w: conversation cancellation is unavailable", domain.ErrNotReady))
 		return
 	}
-	if err = canceller.Cancel(r.Context(), principal.TenantID, request.RequestID, reason); err != nil {
+	if err = canceller.Cancel(r.Context(), tenant.TenantID, request.RequestID, reason); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
 	common.WriteJSON(w, http.StatusAccepted, api.ConversationTurnAccepted{RequestID: request.RequestID})
+}
+
+// feedback records the signed-in person's rating of a completed turn.
+func (h *ConversationHandler) feedback(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var request api.ConversationFeedbackRequest
+	session, ok := h.ReadAuthRequest(w, r, &request)
+	if !ok {
+		return
+	}
+	if err := h.validate(); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	if h.Feedback == nil {
+		h.writeError(w, r, fmt.Errorf("%w: turn feedback is not composed", domain.ErrNotReady))
+		return
+	}
+	tenant, person, err := h.caller(r.Context(), session)
+	if err == nil {
+		err = h.Feedback.RecordFeedback(r.Context(), tenant, person, request.RequestID, request.Rating, request.Reason)
+	}
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	common.WriteJSON(w, http.StatusAccepted, api.ConversationTurnAccepted{RequestID: request.RequestID})
+}
+
+// caller resolves the session to a person: a turn from HTTP always acts for someone, so
+// its authorization never takes the in-process path of delegated work.
+func (h *ConversationHandler) caller(ctx context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+	tenant, person, err := h.Callers.Resolve(ctx, session)
+	if err == nil && (person.Kind == "" || person.ID == "") {
+		err = fmt.Errorf("%w: the session resolves to no person", domain.ErrForbidden)
+	}
+	return tenant, person, err
+}
+
+// agents lists the agents of ?agent_type= the caller may address, the default first.
+func (h *ConversationHandler) agents(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	session, ok := h.RequireSession(w, r)
+	if !ok {
+		return
+	}
+	if err := h.validate(); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	tenant, person, err := h.caller(r.Context(), session)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	ingress := h.Plane.Ingress()
+	if ingress == nil {
+		h.writeError(w, r, fmt.Errorf("%w: conversation ingress is unavailable", domain.ErrNotReady))
+		return
+	}
+	selectable, err := ingress.Selectable(r.Context(), tenant, person, r.URL.Query().Get("agent_type"))
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	items := make([]api.ConversationAgent, 0, len(selectable))
+	for _, agent := range selectable {
+		items = append(items, api.ConversationAgent{AgentName: agent.AgentID, DisplayName: agent.DisplayName, Default: agent.Default, Release: agent.Release})
+	}
+	common.WriteJSON(w, http.StatusOK, items)
 }
 
 func parseCursor(raw string) (int64, error) {

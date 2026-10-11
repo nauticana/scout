@@ -161,6 +161,16 @@ func TestAdmissionEvaluatesOneAssignmentContext(t *testing.T) {
 	if ec.ExecutionContextID != "req-0042" || ec.Assignment.ID != "ASGN-TEST-EXECUTES" || ec.DefinitionVersion != "1" || ec.Participation != model.ParticipationExecutes {
 		t.Fatalf("context = %+v", ec)
 	}
+	// An agent whose operating mode stops at drafting may not take work that executes.
+	drafting := work
+	drafting.Autonomy = domain.AutonomyDraft
+	if _, decision := admission.Admit(requestCtx(), drafting); decision.Result != agent.Refused || decision.Requirement != "CHR-PROC-008" {
+		t.Fatalf("drafting agent on executing work = %+v", decision)
+	}
+	drafting.Autonomy = domain.AutonomyBounded
+	if _, decision := admission.Admit(requestCtx(), drafting); decision.Result != agent.Admitted {
+		t.Fatalf("bounded agent = %+v", decision)
+	}
 	// Outside a correlated request there is no execution context id: fail closed, never invent one.
 	if _, decision := admission.Admit(context.Background(), work); decision.Result != agent.Error {
 		t.Fatalf("uncorrelated admission = %+v", decision)

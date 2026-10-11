@@ -201,6 +201,7 @@ func NewMergerRegistry(extra ...contract.ResourceMerger) (*MergerRegistry, error
 		SetMerger{ResourceKind: domain.ResourceKnowledge},
 		SetMerger{ResourceKind: domain.ResourceModel},
 		SetMerger{ResourceKind: domain.ResourceEntitlement},
+		SetMerger{ResourceKind: domain.ResourceSkill},
 	}
 	for _, merger := range append(platform, extra...) {
 		if merger == nil || strings.TrimSpace(string(merger.Kind())) == "" {

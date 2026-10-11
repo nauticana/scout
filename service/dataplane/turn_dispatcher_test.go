@@ -15,11 +15,13 @@ import (
 // queueQueryFake answers the queue's named queries from canned rows and records
 // every argument list, so tests can assert argument order.
 type queueQueryFake struct {
-	rows  map[string][][]any
-	errs  map[string]error
-	calls []string
-	args  map[string][][]any
-	genID int64
+	rows map[string][][]any
+	// sequence answers successive calls of a query before rows does.
+	sequence map[string][][][]any
+	errs     map[string]error
+	calls    []string
+	args     map[string][][]any
+	genID    int64
 }
 
 func (query *queueQueryFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
@@ -30,6 +32,10 @@ func (query *queueQueryFake) Query(_ context.Context, name string, args ...any) 
 	query.args[name] = append(query.args[name], append([]any(nil), args...))
 	if err := query.errs[name]; err != nil {
 		return nil, err
+	}
+	if next := query.sequence[name]; len(next) > 0 {
+		query.sequence[name] = next[1:]
+		return &keelmodel.QueryResult{Rows: next[0]}, nil
 	}
 	return &keelmodel.QueryResult{Rows: query.rows[name]}, nil
 }

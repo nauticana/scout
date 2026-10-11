@@ -12,6 +12,13 @@ import (
 	"github.com/nauticana/scout/service/observability"
 )
 
+// The authorization object and actions a person needs to converse with an agent.
+const (
+	ConversationAuthorizationObject = "AGENT_CONVERSATION"
+	ConversationActionUse           = "USE"
+	ConversationActionPinRelease    = "PIN_RELEASE"
+)
+
 // TurnIngress admits one turn: rate limit, durable turn identity, budget
 // reservation, reply subscription, durable dispatch. Nothing irreversible
 // happens before the reservation, and a failed dispatch refunds it.
@@ -23,6 +30,11 @@ type TurnIngress struct {
 	Budget     contract.TenantBudgetManager
 	Replies    contract.TurnReplySubscriber
 	Dispatcher contract.TurnDispatcher
+	// Roles authorizes the person a turn acts for: AGENT_CONVERSATION USE, and PIN_RELEASE
+	// for a release pin, at the value "agent:<id>".
+	Roles contract.PrincipalAuthorizer
+	// Principals resolves the serving agent's principal for a turn that arrives without one.
+	Principals contract.PrincipalResolver
 	// Audit is optional; when set an admitted turn opens its decision chain with turn_admitted.
 	Audit contract.AuditSink
 	Now   func() time.Time
@@ -32,8 +44,8 @@ var _ contract.ConversationIngress = (*TurnIngress)(nil)
 
 func (ingress *TurnIngress) validate() error {
 	if ingress.Limiter == nil || ingress.Records == nil || ingress.Objects == nil ||
-		ingress.Estimator == nil || ingress.Budget == nil || ingress.Replies == nil || ingress.Dispatcher == nil {
-		return fmt.Errorf("%w: turn ingress needs a limiter, record store, object codec, estimator, budget manager, subscriber, and dispatcher", domain.ErrValidation)
+		ingress.Estimator == nil || ingress.Budget == nil || ingress.Replies == nil || ingress.Dispatcher == nil || ingress.Roles == nil || ingress.Principals == nil {
+		return fmt.Errorf("%w: turn ingress needs a limiter, record store, object codec, estimator, budget manager, subscriber, dispatcher, role authorizer, and principal resolver", domain.ErrValidation)
 	}
 	return nil
 }
@@ -51,14 +63,30 @@ func (ingress *TurnIngress) now() time.Time {
 func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnRequest) (contract.TurnReplySubscription, error) {
 	tenantID := request.TenantContext.TenantID
 	if tenantID <= 0 || strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.ConversationID) == "" ||
-		strings.TrimSpace(request.AgentID) == "" || len(request.Input) == 0 {
-		return nil, fmt.Errorf("%w: tenant, request, conversation, agent, and input are required", domain.ErrValidation)
+		strings.TrimSpace(request.AliasID) == "" && strings.TrimSpace(request.AgentID) == "" || len(request.Input) == 0 {
+		return nil, fmt.Errorf("%w: tenant, request, conversation, agent type or agent, and input are required", domain.ErrValidation)
+	}
+	if request.Release != "" && strings.TrimSpace(request.ReleaseReason) == "" {
+		return nil, fmt.Errorf("%w: a release pin needs a reason", domain.ErrValidation)
+	}
+	if len(request.AliasID) > 80 || len(request.AgentID) > 80 || len(request.Release) > 80 || len(request.ReleaseReason) > 200 || len(request.WorkRef) > 200 {
+		return nil, fmt.Errorf("%w: agent type, agent, and release are at most 80 bytes, a release reason and work reference at most 200", domain.ErrValidation)
 	}
 	if err := ingress.validate(); err != nil {
 		return nil, err
 	}
-	if err := ingress.Limiter.AllowTurn(ctx, request.TenantContext); err != nil {
+	var err error
+	if err = ingress.Limiter.AllowTurn(ctx, request.TenantContext); err != nil {
 		return nil, fmt.Errorf("admit turn %q: %w", request.RequestID, err)
+	}
+	if request.AgentID, err = ingress.Records.Address(ctx, tenantID, request.AliasID, request.AgentID, request.ConversationID); err != nil {
+		return nil, err
+	}
+	if request.Principal, err = ingress.agentPrincipal(ctx, request); err != nil {
+		return nil, err
+	}
+	if err = ingress.authorize(ctx, request.TenantContext, request.OnBehalfOf, request.AgentID, request.Release != ""); err != nil {
+		return nil, err
 	}
 	_, status, _, err := ingress.Records.Find(ctx, tenantID, request.RequestID)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
@@ -98,6 +126,79 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 	return subscription, nil
 }
 
+// authorize checks the person a turn acts for. A turn acting for nobody is an agent's own or
+// delegated work, whose authority the delegation chain and tool gateway already bound; it
+// may not pin a release.
+func (ingress *TurnIngress) authorize(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, agentID string, pin bool) error {
+	if person.ID == "" {
+		if pin {
+			return fmt.Errorf("%w: only a person may pin a release", domain.ErrForbidden)
+		}
+		return nil
+	}
+	principal := domain.Principal{Kind: person.Kind, ID: person.ID, TenantID: tenant.TenantID, ScopeID: tenant.ScopeID}
+	actions := []string{ConversationActionUse}
+	if pin {
+		actions = append(actions, ConversationActionPinRelease)
+	}
+	for _, action := range actions {
+		grant, err := ingress.Roles.Authorize(ctx, principal, ConversationAuthorizationObject, action, "agent:"+agentID)
+		if err != nil {
+			return fmt.Errorf("authorize turn: %w", err)
+		}
+		if !grant.Allowed {
+			return fmt.Errorf("%w: %s %s on agent %q", domain.ErrForbidden, ConversationAuthorizationObject, action, agentID)
+		}
+	}
+	return nil
+}
+
+// agentPrincipal resolves the serving agent unless the caller already acts as it, as a
+// delegated turn does with its authority chain; a principal for another agent is refused.
+func (ingress *TurnIngress) agentPrincipal(ctx context.Context, request domain.TurnRequest) (domain.Principal, error) {
+	if request.Principal.ID != "" {
+		if request.Principal.Kind != domain.PrincipalAgent || request.Principal.ID != request.AgentID ||
+			request.Principal.TenantID != request.TenantContext.TenantID {
+			return domain.Principal{}, fmt.Errorf("%w: the turn's principal is not agent %q of its tenant", domain.ErrForbidden, request.AgentID)
+		}
+		return request.Principal, nil
+	}
+	principal, err := ingress.Principals.Resolve(ctx, request.TenantContext.TenantID, domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: request.AgentID})
+	if err != nil {
+		return domain.Principal{}, err
+	}
+	if request.TenantContext.ScopeID != "" {
+		principal.ScopeID = request.TenantContext.ScopeID
+	}
+	return principal, nil
+}
+
+// Selectable lists the agents of aliasID the person may address, the alias target first.
+func (ingress *TurnIngress) Selectable(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, aliasID string) ([]domain.SelectableAgent, error) {
+	if err := ingress.validate(); err != nil {
+		return nil, err
+	}
+	if person.ID == "" {
+		return nil, fmt.Errorf("%w: a person is required", domain.ErrValidation)
+	}
+	agents, err := ingress.Records.Selectable(ctx, tenant.TenantID, aliasID)
+	if err != nil {
+		return nil, err
+	}
+	selectable := agents[:0]
+	for _, agent := range agents {
+		err := ingress.authorize(ctx, tenant, person, agent.AgentID, false)
+		if errors.Is(err, domain.ErrForbidden) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		selectable = append(selectable, agent)
+	}
+	return selectable, nil
+}
+
 // admitted is recorded before dispatch, so no turn runs without the head of its chain.
 func (ingress *TurnIngress) admitted(ctx context.Context, request domain.TurnRequest) error {
 	if ingress.Audit == nil {
@@ -106,6 +207,7 @@ func (ingress *TurnIngress) admitted(ctx context.Context, request domain.TurnReq
 	err := ingress.Audit.Record(domain.WithDecisionScope(ctx, "turn/", request.RequestID), domain.DecisionRecord{
 		TenantID: request.TenantContext.TenantID, Principal: turnPrincipal(request), ScopeID: request.TenantContext.ScopeID,
 		Category: observability.AuditCategoryTurnAdmitted, Action: "turn", Resource: request.AgentID, Outcome: domain.DecisionAllow,
+		ReleaseVersion: request.Release, Reason: admissionReason(request), WorkRef: request.WorkRef,
 		RequestID: request.RequestID, ConversationID: request.ConversationID, OccurredAt: ingress.now(),
 	})
 	if err != nil {
@@ -123,4 +225,15 @@ func (ingress *TurnIngress) refund(ctx context.Context, reservation domain.Budge
 		ingress.Budget.Release(ctx, reservation),
 		ingress.Records.Fail(ctx, request.TenantContext.TenantID, request.RequestID, "failed", errorCode),
 	)
+}
+
+func admissionReason(request domain.TurnRequest) string {
+	reason := ""
+	if request.AliasID != "" {
+		reason = "requested as " + request.AliasID
+	}
+	if request.Release != "" {
+		reason = strings.TrimPrefix(reason+"; release "+request.Release+" pinned: "+request.ReleaseReason, "; ")
+	}
+	return reason
 }

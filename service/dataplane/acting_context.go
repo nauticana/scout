@@ -15,13 +15,14 @@ type actingContext struct {
 	Bounds        domain.DelegationBounds `json:"bounds,omitzero"`
 	WorkItemID    int64                   `json:"work_item_id,omitempty"`
 	WorkItemDepth int                     `json:"work_item_depth,omitempty"`
+	WorkRef       string                  `json:"work_ref,omitempty"`
 	Tenant        domain.TenantContext    `json:"tenant"`
 }
 
 // encodeActingContext returns nil for a turn that names no principal; it then
 // runs as its agent on its own authority.
 func encodeActingContext(turn domain.TurnRequest) (any, error) {
-	if turn.Principal.Kind == "" && turn.OnBehalfOf.ID == "" {
+	if turn.Principal.Kind == "" && turn.OnBehalfOf.ID == "" && turn.WorkRef == "" {
 		return nil, nil
 	}
 	if turn.Principal.Kind != "" && turn.Principal.TenantID != turn.TenantContext.TenantID {
@@ -29,7 +30,7 @@ func encodeActingContext(turn domain.TurnRequest) (any, error) {
 	}
 	encoded, err := json.Marshal(actingContext{
 		Principal: turn.Principal, OnBehalfOf: turn.OnBehalfOf, Bounds: turn.DelegationBounds,
-		WorkItemID: turn.WorkItemID, WorkItemDepth: turn.WorkItemDepth, Tenant: turn.TenantContext,
+		WorkItemID: turn.WorkItemID, WorkItemDepth: turn.WorkItemDepth, WorkRef: turn.WorkRef, Tenant: turn.TenantContext,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode acting context: %w", err)
@@ -51,6 +52,6 @@ func decodeActingContext(encoded string, turn *domain.TurnRequest) error {
 		return fmt.Errorf("%w: acting context of request %q belongs to another tenant", domain.ErrForbidden, turn.RequestID)
 	}
 	turn.TenantContext, turn.Principal, turn.OnBehalfOf = acting.Tenant, acting.Principal, acting.OnBehalfOf
-	turn.DelegationBounds, turn.WorkItemID, turn.WorkItemDepth = acting.Bounds, acting.WorkItemID, acting.WorkItemDepth
+	turn.DelegationBounds, turn.WorkItemID, turn.WorkItemDepth, turn.WorkRef = acting.Bounds, acting.WorkItemID, acting.WorkItemDepth, acting.WorkRef
 	return nil
 }

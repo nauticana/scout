@@ -657,7 +657,7 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 	}
 	if err := runtime.Audit.Record(ctx, domain.DecisionRecord{
 		TenantID: turn.TenantContext.TenantID, Principal: turnPrincipal(turn), ScopeID: turn.TenantContext.ScopeID,
-		Category: category, Action: "turn", Resource: turn.AgentID, Outcome: outcome, Reason: errorCode,
+		Category: category, Action: "turn", Resource: turn.AgentID, Outcome: outcome, Reason: errorCode, WorkRef: turn.WorkRef,
 		RequestID: turn.RequestID, ConversationID: turn.ConversationID, Payload: payload, OccurredAt: runtime.now(),
 	}); err != nil {
 		return fmt.Errorf("record %s: %w", category, err)
@@ -666,7 +666,7 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 }
 
 func usageAttribution(turn domain.TurnRequest) domain.UsageAttribution {
-	return domain.UsageAttribution{Principal: turnPrincipal(turn), ScopeID: turn.TenantContext.ScopeID}
+	return domain.UsageAttribution{Principal: turnPrincipal(turn), ScopeID: turn.TenantContext.ScopeID, OnBehalfOf: turn.OnBehalfOf, WorkRef: turn.WorkRef}
 }
 
 // turnBudgetRequest is the hold one turn asks for, the same at ingress and in the runtime so a

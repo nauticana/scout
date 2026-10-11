@@ -14,6 +14,9 @@ const (
 	AgentStateSuspended AgentState = "suspended"
 	AgentStateDraining  AgentState = "draining"
 	AgentStateRetired   AgentState = "retired"
+	// AgentStateArchived withdraws an agent from use but keeps its releases, audit, and
+	// conversations; it returns to suspended when restored.
+	AgentStateArchived AgentState = "archived"
 )
 
 // AgentStateChange is one audited transition; every change names a reason and

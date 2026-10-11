@@ -129,6 +129,15 @@ func TestCompileAllowsPolicyStatementToNarrowPatternsAndConditions(t *testing.T)
 	}
 }
 
+func TestCompileRejectsUnknownPolicyFields(t *testing.T) {
+	_, err := compile(t, []domain.ScopedBinding{
+		binding("tenant", domain.ResourcePolicy, `[{"id":"invoice","effect":"allow","actions":["read"],"resources":["invoice:*"],"permit_all":true}]`),
+	})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("error = %v, want validation", err)
+	}
+}
+
 func TestCompileRejectsAppendThatWidensASet(t *testing.T) {
 	_, err := compile(t, []domain.ScopedBinding{
 		binding("tenant", domain.ResourceKnowledge, `["public"]`),

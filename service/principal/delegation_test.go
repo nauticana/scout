@@ -25,6 +25,10 @@ func (s stubGrants) Get(_ context.Context, _ int64, grantID string) (domain.Dele
 
 func (s stubGrants) Revoke(context.Context, int64, string, string) error { return nil }
 
+func (s stubGrants) ForAgent(context.Context, int64, string) ([]domain.DelegationGrant, error) {
+	return nil, nil
+}
+
 func (s stubGrants) ForGrantee(context.Context, int64, domain.PrincipalRef) ([]domain.DelegationGrant, error) {
 	return s, nil
 }

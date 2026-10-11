@@ -7,9 +7,8 @@ covers where an agent comes from, what state it is in, and how it may hand work 
 ## Agent types
 
 `agent_type` is a reusable behaviour template; `agent_type_version` is an immutable published one.
-`agent_profile.agent_type_id` is now a real foreign key — it was a bare `VARCHAR` referencing nothing.
-The whole codebase says `agent_type_id` where it used to say `agent_kind`, which also aligns Go with
-the `agent_type` field the studio-v1 wire format already used.
+`agent_profile.agent_type_id` is a foreign key to `agent_type`; Go and Studio use the matching
+`agent_type` name.
 
 `agent_capability_package` is a named, versioned bundle of resource values. A type version requires packages
 through `agent_type_capability`, and `AgentTypeStore.Instantiate` expands them into `config_scope_binding`

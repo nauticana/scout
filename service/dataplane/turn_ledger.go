@@ -275,9 +275,9 @@ RETURNING detail.turn_no`,
 	qLedgerInsertUsageEvent: `
 INSERT INTO usage_event
        (id, partner_id, conversation_id, turn_no, category_code, subject_ref,
-        principal_kind, principal_id, scope_id,
+        principal_kind, principal_id, scope_id, on_behalf_kind, on_behalf_id, work_ref,
         input_tokens, output_tokens, tool_calls, search_queries, cost_minor_units, currency_code)
-VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, conversation_id, turn_no, category_code) DO NOTHING
 RETURNING id`,
 
@@ -1095,7 +1095,8 @@ func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService,
 	result, err := qs.Query(ctx, qLedgerInsertUsageEvent,
 		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
 		nullableUsageField(string(attribution.Principal.Kind)), nullableUsageField(attribution.Principal.ID),
-		nullableUsageField(attribution.ScopeID),
+		nullableUsageField(attribution.ScopeID), nullableUsageField(string(attribution.OnBehalfOf.Kind)),
+		nullableUsageField(attribution.OnBehalfOf.ID), nullableUsageField(attribution.WorkRef),
 		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries, usage.CostMinorUnits, usage.Currency)
 	if err != nil {
 		return false, fmt.Errorf("persist usage event: %w", err)

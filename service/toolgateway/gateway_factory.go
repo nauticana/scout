@@ -32,7 +32,10 @@ type GovernedGatewayConfig struct {
 	// Guardrails is optional; when set, GuardrailConfigs must resolve the pinned policy per call.
 	Guardrails       contract.GuardrailEnforcer
 	GuardrailConfigs contract.ToolGuardrailConfigResolver
-	Timeout          time.Duration
+	// Limits reads each agent's operating mode; Approvals decides the calls its mode routes to a person.
+	Limits    contract.PrincipalLimits
+	Approvals contract.ToolApprovalGate
+	Timeout   time.Duration
 }
 
 // NewGovernedGateway validates the composition and fills in the default breaker and retry policy.
@@ -69,7 +72,7 @@ func NewGovernedGateway(config GovernedGatewayConfig) (*GovernedGateway, error) 
 		Credentials: config.Credentials, Egress: config.Egress, Circuit: circuit,
 		Transport: config.Transport, Retry: retry, Validator: config.Validator, Effects: config.Effects,
 		Guardrails: config.Guardrails, GuardrailConfigs: config.GuardrailConfigs,
-		Classifier: config.Classifier, Timeout: config.Timeout,
+		Classifier: config.Classifier, Timeout: config.Timeout, Limits: config.Limits, Approvals: config.Approvals,
 	}
 	if err := gateway.validate(validationProbe); err != nil {
 		return nil, err

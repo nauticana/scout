@@ -102,7 +102,7 @@ func syncPromptBindings(ctx context.Context, tx keelport.TxQueryService, actor d
 		}
 		digest := valueDigest(value)
 		if _, err = tx.Query(ctx, qStudioInsertBinding, actor.TenantID, scopeID, PromptResourceID(key.sectionID, key.language),
-			digest[:12], string(next.mode), next.sealed, string(value), digest, actor.ActorID); err != nil {
+			digest[:12], string(next.mode), next.sealed, string(value), digest, actorUser(actor)); err != nil {
 			return fmt.Errorf("bind prompt section %d at scope %q: %w", key.sectionID, scopeID, err)
 		}
 	}

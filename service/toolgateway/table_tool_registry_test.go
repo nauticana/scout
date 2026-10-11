@@ -60,7 +60,7 @@ func (fake *toolTableFake) Query(_ context.Context, name string, args ...any) (*
 	key := func(n int) string { return fmt.Sprint(args[:n]...) }
 	versionRow := func(versionKey string) []any {
 		row := tables.versions[versionKey]
-		return []any{row[1], row[2], tables.profiles[fmt.Sprint(row[0], row[1])], row[3], row[4], row[5], row[6], row[7], row[8], row[9]}
+		return []any{row[1], row[2], tables.profiles[fmt.Sprint(row[0], row[1])], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10]}
 	}
 	switch name {
 	case qToolProfileEnsure:

@@ -88,6 +88,7 @@ seeds:
       - [entitlement, subset, Retrieval entitlement labels]
       - [budget, at_most, Token and cost ceilings]
       - [autonomy, ordered, Operating mode an agent may act under]
+      - [skill, subset, Skills an agent may use]
   - table: config_merge_mode
     columns: [code, description]
     rows:
@@ -137,6 +138,7 @@ seeds:
       - [suspended, false, false, Stopped immediately; new work is refused]
       - [draining, false, false, Finishing in-flight work only]
       - [retired, false, true, Permanently withdrawn]
+      - [archived, false, false, "Withdrawn from use; releases, audit and conversations are kept, and it can be restored"]
   - table: approval_risk_tier
     columns: [code, severity_rank, description]
     rows:

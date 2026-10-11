@@ -37,6 +37,11 @@ The consequence matters more than the table: because both kinds resolve to the s
 and limits, "a delegated grant may convey no more than its grantor holds" is a subset comparison in
 one lattice rather than a translation between two models.
 
+Scout's own objects are scoped by value. `AGENT_STUDIO` actions are checked at `agent:<id>` —
+`CREATE` at `agent_type:<id>` — and `AGENT_CONVERSATION` `USE` and `PIN_RELEASE` at `agent:<id>`, so
+a role holds every agent of its tenant with `*` or named agents only; Studio lists only the agents
+its actor may view. `AGENT_APPROVAL` `DECIDE` is checked at the request's scope.
+
 Agents are deliberately **not** rows in `user_account`. That table is a credential store —
 `passtext`, `passdate`, `login_attempts`, `lock_time`, `twofa_*`, `single_device_session`, unique
 email and phone — and an agent needs none of it. Sharing the table would subject machine identities
@@ -55,7 +60,7 @@ Binding values are canonical JSON, fixed per kind:
 | Kind | Value | Merger | Narrowing rule |
 |---|---|---|---|
 | `prompt_section` | `{"instruction":"…","output":"…"}` | `PromptMerger` | `text` |
-| `tool`, `knowledge`, `model`, `entitlement` | `["a","b"]` | `SetMerger` | `subset` |
+| `tool`, `skill`, `knowledge`, `model`, `entitlement` | `["a","b"]` | `SetMerger` | `subset` |
 | `policy` | `[{"id":"…","effect":"allow","actions":[…],"resources":[…]}]` | `PolicyMerger` | `policy` |
 | `budget` | `{"tokens":0,"cost_minor_units":0,"currency":"EUR"}` | `BudgetMerger` | `at_most` |
 | `autonomy` | `{"mode":"draft","window_from_minute":0,"window_to_minute":0}` | `AutonomyMerger` | `ordered` |
@@ -68,6 +73,7 @@ entirely degrades the mode to `execute_with_approval` rather than granting an em
 
 `config_resource_kind.narrowing_rule` is the seeded source of that last column; `PlatformNarrowingRules`
 mirrors it in code. An unregistered kind fails compilation and an unmapped rule fails the check —
+set, budget, and autonomy bindings use their kind as `resource_id`, while policy may use several ids.
 both closed, never permissive.
 
 ## Compilation
