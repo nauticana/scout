@@ -26,8 +26,8 @@ type ApprovalHandler struct {
 func (h *ApprovalHandler) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		api.ApprovalPendingPath: h.JSON(http.MethodGet, h.pending),
-		api.ApprovalResolvePath: bounded(h.JSON(http.MethodPost, h.resolve)),
-		api.ApprovalLinkPath:    bounded(h.JSONPublic(http.MethodPost, h.redeem)),
+		api.ApprovalResolvePath: bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.resolve)),
+		api.ApprovalLinkPath:    bounded(&h.AbstractHandler, h.JSONPublic(http.MethodPost, h.redeem)),
 	}
 }
 
@@ -95,7 +95,11 @@ func apiApproval(request domain.ApprovalRequest) api.ApprovalRequest {
 		ScopeID: request.ScopeID, RuleID: request.RuleID, Action: request.Action, Resource: request.Resource,
 		OutputClass: string(request.Class), RiskTier: string(request.RiskTier), Summary: request.Summary,
 		ProposedDigest: request.ProposedDigest, Status: string(request.Status), CreatedAt: request.CreatedAt,
-		RevisesStepID: request.RevisesStepID,
+		RevisesStepID: request.RevisesStepID, RuleSource: string(request.Source),
+		RouteID: request.Route.RouteID, RouteStep: request.Route.Step,
+	}
+	if request.Route.RouteID != "" {
+		item.ApproverReference = &api.ApproverReference{Kind: string(request.Route.Reference.Kind), Ref: request.Route.Reference.Ref}
 	}
 	if !request.DeadlineAt.IsZero() {
 		deadline := request.DeadlineAt

@@ -17,9 +17,9 @@ import (
 const (
 	qStudioUsage = "scout_studio_usage"
 
-	// MaxUsageWindow bounds one usage report, and MaxUsageLines the lines it returns.
-	MaxUsageWindow = 92 * 24 * time.Hour
-	MaxUsageLines  = 1000
+	// DefaultUsageWindow bounds one usage or feedback report, and DefaultUsageLines the lines a usage report returns.
+	DefaultUsageWindow = 92 * 24 * time.Hour
+	DefaultUsageLines  = 1000
 )
 
 var studioUsageQueries = map[string]string{
@@ -48,6 +48,9 @@ SELECT split_part(u.subject_ref, '@', 2), COALESCE(u.on_behalf_kind, ''), COALES
 type StudioUsage struct {
 	DB         port.DatabaseRepository
 	Authorizer contract.StudioAuthorizer
+	// MaxWindow bounds one report's span, default DefaultUsageWindow; MaxLines the lines it returns, default DefaultUsageLines.
+	MaxWindow time.Duration
+	MaxLines  int
 
 	once sync.Once
 	qs   port.QueryService
@@ -55,25 +58,29 @@ type StudioUsage struct {
 
 var _ contract.StudioUsageBackend = (*StudioUsage)(nil)
 
-// Usage returns the lines of [from, to); a window over MaxUsageWindow, or one that
-// would return more than MaxUsageLines lines, is refused rather than cut short.
+// Usage returns the lines of [from, to); a window over MaxWindow, or one that
+// would return more than MaxLines lines, is refused rather than cut short.
 func (s *StudioUsage) Usage(ctx context.Context, actor domain.StudioActor, agentID string, from, to time.Time) ([]domain.UsageLine, error) {
 	if s.DB == nil || s.Authorizer == nil {
 		return nil, fmt.Errorf("studio usage: database and authorizer are required")
 	}
-	if from.IsZero() || !to.After(from) || to.Sub(from) > MaxUsageWindow {
-		return nil, fmt.Errorf("%w: a usage window ends after it starts and spans at most %d days", domain.ErrValidation, int(MaxUsageWindow.Hours()/24))
+	if s.MaxWindow < 0 || s.MaxLines < 0 {
+		return nil, fmt.Errorf("studio usage: window and line limits must not be negative")
+	}
+	maxWindow, maxLines := positiveOr(s.MaxWindow, DefaultUsageWindow), positiveOr(s.MaxLines, DefaultUsageLines)
+	if err := checkReportWindow("usage", from, to, maxWindow); err != nil {
+		return nil, err
 	}
 	if err := s.Authorizer.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return nil, err
 	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, studioUsageQueries) })
-	result, err := s.qs.Query(ctx, qStudioUsage, actor.TenantID, agentID, from.UTC(), to.UTC(), MaxUsageLines+1)
+	result, err := s.qs.Query(ctx, qStudioUsage, actor.TenantID, agentID, from.UTC(), to.UTC(), maxLines+1)
 	if err != nil {
 		return nil, fmt.Errorf("report agent usage: %w", err)
 	}
-	if len(result.Rows) > MaxUsageLines {
-		return nil, fmt.Errorf("%w: the window has more than %d usage lines; narrow it", domain.ErrValidation, MaxUsageLines)
+	if len(result.Rows) > maxLines {
+		return nil, fmt.Errorf("%w: the window has more than %d usage lines; narrow it", domain.ErrValidation, maxLines)
 	}
 	lines := make([]domain.UsageLine, 0, len(result.Rows))
 	for _, row := range result.Rows {
@@ -93,4 +100,19 @@ func (s *StudioUsage) Usage(ctx context.Context, actor domain.StudioActor, agent
 		lines = append(lines, line)
 	}
 	return lines, nil
+}
+
+// checkReportWindow refuses a report window that is empty, backwards, or longer than maxWindow.
+func checkReportWindow(report string, from, to time.Time, maxWindow time.Duration) error {
+	if from.IsZero() || !to.After(from) || to.Sub(from) > maxWindow {
+		return fmt.Errorf("%w: a %s window ends after it starts and spans at most %s", domain.ErrValidation, report, reportSpan(maxWindow))
+	}
+	return nil
+}
+
+func reportSpan(window time.Duration) string {
+	if window%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%d days", window/(24*time.Hour))
+	}
+	return window.String()
 }

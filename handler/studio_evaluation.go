@@ -105,7 +105,7 @@ func (h *StudioEvaluationHandler) evaluation(ctx context.Context, actor domain.S
 		}
 		result.Results = append(result.Results, api.AgentCaseResult{
 			CaseID: item.ExampleID, Scores: scores, LatencyMs: item.Latency.Milliseconds(), Cost: apiCost(item.Usage, item.Exponent),
-			NeedsHumanReview: item.NeedsHumanReview, Reason: item.Reason,
+			EvaluatorCost: apiCost(item.EvaluatorUsage, item.Exponent), NeedsHumanReview: item.NeedsHumanReview, Reason: item.Reason,
 		})
 	}
 	return result, nil

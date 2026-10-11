@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/fake"
 )
 
 // TestIsolationConstructorsRejectUnsafeLimits keeps every configured limit explicit: a negative or
@@ -86,6 +87,7 @@ func TestBudgetLedgerRejectsNegativeReservationTTL(t *testing.T) {
 	ledger := &BudgetLedger{
 		DB:             budgetDBFake{query: &budgetQueryFake{}},
 		Policy:         staticBudgetPolicy{limits: domain.BudgetLimits{WindowTokens: 100, WindowCostMinorUnits: 100, Currency: "EUR", Window: time.Minute}},
+		Releases:       &fake.PrincipalLimits{},
 		ReservationTTL: -time.Second,
 	}
 	if _, err := ledger.Reserve(context.Background(), domain.BudgetRequest{TenantID: 1, RequestID: "req", Tokens: 10, CostMinorUnits: 1, Currency: "EUR"}); !errors.Is(err, domain.ErrValidation) {

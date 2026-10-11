@@ -160,8 +160,8 @@ func TestCompileRejectsAnyOverrideOfASealedBinding(t *testing.T) {
 
 func TestCompileTakesTheTighterBudgetAndLowerAutonomy(t *testing.T) {
 	release, err := compile(t, []domain.ScopedBinding{
-		binding("tenant", domain.ResourceBudget, `{"tokens":1000,"cost_minor_units":5000,"currency":"EUR"}`),
-		binding("agent", domain.ResourceBudget, `{"tokens":400,"cost_minor_units":5000,"currency":"EUR"}`),
+		binding("tenant", domain.ResourceBudget, `{"tokens":1000,"cost_minor_units":5000,"currency":"EUR","exponent":2,"period":"turn"}`),
+		binding("agent", domain.ResourceBudget, `{"tokens":400,"cost_minor_units":5000,"currency":"EUR","exponent":2,"period":"turn"}`),
 		binding("tenant", domain.ResourceAutonomy, `{"mode":"execute_with_approval"}`),
 		binding("agent", domain.ResourceAutonomy, `{"mode":"advise"}`),
 	})
@@ -204,8 +204,8 @@ func TestCompileIntersectsBoundedAutonomyWindows(t *testing.T) {
 func TestCompileRejectsRaisedCeilings(t *testing.T) {
 	for name, bindings := range map[string][]domain.ScopedBinding{
 		"budget": {
-			binding("tenant", domain.ResourceBudget, `{"tokens":100,"cost_minor_units":0}`),
-			binding("agent", domain.ResourceBudget, `{"tokens":1000,"cost_minor_units":0}`),
+			binding("tenant", domain.ResourceBudget, `{"tokens":100,"cost_minor_units":0,"period":"turn"}`),
+			binding("agent", domain.ResourceBudget, `{"tokens":1000,"cost_minor_units":0,"period":"turn"}`),
 		},
 		"autonomy": {
 			binding("tenant", domain.ResourceAutonomy, `{"mode":"draft"}`),

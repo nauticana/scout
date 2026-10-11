@@ -3,6 +3,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
+	"github.com/nauticana/scout/service/runtime"
+	"github.com/nauticana/scout/service/scope"
 )
 
 type queueFake struct {
@@ -97,12 +100,12 @@ func draftWorker(t *testing.T, queue *queueFake, cost int64, currency string) (*
 }
 
 func draftClaim(recorded map[string]domain.Usage) domain.AgentEvaluationClaim {
-	definition := domain.AgentDefinition{AgentID: "writer-a", DefinitionDigest: draftDigest}
+	definition := domain.AgentDefinition{AgentID: "writer-a", DefinitionDigest: draftDigest, SettingsDigest: scope.SettingsDigest(draftSettings())}
 	return domain.AgentEvaluationClaim{
 		Run: domain.AgentEvaluationRun{RunID: 11, TenantID: 7, AgentID: "writer-a", GoldenSetID: "core", SetVersion: 3, Scope: domain.GoldenScopeDev,
 			Subject:     domain.AgentEvaluationSubject{Kind: domain.SubjectDraft, AgentID: "writer-a", DefinitionDigest: draftDigest},
 			RequestedBy: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}, Status: domain.EvaluationRunning},
-		Draft: &definition, Recorded: recorded,
+		Draft: &definition, DraftSettings: draftSettings(), Recorded: recorded,
 	}
 }
 
@@ -119,7 +122,8 @@ func TestAgentEvaluationWorkerRunsTheDraftOnlyOnUnrecordedExamples(t *testing.T)
 		t.Fatalf("ran %d and recorded %d examples, want the 2 unrecorded ones", len(*requests), len(queue.recorded))
 	}
 	for _, request := range *requests {
-		if request.AgentID != "writer-a" || request.LanguageCode != "en-US" || (request.Task != inputs["b"] && request.Task != inputs["c"]) {
+		if request.AgentID != "writer-a" || request.LanguageCode != "en-US" || (request.Task != inputs["b"] && request.Task != inputs["c"]) ||
+			request.Limits != (domain.ExecutionLimits{MaxDuration: 30 * time.Second}) {
 			t.Fatalf("request = %+v", request)
 		}
 	}
@@ -295,5 +299,105 @@ func TestAgentEvaluationWorkerReplaysAReleaseThroughTheCaseExecutor(t *testing.T
 	w, _ = draftWorker(t, uncomposed, 5, "EUR")
 	if err := w.Execute(context.Background(), testLease); err != nil || uncomposed.finished[0] != domain.EvaluationFailed+"|release evaluation is not composed" {
 		t.Fatalf("release run without an executor: %v, %v", err, uncomposed.finished)
+	}
+}
+
+func durationStop(cost int64) error {
+	return &runtime.DraftLimitError{
+		Err:   fmt.Errorf("%w: draft exceeded its 30s duration", domain.ErrExecutionLimit),
+		Usage: domain.Usage{InputTokens: 40, CostMinorUnits: cost, Currency: "EUR"},
+	}
+}
+
+func TestAgentEvaluationWorkerScoresADraftStoppedByItsFrozenDuration(t *testing.T) {
+	queue := &queueFake{claim: draftClaim(nil)}
+	w, _ := draftWorker(t, queue, 5, "EUR")
+	w.Examples = &examplesFake{examples: []domain.GoldenExample{inputExample("a")}}
+	var trajectory []domain.TrajectoryEvent
+	w.Evaluators = []contract.HeuristicEvaluator{&fake.HeuristicEvaluator{
+		EvaluatorVersion: domain.EvaluatorVersion{Kind: "heuristic", Version: "h1"},
+		EvaluateFunc: func(_ context.Context, evalCase domain.EvaluationCase) ([]domain.EvaluationScore, error) {
+			trajectory = evalCase.Trajectory
+			return []domain.EvaluationScore{{Metric: domain.MetricPatternMatch, Value: 0, Evaluator: domain.EvaluatorVersion{Kind: "heuristic", Version: "h1"}}}, nil
+		},
+	}}
+	w.Drafts = fake.DraftTester{ExecuteFunc: func(_ context.Context, _ domain.StudioActor, request domain.AgentTestRequest, _ domain.AgentDefinition) (domain.AgentTestResult, error) {
+		if request.Limits.MaxDuration != 30*time.Second {
+			t.Errorf("limits = %+v, want the pinned draft's", request.Limits)
+		}
+		return domain.AgentTestResult{}, durationStop(6)
+	}}
+	if err := w.Execute(context.Background(), testLease); err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.recorded) != 1 || len(queue.finished) != 1 || queue.finished[0] != domain.EvaluationCompleted+"|" ||
+		len(trajectory) != 1 || trajectory[0].Name != "execution_limit" || !trajectory[0].Failed {
+		t.Fatalf("recorded %d, finished %v, trajectory %+v; the draft's limit is a scored outcome", len(queue.recorded), queue.finished, trajectory)
+	}
+	if usage := queue.recorded[0].Usage; usage.CostMinorUnits != 6 || usage.InputTokens != 40 || usage.Currency != "EUR" {
+		t.Fatalf("recorded usage = %+v, want the stop's settled spend", usage)
+	}
+}
+
+// Stopped drafts still spend: their settled cost counts toward the run's ceiling.
+func TestAgentEvaluationWorkerCountsStoppedDraftsTowardTheCostCeiling(t *testing.T) {
+	queue := &queueFake{claim: draftClaim(map[string]domain.Usage{})}
+	w, _ := draftWorker(t, queue, 0, "EUR")
+	ran := 0
+	w.Drafts = fake.DraftTester{ExecuteFunc: func(context.Context, domain.StudioActor, domain.AgentTestRequest, domain.AgentDefinition) (domain.AgentTestResult, error) {
+		ran++
+		return domain.AgentTestResult{}, durationStop(6)
+	}}
+	w.MaxRunCostMinorUnits = 10
+	if err := w.Execute(context.Background(), testLease); err != nil {
+		t.Fatal(err)
+	}
+	if ran != 2 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationStoppedEarly+"|cost ceiling") {
+		t.Fatalf("ran %d, finished %v; stopped drafts must not run free past the ceiling", ran, queue.finished)
+	}
+}
+
+func TestAgentEvaluationWorkerFailsAStopThatSettledNoUsage(t *testing.T) {
+	queue := &queueFake{claim: draftClaim(nil)}
+	w, _ := draftWorker(t, queue, 5, "EUR")
+	w.Drafts = fake.DraftTester{ExecuteFunc: func(context.Context, domain.StudioActor, domain.AgentTestRequest, domain.AgentDefinition) (domain.AgentTestResult, error) {
+		return domain.AgentTestResult{}, fmt.Errorf("%w: draft exceeded its duration", domain.ErrExecutionLimit)
+	}}
+	if err := w.Execute(context.Background(), testLease); err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.recorded) != 0 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|") {
+		t.Fatalf("recorded %d, finished %v; an unsettled stop must fail the run", len(queue.recorded), queue.finished)
+	}
+}
+
+func TestAgentEvaluationWorkerFailsADraftRunWhoseLimitsCannotBeRead(t *testing.T) {
+	malformed := []domain.EffectiveResource{{ResourceKind: domain.ResourceLimits, ResourceID: "limits", Value: []byte(`{"max_duration_seconds":-1}`)}}
+	cases := map[string]func(*domain.AgentEvaluationClaim){
+		"settings the definition does not digest": func(claim *domain.AgentEvaluationClaim) {
+			claim.DraftSettings = []domain.EffectiveResource{{ResourceKind: domain.ResourceLimits, ResourceID: "limits", Value: []byte(`{"max_duration_seconds":3600}`)}}
+		},
+		"no pinned settings": func(claim *domain.AgentEvaluationClaim) { claim.DraftSettings = nil },
+		"undigested definition": func(claim *domain.AgentEvaluationClaim) {
+			claim.Draft.SettingsDigest, claim.DraftSettings = "", nil
+		},
+		"malformed limits": func(claim *domain.AgentEvaluationClaim) {
+			claim.DraftSettings, claim.Draft.SettingsDigest = malformed, scope.SettingsDigest(malformed)
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			claim := draftClaim(nil)
+			change(&claim)
+			queue := &queueFake{claim: claim}
+			w, requests := draftWorker(t, queue, 5, "EUR")
+			if err := w.Execute(context.Background(), testLease); err != nil {
+				t.Fatal(err)
+			}
+			if len(*requests) != 0 || len(queue.recorded) != 0 || len(queue.finished) != 1 ||
+				!strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|draft limits cannot be read") {
+				t.Fatalf("ran %d, finished %v; the run must fail before any example", len(*requests), queue.finished)
+			}
+		})
 	}
 }

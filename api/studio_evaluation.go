@@ -120,12 +120,14 @@ type EvaluationScore struct {
 	Critical   bool             `json:"critical"`
 }
 
-// AgentCaseResult is one example's scored outcome.
+// AgentCaseResult is one example's scored outcome; cost is the subject's spend and
+// evaluator_cost what model-based evaluators spent scoring it.
 type AgentCaseResult struct {
 	CaseID           string            `json:"case_id"`
 	Scores           []EvaluationScore `json:"scores"`
 	LatencyMs        int64             `json:"latency_ms"`
 	Cost             EvaluationCost    `json:"cost"`
+	EvaluatorCost    EvaluationCost    `json:"evaluator_cost"`
 	NeedsHumanReview bool              `json:"needs_human_review"`
 	Reason           string            `json:"reason,omitempty"`
 }

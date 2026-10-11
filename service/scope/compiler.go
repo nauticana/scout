@@ -27,8 +27,8 @@ func NewCompiler(scopes contract.ScopeRepository, mergers contract.ResourceMerge
 	if scopes == nil || mergers == nil || checker == nil {
 		return nil, fmt.Errorf("scope compiler: repository, mergers, and narrowing checker are required")
 	}
-	if maxDepth < 0 {
-		return nil, fmt.Errorf("scope compiler: max depth cannot be negative")
+	if maxDepth < 0 || maxDepth > MaxScopeChainDepth {
+		return nil, fmt.Errorf("%w: scope compiler: max depth must be within 0..%d", domain.ErrValidation, MaxScopeChainDepth)
 	}
 	if maxDepth == 0 {
 		maxDepth = DefaultMaxScopeDepth

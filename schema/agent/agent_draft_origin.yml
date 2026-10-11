@@ -1,0 +1,77 @@
+table: agent_draft_origin
+comment: What an agent's draft derives from, an imported definition or a template version; each publish freezes it into the release
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: source_kind
+    type: VARCHAR(60)
+  - name: source_id
+    type: VARCHAR(120)
+  - name: source_namespace
+    type: VARCHAR(200)
+    nullable: true
+  - name: source_external
+    type: BOOLEAN
+    default: true
+  - name: source_version
+    type: VARCHAR(60)
+  - name: source_digest
+    type: VARCHAR(80)
+  - name: template_partner_id
+    type: BIGINT
+    nullable: true
+    comment: The owner of a tenant template, which may be another tenant that shared it
+  - name: template_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: template_version
+    type: INTEGER
+    nullable: true
+  - name: catalog_template_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: catalog_template_version
+    type: INTEGER
+    nullable: true
+  - name: recorded_by_kind
+    type: VARCHAR(20)
+  - name: recorded_by_id
+    type: VARCHAR(120)
+  - name: recorded_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, agent_id]
+foreign_keys:
+  - name: agent_draft_origins
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_draft
+      columns: [partner_id, agent_id]
+  - name: template_agent_draft_origins
+    columns: [template_partner_id, template_id, template_version]
+    references:
+      table: agent_template_version
+      columns: [partner_id, template_id, template_version]
+  - name: catalog_template_agent_draft_origins
+    columns: [catalog_template_id, catalog_template_version]
+    references:
+      table: agent_template_catalog_version
+      columns: [template_id, template_version]
+indexes:
+  - name: agent_draft_origin_template_ix
+    columns: [template_partner_id, template_id, template_version]
+  - name: agent_draft_origin_catalog_ix
+    columns: [catalog_template_id, catalog_template_version]
+checks:
+  - name: agent_draft_origin_kind_ck
+    expression: source_kind IN ('AgentTemplate', 'AgentDefinition')
+  - name: agent_draft_origin_digest_ck
+    expression: source_digest LIKE 'sha256:%' AND CHAR_LENGTH(source_digest) = 71
+  - name: agent_draft_origin_template_ck
+    expression: (template_partner_id IS NULL) = (template_id IS NULL) AND (template_id IS NULL) = (template_version IS NULL)
+  - name: agent_draft_origin_catalog_ck
+    expression: (catalog_template_id IS NULL) = (catalog_template_version IS NULL) AND (template_id IS NULL OR catalog_template_id IS NULL)
+  - name: agent_draft_origin_source_ck
+    expression: (source_kind = 'AgentTemplate') = (template_id IS NOT NULL OR catalog_template_id IS NOT NULL)

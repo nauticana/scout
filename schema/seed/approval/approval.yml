@@ -1,0 +1,27 @@
+comment: Approval request code lists
+order: 35
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [approval_rule_source, Approval Rule Source]
+      - [approval_approver_kind, Approver Kind]
+      - [agent_output_class, Agent Output Class]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [approval_rule_source, autonomy, "The agent's operating mode"]
+      - [approval_rule_source, policy, A require_approval policy obligation]
+      - [approval_rule_source, guardrail, An irreversible_tool_approval guardrail rule]
+      - [approval_approver_kind, role, Role]
+      - [approval_approver_kind, position, Position]
+      - [agent_output_class, advice, Research or recommendation only]
+      - [agent_output_class, draft, Prepared artifact a human edits and submits]
+      - [agent_output_class, approval_request, Action awaiting an explicit decision]
+      - [agent_output_class, completed_action, Action already performed]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [approval_rule_source, turn_approval_request, rule_source_code]
+      - [approval_approver_kind, turn_approval_request, approver_reference_kind]
+      - [agent_output_class, turn_approval_request, output_class_code]

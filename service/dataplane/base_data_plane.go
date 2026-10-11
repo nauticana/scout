@@ -29,7 +29,7 @@ import (
 	"github.com/nauticana/scout/service/toolgateway"
 )
 
-const costBreakerWindow = time.Hour
+const defaultCostBreakerWindow = time.Hour
 
 // BaseDataPlane is the table-backed data plane, complete once Compose succeeds. The first
 // block is what a product injects. Every collaborator below it is a default Compose builds
@@ -184,6 +184,11 @@ func (plane *BaseDataPlane) validate() error {
 		settings.GuardrailMaxInputBytes <= 0 || settings.GuardrailMaxOutputBytes <= 0 {
 		return fmt.Errorf("%w: data plane state size, queue attempts, turn steps, tool timeout, tool attempts, and guardrail byte ceilings must be positive", domain.ErrValidation)
 	}
+	if settings.CostWindow < 0 || settings.ReplyRetention < 0 || settings.ReplyPollInterval < 0 || settings.ReplyRecordReadInterval < 0 ||
+		settings.CancelPollInterval < 0 || settings.CancelMaxReadFailures < 0 || settings.SessionRevisionMemory < 0 ||
+		settings.ResultCardMaxBytes < 0 || settings.RunPageMax < 0 || plane.Limits.MaxCallRevisions < 0 {
+		return fmt.Errorf("%w: data plane cost window, reply and cancel periods, cancel read failures, revision memory, result card size, run page, and call revisions must not be negative", domain.ErrValidation)
+	}
 	if settings.StepClaimLease <= plane.Limits.Deadline {
 		return fmt.Errorf("%w: agent_step_claim_lease (%s) must outlast agent_loop_deadline (%s), or a second worker replays a loop that is still running", domain.ErrValidation, settings.StepClaimLease, plane.Limits.Deadline)
 	}
@@ -192,6 +197,9 @@ func (plane *BaseDataPlane) validate() error {
 	}
 	if len(plane.Currency) != 3 || strings.TrimSpace(plane.UsageCategory) == "" || plane.MaxOutputTokens <= 0 {
 		return fmt.Errorf("%w: data plane needs a three-letter currency, a usage category, and positive max output tokens", domain.ErrValidation)
+	}
+	if ledger, ok := plane.Budget.(*isolation.BudgetLedger); ok && ledger.Releases == nil {
+		return fmt.Errorf("%w: the budget ledger enforces no release budget; set BudgetLedger.Releases to the data plane's PrincipalLimits", domain.ErrValidation)
 	}
 	return nil
 }
@@ -234,7 +242,8 @@ func (plane *BaseDataPlane) composeState() error {
 		}
 		plane.closers = append(plane.closers, sessions)
 		plane.Sessions = &SessionCoordinator{
-			Store: &DurableSessionStore{DB: plane.DB, Objects: plane.Objects}, Cache: sessions, Metrics: plane.Metrics,
+			Store: &DurableSessionStore{DB: plane.DB, Objects: plane.Objects, MaxResultCardBytes: settings.ResultCardMaxBytes},
+			Cache: sessions, Metrics: plane.Metrics, RevisionMemory: settings.SessionRevisionMemory,
 		}
 	}
 	if plane.Definitions == nil {
@@ -266,14 +275,15 @@ func (plane *BaseDataPlane) composeGovernance() error {
 		// The breaker limits are zero, so it records spend without tripping; replace Governor to enforce one.
 		plane.Governor = &isolation.ExecutionGovernor{
 			Loops: &isolation.MemoryLoopDetector{Threshold: plane.Limits.MaxRepeatedCalls, MaxConversations: settings.SessionCacheSize},
-			Costs: &isolation.WindowedCostBreaker{Currency: plane.Currency, Window: costBreakerWindow, MaxEntries: settings.SessionCacheSize},
+			Costs: &isolation.WindowedCostBreaker{Currency: plane.Currency, Window: positiveOr(settings.CostWindow, defaultCostBreakerWindow), MaxEntries: settings.SessionCacheSize},
 		}
 	}
 	if plane.Audit == nil {
-		plane.Audit = &observability.TableAuditSink{DB: plane.DB, Evidence: plane.Objects}
+		plane.Audit = &observability.TableAuditSink{DB: plane.DB, Evidence: plane.Objects,
+			PageSize: settings.AuditPageSize, MaxPageSize: settings.AuditMaxPageSize}
 	}
 	if plane.Restrictions == nil {
-		plane.Restrictions = &policy.TableRestrictionLayers{DB: plane.DB}
+		plane.Restrictions = &policy.TableRestrictionLayers{DB: plane.DB, TTL: settings.RestrictionCacheTTL, Entries: settings.RestrictionCacheEntries}
 	}
 	if plane.Guardrails == nil {
 		compiler, err := guardrail.NewRuleSetCompiler(guardrail.CompilerConfig{})
@@ -284,7 +294,7 @@ func (plane *BaseDataPlane) composeGovernance() error {
 			Baseline:     guardrail.DefaultBaseline(settings.GuardrailMaxInputBytes, settings.GuardrailMaxOutputBytes),
 			Compiler:     compiler,
 			Approvals:    plane.Approvals,
-			Events:       &observability.TableSafetyEventSink{DB: plane.DB},
+			Events:       &observability.TableSafetyEventSink{DB: plane.DB, MaxPage: settings.SafetyEventMaxPage},
 			Audit:        plane.Audit,
 			Restrictions: plane.Restrictions,
 		})
@@ -301,11 +311,13 @@ func (plane *BaseDataPlane) composeGovernance() error {
 func (plane *BaseDataPlane) composeDelivery() error {
 	settings := plane.Settings
 	if plane.ReplyHub == nil {
-		plane.ReplyHub = &CacheReplyHub{Cache: plane.Cache, Records: plane.Records}
+		plane.ReplyHub = &CacheReplyHub{Cache: plane.Cache, Records: plane.Records, Retention: settings.ReplyRetention,
+			PollInterval: settings.ReplyPollInterval, RecordReadInterval: settings.ReplyRecordReadInterval}
 		plane.closers = append(plane.closers, plane.ReplyHub)
 	}
 	if plane.Cancels == nil {
-		plane.Cancels = &TableTurnCanceller{DB: plane.DB, Cache: plane.Cache}
+		plane.Cancels = &TableTurnCanceller{DB: plane.DB, Cache: plane.Cache, PollInterval: settings.CancelPollInterval,
+			MaxReadFailures: settings.CancelMaxReadFailures}
 		plane.closers = append(plane.closers, plane.Cancels)
 	}
 	if plane.DeadLetters == nil {
@@ -438,7 +450,7 @@ func (plane *BaseDataPlane) composeLoop() error {
 
 func (plane *BaseDataPlane) composeRuntime() error {
 	if plane.Runs == nil {
-		plane.Runs = &agentruntime.AgentRunStore{DB: plane.DB}
+		plane.Runs = &agentruntime.AgentRunStore{DB: plane.DB, MaxPage: plane.Settings.RunPageMax}
 	}
 	if plane.TurnRuntime == nil {
 		runtime := &TurnRuntime{

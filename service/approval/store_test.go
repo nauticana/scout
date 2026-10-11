@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,12 +18,16 @@ import (
 
 // approvalTable keeps turn_approval_request rows by key and the outbox events queued with them.
 type approvalTable struct {
-	rows      map[string][]any
-	decisions map[int64][]any
-	events    map[int64]string
-	nextID    int64
-	commits   int
-	failQuery string
+	rows        map[string][]any
+	decisions   map[int64][]any
+	events      map[int64]string
+	nextID      int64
+	commits     int
+	failQuery   string
+	fences      [][]any
+	escalations [][]any
+	vacantArgs  []any
+	settled     map[int64]bool
 }
 
 type approvalTx struct {
@@ -34,6 +39,25 @@ type approvalTx struct {
 // requestKey keys a row by request id and execution step, the store's natural key within a tenant.
 func requestKey(requestID, step any) string { return fmt.Sprintf("%v/%v", requestID, step) }
 
+func open(row []any) bool { return row[18] == "pending" || row[18] == "escalated" }
+
+// selectRows returns copies of the open rows keep accepts, in id order.
+func (table *approvalTable) selectRows(keep func([]any) bool) *keelmodel.QueryResult {
+	result := &keelmodel.QueryResult{}
+	for _, row := range table.rows {
+		if open(row) && keep(row) {
+			result.Rows = append(result.Rows, slices.Clone(row))
+		}
+	}
+	slices.SortFunc(result.Rows, func(a, b []any) int { return int(a[0].(int64) - b[0].(int64)) })
+	return result
+}
+
+// assignedAs is the fence: route step and approver as the caller read them; nil matches only nil.
+func assignedAs(row []any, step, kind, id any) bool {
+	return fmt.Sprint(row[31]) == fmt.Sprint(step) && row[6] == kind && row[7] == id
+}
+
 func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*keelmodel.QueryResult, error) {
 	if name == table.failQuery {
 		return nil, errors.New("store down")
@@ -44,21 +68,52 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 			return &keelmodel.QueryResult{}, nil
 		}
 		table.nextID++
-		row := make([]any, 24)
+		row := make([]any, 33)
 		copy(row[1:18], args[1:18])
 		row[0], row[18], row[19], row[23] = table.nextID, "pending", args[18], args[19]
+		copy(row[24:33], args[20:29])
 		table.rows[requestKey(args[1], args[3])] = row
 		return &keelmodel.QueryResult{Rows: [][]any{{table.nextID}}}, nil
 	case qApprovalGet:
 		if row, ok := table.rows[requestKey(args[1], args[2])]; ok {
-			return &keelmodel.QueryResult{Rows: [][]any{row}}, nil
+			return &keelmodel.QueryResult{Rows: [][]any{slices.Clone(row)}}, nil
 		}
 	case qApprovalResolve:
+		table.fences = append(table.fences, args[6:9])
 		row, ok := table.rows[requestKey(args[3], args[4])]
-		if ok && row[18] == "pending" && row[17] == args[5] {
+		if ok && open(row) && row[17] == args[5] && assignedAs(row, args[6], args[7], args[8]) {
 			row[18], row[21] = args[0], args[1]
 			return &keelmodel.QueryResult{Rows: [][]any{{row[0]}}}, nil
 		}
+	case qApprovalEscalate:
+		table.escalations = append(table.escalations, args)
+		for _, row := range table.rows {
+			if row[0] == args[9] && open(row) && assignedAs(row, args[10], args[11], args[12]) {
+				row[18], row[6], row[7], row[19], row[31], row[29], row[30], row[32] = args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]
+				return &keelmodel.QueryResult{Rows: [][]any{{row[0]}}}, nil
+			}
+		}
+	case qApprovalVacant:
+		table.vacantArgs = args
+		return table.selectRows(func(row []any) bool {
+			deadline, timed := row[19].(time.Time)
+			return row[28] != nil && row[7] == nil && (!timed || deadline.After(args[1].(time.Time)))
+		}), nil
+	case qApprovalUnsettled:
+		result := &keelmodel.QueryResult{}
+		for _, row := range table.rows {
+			if row[18] == "expired" && !table.settled[row[0].(int64)] {
+				result.Rows = append(result.Rows, slices.Clone(row))
+			}
+		}
+		return result, nil
+	case qApprovalTurnSettled:
+		table.settled[args[2].(int64)] = true
+	case qApprovalDue:
+		return table.selectRows(func(row []any) bool {
+			deadline, timed := row[19].(time.Time)
+			return timed && !deadline.After(args[1].(time.Time))
+		}), nil
 	case qApprovalDecision:
 		table.decisions[args[0].(int64)] = args
 	case qApprovalDecisionGet, qApprovalRevision:
@@ -125,16 +180,30 @@ func (db approvalDB) BeginTx(context.Context, map[string]string) (keelport.TxQue
 }
 
 func owed(requestID string, approver string) domain.ApprovalRequest {
-	return domain.ApprovalRequest{
+	request := domain.ApprovalRequest{
 		TenantID: 7, RequestID: requestID, ExecutionStepID: 3, Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "writer"},
-		Approver: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: approver}, Action: "tool:refund", Resource: "refund",
+		Source: domain.ApprovalSourceAutonomy, RuleID: "autonomy", Action: "tool:refund", Resource: "refund",
 		Class: domain.OutputApprovalRequest, RiskTier: domain.RiskHigh, Summary: "refund", ProposedDigest: strings.Repeat("a", 64),
 		DeadlineAt: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC),
 	}
+	if approver != "" {
+		request.Approver = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: approver}
+	}
+	return request
+}
+
+// routedOwed is a request routed under the payments route at step, assigned to approver or vacant.
+func routedOwed(requestID, approver string, step int) domain.ApprovalRequest {
+	request := owed(requestID, approver)
+	request.ReleaseVersion, request.Source, request.RuleID = "3", domain.ApprovalSourcePolicy, "policy"
+	request.Requester = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "5"}
+	request.Route = routedAuthority(step)
+	request.Route.Resolution = "directory:holder/77"
+	return request
 }
 
 func newApprovalStore(notify bool) (*approvalTable, *TableStore) {
-	table := &approvalTable{rows: map[string][]any{}, decisions: map[int64][]any{}, events: map[int64]string{}}
+	table := &approvalTable{rows: map[string][]any{}, decisions: map[int64][]any{}, events: map[int64]string{}, settled: map[int64]bool{}}
 	return table, &TableStore{DB: approvalDB{table: table}, NotifyThroughOutbox: notify}
 }
 

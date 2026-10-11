@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -36,6 +37,9 @@ const DefaultPriorityClass = "standard"
 // the ones a product chooses for itself.
 type ModelAccess struct {
 	DB keelport.DatabaseRepository
+	// PriorityClass is the scheduling class a grant takes when none is named; empty takes
+	// DefaultPriorityClass.
+	PriorityClass string
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -73,7 +77,7 @@ func (access *ModelAccess) Grant(ctx context.Context, tenantID int64, reference 
 		return err
 	}
 	if priorityClass = strings.TrimSpace(priorityClass); priorityClass == "" {
-		priorityClass = DefaultPriorityClass
+		priorityClass = cmp.Or(strings.TrimSpace(access.PriorityClass), DefaultPriorityClass)
 	}
 	if _, err := access.qs.Query(ctx, qModelAccessGrant, tenantID, reference.ProviderID, reference.ModelID, priorityClass); err != nil {
 		return fmt.Errorf("grant model %s/%s to tenant %d: %w", reference.ProviderID, reference.ModelID, tenantID, err)

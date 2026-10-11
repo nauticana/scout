@@ -133,6 +133,14 @@ type AgentVersionTrafficManager interface {
 	Rollback(ctx context.Context, tenantID int64, agentID string) error
 }
 
+// ReviewedAgentVersionTrafficManager changes traffic only when the requested
+// release is still the deployed stable or canary release.
+type ReviewedAgentVersionTrafficManager interface {
+	ReweightCanary(ctx context.Context, tenantID int64, agentID, version string, percentage int) error
+	PromoteDeployed(ctx context.Context, tenantID int64, agentID, version string) error
+	EndCanary(ctx context.Context, tenantID int64, agentID string) (string, error)
+}
+
 // AgentVersionResolutionExplainer is an optional AgentVersionTrafficManager
 // capability that reports which precedence rule selected the version so audit
 // and usage records can carry it.

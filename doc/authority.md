@@ -38,10 +38,12 @@ and limits, "a delegated grant may convey no more than its grantor holds" is a s
 one lattice rather than a translation between two models.
 
 Scout's own objects are scoped by value. `AGENT_STUDIO` actions are checked at `agent:<id>` —
-`CREATE` at `agent_type:<id>` — and `AGENT_CONVERSATION` `USE` and `PIN_RELEASE` at `agent:<id>`, so
-a role holds every agent of its tenant with `*` or named agents only; Studio lists only the agents
-its actor may view. `AGENT_STUDIO` `APPROVE_PUBLISH`, deciding another person's publish review, is
-checked at `agent:<id>` too. `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
+`CREATE` and `TEMPLATE` at `agent_type:<id>` — and `AGENT_CONVERSATION` `USE` and `PIN_RELEASE` at
+`agent:<id>`, so a role holds every agent of its tenant with `*` or named agents only; Studio lists
+only the agents its actor may view. `AGENT_STUDIO` `APPROVE_PUBLISH`, deciding another person's
+publish or restore review, is checked at `agent:<id>` too, and `TEMPLATE_PUBLISH`, sharing a
+template with other tenants, at `template_audience:all` or `template_audience:tenants`; no role holds
+it by default. `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
 layers and are checked at the tenant-wide value `tenant`. `AGENT_APPROVAL` `DECIDE` is checked at the
 request's scope.
 
@@ -65,9 +67,10 @@ Binding values are canonical JSON, fixed per kind:
 | `prompt_section` | `{"instruction":"…","output":"…"}` | `PromptMerger` | `text` |
 | `tool`, `skill`, `knowledge`, `model`, `entitlement` | `["a","b"]` | `SetMerger` | `subset` |
 | `policy` | `[{"id":"…","effect":"allow","actions":[…],"resources":[…]}]` | `PolicyMerger` | `policy` |
-| `budget` | `{"tokens":0,"cost_minor_units":0,"currency":"EUR"}` | `BudgetMerger` | `at_most` |
+| `budget` | `{"tokens":0,"cost_minor_units":50000,"currency":"EUR","exponent":2,"period":"day","timezone":"Europe/Berlin"}` | `BudgetMerger` | `at_most` |
 | `autonomy` | `{"mode":"draft","window_from_minute":0,"window_to_minute":0}` | `AutonomyMerger` | `ordered` |
 | `limits` | `{"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}` | `LimitsMerger` | `at_most` |
+| `approval_routing` | `{"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}` | `RoutingMerger` | `routing` |
 
 A set cannot express deny-wins, so `policy` has its own merger and rule: a child may drop an allow or
 add a deny, never add an allow, and an allow it keeps may not widen the parent's actions, resources,
@@ -75,12 +78,15 @@ or conditions, nor drop an obligation the parent attached. `autonomy` narrows on
 rank and the bounded operating window, which may only shrink; a child window that misses the parent's
 entirely degrades the mode to `execute_with_approval` rather than granting an empty one.
 `limits` narrows per field, with 0 meaning unlimited at that scope: a child may lower a ceiling its
-parent sets, never raise or unset it, and may set one its parent leaves at 0.
+parent sets, never raise or unset it, and may set one its parent leaves at 0. `budget` narrows only
+over the parent's period, window, timezone, and currency unit (see
+[release budgets](governance.md#release-budgets)). `approval_routing` overlays its parent route by
+route and may only tighten each inherited route (see [approval routing](governance.md#approval-routing)).
 
 `config_resource_kind.narrowing_rule` is the seeded source of that last column; `PlatformNarrowingRules`
 mirrors it in code. An unregistered kind fails compilation and an unmapped rule fails the check —
-both closed, never permissive. Set, budget, and autonomy bindings use their kind as
-`resource_id`, while policy may use several ids.
+both closed, never permissive. Set, budget, autonomy, limits, and approval routing bindings use
+their kind as `resource_id`, while policy may use several ids.
 
 A release's `limits` only lower the tenant runtime policy and the executor's flag ceilings.
 `turns_per_minute` caps the agent's turns opened in any trailing minute, by the database clock, when

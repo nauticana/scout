@@ -1,0 +1,44 @@
+table: agent_template_catalog_version
+comment: Immutable version of a platform agent template
+columns:
+  - name: template_id
+    type: VARCHAR(80)
+  - name: template_version
+    type: INTEGER
+  - name: display_name
+    type: VARCHAR(200)
+  - name: description
+    type: VARCHAR(500)
+    nullable: true
+  - name: type_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: type_digest
+    type: CHAR(64)
+    nullable: true
+    comment: The type version's definition digest; there is no tenant row to join it from
+  - name: payload
+    type: TEXT
+    comment: Canonical JSON bindings and slot names
+  - name: payload_digest
+    type: CHAR(64)
+  - name: change_summary
+    type: VARCHAR(400)
+    nullable: true
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [template_id, template_version]
+foreign_keys:
+  - name: agent_template_catalog_versions
+    columns: [template_id]
+    references:
+      table: agent_template_catalog
+      columns: [template_id]
+checks:
+  - name: agent_template_catalog_version_ck
+    expression: template_version > 0
+  - name: agent_template_catalog_version_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64
+  - name: agent_template_catalog_version_type_ck
+    expression: (type_version IS NULL) = (type_digest IS NULL)

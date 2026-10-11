@@ -25,9 +25,7 @@ const (
        parent_work_item_id, delegation_depth, scope_id, task_kind, input_uri, input_digest,
        request_id, status_code, budget_minor_units, currency_code, created_at, completed_at`
 
-	// maxWorkItemDepth bounds the ancestor walk; a chain deeper than this is a
-	// configuration error, not a legitimate delegation.
-	maxWorkItemDepth = 32
+	defaultWorkItemDepth = 32
 )
 
 var workItemQueries = map[string]string{
@@ -75,6 +73,9 @@ SELECT * FROM chain LIMIT ?`,
 // so an agent can be assigned work it did not start.
 type TableWorkItemStore struct {
 	DB port.DatabaseRepository
+	// MaxDepth bounds a delegation chain and the ancestor walk; a deeper chain is a
+	// configuration error, not a legitimate delegation. Default 32.
+	MaxDepth int
 
 	once sync.Once
 	qs   port.QueryService
@@ -84,12 +85,17 @@ func (s *TableWorkItemStore) init(ctx context.Context) error {
 	if s.DB == nil {
 		return fmt.Errorf("work item store: database is required")
 	}
+	if s.MaxDepth < 0 {
+		return fmt.Errorf("work item store: max depth must not be negative")
+	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, workItemQueries) })
 	if s.qs == nil {
 		return fmt.Errorf("work item store: query service is required")
 	}
 	return nil
 }
+
+func (s *TableWorkItemStore) maxDepth() int { return positiveOr(s.MaxDepth, defaultWorkItemDepth) }
 
 // Assign records a new item; a repeated request id returns the existing one, so
 // a redelivered delegation does not fan out twice.
@@ -104,7 +110,7 @@ func (s *TableWorkItemStore) Assign(ctx context.Context, item domain.WorkItem) (
 		return domain.WorkItem{}, fmt.Errorf("%w: a work item needs a request id to stay idempotent", domain.ErrValidation)
 	case len(item.Input.Digest) != 64:
 		return domain.WorkItem{}, fmt.Errorf("%w: a work item needs a digest-verified input reference", domain.ErrValidation)
-	case item.Depth < 0 || item.Depth > maxWorkItemDepth:
+	case item.Depth < 0 || item.Depth > s.maxDepth():
 		return domain.WorkItem{}, fmt.Errorf("%w: work item depth %d is out of range", domain.ErrDelegationDepth, item.Depth)
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -189,7 +195,8 @@ func (s *TableWorkItemStore) Ancestors(ctx context.Context, tenantID, id int64) 
 	if err := s.init(ctx); err != nil {
 		return nil, err
 	}
-	result, err := s.qs.Query(ctx, qWorkAncestors, tenantID, id, maxWorkItemDepth)
+	// Depths run from 0 to maxDepth, so a full chain holds maxDepth+1 items, its root included.
+	result, err := s.qs.Query(ctx, qWorkAncestors, tenantID, id, s.maxDepth()+1)
 	if err != nil {
 		return nil, fmt.Errorf("walk work item ancestors: %w", err)
 	}

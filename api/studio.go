@@ -327,12 +327,16 @@ type AgentTestResult struct {
 }
 
 // AgentCreateRequest creates an agent of an existing type; copy_from and template_id are exclusive.
+// A template create takes template_version (0 or absent is the newest the tenant may use) and
+// references, which map each knowledge and entitlement slot of the template to a value of the tenant.
 type AgentCreateRequest struct {
-	AgentType      string `json:"agent_type"`
-	DisplayName    string `json:"display_name"`
-	CopyFrom       string `json:"copy_from,omitempty"`
-	TemplateID     string `json:"template_id,omitempty"`
-	IdempotencyKey string `json:"idempotency_key"`
+	AgentType       string                       `json:"agent_type"`
+	DisplayName     string                       `json:"display_name"`
+	CopyFrom        string                       `json:"copy_from,omitempty"`
+	TemplateID      string                       `json:"template_id,omitempty"`
+	TemplateVersion int64                        `json:"template_version,omitempty"`
+	References      map[string]map[string]string `json:"references,omitempty"`
+	IdempotencyKey  string                       `json:"idempotency_key"`
 }
 
 // AgentRenameRequest changes an agent's display name.

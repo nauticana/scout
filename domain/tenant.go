@@ -90,8 +90,8 @@ type FeedbackSummary struct {
 	Counts  [5]int64
 }
 
-// BudgetRequest asks for a hold on one request's tokens and cost. Principal is who
-// spends; it is what a per-principal budget is counted against.
+// BudgetRequest asks for a hold on one request's tokens and cost. Principal is who spends:
+// empty or the turn's conversation agent, whose release budget the hold is charged to.
 type BudgetRequest struct {
 	TenantID       int64
 	RequestID      string
@@ -99,6 +99,9 @@ type BudgetRequest struct {
 	Tokens         int64
 	CostMinorUnits int64
 	Currency       string
+	// TurnGoverned says the caller stops the work at the release's per-turn ceiling, so a
+	// per-turn budget clamps the grant instead of refusing a larger estimate.
+	TurnGoverned bool
 }
 
 // BudgetReservation represents tokens and cost reserved for an operation.

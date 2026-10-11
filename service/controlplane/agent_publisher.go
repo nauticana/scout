@@ -3,11 +3,16 @@ package controlplane
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+
+	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 // AgentPublisher validates, compiles, and atomically stores immutable agent versions.
@@ -20,6 +25,12 @@ type AgentPublisher struct {
 	Releases  contract.EffectiveReleaseRepository
 	// ScopeID is the scope a published agent compiles against.
 	ScopeID string
+	// DB reads the currency catalog a cost budget is checked against; a release with a cost
+	// budget is refused without it.
+	DB keelport.DatabaseRepository
+
+	once sync.Once
+	qs   keelport.QueryService
 }
 
 // Publish compiles and persists one immutable definition without activating traffic.
@@ -40,22 +51,55 @@ func (publisher *AgentPublisher) Publish(ctx context.Context, tenantID int64, de
 	if graph.AgentID != definition.AgentID || graph.Version != definition.Version || graph.EntryStepID == "" || !validSHA256(graph.Digest) {
 		return fmt.Errorf("%w: compiler returned an inconsistent execution graph", domain.ErrValidation)
 	}
+	// The settings are compiled and checked before the immutable version is stored, so a
+	// refused budget leaves no version that could never serve a turn.
+	release, err := publisher.compile(ctx, tenantID, definition)
+	if err != nil {
+		return err
+	}
 	if err := publisher.Store.Publish(ctx, tenantID, definition, graph); err != nil {
 		return fmt.Errorf("publish agent %q version %q: %w", definition.AgentID, definition.Version, err)
 	}
-	return publisher.freeze(ctx, tenantID, definition)
+	if err := publisher.Releases.Put(ctx, release); err != nil {
+		return fmt.Errorf("store effective release for %q version %q: %w", definition.AgentID, definition.Version, err)
+	}
+	return nil
 }
 
-func (publisher *AgentPublisher) freeze(ctx context.Context, tenantID int64, definition domain.AgentDefinition) error {
+func (publisher *AgentPublisher) compile(ctx context.Context, tenantID int64, definition domain.AgentDefinition) (domain.EffectiveRelease, error) {
 	release, err := publisher.Effective.Compile(ctx, domain.CompileRequest{
 		TenantID: tenantID, AgentID: definition.AgentID, AgentVersion: definition.Version,
 		ScopeID: publisher.ScopeID, CompiledBy: definition.PublishedBy,
 	})
 	if err != nil {
-		return fmt.Errorf("compile effective release for %q version %q: %w", definition.AgentID, definition.Version, err)
+		return domain.EffectiveRelease{}, fmt.Errorf("compile effective release for %q version %q: %w", definition.AgentID, definition.Version, err)
 	}
-	if err := publisher.Releases.Put(ctx, release); err != nil {
-		return fmt.Errorf("store effective release for %q version %q: %w", definition.AgentID, definition.Version, err)
+	if err := publisher.checkBudget(ctx, release.Resources); err != nil {
+		return domain.EffectiveRelease{}, fmt.Errorf("budget of %q version %q: %w", definition.AgentID, definition.Version, err)
+	}
+	return release, nil
+}
+
+// checkBudget refuses a cost ceiling whose currency or frozen exponent the catalog does not match.
+func (publisher *AgentPublisher) checkBudget(ctx context.Context, resources []domain.EffectiveResource) error {
+	for _, resource := range resources {
+		if resource.ResourceKind != domain.ResourceBudget {
+			continue
+		}
+		budget, err := scope.DecodeBudget(resource.Value)
+		if err != nil || budget.CostMinorUnits == 0 {
+			return err
+		}
+		if publisher.DB == nil {
+			return fmt.Errorf("agent publisher: a database is required to check a cost budget's currency")
+		}
+		publisher.once.Do(func() { publisher.qs = publisher.DB.GetQueryService(ctx, scope.CurrencyQueries) })
+		_, err = scope.CheckBudgetUnit(ctx, publisher.qs, budget)
+		var unenforceable *domain.BudgetUnenforceableError
+		if errors.As(err, &unenforceable) {
+			return fmt.Errorf("%w: %s", domain.ErrValidation, unenforceable.Detail)
+		}
+		return err
 	}
 	return nil
 }

@@ -167,7 +167,7 @@ func TestToolLoopBoundsRevisionsOfOneCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	var err error
-	for round := 0; round <= maxCallRevisions && !errors.Is(err, domain.ErrExecutionLimit); round++ {
+	for round := 0; round <= defaultCallRevisions && !errors.Is(err, domain.ErrExecutionLimit); round++ {
 		parked := harness.calls[len(harness.calls)-1]
 		desk.edits[parked.IdempotencyKey] = revisionOf(int64(100+round), fmt.Sprintf(`{"qty":%d}`, round))
 		_, err = harness.executor().Execute(context.Background(), loopInput())

@@ -68,8 +68,10 @@ rule compiler with the enforcer's `CompilerConfig`, or Studio may accept rules t
 
 Tool and retrieved content are wrapped in `<untrusted_content>` … `</untrusted_content>` after all
 other rules have run, with embedded closing markers stripped so injected text cannot escape the
-fence. `irreversible_tool_approval` consults `contract.ToolApprovalGate`; `pending` and `denied` both
-block, and `guardrail.IsPending(err)` distinguishes the resumable case.
+fence. `irreversible_tool_approval` consults `contract.ToolApprovalGate` with a `guardrail` ask at high
+risk, routed like any other ask (see [approval routing](governance.md#approval-routing)); `pending` and
+`denied` both block, and `guardrail.IsPending(err)` distinguishes the resumable case. A rule with
+`params.tools` asks only for those tools; one without asks for every tool.
 
 A blocking rule returns `*ViolationError` wrapping `domain.ErrForbidden` and carrying the blocking
 rule ids, stage, severity, and policy version. `TerminalFrame` builds the payload-free final

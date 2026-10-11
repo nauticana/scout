@@ -20,10 +20,10 @@ const (
 	qCancelRead    = "scout_turn_cancel_read"
 	qCancelWake    = "scout_turn_cancel_wake"
 
-	cancelChannel           = "scout:cancel"
-	defaultCancelPollPeriod = time.Second
-	maxCancelReason         = 200
-	maxCancelReadFailures   = 3
+	cancelChannel             = "scout:cancel"
+	defaultCancelPollPeriod   = time.Second
+	maxCancelReason           = 200
+	defaultCancelReadFailures = 3
 )
 
 var turnCancelQueries = map[string]string{
@@ -57,7 +57,9 @@ type TableTurnCanceller struct {
 	Cache cache.CacheService
 	// PollInterval bounds how long a running turn outlives its cancellation; default 1s.
 	PollInterval time.Duration
-	Now          func() time.Time
+	// MaxReadFailures consecutive failed cancellation reads stop the turn; default 3.
+	MaxReadFailures int
+	Now             func() time.Time
 
 	once   sync.Once
 	qs     keelport.QueryService
@@ -72,6 +74,9 @@ var (
 func (canceller *TableTurnCanceller) queries(ctx context.Context) (keelport.QueryService, error) {
 	if canceller.DB == nil {
 		return nil, fmt.Errorf("turn canceller: database is required")
+	}
+	if canceller.PollInterval < 0 || canceller.MaxReadFailures < 0 {
+		return nil, fmt.Errorf("turn canceller: poll interval and read failures must not be negative")
 	}
 	canceller.once.Do(func() {
 		canceller.qs = canceller.DB.GetQueryService(ctx, turnCancelQueries)
@@ -175,10 +180,7 @@ func (canceller *TableTurnCanceller) Watch(ctx context.Context, tenantID int64, 
 			return nil, nil, fmt.Errorf("subscribe to cancellation wake-ups: %w", err)
 		}
 	}
-	period := canceller.PollInterval
-	if period <= 0 {
-		period = defaultCancelPollPeriod
-	}
+	period, maxFailures := positiveOr(canceller.PollInterval, defaultCancelPollPeriod), positiveOr(canceller.MaxReadFailures, defaultCancelReadFailures)
 	go func() {
 		poll := time.NewTicker(period)
 		defer poll.Stop()
@@ -195,10 +197,10 @@ func (canceller *TableTurnCanceller) Watch(ctx context.Context, tenantID int64, 
 				failures = 0
 			}
 			// A turn whose cancellation cannot be read is not allowed to run unstoppable.
-			if failures == maxCancelReadFailures {
+			if failures == maxFailures {
 				cancel(fmt.Errorf("read turn cancellation: %w", err))
 			}
-			if stop || failures == maxCancelReadFailures {
+			if stop || failures == maxFailures {
 				return
 			}
 		}

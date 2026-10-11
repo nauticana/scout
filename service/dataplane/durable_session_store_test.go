@@ -298,10 +298,35 @@ func TestResultCardKeepsJSONWrapsTextAndReferencesWhatIsTooLarge(t *testing.T) {
 	}{
 		"json":      {[]byte(`{"a":1}`), "json", `{"a":1}`},
 		"text":      {[]byte("hello"), "text", `{"text":"hello"}`},
-		"too large": {make([]byte, maxResultCard+1), "reference", `{"response_digest":"d","response_uri":"scout://r"}`},
+		"too large": {make([]byte, defaultResultCardBytes+1), "reference", `{"response_digest":"d","response_uri":"scout://r"}`},
 	} {
-		if kind, card := resultCard(tc.response, ref); kind != tc.kind || card != tc.card {
+		if kind, card := resultCard(tc.response, ref, defaultResultCardBytes); kind != tc.kind || card != tc.card {
 			t.Errorf("%s: %s %s", name, kind, card)
 		}
+	}
+}
+
+func TestDurableSessionStoreResultCardLimitIsConfigurable(t *testing.T) {
+	response := []byte(`{"text":"done"}`)
+	complete := func(maxBytes int) (string, error) {
+		query := &persistenceQueryFake{rows: map[string][][]any{
+			qSessionActiveTurn: {{int64(4), int64(6)}}, qSessionCompleteTurn: {{int64(4)}},
+		}}
+		store := newDurableSessionStore(query, &fake.ObjectStorage{})
+		store.MaxResultCardBytes = maxBytes
+		err := store.Complete(context.Background(), 7, "conv", 6, domain.TurnResult{Response: response})
+		if args := query.lastArgs(qSessionCompleteTurn); len(args) > 6 {
+			return args[6].(string), err
+		}
+		return "", err
+	}
+	if kind, err := complete(0); err != nil || kind != "json" {
+		t.Fatalf("zero limit takes the 64 KiB default: kind %q, %v", kind, err)
+	}
+	if kind, err := complete(len(response) - 1); err != nil || kind != "reference" {
+		t.Fatalf("a limit below the response references it: kind %q, %v", kind, err)
+	}
+	if _, err := complete(-1); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a negative limit is refused, got %v", err)
 	}
 }

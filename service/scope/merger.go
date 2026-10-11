@@ -107,8 +107,8 @@ func (PolicyMerger) Merge(_ context.Context, inherited []byte, override domain.S
 	}
 }
 
-// BudgetMerger takes the tighter of each inherited and child limit, so a child
-// cannot raise a ceiling even with a replace binding.
+// BudgetMerger takes the tighter of each inherited and child limit, so a child cannot raise a
+// ceiling even with a replace binding; a bounded parent's period and unit must be kept.
 type BudgetMerger struct{}
 
 func (BudgetMerger) Kind() domain.ResourceKind { return domain.ResourceBudget }
@@ -117,25 +117,7 @@ func (BudgetMerger) Merge(_ context.Context, inherited []byte, override domain.S
 	if override.MergeMode != domain.MergeReplace && override.MergeMode != "" {
 		return nil, fmt.Errorf("%w: budgets support replace only", domain.ErrValidation)
 	}
-	parent, err := decodeBudget(inherited)
-	if err != nil {
-		return nil, err
-	}
-	child, err := decodeBudget(override.Value)
-	if err != nil {
-		return nil, err
-	}
-	if parent.Currency != "" && child.Currency != "" && parent.Currency != child.Currency {
-		return nil, fmt.Errorf("%w: budget currency %q cannot override %q", domain.ErrValidation, child.Currency, parent.Currency)
-	}
-	merged := budgetValue{Tokens: child.Tokens, CostMinorUnits: child.CostMinorUnits, Currency: firstNonEmpty(child.Currency, parent.Currency)}
-	if parent.Tokens > 0 {
-		merged.Tokens = minPositive(parent.Tokens, child.Tokens)
-	}
-	if parent.CostMinorUnits > 0 {
-		merged.CostMinorUnits = minPositive(parent.CostMinorUnits, child.CostMinorUnits)
-	}
-	return json.Marshal(merged)
+	return mergeBudget(inherited, override.Value)
 }
 
 // AutonomyMerger keeps the lower of the inherited and child operating modes.
@@ -196,7 +178,7 @@ type MergerRegistry struct {
 func NewMergerRegistry(extra ...contract.ResourceMerger) (*MergerRegistry, error) {
 	registry := &MergerRegistry{mergers: map[domain.ResourceKind]contract.ResourceMerger{}}
 	platform := []contract.ResourceMerger{
-		PromptMerger{}, BudgetMerger{}, AutonomyMerger{}, PolicyMerger{}, LimitsMerger{},
+		PromptMerger{}, BudgetMerger{}, AutonomyMerger{}, PolicyMerger{}, LimitsMerger{}, RoutingMerger{},
 		SetMerger{ResourceKind: domain.ResourceTool},
 		SetMerger{ResourceKind: domain.ResourceKnowledge},
 		SetMerger{ResourceKind: domain.ResourceModel},
@@ -240,15 +222,6 @@ func joinText(parent, child string) string {
 	default:
 		return parent + "\n\n" + child
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func minPositive(parent, child int64) int64 {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 type grants map[domain.StudioAction]bool
@@ -95,7 +96,8 @@ func studioEvaluation(allowed grants) (*StudioEvaluation, *caseStoreFake, *runSt
 	return &StudioEvaluation{
 		DB: dbFake{query: query}, Authorizer: allowed, GoldenCases: cases, Runs: runs, MaxOpenRuns: 2,
 		Drafts: freezerFunc(func(_ context.Context, _ domain.StudioActor, agentID string) (domain.FrozenDraft, error) {
-			return domain.FrozenDraft{Definition: domain.AgentDefinition{AgentID: agentID, DefinitionDigest: draftDigest}}, nil
+			return domain.FrozenDraft{Definition: domain.AgentDefinition{AgentID: agentID, DefinitionDigest: draftDigest, SettingsDigest: scope.SettingsDigest(draftSettings())},
+				Settings: domain.EffectiveRelease{Resources: draftSettings()}}, nil
 		}),
 	}, cases, runs, query
 }
@@ -196,7 +198,8 @@ func TestStudioEvaluationPinsTheFrozenDraft(t *testing.T) {
 	}
 	enqueued := runs.enqueued
 	if enqueued.Scope != domain.GoldenScopeDev || enqueued.Subject.Kind != domain.SubjectDraft || enqueued.Subject.DefinitionDigest != draftDigest ||
-		enqueued.Draft == nil || enqueued.MaxOpenRuns != 2 || enqueued.TenantID != 7 || enqueued.RequestedBy.ID != "9" || run.RunID != 11 {
+		enqueued.Draft == nil || enqueued.MaxOpenRuns != 2 || enqueued.TenantID != 7 || enqueued.RequestedBy.ID != "9" || run.RunID != 11 ||
+		scope.SettingsDigest(enqueued.DraftSettings) != enqueued.Draft.SettingsDigest {
 		t.Fatalf("enqueued = %+v", enqueued)
 	}
 	if args := query.args[qStudioEvaluationEvent]; args[2] != StudioEventEvaluate || args[3] != "run 11 of support version 3 on draft "+draftDigest {
@@ -205,7 +208,7 @@ func TestStudioEvaluationPinsTheFrozenDraft(t *testing.T) {
 	if _, err := service.Evaluate(ctx, studioActor, domain.AgentEvaluationRequest{AgentID: "writer-a", SetVersion: 3, Release: "v2"}); err != nil {
 		t.Fatal(err)
 	}
-	if subject := runs.enqueued.Subject; subject.Kind != domain.SubjectRelease || subject.Version != "v2" || runs.enqueued.Draft != nil {
+	if subject := runs.enqueued.Subject; subject.Kind != domain.SubjectRelease || subject.Version != "v2" || runs.enqueued.Draft != nil || runs.enqueued.DraftSettings != nil {
 		t.Fatalf("release subject = %+v", subject)
 	}
 	for name, request := range map[string]domain.AgentEvaluationRequest{
@@ -234,7 +237,7 @@ func TestStudioEvaluationPagesResults(t *testing.T) {
 		t.Fatalf("page = %+v (asked for %d)", page, runs.limit)
 	}
 	page, err = service.Evaluation(ctx, studioActor, 11, "", 0)
-	if err != nil || len(page.Results) != 3 || page.NextBefore != "" || runs.limit != studioPageSize+1 {
+	if err != nil || len(page.Results) != 3 || page.NextBefore != "" || runs.limit != DefaultStudioPageSize+1 {
 		t.Fatalf("last page = %+v, %v", page, err)
 	}
 	for _, scope := range runs.scopes {
@@ -242,7 +245,7 @@ func TestStudioEvaluationPagesResults(t *testing.T) {
 			t.Fatalf("a Studio reader read the %s scope", scope)
 		}
 	}
-	for _, limit := range []int{-1, studioMaxPageSize + 1} {
+	for _, limit := range []int{-1, DefaultStudioMaxPageSize + 1} {
 		if _, err := service.Evaluation(ctx, studioActor, 11, "", limit); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("limit %d = %v", limit, err)
 		}

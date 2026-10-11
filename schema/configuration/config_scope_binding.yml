@@ -41,11 +41,6 @@ foreign_keys:
     references:
       table: config_resource_kind
       columns: [code]
-  - name: merge_scoped_bindings
-    columns: [merge_mode_code]
-    references:
-      table: config_merge_mode
-      columns: [code]
   - name: bound_scoped_bindings
     columns: [bound_by]
     references:
@@ -55,6 +50,8 @@ indexes:
   - name: config_scope_binding_kind_ix
     columns: [partner_id, resource_kind_code, resource_id]
 checks:
+  - name: config_scope_binding_merge_mode_ck
+    expression: merge_mode_code IN ('replace', 'append', 'intersect')
   - name: config_scope_binding_window_ck
     expression: endda IS NULL OR endda > begda
   - name: config_scope_binding_digest_ck

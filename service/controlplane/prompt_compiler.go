@@ -199,6 +199,13 @@ func (*PromptCompiler) DefinitionDigest(definition domain.AgentDefinition) (stri
 			writeDigestField(&payload, skill.Version)
 		}
 	}
+	// Provenance is written only when present, so every definition without it keeps its digest.
+	if from := definition.DerivedFrom; from != nil {
+		payload.WriteByte(0x1a)
+		for _, field := range []string{from.Source.Kind, from.Source.ID, from.Source.Namespace, boolDigestField(from.Source.External), from.Version, from.Digest} {
+			writeDigestField(&payload, field)
+		}
+	}
 	return sha256Hex(payload.String()), nil
 }
 

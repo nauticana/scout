@@ -100,6 +100,16 @@ func (s *StudioService) SaveSetting(ctx context.Context, actor domain.StudioActo
 	if err != nil {
 		return domain.AgentSettings{}, err
 	}
+	if change.ResourceKind == domain.ResourceBudget && !change.Remove {
+		if err = s.checkSavedBudget(ctx, binding.Value); err != nil {
+			return domain.AgentSettings{}, err
+		}
+	}
+	if change.ResourceKind == domain.ResourceApprovalRouting && !change.Remove {
+		if err = s.checkSavedRouting(binding.Value); err != nil {
+			return domain.AgentSettings{}, err
+		}
+	}
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
 	if err != nil {
 		return domain.AgentSettings{}, fmt.Errorf("begin setting transaction: %w", err)
@@ -186,6 +196,12 @@ func (s *StudioService) freeze(ctx context.Context, tenantID int64, draft domain
 	if err = validateSingletonSettings(release.Resources); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
+	if err = s.init(ctx); err != nil {
+		return domain.EffectiveRelease{}, err
+	}
+	if err = s.checkBudget(ctx, s.qs, release.Resources, *definition); err != nil {
+		return domain.EffectiveRelease{}, err
+	}
 	if s.Kinds != nil {
 		descriptor, err := s.Kinds.Get(ctx, definition.AgentTypeID)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
@@ -216,6 +232,11 @@ func (s *StudioService) freeze(ctx context.Context, tenantID int64, draft domain
 	if definition.Sections, err = s.sections(ctx, tenantID, draft); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
+	origin, err := s.draftOrigin(ctx, tenantID, definition.AgentID)
+	if err != nil {
+		return domain.EffectiveRelease{}, err
+	}
+	definition.DerivedFrom = origin.derivedFrom()
 	if definition.DefinitionDigest, err = s.Compiler.DefinitionDigest(*definition); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
@@ -275,6 +296,15 @@ func storeSettings(ctx context.Context, tx keelport.TxQueryService, release doma
 }
 
 func (s *StudioService) compileSettings(ctx context.Context, tenantID int64, scopeID, agentID string, change *domain.ScopedBinding, compiledBy *int64) (domain.EffectiveRelease, error) {
+	var scopes contract.ScopeRepository = s.scopeRepository()
+	if change != nil {
+		scopes = changedScopes{ScopeRepository: scopes, change: *change}
+	}
+	return s.compileOver(ctx, scopes, tenantID, scopeID, agentID, compiledBy)
+}
+
+// compileOver compiles the chain of scopeID as scopes answers it.
+func (s *StudioService) compileOver(ctx context.Context, scopes contract.ScopeRepository, tenantID int64, scopeID, agentID string, compiledBy *int64) (domain.EffectiveRelease, error) {
 	mergers := s.Mergers
 	if mergers == nil {
 		registry, err := scope.NewMergerRegistry()
@@ -282,10 +312,6 @@ func (s *StudioService) compileSettings(ctx context.Context, tenantID int64, sco
 			return domain.EffectiveRelease{}, err
 		}
 		mergers = registry
-	}
-	var scopes contract.ScopeRepository = s.scopeRepository()
-	if change != nil {
-		scopes = changedScopes{ScopeRepository: scopes, change: *change}
 	}
 	compiler, err := scope.NewCompiler(scopes, mergers, &scope.LatticeChecker{}, s.MaxScopeDepth)
 	if err != nil {
@@ -363,7 +389,7 @@ func settingBinding(actor domain.StudioActor, scopes domain.PromptScopes, change
 func singletonSetting(kind domain.ResourceKind) bool {
 	switch kind {
 	case domain.ResourceTool, domain.ResourceKnowledge, domain.ResourceModel, domain.ResourceEntitlement,
-		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill, domain.ResourceLimits:
+		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill, domain.ResourceLimits, domain.ResourceApprovalRouting:
 		return true
 	default:
 		return false
@@ -393,21 +419,22 @@ func (s *StudioService) compileSettingsOf(ctx context.Context, tenantID int64, d
 	return s.compileSettings(ctx, tenantID, draft.PromptScopes.AgentScopeID, draft.AgentID, nil, nil)
 }
 
-// restoreSettings freezes the restored version's settings again for the new version. A
-// version published before settings were frozen cannot serve a turn, so it is not restored.
-func restoreSettings(ctx context.Context, tx keelport.TxQueryService, tenantID int64, agentID, from, to string) error {
+// loadRestoredSettings reads the restored version's frozen settings, which storeSettings freezes
+// again for the new version. A version published before settings were frozen cannot serve a
+// turn, so it is not restored.
+func loadRestoredSettings(ctx context.Context, tx keelport.TxQueryService, tenantID int64, agentID, from string) (domain.EffectiveRelease, error) {
 	source, err := tx.Query(ctx, qStudioGetSettings, tenantID, agentID, from)
 	if err != nil {
-		return fmt.Errorf("load restored settings: %w", err)
+		return domain.EffectiveRelease{}, fmt.Errorf("load restored settings: %w", err)
 	}
 	if len(source.Rows) == 0 {
-		return fmt.Errorf("%w: version %s has no frozen settings; publish the agent instead", domain.ErrConflict, from)
+		return domain.EffectiveRelease{}, fmt.Errorf("%w: version %s has no frozen settings; publish the agent instead", domain.ErrConflict, from)
 	}
 	release, err := decodeSettings(source.Rows[0], tenantID, agentID)
 	if err != nil {
-		return fmt.Errorf("decode restored settings: %w", err)
+		return domain.EffectiveRelease{}, fmt.Errorf("decode restored settings: %w", err)
 	}
-	return storeSettings(ctx, tx, release, to)
+	return release, nil
 }
 
 // decodeSettings decodes one qStudioGetSettings row; the caller sets the version.

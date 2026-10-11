@@ -2,9 +2,11 @@ package release
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nauticana/keel/common"
 	keelport "github.com/nauticana/keel/port"
@@ -33,11 +35,15 @@ VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?, ?)`,
 // StudioTraffic is the Studio surface over an agent's traffic policy: canary, promote,
 // and rollback change only which release new conversations take; a live conversation
 // stays on the release it recorded, which Explain reports with the rule that chose it.
+// Where Separation requires reviewing restores, traffic moves only between the stable
+// release and the current canary; returning any other version to service is a reviewed restore.
 type StudioTraffic struct {
 	DB          keelport.DatabaseRepository
 	Authorizer  contract.StudioAuthorizer
 	Traffic     contract.AgentVersionTrafficManager
 	Deployments contract.AgentDeploymentStore
+	Separation  contract.PublishSeparation
+	Now         func() time.Time
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -46,8 +52,8 @@ type StudioTraffic struct {
 var _ contract.StudioTrafficBackend = (*StudioTraffic)(nil)
 
 func (s *StudioTraffic) init(ctx context.Context) error {
-	if s.DB == nil || s.Authorizer == nil || s.Traffic == nil || s.Deployments == nil {
-		return fmt.Errorf("studio traffic: database, authorizer, traffic manager, and deployment store are required")
+	if s.DB == nil || s.Authorizer == nil || s.Traffic == nil || s.Deployments == nil || s.Separation == nil {
+		return fmt.Errorf("studio traffic: database, authorizer, traffic manager, deployment store, and publish separation are required")
 	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, trafficQueries) })
 	return nil
@@ -57,6 +63,8 @@ func (s *StudioTraffic) init(ctx context.Context) error {
 func (s *StudioTraffic) Canary(ctx context.Context, actor domain.StudioActor, agentID, version string, percentage int) (domain.AgentDeployment, error) {
 	return s.change(ctx, actor, agentID, "CANARY", fmt.Sprintf("version %s at %d%%", version, percentage), func() error {
 		return s.Traffic.SetCanary(ctx, actor.TenantID, agentID, version, percentage)
+	}, func(reviewed contract.ReviewedAgentVersionTrafficManager) error {
+		return reviewed.ReweightCanary(ctx, actor.TenantID, agentID, version, percentage)
 	})
 }
 
@@ -64,6 +72,8 @@ func (s *StudioTraffic) Canary(ctx context.Context, actor domain.StudioActor, ag
 func (s *StudioTraffic) Promote(ctx context.Context, actor domain.StudioActor, agentID, version string) (domain.AgentDeployment, error) {
 	return s.change(ctx, actor, agentID, "PROMOTE", "version "+version, func() error {
 		return s.Traffic.Promote(ctx, actor.TenantID, agentID, version)
+	}, func(reviewed contract.ReviewedAgentVersionTrafficManager) error {
+		return reviewed.PromoteDeployed(ctx, actor.TenantID, agentID, version)
 	})
 }
 
@@ -71,17 +81,35 @@ func (s *StudioTraffic) Promote(ctx context.Context, actor domain.StudioActor, a
 func (s *StudioTraffic) Rollback(ctx context.Context, actor domain.StudioActor, agentID string) (domain.AgentDeployment, error) {
 	return s.change(ctx, actor, agentID, "ROLLBACK", "", func() error {
 		return s.Traffic.Rollback(ctx, actor.TenantID, agentID)
+	}, func(reviewed contract.ReviewedAgentVersionTrafficManager) error {
+		_, err := reviewed.EndCanary(ctx, actor.TenantID, agentID)
+		return err
 	})
 }
 
-func (s *StudioTraffic) change(ctx context.Context, actor domain.StudioActor, agentID, event, detail string, apply func() error) (domain.AgentDeployment, error) {
+func (s *StudioTraffic) change(ctx context.Context, actor domain.StudioActor, agentID, event, detail string, apply func() error, applyReviewed func(contract.ReviewedAgentVersionTrafficManager) error) (domain.AgentDeployment, error) {
 	if err := s.init(ctx); err != nil {
 		return domain.AgentDeployment{}, err
 	}
 	if err := s.Authorizer.Authorize(ctx, actor, domain.StudioPublish, agentID); err != nil {
 		return domain.AgentDeployment{}, err
 	}
-	if err := apply(); err != nil {
+	reviewed, err := s.Separation.Required(ctx, actor.TenantID, agentID, domain.PublishReviewOfRestore, s.now())
+	if err != nil {
+		return domain.AgentDeployment{}, fmt.Errorf("resolve restore separation: %w", err)
+	}
+	if reviewed {
+		traffic, ok := s.Traffic.(contract.ReviewedAgentVersionTrafficManager)
+		if !ok {
+			return domain.AgentDeployment{}, fmt.Errorf("%w: traffic manager does not support reviewed traffic changes", domain.ErrNotReady)
+		}
+		if err = applyReviewed(traffic); errors.Is(err, domain.ErrConflict) {
+			err = fmt.Errorf("%w; restores of agent %q are reviewed, so returning another release to service takes an approved restore review and a restore", err, agentID)
+		}
+	} else {
+		err = apply()
+	}
+	if err != nil {
 		return domain.AgentDeployment{}, err
 	}
 	deployment, err := s.Deployments.Get(ctx, actor.TenantID, agentID)
@@ -96,6 +124,13 @@ func (s *StudioTraffic) change(ctx context.Context, actor domain.StudioActor, ag
 		return deployment, fmt.Errorf("record traffic event: %w", err)
 	}
 	return deployment, nil
+}
+
+func (s *StudioTraffic) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // Explain reports the release a conversation runs on, why it was chosen, and its digest.

@@ -51,11 +51,11 @@ flowchart BT
     core["keel core"]
     tenant_management["keel tenant_management"]
     keel_approval["keel approval"]
-    catalog["Catalog<br/>19 tables"]
+    catalog["Catalog<br/>15 tables"]
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
     model["Model<br/>6 tables"]
-    agent["Agent<br/>19 tables"]
+    agent["Agent<br/>25 tables"]
     tool["Tool<br/>5 tables"]
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>9 tables"]
@@ -72,7 +72,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 58 Scout tables — while the full platform is 136. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 60 Scout tables — while the full platform is 138. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -94,16 +94,12 @@ flowchart RL
         usage_category["usage_category"]
         config_scope_kind["config_scope_kind"]
         config_resource_kind["config_resource_kind"]
-        config_merge_mode["config_merge_mode"]
         audit_decision_outcome["audit_decision_outcome"]
         approval_status["approval_status"]
         approval_risk_tier["approval_risk_tier"]
-        agent_output_class["agent_output_class"]
         agent_state["agent_state"]
         mcp_confirmation_status["mcp_confirmation_status"]
-        mcp_confirmation_channel["mcp_confirmation_channel"]
         release_activation_state["release_activation_state"]
-        release_activation_reason["release_activation_reason"]
     end
 
     subgraph tenancy["Tenancy"]
@@ -152,6 +148,12 @@ flowchart RL
         agent_alias["agent_alias"]
         agent_studio_event["agent_studio_event"]
         agent_create_request["agent_create_request"]
+        agent_template_catalog["agent_template_catalog"]
+        agent_template_catalog_version["agent_template_catalog_version"]
+        agent_template["agent_template"]
+        agent_template_version["agent_template_version"]
+        agent_template_publication["agent_template_publication"]
+        agent_draft_origin["agent_draft_origin"]
         agent_version["agent_version"]
         agent_deployment["agent_deployment"]
         safety_event["safety_event"]
@@ -180,6 +182,15 @@ flowchart RL
     agent_draft_comment --> prompt_section
     agent_publish_review --> agent_version
     agent_release_activation --> agent_version
+    agent_template --> agent_type
+    agent_template_version --> agent_template
+    agent_template_version --> agent_type_version
+    agent_template_version --> agent_profile
+    agent_template_publication --> agent_template
+    agent_template_catalog_version --> agent_template_catalog
+    agent_draft_origin --> agent_draft
+    agent_draft_origin --> agent_template_version
+    agent_draft_origin --> agent_template_catalog_version
 
     subgraph agent_authorization_module["Agent Authorization"]
         direction BT
@@ -191,7 +202,7 @@ flowchart RL
 
     subgraph configuration_module["Configuration"]
         direction BT
-        scope["scope"]
+        config_scope["config_scope"]
         config_scope_binding["config_scope_binding"]
         effective_agent_release["effective_agent_release"]
         audit_event["audit_event"]
@@ -200,10 +211,10 @@ flowchart RL
         tenant_restriction_layer["tenant_restriction_layer"]
         tenant_current_restriction["tenant_current_restriction"]
     end
-    config_scope_binding --> scope
-    effective_agent_release --> scope
+    config_scope_binding --> config_scope
+    effective_agent_release --> config_scope
     effective_agent_release --> agent_version
-    audit_event --> scope
+    audit_event --> config_scope
     platform_current_restriction --> platform_restriction_layer
     tenant_current_restriction --> tenant_restriction_layer
 
@@ -212,7 +223,7 @@ flowchart RL
         turn_approval_request["turn_approval_request"]
         turn_approval_decision["turn_approval_decision"]
     end
-    turn_approval_request --> scope
+    turn_approval_request --> effective_agent_release
     turn_approval_decision --> turn_approval_request
     turn_approval_decision --> delegation_grant
 
@@ -292,7 +303,7 @@ flowchart RL
     conversation_turn --> agent_conversation
     step_checkpoint --> conversation_turn
     usage_event --> conversation_turn
-    usage_event --> scope
+    usage_event --> config_scope
     usage_event --> model_definition
     turn_feedback --> conversation_turn
     agent_work_item --> delegation_grant
@@ -406,7 +417,7 @@ flowchart RL
 
 All relational identifiers are lowercase. Tenant-owned relations carry `partner_id` in every foreign key toward `agent_tenant`, so keel's generic CRUD treats each as partner-specific and pins it to the caller's partner at any depth; `agent_ops_event` reaches `business_partner` directly. Go types keep the name `TenantID` for the same value. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
 
-`execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
+`execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. Closed code lists that Scout's code switches on, such as `config_scope_binding.merge_mode_code`, `turn_approval_request.output_class_code`, and `mcp_confirmation.channel_code`, are keel constants too, seeded by the owning module and enforced by a check; a catalog table remains where a code carries attributes or products add codes, as `usage_category` does. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
 
 ## REST relationship names
 
@@ -420,20 +431,27 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `agent_profile` | `agent_studio_events` | `agent_studio_event[]` |
 | `agent_profile` | `agent_publish_reviews` | `agent_publish_review[]` |
 | `agent_draft` | `agent_draft_comments` | `agent_draft_comment[]` |
+| `agent_draft` | `agent_draft_origins` | `agent_draft_origin[]` |
 | `agent_version` | `stable_agent_deployments` | `agent_deployment[]` |
 | `agent_version` | `canary_agent_deployments` | `agent_deployment[]` |
 | `agent_version` | `agent_release_activations` | `agent_release_activation[]` |
+| `agent_version` | `restore_version_publish_reviews` | `agent_publish_review[]` |
 | `execution_step` | `outgoing_execution_transitions` | `execution_transition[]` |
 | `execution_step` | `incoming_execution_transitions` | `execution_transition[]` |
-| `configuration` | `child_scopes` | `scope[]` |
-| `configuration` | `config_scope_bindings` | `config_scope_binding[]` |
+| `config_scope` | `child_config_scopes` | `config_scope[]` |
+| `config_scope` | `config_scope_bindings` | `config_scope_binding[]` |
 | `agent_type` | `agent_type_versions` | `agent_type_version[]` |
 | `agent_type` | `typed_agent_profiles` | `agent_profile[]` |
+| `agent_type` | `agent_templates` | `agent_template[]` |
+| `agent_template` | `agent_template_versions` | `agent_template_version[]` |
+| `agent_template` | `agent_template_publications` | `agent_template_publication[]` |
+| `agent_template_catalog` | `agent_template_catalog_versions` | `agent_template_catalog_version[]` |
 | `agent_version` | `agent_version_quarantines` | `agent_version_quarantine[]` |
 | `delegation_grant` | `grant_work_items` | `agent_work_item[]` |
 | `agent_work_item` | `child_work_items` | `agent_work_item[]` |
 | `agent_profile` | `agent_permissions` | `agent_permission[]` |
 | `authorization_role` | `permitted_agents` | `agent_permission[]` |
+| `effective_agent_release` | `released_turn_approval_requests` | `turn_approval_request[]` |
 | `turn_approval_request` | `turn_approval_decisions` | `turn_approval_decision[]` |
 | `tool_profile` | `tool_credential_bindings` | `tool_credential_binding[]` |
 | `skill_version` | `skill_version_tools` | `skill_tool[]` |
@@ -441,7 +459,7 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `skill_version` | `skill_version_requirements` | `skill_requirement[]` |
 | `skill_catalog_version` | `skill_catalog_derivations` | `skill_version[]` |
 
-The YAML foreign-key definitions are the complete relationship-name registry. Any future `foreign_key_lookup` or `rest_api_child` seed must reference those names verbatim. Renaming one is an API compatibility change even when its columns do not change.
+The YAML foreign-key definitions are the complete relationship-name registry. The `agent`, `model`, `prompt`, and `runtime` seeds register lookups for their principal relations in `foreign_key_lookup` — `agent_profiles`, `agent_drafts`, `agent_aliases`, `agent_versions`, `agent_deployments`, `agent_release_activations`, `agent_studio_events`, `agent_publish_reviews`, `agent_draft_comments`, `model_definitions`, `model_capabilities`, `model_routes`, `model_prices`, `prompt_baselines`, `agent_run_versions`, and `tenant_agent_ops_events`; every `foreign_key_lookup` or `rest_api_child` seed references those names verbatim. Renaming one is an API compatibility change even when its columns do not change.
 
 ## Tenant and model governance
 
@@ -674,7 +692,7 @@ erDiagram
     skill_version ||--o{ skill_tool : skill_version_tools
     skill_version ||--o{ skill_example : skill_version_examples
     skill_version ||--o{ agent_skill_binding : skill_agent_bindings
-    agent_version ||--o{ agent_skill_binding : agent_skill_bindings
+    agent_skill_binding }o--|| agent_version : agent_skill_bindings
     skill_version ||--o{ skill_requirement : skill_version_requirements
     skill_version ||--o{ skill_requirement : required_skill_dependents
     skill_catalog_profile ||--o{ skill_catalog_version : skill_catalog_versions
@@ -758,15 +776,15 @@ A skill version is immutable like a tool version. `skill_tool` names tools by id
 
 ```mermaid
 erDiagram
-    agent_profile ||--o| agent_draft : agent_drafts
-    agent_profile ||--o{ agent_alias : agent_aliases
     prompt_baseline }o--|| prompt_section : prompt_baselines
-    agent_profile ||--o{ agent_studio_event : agent_studio_events
-    agent_profile ||--o{ agent_create_request : agent_create_requests
+    prompt_section ||--o{ agent_draft_comment : prompt_section_draft_comments
+    agent_profile ||--o| agent_draft : agent_drafts
     agent_draft ||--o| agent_governance : agent_governances
     agent_draft ||--o| agent_draft_guardrail : agent_draft_guardrails
     agent_draft ||--o{ agent_draft_comment : agent_draft_comments
-    prompt_section ||--o{ agent_draft_comment : prompt_section_draft_comments
+    agent_profile ||--o{ agent_alias : agent_aliases
+    agent_profile ||--o{ agent_studio_event : agent_studio_events
+    agent_profile ||--o{ agent_create_request : agent_create_requests
 
     agent_studio_event {
         bigint id PK
@@ -858,13 +876,13 @@ erDiagram
     agent_profile ||--o{ agent_publish_review : agent_publish_reviews
     agent_version ||--o{ agent_publish_review : base_version_publish_reviews
     agent_version ||--o{ agent_publish_review : published_version_publish_reviews
-    user_account ||--o{ agent_publish_review : requested_publish_reviews
-    user_account ||--o{ agent_publish_review : decided_publish_reviews
+    agent_version ||--o{ agent_publish_review : restore_version_publish_reviews
+    agent_publish_review }o--|| user_account : requested_publish_reviews
+    agent_publish_review }o--|| user_account : decided_publish_reviews
     agent_version ||--o{ agent_release_activation : agent_release_activations
     agent_version ||--o{ agent_release_activation : base_stable_release_activations
     agent_version ||--o{ agent_release_activation : base_canary_release_activations
-    release_activation_state ||--o{ agent_release_activation : state_release_activations
-    release_activation_reason ||--o{ agent_release_activation : reason_release_activations
+    agent_release_activation }o--|| release_activation_state : state_release_activations
 
     agent_profile {
         bigint partner_id PK,FK
@@ -893,6 +911,7 @@ erDiagram
         bigint decided_by FK
         varchar sod_exception_id
         varchar published_version FK
+        varchar restore_version FK
     }
     agent_release_activation {
         bigint id PK
@@ -914,14 +933,98 @@ erDiagram
         varchar code PK
         boolean is_terminal
     }
-    release_activation_reason {
-        varchar code PK
-    }
 ```
 
 `agent_publish_review` asks a second person to approve publishing one exact draft, identified by `definition_digest`. It keeps the draft and prompt-profile revisions, the stable release the diff is taken against (`base_version`), the diff, and optional evaluation results. A new request supersedes one still `requested`, and the approver must not be the requester. When the agent's separation policy requires a review, publication needs the latest review approved for the same digest, refuses while any `agent_draft_comment` is open, and consumes the review by setting `published_version`; `sod_exception_id` is the separation-of-duties exception under which a requester may publish their own approved review.
 
-`agent_release_activation` is a published release scheduled to take the agent's traffic at `effective_at`. Publication writes the immutable release as usual and records the activation instead of moving `agent_deployment`; a partial unique index allows one `pending` activation per agent. `ReleaseActivationWorker` claims due rows by the database clock and, in one transaction, rechecks the scheduler's publish authority, the definition digest, and the publish guards, then compare-and-swaps the deployment against `base_stable_version` and `base_canary_version`. `release_activation_state` (`pending`, `activated`, `refused`, `cancelled`) and `release_activation_reason` classify the outcome; a transient failure retries at `next_attempt_at` until its attempts run out.
+A restore review is the same row with `restore_version` set: it approves restoring that published version over the release active when it was requested (`base_version`), recording the version's digest, its frozen revisions, and the diff from the active release. Publish and restore reviews are separate tracks, so a new request supersedes only an open review of its own kind. When the separation policy requires restore review, a restore needs the agent's latest restore review approved for exactly that version, digest, and base; open draft comments do not block it, and the restore consumes the review by setting `published_version`.
+
+`agent_release_activation` is a published release scheduled to take the agent's traffic at `effective_at`. Publication writes the immutable release as usual and records the activation instead of moving `agent_deployment`; a partial unique index allows one `pending` activation per agent. `ReleaseActivationWorker` claims due rows by the database clock and, in one transaction, rechecks the scheduler's publish authority, the definition digest, and the publish guards, then compare-and-swaps the deployment against `base_stable_version` and `base_canary_version`. `release_activation_state` (`pending`, `activated`, `refused`, `cancelled`) classifies the outcome and the keel constant `release_activation_reason` names why a refusal happened; a transient failure retries at `next_attempt_at` until its attempts run out.
+
+### Templates and provenance
+
+```mermaid
+erDiagram
+    agent_tenant |o--o{ agent_template_publication : audience_agent_template_publications
+    agent_type ||--o{ agent_template : agent_templates
+    agent_template ||--o{ agent_template_version : agent_template_versions
+    agent_type_version |o--o{ agent_template_version : typed_agent_template_versions
+    agent_profile |o--o{ agent_template_version : sourced_agent_template_versions
+    agent_template ||--o{ agent_template_publication : agent_template_publications
+    agent_template_catalog ||--o{ agent_template_catalog_version : agent_template_catalog_versions
+    agent_draft ||--o| agent_draft_origin : agent_draft_origins
+    agent_template_version |o--o{ agent_draft_origin : template_agent_draft_origins
+    agent_template_catalog_version |o--o{ agent_draft_origin : catalog_template_agent_draft_origins
+
+    agent_type {
+        bigint partner_id PK,FK
+        varchar agent_type_id PK
+    }
+    agent_template {
+        bigint partner_id PK,FK
+        varchar template_id PK,UK
+        varchar agent_type_id FK
+        varchar create_key
+        varchar created_by_kind
+        varchar created_by_id
+    }
+    agent_template_version {
+        bigint partner_id PK,FK
+        varchar template_id PK,FK
+        int template_version PK
+        varchar agent_type_id FK
+        varchar display_name
+        varchar type_version FK
+        text payload
+        char payload_digest
+        varchar source_agent_id FK
+        bigint source_draft_revision
+        varchar created_by_id
+    }
+    agent_template_publication {
+        bigint id PK
+        bigint partner_id FK
+        varchar template_id FK
+        bigint audience_partner_id FK
+        timestamp begda
+        timestamp endda
+        varchar published_by_id
+        varchar withdrawn_by_id
+    }
+    agent_template_catalog {
+        varchar template_id PK
+        varchar agent_type_id
+    }
+    agent_template_catalog_version {
+        varchar template_id PK,FK
+        int template_version PK
+        varchar display_name
+        varchar type_version
+        char type_digest
+        text payload
+        char payload_digest
+    }
+    agent_draft_origin {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        varchar source_kind
+        varchar source_id
+        varchar source_namespace
+        boolean source_external
+        varchar source_version
+        varchar source_digest
+        bigint template_partner_id FK
+        varchar template_id FK
+        int template_version FK
+        varchar catalog_template_id FK
+        int catalog_template_version FK
+        varchar recorded_by_id
+    }
+```
+
+A template seeds new agents of one type. `agent_template` is a tenant's own template, private until published; its id is `tpl-` plus hex, unique across tenants, and `create_key` makes a save idempotent per actor. `agent_template_catalog` holds platform templates no tenant owns, whose ids never start with `tpl-`; because every tenant holds its own `agent_type` row, a catalog template names its type by value and each version carries the type version's digest. Versions of both are immutable and numbered from 1. `payload` is canonical JSON of agent-scope bindings and slot names: knowledge and entitlement values and approval route approvers are replaced by slots that a create maps to the new tenant's own, and a template carries no guardrails, models, or extension. `source_agent_id` and `source_draft_revision` name the agent a tenant version was saved from. `agent_template_publication` shares a tenant template, effective-dated by `begda` and `endda`, with one other tenant or, with a null `audience_partner_id`, with every tenant; partial unique indexes keep one open row per audience, and a withdrawal records who ended it.
+
+`agent_draft_origin` records what an agent's draft derives from: an imported Charter `AgentDefinition` or a template version, named by source kind, id, namespace, version, and `sha256:` digest. A template origin also holds a real foreign key to exactly one of the tenant version or the catalog version; `template_partner_id` is the template's owner, which may be another tenant that shared it. Every freeze — publication and a draft evaluation subject — copies the origin into the release definition as `derived_from`, so provenance travels with `agent_version.definition` and with an exported definition.
 
 ## Principals, scopes, and effective configuration
 
@@ -948,16 +1051,15 @@ erDiagram
 
 ```mermaid
 erDiagram
-    config_merge_mode ||--o{ config_scope_binding : merge_scoped_bindings
     config_resource_kind ||--o{ config_scope_binding : kind_scoped_bindings
-    agent_tenant ||--o{ scope : scopes
-    config_scope_kind ||--o{ scope : kind_scopes
-    scope ||--o{ scope : child_scopes
-    scope ||--o{ config_scope_binding : config_scope_bindings
-    scope ||--o{ effective_agent_release : scope_effective_agent_releases
+    agent_tenant ||--o{ config_scope : config_scopes
+    config_scope_kind ||--o{ config_scope : kind_config_scopes
+    config_scope ||--o{ config_scope : child_config_scopes
+    config_scope ||--o{ config_scope_binding : config_scope_bindings
+    config_scope ||--o{ effective_agent_release : scope_effective_agent_releases
     agent_version ||--o| effective_agent_release : effective_agent_releases
 
-    scope {
+    config_scope {
         bigint partner_id PK,FK
         varchar scope_id PK
         varchar parent_scope_id FK
@@ -971,7 +1073,7 @@ erDiagram
         timestamp begda PK
         timestamp endda
         varchar resource_version
-        varchar merge_mode_code FK
+        varchar merge_mode_code
         boolean sealed
         text value
         char value_digest
@@ -1041,18 +1143,20 @@ credentials — password, lockout, 2FA, device session — that no machine ident
 
 ```mermaid
 erDiagram
-    approval_status ||--o{ turn_approval_request : status_turn_approval_requests
-    scope ||--o{ turn_approval_request : scope_turn_approval_requests
+    audit_decision_outcome ||--o{ audit_event : outcome_audit_events
+    agent_tenant ||--o{ audit_event : audit_events
     agent_tenant ||--o{ turn_approval_request : turn_approval_requests
-    turn_approval_request ||--o| turn_approval_decision : turn_approval_decisions
-    turn_approval_request |o--o{ turn_approval_request : revised_turn_approval_requests
+    approval_status ||--o{ turn_approval_request : status_turn_approval_requests
+    approval_risk_tier ||--o{ turn_approval_request : risk_turn_approval_requests
+    config_scope ||--o{ turn_approval_request : scope_turn_approval_requests
+    effective_agent_release |o--o{ turn_approval_request : released_turn_approval_requests
     outbox_event |o--o{ turn_approval_request : notified_turn_approval_requests
+    turn_approval_request |o--o{ turn_approval_request : revised_turn_approval_requests
+    turn_approval_request ||--o| turn_approval_decision : turn_approval_decisions
+    delegation_grant ||--o{ tool_credential_binding : grant_credential_bindings
     tool_profile ||--o{ tool_credential_binding : tool_credential_bindings
     turn_approval_decision }o--|| user_account : decided_turn_approval_decisions
     tool_credential_binding }o--|| user_account : delegated_credential_bindings
-    delegation_grant ||--o{ tool_credential_binding : grant_credential_bindings
-    agent_tenant ||--o{ audit_event : audit_events
-    audit_decision_outcome ||--o{ audit_event : outcome_audit_events
 
     turn_approval_request {
         bigint id PK
@@ -1063,13 +1167,23 @@ erDiagram
         varchar principal_id
         varchar approver_kind
         varchar approver_id
-        varchar output_class_code FK
+        varchar output_class_code
         varchar risk_tier_code FK
         char proposed_digest
         varchar status_code FK
         timestamp deadline_at
         bigint notification_event_id FK
         bigint revises_step_id FK
+        varchar release_version FK
+        varchar requester_kind
+        varchar requester_id
+        varchar rule_source_code
+        varchar approval_route_id
+        varchar approver_reference_kind
+        varchar approver_reference
+        smallint route_step
+        varchar route_resolution
+        timestamp turn_settled_at
     }
     turn_approval_decision {
         bigint turn_approval_request_id PK,FK
@@ -1127,6 +1241,18 @@ turn whose `revises_step_id` names the edited one. `turn_approval_decision` reco
 identity columns with an exactly-one check; human and agent identities keep real declared foreign
 keys, while platform service decisions retain their stable service id.
 
+A request records how it was routed. `rule_source_code` says why the call needs a person (`autonomy`,
+`policy`, or `guardrail`), and `requester_kind`/`requester_id` name the person the turn acts for, who may
+never approve it. An agent's request names in `release_version` the release whose frozen
+`approval_routing` setting routed it, a real key to `effective_agent_release`. A routed request also
+carries the route (`approval_route_id`), the role or position deciding at the current step
+(`approver_reference_kind`, `approver_reference`), the escalation `route_step` (0 to 3) that verdicts and
+reassignments are fenced on, and `route_resolution`, the product resolver's evidence reference; a check
+keeps the route columns all null at step 0 or all set with a release version. Rule sources, approver
+kinds, and output classes are keel constants seeded by the `approval` module and enforced by checks. `turn_settled_at` is set
+on an expired request once its parked turn has been failed or found no longer parked, so a sweep retries
+until it is.
+
 `tool_credential_binding` maps one principal to a scoped identity for one tool and purpose. It holds a
 `credential_ref` into keel's secret or OAuth-connection store — never secret material — so two agents
 sharing a tool version never share an identity, and `revoked_at` stops work whose delegation ended.
@@ -1137,6 +1263,35 @@ invalidates the credential binding.
 policy, with what outcome and obligations. The payload columns hold only a reference to redacted
 evidence in object storage. `audit_decision_outcome` classifies every row, and the query side is
 `contract.AuditQuery`, always bound to one tenant. [doc/governance.md](governance.md) has the rules.
+
+```mermaid
+erDiagram
+    agent_tenant ||--o{ mcp_confirmation : mcp_confirmations
+    mcp_confirmation_status ||--o{ mcp_confirmation : status_mcp_confirmations
+    approval_request |o--o{ mcp_confirmation : approval_mcp_confirmations
+    outbox_event |o--o{ mcp_confirmation : notified_mcp_confirmations
+
+    mcp_confirmation {
+        bigint id PK
+        bigint partner_id FK
+        varchar maker_kind
+        varchar maker_id
+        varchar tool
+        char payload_digest
+        varchar channel_code
+        varchar status_code FK
+        boolean approval_required
+        bigint approval_id FK
+        bigint notification_event_id FK
+        bigint fence
+        timestamp lease_until
+        timestamp expires_at
+    }
+    mcp_confirmation_status {
+        varchar code PK
+        boolean is_open
+    }
+```
 
 `mcp_confirmation` holds one MCP tool call until a person confirms it. A partial unique index on
 `(partner_id, tool, payload_digest)` over the open statuses (`mcp_confirmation_status.is_open`) keeps
@@ -1152,12 +1307,12 @@ retention clears `payload`, `preview`, and `result` and keeps the digest and dec
 
 ```mermaid
 erDiagram
-    agent_type ||--o{ agent_type_version : agent_type_versions
+    agent_version ||--o| agent_version_quarantine : agent_version_quarantines
+    agent_state ||--o{ agent_profile : state_agent_profiles
     agent_type ||--o{ agent_profile : typed_agent_profiles
+    agent_type ||--o{ agent_type_version : agent_type_versions
     agent_type_version ||--o{ agent_type_capability : agent_type_capabilities
     agent_capability_package ||--o{ agent_type_capability : package_agent_type_capabilities
-    agent_state ||--o{ agent_profile : state_agent_profiles
-    agent_version ||--o| agent_version_quarantine : agent_version_quarantines
     agent_profile ||--o{ delegation_grant : grantee_delegation_grants
     delegation_grant ||--o{ agent_work_item : grant_work_items
     agent_work_item ||--o{ agent_work_item : child_work_items
@@ -1416,6 +1571,11 @@ erDiagram
     agent_tenant ||--o{ agent_conversation : conversations
     agent_version ||--o{ agent_conversation : agent_version_conversations
     agent_conversation ||--o| session_snapshot : session_snapshots
+    agent_conversation ||--o{ turn_queue : turn_queue_entries
+    turn_queue ||--o| turn_dead_letter : dead_letter_queue_entries
+    turn_queue |o--|| conversation_turn : turn_queue_turns
+    turn_dead_letter }o--|| conversation_turn : dead_letter_turns
+    agent_conversation ||--|{ conversation_turn : conversation_turns
     session_snapshot |o--|| step_checkpoint : checkpoint_session_snapshots
     conversation_turn ||--o{ step_checkpoint : step_checkpoints
     conversation_turn ||--o{ step_idempotency : step_idempotencies
@@ -1427,17 +1587,13 @@ erDiagram
     budget_reservation }o--|| reservation_status : status_budget_reservations
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
     conversation_turn ||--o{ usage_event : usage_events
+    conversation_turn ||--o{ turn_feedback : turn_feedbacks
     usage_event }o--|| usage_category : category_usage_events
     model_definition |o--o{ usage_event : model_usage_events
-    agent_conversation ||--|{ conversation_turn : conversation_turns
     turn_status ||--o{ conversation_turn : status_conversation_turns
     conversation_turn ||--o| conversation_turn_detail : conversation_turn_details
-    conversation_turn ||--o{ turn_dead_letter : dead_letter_turns
-    turn_queue |o--|| conversation_turn : turn_queue_turns
-    agent_conversation ||--o{ turn_queue : turn_queue_entries
-    turn_queue ||--o| turn_dead_letter : dead_letter_queue_entries
+    agent_run }o--|| turn_status : status_agent_runs
     agent_version ||--o{ agent_run : agent_run_versions
-    turn_status ||--o{ agent_run : status_agent_runs
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -1528,11 +1684,17 @@ erDiagram
         bigint partner_id PK,FK
         varchar reservation_id PK
         varchar request_id FK
+        varchar principal_kind
+        varchar principal_id
         bigint attempt_no
         varchar status_code FK
+        bigint granted_tokens
+        bigint granted_cost_minor_units
         char currency_code FK
         bigint settled_tokens
+        bigint settled_cost_minor_units
         timestamp expires_at
+        timestamp settled_at
     }
     reservation_status {
         varchar code PK
@@ -1599,6 +1761,15 @@ erDiagram
         char input_digest
         timestamp created_at
     }
+    turn_feedback {
+        bigint partner_id PK,FK
+        varchar conversation_id PK,FK
+        bigint turn_no PK,FK
+        varchar principal_kind PK
+        varchar principal_id PK
+        smallint rating
+        timestamp recorded_at
+    }
 ```
 
 `agent_conversation` pins the release a conversation runs on and records why: `version_source` names the rule (`stable`, `canary`, `experiment_cohort`, `pilot`, a pin, or `request_pin` with its `pin_reason`), null when the product supplied the version, and `alias_id` is the agent type it was requested through. `usage_event` attributes settled usage to the spending principal, the person it acted for (`on_behalf_kind`, `on_behalf_id`), and the product's opaque `work_ref`; `audit_event.work_ref` carries the same reference.
@@ -1609,7 +1780,7 @@ Settlement writes one `usage_event` per model that performed part of the turn, p
 
 `step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of a `tool_loop` step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
 
-Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry.
+Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry. Each hold is charged to the turn's agent in `principal_kind` and `principal_id`; a release budget — per turn, rolling window, or calendar day or month, with a frozen currency exponent — is enforced against the agent's settled and live holds in the current period, measured by the database clock, which the `budget_reservation_principal_ix` index on principal, status, and `settled_at` serves.
 
 `turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. `acting_context` carries who the turn acts as — principal, authority chain, delegation bounds, work item — as references and bounds, never a credential. An acknowledged delivery is requeued only while its turn is live again, which is how a resumed turn returns to a worker. `conversation_turn.cancel_requested_at` is the durable cancellation request a worker polls. `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
 
@@ -1828,25 +1999,26 @@ The `evaluation` group holds the evidence a rollout gate consumes.
 ```mermaid
 erDiagram
     knowledge_base ||--o{ golden_query : knowledge_base_golden_queries
+    agent_profile ||--o| agent_golden_set : agent_golden_sets
+    agent_profile |o--o{ golden_set : agent_owned_golden_sets
     agent_tenant ||--o{ golden_set : golden_sets
     golden_set ||--o{ golden_set_version : golden_set_versions
     golden_set ||--o{ golden_case : golden_cases
+    approval_risk_tier ||--o{ golden_case : risk_tier_golden_cases
     golden_set ||--o{ agent_golden_set : golden_set_agents
-    agent_profile ||--o| agent_golden_set : agent_golden_sets
-    agent_profile |o--o{ golden_set : agent_owned_golden_sets
-    golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
-    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
-    agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
-    golden_set_version ||--o{ golden_query : golden_queries
     golden_set_version ||--o{ golden_example : golden_examples
+    golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
+    golden_set_version ||--o{ golden_query : golden_queries
     golden_set_version ||--o{ evaluation_manifest : evaluation_manifests
+    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
+    golden_example ||--o{ evaluation_result : example_evaluation_results
+    golden_example ||--o{ human_review_item : example_human_review_items
+    evaluation_run ||--o{ evaluation_result : evaluation_results
+    evaluation_run ||--o{ human_review_item : human_review_items
+    agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
     agent_version ||--o{ evaluation_manifest : candidate_evaluation_manifests
     agent_version ||--o{ evaluation_manifest : baseline_evaluation_manifests
     evaluation_manifest |o--o{ evaluation_run : evaluation_runs
-    evaluation_run ||--o{ evaluation_result : evaluation_results
-    golden_example ||--o{ evaluation_result : example_evaluation_results
-    evaluation_run ||--o{ human_review_item : human_review_items
-    golden_example ||--o{ human_review_item : example_human_review_items
     evaluation_manifest ||--o{ gate_decision : gate_decisions
     gate_decision }o--|| platform_release : platform_gate_decisions
     agent_tenant ||--o{ evaluation_sample : evaluation_samples
@@ -1966,6 +2138,7 @@ erDiagram
         varchar agent_version FK
         char definition_digest
         text definition_json
+        text settings_json
     }
     evaluation_result {
         bigint run_id PK,FK
@@ -1974,6 +2147,9 @@ erDiagram
         text scores
         int latency_ms
         bigint cost_minor_units
+        bigint evaluator_input_tokens
+        bigint evaluator_output_tokens
+        bigint evaluator_cost_minor_units
         char currency_code FK
         boolean needs_human_review
     }
@@ -2016,7 +2192,7 @@ erDiagram
 ```
  `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring verdict, `human_review_item` the adjudication queue, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
 
-Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`) or a release (`agent_version`), both by `definition_digest`.
+Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
 
 ## Scout table inventory
 
@@ -2024,11 +2200,11 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 
 | Module | Tables |
 |---|---|
-| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state`, `mcp_confirmation_status`, `mcp_confirmation_channel`, `release_activation_state`, `release_activation_reason` |
+| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_state`, `mcp_confirmation_status`, `release_activation_state` |
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
-| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_governance`, `agent_draft_guardrail`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_version`, `agent_deployment`, `agent_release_activation`, `agent_version_quarantine`, `agent_publish_review`, `agent_draft_comment` |
+| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_governance`, `agent_draft_guardrail`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_template_catalog`, `agent_template_catalog_version`, `agent_template`, `agent_template_version`, `agent_template_publication`, `agent_draft_origin`, `agent_version`, `agent_deployment`, `agent_release_activation`, `agent_version_quarantine`, `agent_publish_review`, `agent_draft_comment` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |

@@ -25,7 +25,7 @@ type StudioLimitsHandler struct {
 
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts this route.
 func (h *StudioLimitsHandler) Feature() api.StudioFeature {
-	return api.StudioFeature{ID: StudioFeatureLimits, Version: 1, Actions: []string{string(domain.StudioView)}}
+	return api.StudioFeature{ID: StudioFeatureLimits, Version: 2, Actions: []string{string(domain.StudioView)}}
 }
 
 // Routes returns the limits route: ?agent_name=.
@@ -47,14 +47,18 @@ func (h *StudioLimitsHandler) limits(ctx context.Context, actor domain.StudioAct
 	}
 	if budget := report.Budget; budget != nil {
 		result.Budget = &api.AgentBudget{
-			Tokens: budget.WindowTokens, CostMinorUnits: budget.WindowCostMinorUnits, Currency: budget.Currency,
-			WindowSeconds: int64(budget.Window / time.Second),
+			Tokens: budget.Tokens, CostMinorUnits: budget.CostMinorUnits, Currency: budget.Currency, Exponent: budget.Exponent,
+			Period: string(budget.Period.Kind), Source: string(budget.Source), Timezone: budget.Period.Timezone,
+			Problem: string(report.BudgetProblem),
+		}
+		if budget.Period.Kind == domain.BudgetRolling {
+			result.Budget.WindowSeconds = int64(budget.Period.Window / time.Second)
 		}
 	}
 	if spend := report.Spend; spend != nil {
 		result.Spend = &api.AgentBudgetSpend{
-			PeriodStart: spend.PeriodStart, PeriodEnd: spend.PeriodEnd, Tokens: spend.Tokens,
-			CostMinorUnits: spend.CostMinorUnits, Currency: spend.Currency, Exponent: spend.Exponent,
+			PeriodStart: spend.PeriodStart, PeriodEnd: spend.PeriodEnd, Tokens: spend.Tokens, CostMinorUnits: spend.CostMinorUnits,
+			HeldTokens: spend.HeldTokens, HeldCostMinorUnits: spend.HeldCostMinorUnits, Currency: spend.Currency, Exponent: spend.Exponent,
 		}
 	}
 	return result, nil

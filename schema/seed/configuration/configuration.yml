@@ -1,0 +1,17 @@
+comment: Configuration scope code lists
+order: 28
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [config_merge_mode, Merge Mode]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [config_merge_mode, replace, Child value replaces the inherited value]
+      - [config_merge_mode, append, Child value is appended to the inherited value]
+      - [config_merge_mode, intersect, Effective value is the intersection with the inherited value]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [config_merge_mode, config_scope_binding, merge_mode_code]

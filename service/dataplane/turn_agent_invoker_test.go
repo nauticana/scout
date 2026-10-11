@@ -12,7 +12,7 @@ import (
 	"github.com/nauticana/scout/fake"
 )
 
-// hopLedger holds per principal, like BudgetLedger with a PrincipalBudgetPolicy.
+// hopLedger holds per principal, like BudgetLedger charging each turn to its agent's release budget.
 type hopLedger struct {
 	ceilings map[string]int64
 	held     map[string]int64

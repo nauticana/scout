@@ -85,9 +85,7 @@ type RolloutController struct {
 	States contract.RolloutStateStore
 	Lease  contract.RolloutLease
 	Audit  contract.AuditSink
-	// Health is preferred; Legacy maps true/false/error to healthy/unhealthy/inconclusive.
-	Health contract.DetailedRolloutHealthEvaluator
-	Legacy contract.RolloutHealthEvaluator
+	Health contract.RolloutHealthEvaluator
 	// Bundles supplies the certified rollback target; nil falls back to the current default.
 	Bundles contract.ReleaseBundleStore
 	// Aliases and Capacity are the rollback hooks; nil skips them.
@@ -112,7 +110,7 @@ func (controller *RolloutController) validate() error {
 	switch {
 	case controller.States == nil || controller.Lease == nil || controller.Audit == nil:
 		return fmt.Errorf("rollout controller: state store, lease, and audit sink are required")
-	case controller.Health == nil && controller.Legacy == nil:
+	case controller.Health == nil:
 		return fmt.Errorf("rollout controller: a health evaluator is required")
 	case len(controller.Plan) == 0:
 		return fmt.Errorf("%w: rollout plan is required", domain.ErrValidation)
@@ -490,21 +488,11 @@ func (controller *RolloutController) retireOtherDefaults(ctx context.Context, pl
 
 func (controller *RolloutController) health(ctx context.Context, state domain.RolloutState) (domain.RolloutHealth, error) {
 	target := domain.RolloutTarget{PlatformVersion: state.PlatformVersion, TenantRing: state.Ring, Percentage: state.TrafficPercentage}
-	if controller.Health != nil {
-		health, err := controller.Health.Evaluate(ctx, target)
-		if err != nil {
-			return domain.RolloutHealth{Verdict: domain.RolloutInconclusive, BreachedMetric: "evaluation error: " + err.Error()}, nil
-		}
-		return health, nil
-	}
-	healthy, err := controller.Legacy.Healthy(ctx, target)
-	switch {
-	case err != nil:
+	health, err := controller.Health.Evaluate(ctx, target)
+	if err != nil {
 		return domain.RolloutHealth{Verdict: domain.RolloutInconclusive, BreachedMetric: "evaluation error: " + err.Error()}, nil
-	case healthy:
-		return domain.RolloutHealth{Verdict: domain.RolloutHealthy, Samples: state.MinSamples}, nil
 	}
-	return domain.RolloutHealth{Verdict: domain.RolloutUnhealthy, BreachedMetric: "legacy"}, nil
+	return health, nil
 }
 
 func (controller *RolloutController) activeBypass(ctx context.Context, state domain.RolloutState, now time.Time) (map[string]bool, error) {

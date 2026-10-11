@@ -17,6 +17,8 @@ const (
 	ResourceAutonomy      ResourceKind = "autonomy"
 	ResourceSkill         ResourceKind = "skill"
 	ResourceLimits        ResourceKind = "limits"
+	// ResourceApprovalRouting routes approvals to roles or positions with deadlines and escalation.
+	ResourceApprovalRouting ResourceKind = "approval_routing"
 )
 
 // MergeMode is how a child binding combines with the value it inherits.

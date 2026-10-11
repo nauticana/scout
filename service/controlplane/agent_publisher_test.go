@@ -139,7 +139,10 @@ func TestPublishFailsWhenAScopeBindingBroadens(t *testing.T) {
 		Compiler: fake.AgentCompilerFunc(func(_ context.Context, definition domain.AgentDefinition) (domain.ExecutionGraph, error) {
 			return domain.ExecutionGraph{AgentID: definition.AgentID, Version: definition.Version, EntryStepID: "start", Digest: strings.Repeat("a", 64)}, nil
 		}),
-		Store: fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error { return nil }),
+		Store: fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error {
+			t.Fatal("a version whose settings do not compile must not be stored")
+			return nil
+		}),
 		Effective: fake.EffectiveConfigCompilerFunc(func(context.Context, domain.CompileRequest) (domain.EffectiveRelease, error) {
 			return domain.EffectiveRelease{}, domain.ErrAuthorityExceeded
 		}),
@@ -177,5 +180,25 @@ func TestAgentPublisherRefusesToPublishWithoutFreezing(t *testing.T) {
 		if err := publisher.Publish(context.Background(), 7, validDefinition()); err == nil {
 			t.Fatalf("%s: publication succeeded without a frozen release", name)
 		}
+	}
+}
+
+// A refused budget is caught before the immutable version exists, so no stored version is left
+// without the settings every turn reads.
+func TestAgentPublisherChecksTheBudgetBeforeStoring(t *testing.T) {
+	publisher := frozen(&AgentPublisher{
+		Compiler: fake.AgentCompilerFunc(func(context.Context, domain.AgentDefinition) (domain.ExecutionGraph, error) { return validGraph(), nil }),
+		Store: fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error {
+			t.Fatal("stored a version whose budget is refused")
+			return nil
+		}),
+	})
+	publisher.Effective = fake.EffectiveConfigCompilerFunc(func(_ context.Context, request domain.CompileRequest) (domain.EffectiveRelease, error) {
+		return domain.EffectiveRelease{TenantID: request.TenantID, AgentID: request.AgentID, AgentVersion: request.AgentVersion,
+			Resources: []domain.EffectiveResource{{ResourceKind: domain.ResourceBudget, ResourceID: "budget",
+				Value: []byte(`{"tokens":0,"cost_minor_units":500,"currency":"EUR","exponent":2,"period":"turn"}`)}}}, nil
+	})
+	if err := publisher.Publish(context.Background(), 7, validDefinition()); err == nil {
+		t.Fatal("a cost budget that cannot be checked against the currency catalog must be refused")
 	}
 }

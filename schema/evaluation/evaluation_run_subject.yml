@@ -20,6 +20,10 @@ columns:
     type: TEXT
     nullable: true
     comment: The draft frozen as publish would freeze it; a release subject reads its own agent_version row
+  - name: settings_json
+    type: TEXT
+    nullable: true
+    comment: The settings frozen with the draft, digested by its settings_digest; a release subject reads its effective_agent_release row
 primary_key: [run_id, role_code]
 foreign_keys:
   - name: evaluation_run_subjects
@@ -44,6 +48,6 @@ checks:
   - name: evaluation_run_subject_role_ck
     expression: role_code IN ('baseline', 'candidate')
   - name: evaluation_run_subject_kind_ck
-    expression: (subject_code = 'draft' AND agent_version IS NULL AND definition_json IS NOT NULL) OR (subject_code = 'release' AND agent_version IS NOT NULL AND definition_json IS NULL)
+    expression: (subject_code = 'draft' AND agent_version IS NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code = 'release' AND agent_version IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL)
   - name: evaluation_run_subject_digest_ck
     expression: CHAR_LENGTH(definition_digest) = 64

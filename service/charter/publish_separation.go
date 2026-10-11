@@ -15,11 +15,12 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// PublishSeparation reads two-person publish from a tenant's Charter documents: publishing an
+// PublishSeparation reads two-person review from a tenant's Charter documents: publishing an
 // agent is separated from authoring it while a SodConstraint in force in the tenant's namespace
-// constrains both the Author and the Publish capability at the agent's scope (CHR-AUTH-007).
-// Excuse admits only a SodException in that namespace that relieves the person of that
-// constraint now and leaves no other constraint separating them (CHR-AUTH-012).
+// constrains both the Author and the Publish capability at the agent's scope (CHR-AUTH-007), and
+// restoring a published version likewise while one constrains Author and Restore. Excuse admits
+// only a SodException in that namespace that relieves the person of that constraint now and
+// leaves no other constraint separating them (CHR-AUTH-012).
 type PublishSeparation struct {
 	Documents corpus.Source
 	// Namespace maps a tenant to the Charter namespace that owns its constraints and exceptions.
@@ -27,29 +28,43 @@ type PublishSeparation struct {
 	// Author and Publish are the capabilities a constraint names, relative to the tenant's namespace.
 	Author  model.Ref
 	Publish model.Ref
+	// Restore is the restore capability; while it is unset no restore is separated.
+	Restore model.Ref
 	// Actor maps a Studio person to the Charter actor an exception names as its beneficiary.
 	Actor func(ctx context.Context, tenantID int64, person domain.PrincipalRef) (model.ObjectRef, error)
 }
 
 var _ contract.PublishSeparation = (*PublishSeparation)(nil)
 
-// Required reports whether a constraint in force separates authoring from publishing the agent.
-func (p *PublishSeparation) Required(ctx context.Context, tenantID int64, agentID string, at time.Time) (bool, error) {
+// Required reports whether a constraint in force separates authoring from publishing or
+// restoring the agent.
+func (p *PublishSeparation) Required(ctx context.Context, tenantID int64, agentID string, kind domain.PublishReviewKind, at time.Time) (bool, error) {
+	capability, err := p.capability(kind)
+	if err != nil || (kind == domain.PublishReviewOfRestore && capability.ID == "") {
+		return false, err
+	}
 	namespace, constraints, err := p.constraints(ctx, tenantID, at)
 	if err != nil {
 		return false, err
 	}
-	return p.separated(namespace, constraints, agentID)
+	return p.separated(namespace, constraints, agentID, capability)
 }
 
 // Excuse fails closed unless the named exception relieves the person of every constraint
-// separating authoring from publishing the agent at the instant.
-func (p *PublishSeparation) Excuse(ctx context.Context, tenantID int64, agentID, exceptionID string, person domain.PrincipalRef, at time.Time) error {
+// separating authoring from publishing or restoring the agent at the instant.
+func (p *PublishSeparation) Excuse(ctx context.Context, tenantID int64, agentID string, kind domain.PublishReviewKind, exceptionID string, person domain.PrincipalRef, at time.Time) error {
 	if p.Actor == nil {
 		return fmt.Errorf("%w: charter publish separation needs an actor mapping", domain.ErrNotReady)
 	}
 	if strings.TrimSpace(exceptionID) == "" {
 		return fmt.Errorf("%w: no separation exception is named", domain.ErrForbidden)
+	}
+	capability, err := p.capability(kind)
+	if err != nil {
+		return err
+	}
+	if capability.ID == "" {
+		return fmt.Errorf("%w: restores of agent %s are not separated, so no exception applies", domain.ErrForbidden, agentID)
 	}
 	namespace, constraints, err := p.constraints(ctx, tenantID, at)
 	if err != nil {
@@ -71,14 +86,25 @@ func (p *PublishSeparation) Excuse(ctx context.Context, tenantID int64, agentID,
 	if err != nil {
 		return fmt.Errorf("%w: %v", domain.ErrForbidden, err)
 	}
-	separated, err := p.separated(namespace, remaining, agentID)
+	separated, err := p.separated(namespace, remaining, agentID, capability)
 	if err != nil {
 		return err
 	}
 	if separated {
-		return fmt.Errorf("%w: another constraint still separates authoring from publishing agent %s", domain.ErrForbidden, agentID)
+		return fmt.Errorf("%w: another constraint still separates authoring from the %s of agent %s", domain.ErrForbidden, kind, agentID)
 	}
 	return nil
+}
+
+// capability is the capability a review of kind carries out; it is empty for an unseparated restore.
+func (p *PublishSeparation) capability(kind domain.PublishReviewKind) (model.Ref, error) {
+	switch kind {
+	case domain.PublishReviewOfPublish:
+		return p.Publish, nil
+	case domain.PublishReviewOfRestore:
+		return p.Restore, nil
+	}
+	return model.Ref{}, fmt.Errorf("%w: unknown review kind %q", domain.ErrValidation, kind)
 }
 
 func (p *PublishSeparation) constraints(ctx context.Context, tenantID int64, at time.Time) (string, []model.SodConstraint, error) {
@@ -102,12 +128,12 @@ func (p *PublishSeparation) constraints(ctx context.Context, tenantID int64, at 
 	return namespace, owned, nil
 }
 
-func (p *PublishSeparation) separated(namespace string, constraints []model.SodConstraint, agentID string) (bool, error) {
+func (p *PublishSeparation) separated(namespace string, constraints []model.SodConstraint, agentID string, capability model.Ref) (bool, error) {
 	scope := "agent:" + agentID
 	evaluator := authority.SodEvaluator{Scopes: authority.ExactSodScopeMatcher{}}
 	_, conflict, err := evaluator.Conflict(constraints,
 		[]authority.SodAction{{Namespace: namespace, Capability: p.Author, Scope: scope}},
-		authority.SodAction{Namespace: namespace, Capability: p.Publish, Scope: scope})
+		authority.SodAction{Namespace: namespace, Capability: capability, Scope: scope})
 	if err != nil {
 		return false, fmt.Errorf("evaluate publish separation: %w", err)
 	}

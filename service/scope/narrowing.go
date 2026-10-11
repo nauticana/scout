@@ -27,20 +27,23 @@ const (
 	NarrowPolicy NarrowingRule = "policy"
 	// NarrowText carries no authority, so any value is accepted; sealing still applies.
 	NarrowText NarrowingRule = "text"
+	// NarrowRouting keeps every parent approval route in place, tightening only its deadlines.
+	NarrowRouting NarrowingRule = "routing"
 )
 
 // PlatformNarrowingRules mirrors the seeded resource_kind.narrowing_rule column.
 var PlatformNarrowingRules = map[domain.ResourceKind]NarrowingRule{
-	domain.ResourcePromptSection: NarrowText,
-	domain.ResourcePolicy:        NarrowPolicy,
-	domain.ResourceTool:          NarrowSubset,
-	domain.ResourceKnowledge:     NarrowSubset,
-	domain.ResourceModel:         NarrowSubset,
-	domain.ResourceEntitlement:   NarrowSubset,
-	domain.ResourceBudget:        NarrowAtMost,
-	domain.ResourceAutonomy:      NarrowOrdered,
-	domain.ResourceSkill:         NarrowSubset,
-	domain.ResourceLimits:        NarrowAtMost,
+	domain.ResourcePromptSection:   NarrowText,
+	domain.ResourcePolicy:          NarrowPolicy,
+	domain.ResourceTool:            NarrowSubset,
+	domain.ResourceKnowledge:       NarrowSubset,
+	domain.ResourceModel:           NarrowSubset,
+	domain.ResourceEntitlement:     NarrowSubset,
+	domain.ResourceBudget:          NarrowAtMost,
+	domain.ResourceAutonomy:        NarrowOrdered,
+	domain.ResourceSkill:           NarrowSubset,
+	domain.ResourceLimits:          NarrowAtMost,
+	domain.ResourceApprovalRouting: NarrowRouting,
 }
 
 // LatticeChecker rejects any effective value that broadens what it inherits. An
@@ -70,9 +73,11 @@ func (c *LatticeChecker) CheckNarrowing(_ context.Context, kind domain.ResourceK
 		if kind == domain.ResourceLimits {
 			return checkLimits(kind, inherited, candidate)
 		}
-		return checkAtMost(kind, inherited, candidate)
+		return checkBudgetAtMost(kind, inherited, candidate)
 	case NarrowOrdered:
 		return checkOrdered(kind, inherited, candidate)
+	case NarrowRouting:
+		return checkRouting(kind, inherited, candidate)
 	default:
 		return fmt.Errorf("%w: unsupported narrowing rule %q for kind %q", domain.ErrValidation, rule, kind)
 	}
@@ -217,24 +222,6 @@ func obligationsPreserved(parent, child []domain.Obligation) bool {
 		}
 	}
 	return true
-}
-
-func checkAtMost(kind domain.ResourceKind, inherited, candidate []byte) error {
-	parent, err := decodeBudget(inherited)
-	if err != nil {
-		return err
-	}
-	child, err := decodeBudget(candidate)
-	if err != nil {
-		return err
-	}
-	if parent.Tokens > 0 && (child.Tokens == 0 || child.Tokens > parent.Tokens) {
-		return fmt.Errorf("%w: %s raises the token ceiling above %d", domain.ErrAuthorityExceeded, kind, parent.Tokens)
-	}
-	if parent.CostMinorUnits > 0 && (child.CostMinorUnits == 0 || child.CostMinorUnits > parent.CostMinorUnits) {
-		return fmt.Errorf("%w: %s raises the cost ceiling above %d", domain.ErrAuthorityExceeded, kind, parent.CostMinorUnits)
-	}
-	return nil
 }
 
 func checkOrdered(kind domain.ResourceKind, inherited, candidate []byte) error {

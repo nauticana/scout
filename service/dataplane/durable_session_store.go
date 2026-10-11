@@ -117,6 +117,9 @@ SELECT response_digest
 type DurableSessionStore struct {
 	DB      port.DatabaseRepository
 	Objects ObjectStateCodec
+	// MaxResultCardBytes is the largest response copied into turn history; a larger one is
+	// referenced, not copied. Default 64 KiB.
+	MaxResultCardBytes int
 
 	once sync.Once
 	qs   port.QueryService
@@ -125,6 +128,9 @@ type DurableSessionStore struct {
 func (store *DurableSessionStore) validate() error {
 	if store.DB == nil || store.Objects == nil {
 		return fmt.Errorf("%w: durable session store needs a database and an object codec", domain.ErrValidation)
+	}
+	if store.MaxResultCardBytes < 0 {
+		return fmt.Errorf("%w: durable session store result card limit must not be negative", domain.ErrValidation)
 	}
 	return nil
 }
@@ -261,7 +267,7 @@ func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, 
 		return fmt.Errorf("dehydrate turn response: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	kind, card := resultCard(result.Response, ref)
+	kind, card := resultCard(result.Response, ref, positiveOr(store.MaxResultCardBytes, defaultResultCardBytes))
 	completed, err := store.queries(ctx).Query(ctx, qSessionCompleteTurn,
 		ref.URI, ref.Digest, tenantID, conversationID, turnNo, expectedRevision, kind, card)
 	if err != nil {
@@ -275,13 +281,13 @@ func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, 
 	return nil
 }
 
-// maxResultCard bounds the response copy kept in turn history; a larger one is referenced, not copied.
-const maxResultCard = 64 << 10
+const defaultResultCardBytes = 64 << 10
 
-// resultCard is the turn-history view of a response: JSON verbatim, anything else as text.
-func resultCard(response []byte, ref domain.ObjectRef) (kind, card string) {
+// resultCard is the turn-history view of a response: JSON verbatim, anything else as text,
+// and a reference to the stored object when the response is larger than maxBytes.
+func resultCard(response []byte, ref domain.ObjectRef, maxBytes int) (kind, card string) {
 	switch {
-	case len(response) > maxResultCard:
+	case len(response) > maxBytes:
 		encoded, _ := json.Marshal(map[string]string{"response_uri": ref.URI, "response_digest": ref.Digest})
 		return "reference", string(encoded)
 	case json.Valid(response):

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 const (
@@ -31,12 +32,12 @@ const (
 )
 
 // Window accounting: held reservations count at their grant until they expire,
-// settled reservations count at actual usage for one budget window. A bounded
-// principal is counted the same way inside the tenant's envelope; both must hold.
-var budgetQueries = map[string]string{
+// settled reservations count at actual usage for one budget window. The turn's agent is
+// counted against its release budget's period the same way; both must hold.
+var budgetQueries = common.MergeMaps(scope.CurrencyQueries, agentBudgetQueries, map[string]string{
 	qLockBudget: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
 	qGetTurnState: `
-SELECT status.is_terminal
+SELECT status.is_terminal, CURRENT_TIMESTAMP
   FROM conversation_turn turn_row
   JOIN turn_status status ON status.code = turn_row.status_code
  WHERE turn_row.partner_id = ? AND turn_row.request_id = ?`,
@@ -71,18 +72,6 @@ SELECT ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?, CURRENT_TIMESTAMP + make_interval(secs
            AND currency_code = ?
            AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
              OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
-   AND (NOT ? OR
-       (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_tokens ELSE settled_tokens END), 0)
-          FROM budget_reservation
-         WHERE partner_id = ? AND principal_kind = ? AND principal_id = ?
-           AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
-             OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
-   AND (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_cost_minor_units ELSE settled_cost_minor_units END), 0)
-          FROM budget_reservation
-         WHERE partner_id = ? AND principal_kind = ? AND principal_id = ?
-           AND currency_code = ?
-           AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
-             OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?)
 RETURNING reservation_id, expires_at`,
 	qSettleBudget: `
 UPDATE budget_reservation
@@ -111,16 +100,17 @@ UPDATE budget_reservation
                                         LIMIT ?
                                           FOR UPDATE SKIP LOCKED)
 RETURNING reservation_id`,
-}
+})
 
 // BudgetLedger is a durable TenantBudgetManager over budget_reservation:
 // reserve-then-settle with a lease, so a dead worker's hold expires instead of
-// throttling its tenant forever.
+// throttling its tenant forever. Every hold is charged to its turn's conversation agent
+// and enforces that agent's release budget inside the tenant envelope.
 type BudgetLedger struct {
 	DB     keelport.DatabaseRepository
 	Policy contract.TenantBudgetPolicy
-	// Principals is optional; when set a bounded principal reserves inside its own window too.
-	Principals contract.PrincipalBudgetPolicy
+	// Releases reads each agent's frozen budget; required. Pass the data plane's PrincipalLimits.
+	Releases contract.PrincipalLimits
 	// ReservationTTL bounds how long a hold counts before Expire reclaims it; default 15m.
 	ReservationTTL time.Duration
 
@@ -148,8 +138,8 @@ func (ledger *BudgetLedger) ttl() time.Duration {
 	return ledger.ReservationTTL
 }
 
-// Reserve atomically holds tokens and cost against the tenant's window budget and,
-// when the principal is bounded, against the principal's inside it.
+// Reserve atomically holds tokens and cost against the tenant's window budget and the release
+// budget of the turn's agent: its per-turn ceiling, or its current period by the database clock.
 func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
 	tenantID, tokens, costMinorUnits, currency := request.TenantID, request.Tokens, request.CostMinorUnits, request.Currency
 	requestID := strings.TrimSpace(request.RequestID)
@@ -159,8 +149,11 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 	if ledger.Policy == nil {
 		return domain.BudgetReservation{}, fmt.Errorf("budget ledger: policy is required")
 	}
-	if ledger.DB == nil {
-		return domain.BudgetReservation{}, fmt.Errorf("budget ledger: database is required")
+	if ledger.Releases == nil {
+		return domain.BudgetReservation{}, fmt.Errorf("budget ledger: release limits are required")
+	}
+	if err := ledger.init(ctx); err != nil {
+		return domain.BudgetReservation{}, err
 	}
 	limits, err := ledger.Policy.BudgetFor(ctx, tenantID)
 	if err != nil {
@@ -175,8 +168,15 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 	if ledger.ttl() < time.Second {
 		return domain.BudgetReservation{}, fmt.Errorf("%w: reservation TTL must be at least one second", domain.ErrValidation)
 	}
-	own, bounded, err := ledger.principalLimits(ctx, request, limits)
+	agent, err := ledger.turnAgent(ctx, tenantID, requestID, request.Principal)
 	if err != nil {
+		return domain.BudgetReservation{}, err
+	}
+	budget, err := ledger.Releases.Budget(ctx, agent)
+	if err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("release budget of agent %q: %w", agent.ID, err)
+	}
+	if tokens, costMinorUnits, err = turnGrant(budget, request.TurnGoverned, tokens, costMinorUnits); err != nil {
 		return domain.BudgetReservation{}, err
 	}
 	windowSeconds := durationSeconds(limits.Window)
@@ -202,6 +202,10 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 	}
 	if common.AsBool(turnState.Rows[0][0]) {
 		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q is terminal", domain.ErrConflict, requestID)
+	}
+	now, ok := common.AsTimeOK(turnState.Rows[0][1])
+	if !ok {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: invalid database clock %q", common.AsString(turnState.Rows[0][1]))
 	}
 	existing, err := tx.Query(ctx, qFindBudget, tenantID, requestID)
 	if err != nil {
@@ -257,24 +261,31 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 		}
 		attempt = reservation.Attempt + 1
 	}
+	// Admission runs only for a new attempt: a live hold was admitted already, and Abandon and
+	// cancellation recover it to release it even after the budget became unenforceable.
+	if err = enforceable(budget, currency); err != nil {
+		return domain.BudgetReservation{}, err
+	}
+	if _, err = scope.CheckBudgetUnit(ctx, tx, budget); err != nil {
+		return domain.BudgetReservation{}, err
+	}
+	if err = ledger.checkPeriod(ctx, tx, tenantID, agent.ID, budget, now, tokens, costMinorUnits, currency); err != nil {
+		return domain.BudgetReservation{}, err
+	}
 	reservationID, err := newReservationID()
 	if err != nil {
 		return domain.BudgetReservation{}, err
 	}
-	kind, id := string(request.Principal.Kind), request.Principal.ID
 	result, err := tx.Query(ctx, qReserveBudget,
-		tenantID, reservationID, requestID, nullableText(kind), nullableText(id), attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
+		tenantID, reservationID, requestID, string(domain.PrincipalAgent), agent.ID, attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
 		tenantID, windowSeconds, tokens, limits.WindowTokens,
 		tenantID, currency, windowSeconds, costMinorUnits, limits.WindowCostMinorUnits,
-		bounded,
-		tenantID, kind, id, durationSeconds(own.Window), tokens, own.WindowTokens,
-		tenantID, kind, id, currency, durationSeconds(own.Window), costMinorUnits, own.WindowCostMinorUnits,
 	)
 	if err != nil {
 		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: %w", err)
 	}
 	if len(result.Rows) == 0 {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of the tenant or of %s %q is exhausted", domain.ErrBudgetExceeded, kind, id)
+		return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of tenant %d is exhausted", domain.ErrBudgetExceeded, tenantID)
 	}
 	expiresAt, ok := common.AsTimeOK(result.Rows[0][1])
 	if !ok {
@@ -295,31 +306,6 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 	}
 	committed = true
 	return reservation, nil
-}
-
-// principalLimits resolves the principal's own window; an unbounded or unnamed principal has none.
-func (ledger *BudgetLedger) principalLimits(ctx context.Context, request domain.BudgetRequest, tenant domain.BudgetLimits) (domain.BudgetLimits, bool, error) {
-	if ledger.Principals == nil || request.Principal.Kind == "" || request.Principal.ID == "" {
-		return domain.BudgetLimits{}, false, nil
-	}
-	own, bounded, err := ledger.Principals.PrincipalBudgetFor(ctx, request.TenantID, request.Principal)
-	if err != nil {
-		return domain.BudgetLimits{}, false, fmt.Errorf("budget policy for %s %q: %w", request.Principal.Kind, request.Principal.ID, err)
-	}
-	if !bounded {
-		return domain.BudgetLimits{}, false, nil
-	}
-	if own.Window < time.Second || own.WindowTokens <= 0 || own.WindowCostMinorUnits < 0 || own.Currency != tenant.Currency {
-		return domain.BudgetLimits{}, false, fmt.Errorf("%w: budget limits of %s %q are invalid or not in the tenant's currency", domain.ErrValidation, request.Principal.Kind, request.Principal.ID)
-	}
-	return own, true, nil
-}
-
-func nullableText(value string) any {
-	if value == "" {
-		return nil
-	}
-	return value
 }
 
 // Commit settles actual usage, including an overrun, into the budget window.

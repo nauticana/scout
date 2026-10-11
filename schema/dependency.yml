@@ -77,7 +77,9 @@ groups:
 
   - name: configuration
     path: configuration
+    seed: seed/configuration/configuration.yml
     depends_on: [catalog, tenancy, agent]
+    seed_depends_on: [core]
 
   - name: agent_authorization
     path: agent_authorization
@@ -85,8 +87,12 @@ groups:
 
   - name: approval
     path: approval
+    seed: seed/approval/approval.yml
     depends_on: [catalog, tenancy, agent, configuration, agent_authorization]
+    seed_depends_on: [core]
 
   - name: mcp_confirmation
     path: mcp_confirmation
+    seed: seed/mcp_confirmation/mcp_confirmation.yml
     depends_on: [catalog, tenancy]
+    seed_depends_on: [core]

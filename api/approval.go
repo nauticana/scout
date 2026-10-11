@@ -18,7 +18,7 @@ type ApprovalRequest struct {
 	ExecutionStepID int64      `json:"execution_step_id"`
 	ConversationID  string     `json:"conversation_id"`
 	ScopeID         string     `json:"scope_id,omitempty"`
-	RuleID          string     `json:"rule_id,omitempty"`
+	RuleID          string     `json:"rule_id"`
 	Action          string     `json:"action"`
 	Resource        string     `json:"resource"`
 	OutputClass     string     `json:"output_class"`
@@ -30,6 +30,12 @@ type ApprovalRequest struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	// RevisesStepID names the edited proposal of the same turn this request revises.
 	RevisesStepID int64 `json:"revises_step_id,omitempty"`
+	// RuleSource is why the call needs a person: autonomy, policy, or guardrail.
+	RuleSource string `json:"rule_source"`
+	// RouteID, RouteStep, and ApproverReference are the routed authority the request is assigned under.
+	RouteID           string             `json:"route_id,omitempty"`
+	RouteStep         int                `json:"route_step"`
+	ApproverReference *ApproverReference `json:"approver_reference,omitempty"`
 }
 
 // ApprovalResolveRequest is a signed-in decider's verdict: approved, rejected, or edited.

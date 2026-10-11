@@ -23,7 +23,7 @@ const (
 	cacheReplyRoutePrefix   = "cachereply"
 	replyHeadSuffix         = "head"
 	replyTerminalRouteLabel = "record"
-	recordReadPeriod        = 5 * time.Second
+	defaultRecordReadPeriod = 5 * time.Second
 )
 
 // CacheReplyHub carries reply frames between processes through the shared keel
@@ -39,6 +39,8 @@ type CacheReplyHub struct {
 	Retention time.Duration
 	// PollInterval bounds delivery latency when a wake-up is lost; default 500ms.
 	PollInterval time.Duration
+	// RecordReadInterval throttles a subscriber's durable record reads; default 5s.
+	RecordReadInterval time.Duration
 
 	once   sync.Once
 	signal cacheSignal
@@ -60,11 +62,19 @@ func replyStreamKey(tenantID int64, requestID string) string {
 	return fmt.Sprintf("%s:%d:%s", replyChannel, tenantID, requestID)
 }
 
-func (hub *CacheReplyHub) retention() time.Duration {
-	if hub.Retention > 0 {
-		return hub.Retention
+// check refuses a hub that cannot deliver: no cache, or a negative period.
+func (hub *CacheReplyHub) check() error {
+	if hub.Cache == nil {
+		return fmt.Errorf("cache reply hub: cache is required")
 	}
-	return defaultReplyRetention
+	if hub.Retention < 0 || hub.PollInterval < 0 || hub.RecordReadInterval < 0 {
+		return fmt.Errorf("cache reply hub: retention, poll interval, and record read interval must not be negative")
+	}
+	return nil
+}
+
+func (hub *CacheReplyHub) retention() time.Duration {
+	return positiveOr(hub.Retention, defaultReplyRetention)
 }
 
 func (hub *CacheReplyHub) relay() *cacheSignal {
@@ -112,8 +122,8 @@ func (hub *CacheReplyHub) frame(ctx context.Context, stream string, sequence int
 // Publish stores the frame, advances the head, and wakes subscribers. One leased
 // worker publishes a request's frames, so the head needs no compare-and-set.
 func (hub *CacheReplyHub) Publish(ctx context.Context, reply domain.TurnReply) error {
-	if hub.Cache == nil {
-		return fmt.Errorf("cache reply hub: cache is required")
+	if err := hub.check(); err != nil {
+		return err
 	}
 	if reply.TenantID <= 0 || strings.TrimSpace(reply.RequestID) == "" || reply.Sequence < 0 {
 		return fmt.Errorf("%w: tenant, request, and sequence are required", domain.ErrValidation)
@@ -170,8 +180,8 @@ func (hub *CacheReplyHub) SubscribeFrom(ctx context.Context, tenantID int64, req
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if hub.Cache == nil {
-		return nil, fmt.Errorf("cache reply hub: cache is required")
+	if err := hub.check(); err != nil {
+		return nil, err
 	}
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || fromSequence < 0 {
 		return nil, fmt.Errorf("%w: tenant, request, and cursor are required", domain.ErrValidation)
@@ -237,11 +247,7 @@ func (subscription *cacheReplySubscription) Route() string {
 // cache no longer holds is ErrReplayExpired: an unbroken prefix beats a silent gap.
 func (subscription *cacheReplySubscription) Receive(ctx context.Context) (domain.TurnReply, error) {
 	hub := subscription.hub
-	period := hub.PollInterval
-	if period <= 0 {
-		period = defaultReplyPollPeriod
-	}
-	poll := time.NewTicker(period)
+	poll := time.NewTicker(positiveOr(hub.PollInterval, defaultReplyPollPeriod))
 	defer poll.Stop()
 	for {
 		if subscription.done {
@@ -286,7 +292,7 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 		return domain.TurnReply{}, false, fmt.Errorf("%w: reply sequence %d is no longer retained", domain.ErrReplayExpired, subscription.next)
 	}
 	// A running stream is answered by the cache alone; the record is read for one that is absent or final.
-	if hub.Records == nil || started && !head.Final || time.Since(subscription.recordReadAt) < recordReadPeriod {
+	if hub.Records == nil || started && !head.Final || time.Since(subscription.recordReadAt) < positiveOr(hub.RecordReadInterval, defaultRecordReadPeriod) {
 		return domain.TurnReply{}, false, nil
 	}
 	subscription.recordReadAt = time.Now()

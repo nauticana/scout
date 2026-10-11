@@ -47,7 +47,7 @@ func (f *evaluationBackendFake) Evaluation(_ context.Context, _ domain.StudioAct
 	return domain.AgentEvaluationPage{
 		Run: domain.AgentEvaluationRun{RunID: runID, Usage: domain.Usage{CostMinorUnits: 1250, Currency: "JPY"}, Exponent: 0, HiddenResults: 2},
 		Results: []domain.AgentCaseResult{{ExampleID: "refund", Latency: 1500 * time.Millisecond, Exponent: 2,
-			Usage:  domain.Usage{CostMinorUnits: 7, Currency: "EUR"},
+			Usage: domain.Usage{CostMinorUnits: 7, Currency: "EUR"}, EvaluatorUsage: domain.Usage{InputTokens: 40, CostMinorUnits: 3, Currency: "EUR"},
 			Scores: []domain.EvaluationScore{{Metric: "correctness", Value: 0.5, Evaluator: domain.EvaluatorVersion{Kind: "judge", Version: "j2"}, Rationale: "partial"}}}},
 		NextBefore: "refund",
 	}, nil
@@ -116,6 +116,10 @@ func TestStudioEvaluationHandlerMapsRunsAndPages(t *testing.T) {
 		t.Fatalf("run cost = %+v", page.Run)
 	}
 	result := page.Results[0]
+	if result.Cost.CostMinorUnits != 7 || result.EvaluatorCost.CostMinorUnits != 3 || result.EvaluatorCost.InputTokens != 40 ||
+		result.EvaluatorCost.Currency != "EUR" || result.EvaluatorCost.Exponent != 2 {
+		t.Fatalf("costs = %+v and %+v, want the subject's and the evaluators' apart", result.Cost, result.EvaluatorCost)
+	}
 	if result.CaseID != "refund" || result.LatencyMs != 1500 || result.Cost.Exponent != 2 || result.Scores[0].Evaluator.Version != "j2" || result.Scores[0].Rationale != "partial" {
 		t.Fatalf("result = %+v", result)
 	}

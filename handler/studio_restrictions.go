@@ -41,7 +41,7 @@ func (h *StudioRestrictionHandler) Routes() map[string]http.HandlerFunc {
 			read(w, r)
 			return
 		}
-		bounded(replace)(w, r)
+		bounded(&h.AbstractHandler, replace)(w, r)
 	}}
 }
 

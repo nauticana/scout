@@ -9,8 +9,9 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// maxCallRevisions bounds how often deciders may revise one proposed call in a turn.
-const maxCallRevisions = 8
+// defaultCallRevisions bounds how often deciders may revise one proposed call in a turn
+// when ToolLoopLimits.MaxCallRevisions is zero.
+const defaultCallRevisions = 8
 
 // revision returns the edit a decider made to a parked call: the journaled substitution on
 // replay, or, at the head of the journal, a newly read edit that is journaled before it runs.

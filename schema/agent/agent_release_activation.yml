@@ -81,11 +81,6 @@ foreign_keys:
     references:
       table: release_activation_state
       columns: [code]
-  - name: reason_release_activations
-    columns: [reason_code]
-    references:
-      table: release_activation_reason
-      columns: [code]
 indexes:
   - name: agent_release_activation_pending_uq
     columns: [partner_id, agent_id]
@@ -102,6 +97,8 @@ checks:
     expression: canary_percentage BETWEEN 0 AND 99 AND (canary_percentage = 0 OR base_stable_version IS NOT NULL)
   - name: agent_release_activation_attempts_ck
     expression: attempts >= 0
+  - name: agent_release_activation_reason_code_ck
+    expression: reason_code IS NULL OR reason_code IN ('version_missing', 'digest_mismatch', 'not_authorized', 'agent_archived', 'guard_refused', 'deployment_changed', 'attempts_exhausted')
   - name: agent_release_activation_reason_ck
     expression: (state_code = 'refused') = (reason_code IS NOT NULL)
   - name: agent_release_activation_decider_ck

@@ -1,0 +1,64 @@
+table: agent_template_version
+comment: Immutable version of a tenant agent template
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: template_id
+    type: VARCHAR(80)
+  - name: template_version
+    type: INTEGER
+  - name: agent_type_id
+    type: VARCHAR(80)
+  - name: display_name
+    type: VARCHAR(200)
+  - name: description
+    type: VARCHAR(500)
+    nullable: true
+  - name: type_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: payload
+    type: TEXT
+    comment: Canonical JSON bindings and slot names; no knowledge or entitlement value of the owner
+  - name: payload_digest
+    type: CHAR(64)
+  - name: change_summary
+    type: VARCHAR(400)
+    nullable: true
+  - name: source_agent_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: source_draft_revision
+    type: BIGINT
+    nullable: true
+  - name: created_by_kind
+    type: VARCHAR(20)
+  - name: created_by_id
+    type: VARCHAR(120)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, template_id, template_version]
+foreign_keys:
+  - name: agent_template_versions
+    columns: [partner_id, template_id, agent_type_id]
+    references:
+      table: agent_template
+      columns: [partner_id, template_id, agent_type_id]
+  - name: typed_agent_template_versions
+    columns: [partner_id, agent_type_id, type_version]
+    references:
+      table: agent_type_version
+      columns: [partner_id, agent_type_id, type_version]
+  - name: sourced_agent_template_versions
+    columns: [partner_id, source_agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+checks:
+  - name: agent_template_version_ck
+    expression: template_version > 0
+  - name: agent_template_version_digest_ck
+    expression: CHAR_LENGTH(payload_digest) = 64
+  - name: agent_template_version_source_ck
+    expression: (source_agent_id IS NULL) = (source_draft_revision IS NULL)

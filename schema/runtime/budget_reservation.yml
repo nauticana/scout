@@ -60,7 +60,7 @@ indexes:
   - name: budget_reservation_expiry_ix
     columns: [status_code, expires_at]
   - name: budget_reservation_principal_ix
-    columns: [partner_id, principal_kind, principal_id, status_code]
+    columns: [partner_id, principal_kind, principal_id, status_code, settled_at]
   - name: budget_reservation_request_attempt_uq
     columns: [partner_id, request_id, attempt_no]
     unique: true

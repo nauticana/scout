@@ -65,6 +65,8 @@ type ToolLoopLimits struct {
 	// MaxRepeatedCalls trips ErrLoopDetected when one tool is proposed with identical arguments this often.
 	MaxRepeatedCalls int
 	Deadline         time.Duration
+	// MaxCallRevisions bounds how often deciders may revise one proposed call in a turn; zero takes the default.
+	MaxCallRevisions int
 }
 
 // LoopKey identifies the journal of one loop step within one turn.

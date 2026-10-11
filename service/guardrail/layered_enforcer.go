@@ -394,7 +394,7 @@ func (enforcer *LayeredEnforcer) requireApproval(ctx context.Context, rule *comp
 	if enforcer.approvals == nil {
 		return fmt.Errorf("%w: rule %q needs a tool approval gate", domain.ErrDegraded, rule.rule.ID)
 	}
-	decision, err := enforcer.approvals.Decide(ctx, *in.call, rule.rule.ID)
+	decision, err := enforcer.approvals.Decide(ctx, *in.call, domain.ApprovalAsk{Source: domain.ApprovalSourceGuardrail, RuleID: rule.rule.ID})
 	if err != nil {
 		return err
 	}

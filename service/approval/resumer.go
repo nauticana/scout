@@ -32,7 +32,7 @@ type Resumer struct {
 	LinkMaxRisk domain.RiskTier
 	// Archive keeps an edited verdict's revised arguments where evidence lives; nil refuses edits.
 	Archive contract.EvidenceArchive
-	// MaxRevisedArgumentBytes bounds revised arguments; zero is DefaultMaxRevisedArgumentBytes.
+	// MaxRevisedArgumentBytes bounds revised arguments; zero takes DefaultMaxRevisedArgumentBytes.
 	MaxRevisedArgumentBytes int
 	Now                     func() time.Time
 }
@@ -87,9 +87,13 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 	if err != nil {
 		return domain.ApprovalRequest{}, err
 	}
+	if err := awaitsApprover(request); err != nil {
+		return domain.ApprovalRequest{}, err
+	}
 	if err := r.Authorizer.AuthorizeApproval(ctx, request, verdict.Decider); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
+	verdict.Assignment = fenceOf(request)
 	if verdict.Authority.Subject.ID == "" {
 		verdict.Authority.Subject = verdict.Decider
 	}
@@ -107,7 +111,7 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 	}
 	key := verdict.RequestKey
 	if verdict.Status == domain.ApprovalStatusRejected {
-		return request, r.failRefused(ctx, key, verdict.Status)
+		return request, failTurn(ctx, r.Records, key, verdict.Status)
 	}
 	if err := r.Records.Resume(ctx, key.TenantID, key.RequestID); err != nil {
 		return request, err
@@ -118,16 +122,32 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 	return request, nil
 }
 
-func (r *Resumer) failRefused(ctx context.Context, key domain.ApprovalKey, status domain.ApprovalStatus) error {
-	err := r.Records.Fail(ctx, key.TenantID, key.RequestID, "failed", string(status))
+// failTurn fails the turn parked on a refused or expired request; a replay that finds the turn
+// already failed with the same code succeeds.
+func failTurn(ctx context.Context, records contract.TurnRecordStore, key domain.ApprovalKey, status domain.ApprovalStatus) error {
+	err := records.Fail(ctx, key.TenantID, key.RequestID, "failed", string(status))
 	if !errors.Is(err, domain.ErrConflict) {
 		return err
 	}
-	_, turnStatus, payload, findErr := r.Records.Find(ctx, key.TenantID, key.RequestID)
+	_, turnStatus, payload, findErr := records.Find(ctx, key.TenantID, key.RequestID)
 	if findErr == nil && turnStatus == "failed" && string(payload) == string(status) {
 		return nil
 	}
 	return errors.Join(err, findErr)
+}
+
+// awaitsApprover refuses a routed request nobody is assigned yet: it waits for escalation to
+// fill it and never falls back to whoever holds DECIDE.
+func awaitsApprover(request domain.ApprovalRequest) error {
+	if request.Route.RouteID != "" && request.Approver.ID == "" {
+		return fmt.Errorf("%w: approval %d awaits an eligible approver", domain.ErrForbidden, request.ID)
+	}
+	return nil
+}
+
+// fenceOf is the assignment a verdict on request is decided against.
+func fenceOf(request domain.ApprovalRequest) domain.ApprovalFence {
+	return domain.ApprovalFence{Step: request.Route.Step, Approver: request.Approver}
 }
 
 // MintLink returns a single-use token by which one person decides one request with one
@@ -203,6 +223,9 @@ func (r *Resumer) linkBinding(ctx context.Context, key domain.ApprovalKey, statu
 	}
 	request, err := r.Store.Get(ctx, key)
 	if err != nil {
+		return domain.ApprovalRequest{}, actiontoken.Binding{}, err
+	}
+	if err := awaitsApprover(request); err != nil {
 		return domain.ApprovalRequest{}, actiontoken.Binding{}, err
 	}
 	if limit, ok := riskRank[r.LinkMaxRisk]; !ok || riskRank[request.RiskTier] > limit {

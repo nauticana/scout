@@ -14,7 +14,7 @@ import (
 func TestApprovalRuleDecidesTheRevisionNotTheOriginal(t *testing.T) {
 	var seen domain.ToolCall
 	refuse := false
-	gate := fake.ToolApprovalGateFunc(func(_ context.Context, call domain.ToolCall, _ string) (domain.ApprovalDecision, error) {
+	gate := fake.ToolApprovalGateFunc(func(_ context.Context, call domain.ToolCall, _ domain.ApprovalAsk) (domain.ApprovalDecision, error) {
 		seen = call
 		if refuse {
 			return domain.ApprovalDenied, fmt.Errorf("gate: %w", domain.ErrProposalRevised)

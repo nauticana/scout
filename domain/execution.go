@@ -52,6 +52,8 @@ type StepInput struct {
 	Input []byte
 	// Limits are the release's execution limits the turn runs under; a step only narrows its own ceilings by them.
 	Limits ExecutionLimits
+	// Spend is what the step may still spend of the release's per-turn budget.
+	Spend StepSpend
 }
 
 // StepResult contains state, routing, and usage produced by a step.

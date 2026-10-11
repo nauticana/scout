@@ -125,6 +125,9 @@ func (store *TableRestrictionLayers) init(ctx context.Context) error {
 	if store.DB == nil {
 		return fmt.Errorf("restriction layers: database is required")
 	}
+	if store.TTL < 0 || store.Entries < 0 {
+		return fmt.Errorf("%w: restriction layer TTL and entries cannot be negative", domain.ErrValidation)
+	}
 	store.once.Do(func() {
 		store.qs = store.DB.GetQueryService(ctx, restrictionQueries)
 		entries := store.Entries

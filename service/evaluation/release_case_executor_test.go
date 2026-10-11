@@ -84,7 +84,8 @@ func newReplayHarness(t *testing.T, script ...domain.ModelResult) *replayHarness
 		Sandboxes: func(context.Context, domain.GoldenExample) (contract.ToolSandbox, error) {
 			return harness.sandbox, nil
 		},
-		Limits: domain.ToolLoopLimits{MaxIterations: 3, MaxToolCalls: 4, MaxTokens: 10_000, MaxRepeatedCalls: 3, Deadline: time.Minute},
+		Limits:        domain.ToolLoopLimits{MaxIterations: 3, MaxToolCalls: 4, MaxTokens: 10_000, MaxRepeatedCalls: 3, Deadline: time.Minute},
+		ReleaseLimits: &fake.PrincipalLimits{},
 	}
 	return harness
 }

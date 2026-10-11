@@ -44,8 +44,8 @@ type EffectiveConfigCompiler interface {
 // PrincipalLimits resolves the limits frozen into a principal's effective
 // release. The tenant envelope always binds on top of whatever these return.
 type PrincipalLimits interface {
-	// Budget returns the principal's token and cost ceiling.
-	Budget(ctx context.Context, principal domain.Principal) (domain.BudgetLimits, error)
+	// Budget returns the frozen budget and its period; the ledger and the turn's governors enforce it.
+	Budget(ctx context.Context, principal domain.Principal) (domain.ReleaseBudget, error)
 	// AutonomyMode returns the mode the principal may act under at a point in
 	// time; outside its operating window a bounded mode degrades rather than fails.
 	AutonomyMode(ctx context.Context, principal domain.Principal, at time.Time) (domain.AutonomyMode, error)

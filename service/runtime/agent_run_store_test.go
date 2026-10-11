@@ -94,13 +94,32 @@ func TestAgentRunStoreListsRunsNewestFirst(t *testing.T) {
 	}
 	for name, filter := range map[string]domain.AgentRunFilter{
 		"no limit":      {},
-		"over the cap":  {Limit: MaxAgentRunPage + 1},
+		"over the cap":  {Limit: DefaultAgentRunPage + 1},
 		"negative from": {Limit: 1, Before: -1},
 		"non-terminal":  {Limit: 1, Status: "queued"},
 	} {
 		if _, err := store.Runs(context.Background(), 8, filter); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("%s: want ErrValidation, got %v", name, err)
 		}
+	}
+}
+
+func TestAgentRunStorePageCapIsConfigurable(t *testing.T) {
+	query := &agentRunQueryFake{rows: map[string][][]any{}}
+	defaulted := &AgentRunStore{qs: query}
+	if _, err := defaulted.Runs(context.Background(), 8, domain.AgentRunFilter{Limit: DefaultAgentRunPage}); err != nil {
+		t.Fatalf("zero MaxPage must take the default cap: %v", err)
+	}
+	narrowed := &AgentRunStore{qs: query, MaxPage: 20}
+	if _, err := narrowed.Runs(context.Background(), 8, domain.AgentRunFilter{Limit: 20}); err != nil {
+		t.Fatalf("a page at MaxPage: %v", err)
+	}
+	if _, err := narrowed.Runs(context.Background(), 8, domain.AgentRunFilter{Limit: 21}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a page over MaxPage: want ErrValidation, got %v", err)
+	}
+	invalid := &AgentRunStore{qs: query, MaxPage: -1}
+	if _, err := invalid.Runs(context.Background(), 8, domain.AgentRunFilter{Limit: 1}); err == nil || errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a negative MaxPage is a composition error, got %v", err)
 	}
 }
 

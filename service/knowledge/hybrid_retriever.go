@@ -25,6 +25,8 @@ type HybridRetriever struct {
 	Overfetch int
 	// MinRerankBudget skips reranking when less deadline remains; default 0.
 	MinRerankBudget time.Duration
+	// RRFOffset is the reciprocal rank fusion constant k in 1/(k+rank); zero takes DefaultRRFOffset.
+	RRFOffset int
 	// Observer receives one retrieval-stage observation per query; nil skips.
 	Observer contract.ObservationRecorder
 	Now      func() time.Time
@@ -35,7 +37,8 @@ var _ contract.KnowledgeRetriever = (*HybridRetriever)(nil)
 // HybridRetrieverComponent names the retriever in observations.
 const HybridRetrieverComponent = "hybrid_retriever"
 
-const rrfOffset = 60
+// DefaultRRFOffset is the conventional reciprocal rank fusion constant.
+const DefaultRRFOffset = 60
 
 // Retrieve returns the fused, optionally reranked, top TopK matches.
 func (retriever *HybridRetriever) Retrieve(ctx context.Context, query domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
@@ -81,6 +84,13 @@ func (retriever *HybridRetriever) retrieve(ctx context.Context, query domain.Kno
 		ctx, cancel = context.WithTimeout(ctx, query.Budget)
 		defer cancel()
 	}
+	if retriever.RRFOffset < 0 {
+		return domain.KnowledgeResult{}, fmt.Errorf("%w: hybrid retriever: RRF offset cannot be negative", domain.ErrValidation)
+	}
+	offset := retriever.RRFOffset
+	if offset == 0 {
+		offset = DefaultRRFOffset
+	}
 	overfetch := retriever.Overfetch
 	if overfetch <= 0 {
 		overfetch = 3
@@ -105,7 +115,7 @@ func (retriever *HybridRetriever) retrieve(ctx context.Context, query domain.Kno
 
 	// Availability over completeness: partial leg failures degrade recall,
 	// only a total failure fails the query.
-	fused, usage, succeeded, err := fuse(results, failures)
+	fused, usage, succeeded, err := fuse(results, failures, offset)
 	if err != nil {
 		return domain.KnowledgeResult{}, stage.At(domain.StageRetrieval, err)
 	}
@@ -134,7 +144,7 @@ func (retriever *HybridRetriever) retrieve(ctx context.Context, query domain.Kno
 }
 
 // fuse merges leg rankings by reciprocal rank, keeping each chunk's first-seen content.
-func fuse(results []domain.KnowledgeResult, failures []error) ([]domain.KnowledgeMatch, domain.Usage, int, error) {
+func fuse(results []domain.KnowledgeResult, failures []error, offset int) ([]domain.KnowledgeMatch, domain.Usage, int, error) {
 	type chunkKey struct {
 		documentID string
 		chunkNo    int
@@ -178,7 +188,7 @@ func fuse(results []domain.KnowledgeResult, failures []error) ([]domain.Knowledg
 				first[key] = match
 				order = append(order, key)
 			}
-			scores[key] += 1 / float64(rrfOffset+rank+1)
+			scores[key] += 1 / float64(offset+rank+1)
 		}
 	}
 	fused := make([]domain.KnowledgeMatch, 0, len(order))

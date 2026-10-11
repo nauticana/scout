@@ -14,6 +14,8 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
+	"github.com/nauticana/scout/service/observability"
+	"github.com/nauticana/scout/service/policy"
 	"github.com/nauticana/scout/service/toolgateway"
 )
 
@@ -49,6 +51,24 @@ func composablePlane() *BaseDataPlane {
 		},
 		Limits:   domain.ToolLoopLimits{MaxIterations: 4, MaxToolCalls: 8, MaxTokens: 1000, MaxRepeatedCalls: 2, Deadline: time.Minute},
 		Currency: "USD", UsageCategory: "agent", MaxOutputTokens: 512,
+	}
+}
+
+func TestBaseDataPlanePassesObservabilityAndRestrictionSettings(t *testing.T) {
+	plane := composablePlane()
+	plane.Settings.AuditPageSize, plane.Settings.AuditMaxPageSize = 20, 40
+	plane.Settings.RestrictionCacheTTL, plane.Settings.RestrictionCacheEntries = time.Second, 8
+	if err := plane.Compose(); err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	t.Cleanup(func() { _ = plane.Close() })
+	audit, ok := plane.Audit.(*observability.TableAuditSink)
+	if !ok || audit.PageSize != 20 || audit.MaxPageSize != 40 {
+		t.Fatalf("audit = %+v", plane.Audit)
+	}
+	restrictions, ok := plane.Restrictions.(*policy.TableRestrictionLayers)
+	if !ok || restrictions.TTL != time.Second || restrictions.Entries != 8 {
+		t.Fatalf("restrictions = %+v", plane.Restrictions)
 	}
 }
 

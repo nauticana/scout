@@ -30,18 +30,10 @@ var _ contract.ContractTestExecutor = ContractTestExecutorFunc(nil)
 var _ contract.ContractAssertionEvaluator = ContractAssertionEvaluatorFunc(nil)
 
 // RolloutHealthEvaluatorFunc adapts a function to contract.RolloutHealthEvaluator.
-type RolloutHealthEvaluatorFunc func(context.Context, domain.RolloutTarget) (bool, error)
-
-// Healthy invokes the configured function.
-func (function RolloutHealthEvaluatorFunc) Healthy(ctx context.Context, target domain.RolloutTarget) (bool, error) {
-	return function(ctx, target)
-}
-
-// DetailedRolloutHealthEvaluatorFunc adapts a function to contract.DetailedRolloutHealthEvaluator.
-type DetailedRolloutHealthEvaluatorFunc func(context.Context, domain.RolloutTarget) (domain.RolloutHealth, error)
+type RolloutHealthEvaluatorFunc func(context.Context, domain.RolloutTarget) (domain.RolloutHealth, error)
 
 // Evaluate invokes the configured function.
-func (function DetailedRolloutHealthEvaluatorFunc) Evaluate(ctx context.Context, target domain.RolloutTarget) (domain.RolloutHealth, error) {
+func (function RolloutHealthEvaluatorFunc) Evaluate(ctx context.Context, target domain.RolloutTarget) (domain.RolloutHealth, error) {
 	return function(ctx, target)
 }
 
@@ -323,6 +315,48 @@ func (store *AgentDeploymentStore) Promote(ctx context.Context, tenantID int64, 
 	return nil
 }
 
+// ReweightCanary changes only the currently deployed canary.
+func (store *AgentDeploymentStore) ReweightCanary(ctx context.Context, tenantID int64, agentID, version string, percentage int) error {
+	deployment, err := store.Get(ctx, tenantID, agentID)
+	if err != nil {
+		return err
+	}
+	if deployment.CanaryVersion != version {
+		return fmt.Errorf("%w: %s is not the deployed canary for agent %s", domain.ErrConflict, version, agentID)
+	}
+	deployment.CanaryPercentage = percentage
+	store.Deployments[deploymentKey(tenantID, agentID)] = deployment
+	return nil
+}
+
+// PromoteDeployed promotes only the current stable or canary release.
+func (store *AgentDeploymentStore) PromoteDeployed(ctx context.Context, tenantID int64, agentID, version string) error {
+	deployment, err := store.Get(ctx, tenantID, agentID)
+	if err != nil {
+		return err
+	}
+	if version != deployment.StableVersion && version != deployment.CanaryVersion {
+		return fmt.Errorf("%w: %s is not deployed for agent %s", domain.ErrConflict, version, agentID)
+	}
+	deployment.StableVersion, deployment.CanaryVersion, deployment.CanaryPercentage = version, "", 0
+	store.Deployments[deploymentKey(tenantID, agentID)] = deployment
+	return nil
+}
+
+// EndCanary clears the current canary without restoring an older release.
+func (store *AgentDeploymentStore) EndCanary(ctx context.Context, tenantID int64, agentID string) (string, error) {
+	deployment, err := store.Get(ctx, tenantID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if deployment.CanaryVersion == "" {
+		return "", fmt.Errorf("%w: agent %s has no deployed canary", domain.ErrConflict, agentID)
+	}
+	deployment.CanaryVersion, deployment.CanaryPercentage = "", 0
+	store.Deployments[deploymentKey(tenantID, agentID)] = deployment
+	return deployment.StableVersion, nil
+}
+
 // RestorePrevious clears the canary or restores the configured previous version.
 func (store *AgentDeploymentStore) RestorePrevious(ctx context.Context, tenantID int64, agentID string) (string, error) {
 	deployment, err := store.Get(ctx, tenantID, agentID)
@@ -423,20 +457,19 @@ func (function AlertOwnershipCheckerFunc) Owner(ctx context.Context, platformVer
 }
 
 var (
-	_ contract.RolloutHealthEvaluator         = RolloutHealthEvaluatorFunc(nil)
-	_ contract.DetailedRolloutHealthEvaluator = DetailedRolloutHealthEvaluatorFunc(nil)
-	_ contract.AuditSink                      = (*RecordingAuditSink)(nil)
-	_ contract.RolloutStateStore              = (*RolloutStateStore)(nil)
-	_ contract.RolloutLease                   = (*RolloutStateStore)(nil)
-	_ contract.ReleaseBundleStore             = (*ReleaseBundleStore)(nil)
-	_ contract.ConversationReleaseStore       = (*ConversationReleaseStore)(nil)
-	_ contract.VersionPinStore                = (*VersionPinStore)(nil)
-	_ contract.ExperimentCohortResolver       = ExperimentCohortResolverFunc(nil)
-	_ contract.AgentDeploymentStore           = (*AgentDeploymentStore)(nil)
-	_ contract.TenantPlatformReleaseResolver  = TenantPlatformReleaseResolverFunc(nil)
-	_ contract.TurnCanceller                  = TurnCancellerFunc(nil)
-	_ contract.PlatformAliasSwitcher          = (*PlatformAliasSwitcher)(nil)
-	_ contract.CapacityRestorer               = (*CapacityRestorer)(nil)
-	_ contract.ShadowTrafficSampler           = (*ShadowTrafficSampler)(nil)
-	_ contract.AlertOwnershipChecker          = AlertOwnershipCheckerFunc(nil)
+	_ contract.RolloutHealthEvaluator        = RolloutHealthEvaluatorFunc(nil)
+	_ contract.AuditSink                     = (*RecordingAuditSink)(nil)
+	_ contract.RolloutStateStore             = (*RolloutStateStore)(nil)
+	_ contract.RolloutLease                  = (*RolloutStateStore)(nil)
+	_ contract.ReleaseBundleStore            = (*ReleaseBundleStore)(nil)
+	_ contract.ConversationReleaseStore      = (*ConversationReleaseStore)(nil)
+	_ contract.VersionPinStore               = (*VersionPinStore)(nil)
+	_ contract.ExperimentCohortResolver      = ExperimentCohortResolverFunc(nil)
+	_ contract.AgentDeploymentStore          = (*AgentDeploymentStore)(nil)
+	_ contract.TenantPlatformReleaseResolver = TenantPlatformReleaseResolverFunc(nil)
+	_ contract.TurnCanceller                 = TurnCancellerFunc(nil)
+	_ contract.PlatformAliasSwitcher         = (*PlatformAliasSwitcher)(nil)
+	_ contract.CapacityRestorer              = (*CapacityRestorer)(nil)
+	_ contract.ShadowTrafficSampler          = (*ShadowTrafficSampler)(nil)
+	_ contract.AlertOwnershipChecker         = AlertOwnershipCheckerFunc(nil)
 )

@@ -28,4 +28,30 @@ type DataPlaneSettings struct {
 	GuardrailMaxOutputBytes int
 	// ModelRegion stamps a candidate model with no route row of its own; empty leaves it unknown.
 	ModelRegion string
+	// A zero value below takes the consumer's default; a negative one refuses composition.
+	// CostWindow is the cost breaker's trailing window.
+	CostWindow time.Duration
+	// ReplyRetention is each reply frame's cache lifetime; ReplyPollInterval bounds delivery
+	// latency after a lost wake-up; ReplyRecordReadInterval throttles the durable fallback read.
+	ReplyRetention          time.Duration
+	ReplyPollInterval       time.Duration
+	ReplyRecordReadInterval time.Duration
+	// CancelPollInterval bounds how long a running turn outlives its cancellation;
+	// CancelMaxReadFailures consecutive failed reads stop the turn.
+	CancelPollInterval    time.Duration
+	CancelMaxReadFailures int
+	// SessionRevisionMemory is how many conversations' last written revisions are remembered.
+	SessionRevisionMemory int
+	// ResultCardMaxBytes is the largest response copied into turn history; a larger one is referenced.
+	ResultCardMaxBytes int
+	// RunPageMax is the largest page of settled agent runs one query returns.
+	RunPageMax int
+	// AuditPageSize and AuditMaxPageSize size the decision audit's pages, SafetyEventMaxPage caps a
+	// page of safety events, and RestrictionCacheTTL and RestrictionCacheEntries bound the cached
+	// restriction layers; zero takes each component's default.
+	AuditPageSize           int
+	AuditMaxPageSize        int
+	SafetyEventMaxPage      int
+	RestrictionCacheTTL     time.Duration
+	RestrictionCacheEntries int
 }

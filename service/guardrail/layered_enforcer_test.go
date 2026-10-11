@@ -255,9 +255,9 @@ func TestToolAllowlistAndDestinationAllowlist(t *testing.T) {
 
 func TestApprovalGateOutcomes(t *testing.T) {
 	decision := domain.ApprovalPending
-	gate := fake.ToolApprovalGateFunc(func(_ context.Context, call domain.ToolCall, ruleID string) (domain.ApprovalDecision, error) {
-		if ruleID != "release.approve" || call.ToolID != "wire" {
-			t.Fatalf("gate saw %s / %s", ruleID, call.ToolID)
+	gate := fake.ToolApprovalGateFunc(func(_ context.Context, call domain.ToolCall, ask domain.ApprovalAsk) (domain.ApprovalDecision, error) {
+		if ask.RuleID != "release.approve" || ask.Source != domain.ApprovalSourceGuardrail || ask.RiskTier != "" || call.ToolID != "wire" {
+			t.Fatalf("gate saw %+v / %s", ask, call.ToolID)
 		}
 		return decision, nil
 	})

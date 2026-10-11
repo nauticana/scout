@@ -18,6 +18,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/isolation"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -67,7 +68,29 @@ type StudioService struct {
 	// version row exists: tool and skill bindings and the compiled execution graph
 	// commit with the release or not at all.
 	ReleaseWriters []ReleaseWriter
-	Now            func() time.Time
+	// Pricer prices the selected models of a release with a cost budget, which publish,
+	// restore, and activation refuse without it; controlplane.ModelCatalog implements it.
+	Pricer contract.ModelPricer
+	// Templates keeps agent templates; nil refuses a create from a template. TemplateLimits bound a
+	// tenant's templates: agent_studio_max_templates_per_type and agent_studio_max_template_versions.
+	Templates      contract.AgentTemplateStore
+	TemplateLimits domain.TemplateLimits
+	// ApprovalRoutingLimits tighten every approval_routing value a save, import, or adoption
+	// writes; zero takes the structural bounds. StudioApprovalRouting.MaxRoutes bounds the agent.
+	ApprovalRoutingLimits domain.ApprovalRoutingLimits
+	// MaxActivationLead is how far ahead a publish may schedule its activation; zero takes
+	// DefaultMaxActivationLead.
+	MaxActivationLead time.Duration
+	// MaxPortableBindings bounds the bindings of one portable document or template, MaxReferences
+	// the reference mappings of one import or template create, MaxPortableExtension the bytes of
+	// one portable draft extension, MaxTemplateAudience the tenants one template publication
+	// names, and MaxCommentsShown the draft comments one list returns; zero takes the Default of each.
+	MaxPortableBindings  int
+	MaxReferences        int
+	MaxPortableExtension int
+	MaxTemplateAudience  int
+	MaxCommentsShown     int
+	Now                  func() time.Time
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -143,6 +166,36 @@ func requirePinnedGuardrails(ctx context.Context, tx keelport.TxQueryService, te
 	return nil
 }
 
+func (s *StudioService) activationLead() time.Duration {
+	return orDefault(s.MaxActivationLead, DefaultMaxActivationLead)
+}
+
+func (s *StudioService) portableBindingLimit() int {
+	return orDefault(s.MaxPortableBindings, DefaultMaxPortableBindings)
+}
+
+func (s *StudioService) referenceLimit() int { return orDefault(s.MaxReferences, DefaultMaxReferences) }
+
+func (s *StudioService) extensionLimit() int {
+	return orDefault(s.MaxPortableExtension, DefaultMaxPortableExtension)
+}
+
+func (s *StudioService) audienceLimit() int {
+	return orDefault(s.MaxTemplateAudience, DefaultMaxTemplateAudience)
+}
+
+func (s *StudioService) commentLimit() int {
+	return orDefault(s.MaxCommentsShown, DefaultMaxCommentsShown)
+}
+
+// orDefault is value when it is positive and fallback otherwise; negative limits are refused before use.
+func orDefault[T ~int | ~int64](value, fallback T) T {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
 func (s *StudioService) now() time.Time {
 	if s.Now != nil {
 		return s.Now().UTC()
@@ -154,13 +207,17 @@ func (s *StudioService) init(ctx context.Context) error {
 	if s.Sources == nil || s.Assembler == nil || s.Compiler == nil {
 		return fmt.Errorf("studio service: prompt sources, assembler, and compiler are required")
 	}
+	if s.MaxActivationLead < 0 || s.MaxPortableBindings < 0 || s.MaxReferences < 0 || s.MaxPortableExtension < 0 ||
+		s.MaxTemplateAudience < 0 || s.MaxCommentsShown < 0 {
+		return fmt.Errorf("%w: studio service limits cannot be negative", domain.ErrValidation)
+	}
 	if s.qs != nil {
 		return nil
 	}
 	if s.DB == nil {
 		return fmt.Errorf("studio service: database is required")
 	}
-	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, studioQueries) })
+	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, studioCreateQueries) })
 	return nil
 }
 
@@ -469,8 +526,11 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	definition, _, err := s.frozenDraft(ctx, actor.TenantID, draft, nil)
+	definition, settings, err := s.frozenDraft(ctx, actor.TenantID, draft, nil)
 	if err != nil {
+		return domain.AgentTestResult{}, err
+	}
+	if request.Limits, err = isolation.FrozenExecutionLimits(settings.Resources); err != nil {
 		return domain.AgentTestResult{}, err
 	}
 	result, err := s.Tester.Execute(ctx, actor, request, definition)
@@ -615,6 +675,13 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if err = s.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version}); err != nil {
 		return domain.AgentRelease{}, err
 	}
+	settings, err := loadRestoredSettings(ctx, tx, actor.TenantID, request.AgentID, request.Version)
+	if err != nil {
+		return domain.AgentRelease{}, err
+	}
+	if err = s.checkBudget(ctx, tx, settings.Resources, definition); err != nil {
+		return domain.AgentRelease{}, err
+	}
 	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
 	if err != nil {
 		return domain.AgentRelease{}, err
@@ -633,7 +700,7 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 		definition.ChangeSummary, actorUser(actor), request.Version); err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("insert restored version: %w", err)
 	}
-	if err = restoreSettings(ctx, tx, actor.TenantID, request.AgentID, request.Version, version); err != nil {
+	if err = storeSettings(ctx, tx, settings, version); err != nil {
 		return domain.AgentRelease{}, err
 	}
 	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
@@ -895,6 +962,13 @@ func (s *StudioService) drift(ctx context.Context, tenantID int64, draft domain.
 	}
 	if !bytes.Equal(compactStudioJSON(active.Extension), compactStudioJSON(draft.Extension)) {
 		report.Causes = append(report.Causes, "extension")
+	}
+	origin, err := s.draftOrigin(ctx, tenantID, draft.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	if !derivedFromEqual(origin.derivedFrom(), active.DerivedFrom) {
+		report.Causes = append(report.Causes, "derived_from")
 	}
 	settings, err := s.compileSettingsOf(ctx, tenantID, draft)
 	if err != nil && !settingsProblem(err) {

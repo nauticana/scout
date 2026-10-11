@@ -12,9 +12,9 @@ flowchart TB
 
     PRODUCT --> SURFACES --> SCOUT
 
-    SCOUT --> CONTROL["Author & Publish<br/><small>agent types · drafts · prompts · graphs · skills<br/>immutable versions · compatibility · rollout<br/>two-person review · pilots · scheduled activation</small>"]
+    SCOUT --> CONTROL["Author & Publish<br/><small>agent types · drafts · prompts · graphs · skills<br/>immutable versions · compatibility · rollout<br/>templates · Charter export and import<br/>two-person publish and restore review · pilots · scheduled activation</small>"]
     SCOUT --> RUNTIME["Admit & Execute<br/><small>turns · budgets · fair scheduling · checkpoints<br/>model routing · tool loops · streaming</small>"]
-    SCOUT --> GOVERN["Govern & Prove<br/><small>principals · policy · guardrails · approvals<br/>delegation · evidence · evaluation · audit</small>"]
+    SCOUT --> GOVERN["Govern & Prove<br/><small>principals · policy · guardrails · routed approvals<br/>delegation · evidence · evaluation · audit</small>"]
     SCOUT --> KNOWLEDGE["Ground & Remember<br/><small>ingestion · versioned knowledge · retrieval<br/>citations · entitlements · garbage collection</small>"]
 
     CONTROL --> RELEASE["Pinned release<br/><small>resolved behavior and provenance</small>"]
@@ -71,10 +71,10 @@ The detailed [repository contract](doc/engineering-reference.md#repository-contr
 
 | Topic | Contents |
 |---|---|
-| [HTTP API](doc/api_surface.md) | Agent Studio core and optional feature routes, conversation, and approval routes, payload mappings, mutation contracts, and errors |
+| [HTTP API](doc/api_surface.md) | Agent Studio core and optional feature routes (export and import, templates, reviews, limits and budgets, approval routing, evaluation), conversation and approval routes, payload mappings, mutation contracts, and errors |
 | [Engineering reference](doc/engineering-reference.md) | Package map, services, Studio, runtime, MCP, schema, providers, reliability, composition, and testing |
 | [Database reference](doc/database.md) | Module dependencies, ER diagrams, tables, relationships, and storage boundaries |
-| [Configuration](doc/configuration.md) | Flags, limits, admission, budgets, latency, and data-plane settings |
+| [Configuration](doc/configuration.md) | Configuration flag reference (every catalog flag with type, default, enforced range, and meaning), component limits, admission, budgets, latency, and data-plane settings |
 | [Authority](doc/authority.md) | Principals, authorization, scope inheritance, compilation, and limits |
 | [Governance](doc/governance.md) | Policy, restriction layers, approvals, credentials, decision records, and evidence |
 | [Agent organization](doc/organization.md) | Agent types, lifecycle, entitlements, delegation, and release explanation |

@@ -26,7 +26,7 @@ columns:
     nullable: true
   - name: rule_id
     type: VARCHAR(80)
-    nullable: true
+    comment: The rule within its source that asked for the person
   - name: requested_action
     type: VARCHAR(120)
   - name: resource_ref
@@ -65,6 +65,43 @@ columns:
     type: BIGINT
     nullable: true
     comment: The edited proposal of the same turn that this request revises; null for an original proposal
+  - name: release_version
+    type: VARCHAR(80)
+    nullable: true
+    comment: The agent release whose frozen approval routing routed the request; null for other principals
+  - name: requester_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: requester_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The person the turn acts for, who may never approve the request
+  - name: rule_source_code
+    type: VARCHAR(20)
+    comment: Why the call needs a person
+  - name: approval_route_id
+    type: VARCHAR(64)
+    nullable: true
+    comment: The frozen approval route the request is assigned under; null for a request routed by scope or a product router
+  - name: approver_reference_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: approver_reference
+    type: VARCHAR(128)
+    nullable: true
+    comment: The role or position, by the product's opaque reference, deciding at the current step
+  - name: route_step
+    type: SMALLINT
+    default: 0
+    comment: The route's escalation step the current assignment is at; verdicts and reassignments are fenced on it
+  - name: route_resolution
+    type: VARCHAR(256)
+    nullable: true
+    comment: The product resolver's evidence reference for the assigned approver, never personal data beyond it
+  - name: turn_settled_at
+    type: TIMESTAMP
+    nullable: true
+    comment: When the turn parked on an expired request was failed or found no longer parked; null while that is owed
 primary_key: [id]
 sequence:
   name: turn_approval_request_seq
@@ -100,11 +137,11 @@ foreign_keys:
     references:
       table: approval_risk_tier
       columns: [code]
-  - name: class_turn_approval_requests
-    columns: [output_class_code]
+  - name: released_turn_approval_requests
+    columns: [partner_id, principal_id, release_version]
     references:
-      table: agent_output_class
-      columns: [code]
+      table: effective_agent_release
+      columns: [partner_id, agent_id, agent_version]
 indexes:
   - name: turn_approval_request_id_tenant_uq
     columns: [id, partner_id]
@@ -125,5 +162,21 @@ checks:
     expression: (approver_kind IS NULL AND approver_id IS NULL) OR (approver_kind IS NOT NULL AND approver_id IS NOT NULL)
   - name: turn_approval_request_revises_ck
     expression: revises_step_id IS NULL OR revises_step_id <> execution_step_id
+  - name: turn_approval_request_release_ck
+    expression: release_version IS NULL OR principal_kind = 'agent'
+  - name: turn_approval_request_requester_ck
+    expression: (requester_kind IS NULL AND requester_id IS NULL) OR (requester_kind IS NOT NULL AND requester_id IS NOT NULL)
+  - name: turn_approval_request_step_ck
+    expression: route_step BETWEEN 0 AND 3
+  - name: turn_approval_request_rule_source_ck
+    expression: rule_source_code IN ('autonomy', 'policy', 'guardrail')
+  - name: turn_approval_request_approver_kind_ck
+    expression: approver_reference_kind IS NULL OR approver_reference_kind IN ('role', 'position')
+  - name: turn_approval_request_output_class_ck
+    expression: output_class_code IN ('advice', 'draft', 'approval_request', 'completed_action')
+  - name: turn_approval_request_route_ck
+    expression: (approval_route_id IS NULL AND approver_reference_kind IS NULL AND approver_reference IS NULL AND route_resolution IS NULL AND route_step = 0) OR (approval_route_id IS NOT NULL AND approver_reference_kind IS NOT NULL AND approver_reference IS NOT NULL AND release_version IS NOT NULL)
+  - name: turn_approval_request_settled_ck
+    expression: turn_settled_at IS NULL OR status_code = 'expired'
   - name: turn_approval_request_resolved_ck
     expression: (status_code IN ('pending', 'escalated') AND resolved_at IS NULL) OR (status_code NOT IN ('pending', 'escalated') AND resolved_at IS NOT NULL)

@@ -33,7 +33,7 @@ func openRequest(t *testing.T) (*stubStore, domain.ApprovalVerdict) {
 	t.Helper()
 	store := &stubStore{}
 	call := toolCall(`{"amount":1}`)
-	if _, err := gate(store).Decide(context.Background(), call, "release.approve"); err != nil {
+	if _, err := gate(store).Decide(context.Background(), call, autonomyAsk); err != nil {
 		t.Fatal(err)
 	}
 	return store, domain.ApprovalVerdict{

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nauticana/keel/common"
@@ -11,8 +12,9 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// MaxActivationLead is how far ahead a publish may schedule its activation.
-const MaxActivationLead = 366 * 24 * time.Hour
+// DefaultMaxActivationLead is how far ahead a publish may schedule its activation when
+// StudioService.MaxActivationLead is zero.
+const DefaultMaxActivationLead = 366 * 24 * time.Hour
 
 // deployOrSchedule puts a new release in service now, or, when the request's EffectiveAt
 // is after publication, records a pending activation for the activation worker.
@@ -21,7 +23,7 @@ func (s *StudioService) deployOrSchedule(ctx context.Context, tx keelport.TxQuer
 		active, detail, err := deploy(ctx, tx, actor.TenantID, request.AgentID, definition.Version, request.CanaryPercentage)
 		return active, detail, nil, err
 	}
-	activation, err := scheduleActivation(ctx, tx, actor, definition, request.CanaryPercentage, request.EffectiveAt.UTC())
+	activation, err := scheduleActivation(ctx, tx, actor, definition, request.CanaryPercentage, request.EffectiveAt.UTC(), s.activationLead())
 	if err != nil {
 		return false, "", nil, err
 	}
@@ -29,16 +31,16 @@ func (s *StudioService) deployOrSchedule(ctx context.Context, tx keelport.TxQuer
 }
 
 // scheduleActivation records the deployment the release will replace, so activation can
-// compare and swap against it. An agent holds at most one pending activation.
-func scheduleActivation(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, definition domain.AgentDefinition, canary int, effectiveAt time.Time) (*domain.ReleaseActivation, error) {
+// compare and swap against it. An agent holds at most one pending activation, at most lead ahead.
+func scheduleActivation(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, definition domain.AgentDefinition, canary int, effectiveAt time.Time, lead time.Duration) (*domain.ReleaseActivation, error) {
 	if canary < 0 || canary > 100 {
 		return nil, validationError("canary_percentage", "must be between 0 and 100")
 	}
 	if canary == 100 {
 		canary = 0
 	}
-	if effectiveAt.Sub(definition.PublishedAt) > MaxActivationLead {
-		return nil, validationError("effective_at", "must be within 366 days")
+	if effectiveAt.Sub(definition.PublishedAt) > lead {
+		return nil, validationError("effective_at", "must be within "+leadText(lead)+" of publication")
 	}
 	pending, err := tx.Query(ctx, qSchedulePending, actor.TenantID, definition.AgentID)
 	if err != nil {
@@ -95,4 +97,13 @@ func optionalTime(value any) *time.Time {
 	}
 	at = at.UTC()
 	return &at
+}
+
+// leadText states a lead in whole days, or as a duration when it is not a whole number of days.
+func leadText(lead time.Duration) string {
+	const day = 24 * time.Hour
+	if lead%day == 0 {
+		return strconv.FormatInt(int64(lead/day), 10) + " days"
+	}
+	return lead.String()
 }

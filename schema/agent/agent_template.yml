@@ -1,0 +1,42 @@
+table: agent_template
+comment: Tenant-owned agent template identity; private to its owner until published
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: template_id
+    type: VARCHAR(80)
+  - name: agent_type_id
+    type: VARCHAR(80)
+  - name: create_key
+    type: VARCHAR(120)
+    comment: The creating principal's idempotency key; a replay returns this template
+  - name: created_by_kind
+    type: VARCHAR(20)
+  - name: created_by_id
+    type: VARCHAR(120)
+    comment: The creator's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, template_id]
+foreign_keys:
+  - name: agent_templates
+    columns: [partner_id, agent_type_id]
+    references:
+      table: agent_type
+      columns: [partner_id, agent_type_id]
+indexes:
+  - name: agent_template_id_uq
+    columns: [template_id]
+    unique: true
+  - name: agent_template_type_uq
+    columns: [partner_id, template_id, agent_type_id]
+    unique: true
+  - name: agent_template_create_uq
+    columns: [partner_id, created_by_kind, created_by_id, create_key]
+    unique: true
+  - name: agent_template_type_ix
+    columns: [partner_id, agent_type_id]
+checks:
+  - name: agent_template_id_ck
+    expression: template_id LIKE 'tpl-%'

@@ -17,6 +17,7 @@ import (
 var reviewedAt = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 type excuseCall struct {
+	kind      domain.PublishReviewKind
 	exception string
 	person    domain.PrincipalRef
 }
@@ -30,9 +31,11 @@ func reviewService(t *testing.T, required bool) (*StudioPublishReviews, *studioQ
 	reviews := &StudioPublishReviews{Studio: studio, Now: func() time.Time { return reviewedAt },
 		Releases: &fake.EffectiveReleaseRepository{},
 		Separation: fake.PublishSeparation{
-			RequiredFunc: func(context.Context, int64, string, time.Time) (bool, error) { return required, nil },
-			ExcuseFunc: func(_ context.Context, _ int64, _, exception string, person domain.PrincipalRef, _ time.Time) error {
-				*excused = append(*excused, excuseCall{exception, person})
+			RequiredFunc: func(context.Context, int64, string, domain.PublishReviewKind, time.Time) (bool, error) {
+				return required, nil
+			},
+			ExcuseFunc: func(_ context.Context, _ int64, _ string, kind domain.PublishReviewKind, exception string, person domain.PrincipalRef, _ time.Time) error {
+				*excused = append(*excused, excuseCall{kind, exception, person})
 				if exception == "EXC-OK" {
 					return nil
 				}
@@ -53,7 +56,7 @@ func reviewRow(id int64, digest string, status domain.PublishReviewStatus, reque
 		decidedAt = reviewedAt
 	}
 	return []any{id, digest, int64(4), int64(2), nil, `{"causes":["models"],"editors":[7]}`, `[{"name":"golden","passed":true}]`,
-		string(status), requestedBy, "please", reviewedAt, decidedBy, nil, decidedAt, exception, nil}
+		string(status), requestedBy, "please", reviewedAt, decidedBy, nil, decidedAt, exception, nil, nil}
 }
 
 func consumedRow(id int64, digest string) []any {
@@ -97,8 +100,8 @@ func TestRequestRecordsTheCandidateDigestDiffAndEvaluations(t *testing.T) {
 		t.Fatalf("editors = %v", review.Diff.Editors)
 	}
 	args := query.args[qReviewInsert]
-	if args[2] != digest || args[5] != "3" || !strings.Contains(args[6].(string), `"prompt_sections"`) || !strings.Contains(args[7].(string), "golden writer-a") ||
-		args[8] != int64(9) || args[10] != nil {
+	if args[2] != digest || args[5] != "3" || args[6] != nil || !strings.Contains(args[7].(string), `"prompt_sections"`) || !strings.Contains(args[8].(string), "golden writer-a") ||
+		args[9] != int64(9) || args[11] != nil {
 		t.Fatalf("insert args = %v", args)
 	}
 	if !slices.Contains(query.queries, qReviewSupersede) || query.args[qReviewAudit][2] != "PUBLISH_REVIEW_REQUEST" || query.commits != 1 {
@@ -116,10 +119,10 @@ func TestRequestNamesAnExceptionSeparationAdmitsForTheRequester(t *testing.T) {
 	}
 	request.SodExceptionID = "EXC-OK"
 	review, err := reviews.Request(context.Background(), humanActor(8, 9), request)
-	if err != nil || review.SodExceptionID != "EXC-OK" || query.args[qReviewInsert][10] != "EXC-OK" {
+	if err != nil || review.SodExceptionID != "EXC-OK" || query.args[qReviewInsert][11] != "EXC-OK" {
 		t.Fatalf("review = %+v, %v, args %v", review, err, query.args[qReviewInsert])
 	}
-	if last := (*excused)[len(*excused)-1]; last.person.ID != "9" || !strings.Contains(query.args[qReviewAudit][3].(string), "EXC-OK") {
+	if last := (*excused)[len(*excused)-1]; last.person.ID != "9" || last.kind != domain.PublishReviewOfPublish || !strings.Contains(query.args[qReviewAudit][3].(string), "EXC-OK") {
 		t.Fatalf("excused %+v, audit %v", last, query.args[qReviewAudit])
 	}
 	request.SodExceptionID = strings.Repeat("x", 201)
@@ -215,11 +218,11 @@ func TestReviewStateReportsStalenessAndOpenComments(t *testing.T) {
 	reviews, query, digest, _ := reviewService(t, true)
 	query.rows[qReviewLatest] = [][]any{reviewRow(11, strings.Repeat("0", 64), domain.PublishReviewApproved, 9, int64(10), nil)}
 	query.rows[qCommentListStatus] = [][]any{{int64(3), int64(4), "draft", nil, nil, nil, nil, "too long", "open", "human", "10", reviewedAt, nil, nil, nil}}
-	state, err := reviews.Review(context.Background(), humanActor(8, 10), "writer-a")
+	state, err := reviews.Review(context.Background(), humanActor(8, 10), "writer-a", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.Required || state.CurrentDigest != digest || !state.Stale || state.Review.ReviewID != 11 || len(state.Review.Evaluations) != 1 ||
+	if state.Kind != domain.PublishReviewOfPublish || !state.Required || state.CurrentDigest != digest || !state.Stale || state.Review.ReviewID != 11 || len(state.Review.Evaluations) != 1 ||
 		state.Review.Diff.Causes[0] != "models" || !slices.Equal(state.Review.Diff.Editors, []int64{7}) || len(state.OpenComments) != 1 || state.OpenComments[0].Author.ID != "10" {
 		t.Fatalf("state = %+v", state)
 	}
@@ -227,7 +230,7 @@ func TestReviewStateReportsStalenessAndOpenComments(t *testing.T) {
 		t.Fatalf("comment filter = %v", query.args[qCommentListStatus])
 	}
 	reviews.Studio.Roles = denyActions(domain.StudioView)
-	if _, err = reviews.Review(context.Background(), humanActor(8, 10), "writer-a"); !errors.Is(err, domain.ErrForbidden) {
+	if _, err = reviews.Review(context.Background(), humanActor(8, 10), "writer-a", domain.PublishReviewOfPublish); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("stranger = %v", err)
 	}
 }
@@ -250,9 +253,14 @@ func TestGuardAdmitsOnlyTheLatestApprovedUnconsumedReviewOfTheDigest(t *testing.
 	if err := reviews.CheckPublish(context.Background(), candidateOf(digest, 10)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("no review = %v", err)
 	}
+	// A tenant separating publishing only restores unreviewed.
+	publishOnly := &StudioPublishReviews{Studio: reviews.Studio, Now: reviews.Now, Releases: reviews.Releases,
+		Separation: fake.PublishSeparation{RequiredFunc: func(_ context.Context, _ int64, _ string, kind domain.PublishReviewKind, _ time.Time) (bool, error) {
+			return kind == domain.PublishReviewOfPublish, nil
+		}}}
 	restore := candidateOf(digest, 9)
 	restore.RestoredFrom = "2"
-	if err := reviews.CheckPublish(context.Background(), restore); err != nil {
+	if err := publishOnly.CheckPublish(context.Background(), restore); err != nil {
 		t.Fatalf("restore = %v", err)
 	}
 	// Publish consumed the review of a scheduled release, so going live must not ask for another.
@@ -377,11 +385,14 @@ func TestPublishConsumesTheReviewInItsTransaction(t *testing.T) {
 	}
 }
 
-func TestWriteReleaseSkipsRestoresAndFailsClearlyUnconfigured(t *testing.T) {
-	reviews, query, digest, _ := reviewService(t, true)
+func TestWriteReleaseFailsClearlyUnconfigured(t *testing.T) {
+	reviews, query, digest, _ := reviewService(t, false)
 	restored := domain.AgentDefinition{AgentID: "writer-a", DefinitionDigest: digest, Version: "5", RestoredFromVersion: "2"}
-	if err := reviews.WriteRelease(context.Background(), query, 8, restored); err != nil {
-		t.Fatalf("restore = %v", err)
+	if err := reviews.WriteRelease(context.Background(), catalogTxFake{query}, 8, restored); err != nil {
+		t.Fatalf("an unreviewed restore where none is required = %v", err)
+	}
+	if err := reviews.WriteRelease(context.Background(), query, 8, restored); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("restore in a plain transaction = %v", err)
 	}
 	if err := reviews.WriteRelease(context.Background(), query, 8, domain.AgentDefinition{AgentID: "writer-a", Version: "5"}); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("plain transaction = %v", err)
@@ -419,16 +430,32 @@ func TestChangedEditorsAreTheLastEditorsOfAddedAndChangedResources(t *testing.T)
 
 func TestBasePublishSeparationAdmitsNoException(t *testing.T) {
 	separation := BasePublishSeparation{Tenants: map[int64]bool{8: true}}
-	if required, _ := separation.Required(context.Background(), 8, "writer-a", reviewedAt); !required {
+	publish, restore := domain.PublishReviewOfPublish, domain.PublishReviewOfRestore
+	if required, _ := separation.Required(context.Background(), 8, "writer-a", publish, reviewedAt); !required {
 		t.Fatal("listed tenant must require two-person publish")
 	}
-	if required, _ := separation.Required(context.Background(), 9, "writer-a", reviewedAt); required {
+	if required, _ := separation.Required(context.Background(), 9, "writer-a", publish, reviewedAt); required {
 		t.Fatal("unlisted tenant must not")
 	}
-	if required, _ := (BasePublishSeparation{All: true}).Required(context.Background(), 9, "writer-a", reviewedAt); !required {
+	if required, _ := (BasePublishSeparation{All: true}).Required(context.Background(), 9, "writer-a", publish, reviewedAt); !required {
 		t.Fatal("All must require it everywhere")
 	}
-	if err := separation.Excuse(context.Background(), 8, "writer-a", "EXC-1", domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}, reviewedAt); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("excuse = %v", err)
+	if required, _ := separation.Required(context.Background(), 8, "writer-a", restore, reviewedAt); required {
+		t.Fatal("restores are reviewed only with Restores")
+	}
+	separation.Restores = true
+	if required, _ := separation.Required(context.Background(), 8, "writer-a", restore, reviewedAt); !required {
+		t.Fatal("Restores must require reviewing a listed tenant's restores")
+	}
+	if required, _ := separation.Required(context.Background(), 9, "writer-a", restore, reviewedAt); required {
+		t.Fatal("Restores must not reach an unlisted tenant")
+	}
+	if _, err := separation.Required(context.Background(), 8, "writer-a", "rollback", reviewedAt); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("unknown kind = %v", err)
+	}
+	for _, kind := range []domain.PublishReviewKind{publish, restore} {
+		if err := separation.Excuse(context.Background(), 8, "writer-a", kind, "EXC-1", domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}, reviewedAt); !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("%s excuse = %v", kind, err)
+		}
 	}
 }

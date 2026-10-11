@@ -23,9 +23,11 @@ const (
 	qCommentResolve    = "scout_comment_resolve"
 	qCommentGet        = "scout_comment_get"
 
-	maxCommentBody   = 2000
-	maxCommentsShown = 500
+	maxCommentBody = 2000
 )
+
+// DefaultMaxCommentsShown bounds one list of draft comments when StudioService.MaxCommentsShown is zero.
+const DefaultMaxCommentsShown = 500
 
 const commentColumns = `id, draft_revision, anchor_code, prompt_section_id, language_code, resource_kind_code, resource_id,
        body, status_code, author_kind, author_id, created_at, resolved_by_kind, resolved_by_id, resolved_at`
@@ -36,13 +38,13 @@ SELECT ` + commentColumns + `
   FROM agent_draft_comment
  WHERE partner_id = ? AND agent_id = ?
  ORDER BY id DESC
- LIMIT 500`
+ LIMIT ?`
 	commentListStatus = `
 SELECT ` + commentColumns + `
   FROM agent_draft_comment
  WHERE partner_id = ? AND agent_id = ? AND status_code = ?
  ORDER BY id DESC
- LIMIT 500`
+ LIMIT ?`
 )
 
 var commentQueries = map[string]string{
@@ -99,7 +101,7 @@ func (c *StudioDraftComments) Comments(ctx context.Context, actor domain.StudioA
 	if err := c.Studio.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return nil, err
 	}
-	return listComments(ctx, c.qs, actor.TenantID, agentID, status)
+	return listComments(ctx, c.qs, actor.TenantID, agentID, status, c.Studio.commentLimit())
 }
 
 // Comment records an open comment on the draft revision the author saw.
@@ -257,11 +259,13 @@ func (c *StudioDraftComments) settingKind(ctx context.Context, kind domain.Resou
 	return err == nil && merger != nil
 }
 
-func listComments(ctx context.Context, qs keelport.QueryService, tenantID int64, agentID string, status domain.DraftCommentStatus) ([]domain.DraftComment, error) {
+// listComments returns the agent's newest limit comments, all or of one status.
+func listComments(ctx context.Context, qs keelport.QueryService, tenantID int64, agentID string, status domain.DraftCommentStatus, limit int) ([]domain.DraftComment, error) {
 	name, args := qCommentList, []any{tenantID, agentID}
 	if status != "" {
 		name, args = qCommentListStatus, append(args, string(status))
 	}
+	args = append(args, limit)
 	res, err := qs.Query(ctx, name, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list draft comments: %w", err)

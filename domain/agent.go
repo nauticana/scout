@@ -32,4 +32,6 @@ type AgentDefinition struct {
 	PublishedBy           *int64    `json:"published_by,omitempty"`
 	RestoredFromVersion   string    `json:"restored_from_version,omitempty"`
 	PublishedAt           time.Time `json:"published_at"`
+	// DerivedFrom is the draft's origin frozen with this version; the digest covers it.
+	DerivedFrom *DerivedFrom `json:"derived_from,omitempty"`
 }

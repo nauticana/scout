@@ -6,7 +6,8 @@ import (
 )
 
 const (
-	// StudioPublishReviewPath requests a review (POST) or shows the latest one (GET ?agent_name=).
+	// StudioPublishReviewPath requests a review (POST) or shows the latest one (GET
+	// ?agent_name=&kind=publish|restore, publish when kind is absent).
 	StudioPublishReviewPath        = StudioBasePath + "publish-review"
 	StudioPublishReviewApprovePath = StudioBasePath + "publish-review/approve"
 	StudioPublishReviewRejectPath  = StudioBasePath + "publish-review/reject"
@@ -16,13 +17,14 @@ const (
 	StudioCommentResolvePath = StudioBasePath + "comment/resolve"
 )
 
-// PublishReviewRequest asks a second person to review agent_name's current draft.
-// sod_exception_id optionally names the separation-of-duties exception under which the
-// requester will publish the approved review themselves.
+// PublishReviewRequest asks a second person to review agent_name's current draft, or restoring
+// its published restore_version when set. sod_exception_id optionally names the
+// separation-of-duties exception under which the requester will carry out the approved review themselves.
 type PublishReviewRequest struct {
 	AgentName      string `json:"agent_name"`
 	Note           string `json:"note,omitempty"`
 	SodExceptionID string `json:"sod_exception_id,omitempty"`
+	RestoreVersion string `json:"restore_version,omitempty"`
 }
 
 // PublishReviewDecision approves or rejects review_id.
@@ -32,8 +34,9 @@ type PublishReviewDecision struct {
 	Note      string `json:"note,omitempty"`
 }
 
-// PublishReview is one review of an exact draft, identified by definition_digest. requested_by
-// and decided_by are user ids; published_version is the release that consumed the approval.
+// PublishReview is one review of an exact draft, identified by definition_digest, or of
+// restoring restore_version over base_version. requested_by and decided_by are user ids;
+// published_version is the release that consumed the approval.
 type PublishReview struct {
 	ReviewID              int64                     `json:"review_id"`
 	AgentName             string                    `json:"agent_name"`
@@ -50,6 +53,7 @@ type PublishReview struct {
 	DecidedAt             *time.Time                `json:"decided_at,omitempty"`
 	SodExceptionID        string                    `json:"sod_exception_id,omitempty"`
 	PublishedVersion      string                    `json:"published_version,omitempty"`
+	RestoreVersion        string                    `json:"restore_version,omitempty"`
 	Diff                  PublishReviewDiff         `json:"diff"`
 	Evaluations           []PublishReviewEvaluation `json:"evaluations"`
 }
@@ -89,11 +93,14 @@ type PublishReviewEvaluation struct {
 	Reference string `json:"reference,omitempty"`
 }
 
-// PublishReviewState is the latest review against the current draft. required reports whether
-// two-person publish applies; stale that the draft changed since the review was requested.
+// PublishReviewState is the latest review of kind. required reports whether two-person review
+// applies. For a publish, stale says the draft changed since the review was requested; for a
+// restore, active_version is the release active now and stale says it is not the review's base_version.
 type PublishReviewState struct {
 	AgentName     string         `json:"agent_name"`
+	Kind          string         `json:"kind"`
 	Required      bool           `json:"required"`
+	ActiveVersion string         `json:"active_version,omitempty"`
 	CurrentDigest string         `json:"current_digest,omitempty"`
 	Stale         bool           `json:"stale"`
 	Review        *PublishReview `json:"review,omitempty"`

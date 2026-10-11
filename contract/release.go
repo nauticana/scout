@@ -43,14 +43,9 @@ type PlatformReleaseRolloutController interface {
 	Rollback(ctx context.Context, platformVersion string) error
 }
 
-// RolloutHealthEvaluator determines whether a staged release may advance.
+// RolloutHealthEvaluator decides whether a staged release may advance: healthy, unhealthy, or
+// inconclusive when telemetry cannot tell.
 type RolloutHealthEvaluator interface {
-	// Healthy evaluates latency, errors, cost, quality, and contract regressions.
-	Healthy(ctx context.Context, target domain.RolloutTarget) (bool, error)
-}
-
-// DetailedRolloutHealthEvaluator reports evidence and inconclusive telemetry.
-type DetailedRolloutHealthEvaluator interface {
 	Evaluate(ctx context.Context, target domain.RolloutTarget) (domain.RolloutHealth, error)
 }
 

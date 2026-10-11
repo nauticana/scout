@@ -34,6 +34,12 @@ const (
 	qApprovalEscalate     = "scout_approval_escalate"
 	qApprovalNotified     = "scout_approval_notified"
 	qApprovalRevision     = "scout_approval_revision"
+	qApprovalVacant       = "scout_approval_vacant"
+	qApprovalUnsettled    = "scout_approval_unsettled"
+	qApprovalTurnSettled  = "scout_approval_turn_settled"
+
+	// maxResolutionBytes bounds the resolver's evidence reference kept on a routed request.
+	maxResolutionBytes = 256
 
 	// ApprovalAggregate and ApprovalRequestedEvent route the outbox event that notifies an approver.
 	ApprovalAggregate      = "turn_approval_request"
@@ -42,7 +48,9 @@ const (
 	approvalColumns = `id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
        approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code,
-       deadline_at, created_at, resolved_at, notification_event_id, revises_step_id`
+       deadline_at, created_at, resolved_at, notification_event_id, revises_step_id, release_version,
+       requester_kind, requester_id, rule_source_code, approval_route_id, approver_reference_kind,
+       approver_reference, route_step, route_resolution`
 )
 
 var approvalQueries = map[string]string{
@@ -50,21 +58,25 @@ var approvalQueries = map[string]string{
 INSERT INTO turn_approval_request
        (id, partner_id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
         approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
-        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at, revises_step_id)
-VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at, revises_step_id,
+        release_version, requester_kind, requester_id, rule_source_code, approval_route_id, approver_reference_kind,
+        approver_reference, route_step, route_resolution)
+VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, request_id, execution_step_id) DO NOTHING
 RETURNING id`,
 	qApprovalGet: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?`,
-	// The digest guard is in the WHERE clause, so approving a changed action
-	// updates nothing rather than resolving the wrong proposal.
+	// The digest and assignment guards are in the WHERE clause, so approving a changed action,
+	// or deciding a request reassigned since it was read, updates nothing.
 	qApprovalResolve: `
 UPDATE turn_approval_request
    SET status_code = ?, resolved_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
    AND status_code IN ('pending', 'escalated') AND proposed_digest = ?
+   AND route_step = ? AND approver_kind IS NOT DISTINCT FROM ? AND approver_id IS NOT DISTINCT FROM ?
 RETURNING id`,
 	qApprovalDecision: `
 INSERT INTO turn_approval_decision
@@ -115,11 +127,31 @@ SELECT ` + approvalColumns + `
 UPDATE turn_approval_request
    SET notification_event_id = ?
  WHERE partner_id = ? AND id = ? AND notification_event_id IS NULL`,
+	// Reassignment is a compare-and-swap on the assignment it was decided against.
 	qApprovalEscalate: `
 UPDATE turn_approval_request
-   SET status_code = 'escalated', approver_kind = ?, approver_id = ?, deadline_at = ?
+   SET status_code = ?, approver_kind = ?, approver_id = ?, deadline_at = ?, route_step = ?,
+       approver_reference_kind = ?, approver_reference = ?, route_resolution = ?
  WHERE partner_id = ? AND id = ? AND status_code IN ('pending', 'escalated')
+   AND route_step = ? AND approver_kind IS NOT DISTINCT FROM ? AND approver_id IS NOT DISTINCT FROM ?
 RETURNING id`,
+	qApprovalVacant: `
+SELECT ` + approvalColumns + `
+  FROM turn_approval_request
+ WHERE partner_id = ? AND status_code IN ('pending', 'escalated') AND approval_route_id IS NOT NULL
+   AND approver_id IS NULL AND (deadline_at IS NULL OR deadline_at > ?)
+ ORDER BY deadline_at NULLS LAST, id
+ LIMIT ?`,
+	qApprovalUnsettled: `
+SELECT ` + approvalColumns + `
+  FROM turn_approval_request
+ WHERE partner_id = ? AND status_code = 'expired' AND turn_settled_at IS NULL
+ ORDER BY resolved_at, id
+ LIMIT ?`,
+	qApprovalTurnSettled: `
+UPDATE turn_approval_request
+   SET turn_settled_at = ?
+ WHERE partner_id = ? AND id = ? AND status_code = 'expired' AND turn_settled_at IS NULL`,
 }
 
 // TableStore is the durable ApprovalStore, inbox, and escalation writer.
@@ -246,10 +278,13 @@ func insertRequest(ctx context.Context, qs keelport.QueryService, request domain
 		request.TenantID, request.RequestID, request.ConversationID, request.ExecutionStepID,
 		string(request.Principal.Kind), request.Principal.ID,
 		nullable(string(request.Approver.Kind)), nullable(request.Approver.ID),
-		nullable(request.ScopeID), nullable(request.RuleID), request.Action, request.Resource,
+		nullable(request.ScopeID), request.RuleID, request.Action, request.Resource,
 		string(request.Class), string(request.RiskTier), request.Summary,
 		nullable(request.Evidence.URI), nullable(request.Evidence.Digest), request.ProposedDigest,
-		nullableTime(request.DeadlineAt), nullableID(request.RevisesStepID))
+		nullableTime(request.DeadlineAt), nullableID(request.RevisesStepID),
+		nullable(request.ReleaseVersion), nullable(string(request.Requester.Kind)), nullable(request.Requester.ID),
+		string(request.Source), nullable(request.Route.RouteID), nullable(string(request.Route.Reference.Kind)),
+		nullable(request.Route.Reference.Ref), request.Route.Step, nullable(request.Route.Resolution))
 	if err != nil {
 		return 0, fmt.Errorf("open approval: %w", err)
 	}
@@ -300,8 +335,10 @@ func (s *TableStore) Resolve(ctx context.Context, verdict domain.ApprovalVerdict
 		}
 	}()
 	key := verdict.RequestKey
+	fence := verdict.Assignment
 	updated, err := tx.Query(ctx, qApprovalResolve, string(verdict.Status), decidedAt,
-		key.TenantID, key.RequestID, key.ExecutionStepID, verdict.ProposedDigest)
+		key.TenantID, key.RequestID, key.ExecutionStepID, verdict.ProposedDigest,
+		fence.Step, nullable(string(fence.Approver.Kind)), nullable(fence.Approver.ID))
 	if err != nil {
 		return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: %w", err)
 	}
@@ -448,24 +485,198 @@ func (s *TableStore) DueBy(ctx context.Context, tenantID int64, filter domain.Ap
 	return scanRequests(tenantID, result.Rows), nil
 }
 
-// Reassign moves a request to a backup approver with a new deadline.
+// Vacant returns open routed requests nobody is assigned yet whose deadline has not passed,
+// so a sweep can fill them once someone becomes eligible.
+func (s *TableStore) Vacant(ctx context.Context, tenantID int64, limit int) ([]domain.ApprovalRequest, error) {
+	if err := s.init(ctx); err != nil {
+		return nil, err
+	}
+	result, err := s.qs.Query(ctx, qApprovalVacant, tenantID, s.now(), pageLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list vacant approvals: %w", err)
+	}
+	return scanRequests(tenantID, result.Rows), nil
+}
+
+// Unsettled returns expired requests whose parked turn is not yet known to be failed.
+func (s *TableStore) Unsettled(ctx context.Context, tenantID int64, limit int) ([]domain.ApprovalRequest, error) {
+	if err := s.init(ctx); err != nil {
+		return nil, err
+	}
+	result, err := s.qs.Query(ctx, qApprovalUnsettled, tenantID, pageLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list unsettled approvals: %w", err)
+	}
+	return scanRequests(tenantID, result.Rows), nil
+}
+
+// TurnSettled records that the turn parked on an expired request is failed or no longer parked.
+func (s *TableStore) TurnSettled(ctx context.Context, tenantID, id int64) error {
+	if err := s.init(ctx); err != nil {
+		return err
+	}
+	if _, err := s.qs.Query(ctx, qApprovalTurnSettled, s.now(), tenantID, id); err != nil {
+		return fmt.Errorf("settle turn of approval %d: %w", id, err)
+	}
+	return nil
+}
+
+// Reassign applies one escalation step to request as it was read. It swaps the assignment only
+// while the request still holds the step and approver it was read with; otherwise another sweep
+// or a verdict won and the result is domain.ErrConflict.
 func (s *TableStore) Reassign(ctx context.Context, request domain.ApprovalRequest, step domain.EscalationStep) error {
 	if err := s.init(ctx); err != nil {
 		return err
 	}
-	if strings.TrimSpace(step.Backup.ID) == "" {
-		return fmt.Errorf("%w: escalation needs a backup approver", domain.ErrValidation)
+	if err := validateReassign(request, step); err != nil {
+		return err
 	}
-	deadline := s.now().Add(step.Extension)
+	var deadline any
+	switch {
+	case step.KeepDeadline:
+		deadline = nullableTime(request.DeadlineAt)
+	case step.Extension > 0:
+		deadline = s.now().Add(step.Extension)
+	}
+	status := domain.ApprovalStatusEscalated
+	if step.KeepDeadline && request.Status == domain.ApprovalStatusPending {
+		status = domain.ApprovalStatusPending
+	}
+	backup, route := step.Backup, step.Route
+	if request.Route.RouteID == "" {
+		route = domain.ApprovalRouteAuthority{}
+	}
+	args := []any{string(status), nullable(string(backup.Kind)), nullable(backup.ID), deadline, route.Step,
+		nullable(string(route.Reference.Kind)), nullable(route.Reference.Ref), nullable(route.Resolution),
+		request.TenantID, request.ID, request.Route.Step, nullable(string(request.Approver.Kind)), nullable(request.Approver.ID)}
 	ctx = context.WithoutCancel(ctx)
-	updated, err := s.qs.Query(ctx, qApprovalEscalate, string(step.Backup.Kind), step.Backup.ID, deadline, request.TenantID, request.ID)
+	if !s.NotifyThroughOutbox || backup.ID == "" || backup == request.Approver {
+		updated, err := s.qs.Query(ctx, qApprovalEscalate, args...)
+		if err != nil {
+			return fmt.Errorf("escalate approval: %w", err)
+		}
+		if len(updated.Rows) == 0 {
+			return fmt.Errorf("%w: approval %d is no longer assigned as read", domain.ErrConflict, request.ID)
+		}
+		return nil
+	}
+	return s.reassignNotified(ctx, request, backup, deadline, args)
+}
+
+// reassignNotified swaps the assignment and queues the new approver's notice in one transaction.
+func (s *TableStore) reassignNotified(ctx context.Context, request domain.ApprovalRequest, backup domain.PrincipalRef, deadline any, args []any) error {
+	queries := maps.Clone(approvalQueries)
+	maps.Copy(queries, outbox.WriteQueries())
+	tx, err := s.DB.BeginTx(ctx, queries)
+	if err != nil {
+		return fmt.Errorf("escalate approval: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	updated, err := tx.Query(ctx, qApprovalEscalate, args...)
 	if err != nil {
 		return fmt.Errorf("escalate approval: %w", err)
 	}
 	if len(updated.Rows) == 0 {
-		return fmt.Errorf("%w: approval %d is no longer open", domain.ErrConflict, request.ID)
+		return fmt.Errorf("%w: approval %d is no longer assigned as read", domain.ErrConflict, request.ID)
+	}
+	due, _ := deadline.(time.Time)
+	payload, err := json.Marshal(approvalNotice{
+		TenantID: request.TenantID, RecipientKind: string(backup.Kind), RecipientID: backup.ID,
+		RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, Subject: request.Action,
+		RiskTier: string(request.RiskTier), DueAt: due,
+	})
+	if err != nil {
+		return fmt.Errorf("encode approval notice: %w", err)
+	}
+	if _, err = outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: request.TenantID, AggregateType: ApprovalAggregate,
+		AggregateID: strconv.FormatInt(request.ID, 10), EventType: ApprovalRequestedEvent, Payload: string(payload)}); err != nil {
+		return fmt.Errorf("queue approval notice: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("escalate approval: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func validateReassign(request domain.ApprovalRequest, step domain.EscalationStep) error {
+	routed := request.Route.RouteID != ""
+	backup := step.Backup
+	if (backup.Kind == "") != (strings.TrimSpace(backup.ID) == "") {
+		return fmt.Errorf("%w: an approver needs both kind and id", domain.ErrValidation)
+	}
+	switch step.Resolved() {
+	case domain.EscalationReassign:
+		if backup.ID == "" {
+			return fmt.Errorf("%w: a reassignment needs a backup approver", domain.ErrValidation)
+		}
+		if routed && !decimalHuman(backup) {
+			return fmt.Errorf("%w: a routed approver is a person with a user account id", domain.ErrValidation)
+		}
+		if step.KeepDeadline && request.Approver.ID != "" {
+			return fmt.Errorf("%w: only a vacancy is filled under its current deadline", domain.ErrValidation)
+		}
+	case domain.EscalationVacate:
+		if !routed || backup.ID != "" {
+			return fmt.Errorf("%w: only a routed request is vacated, and to nobody", domain.ErrValidation)
+		}
+	case domain.EscalationHold:
+		if backup != request.Approver || (routed && step.Route.Step != request.Route.Step) || step.KeepDeadline || step.Extension != 0 {
+			return fmt.Errorf("%w: a hold keeps the current assignment with no deadline", domain.ErrValidation)
+		}
+	default:
+		return fmt.Errorf("%w: escalation action %q does not reassign", domain.ErrValidation, step.Resolved())
+	}
+	if step.KeepDeadline && step.Resolved() != domain.EscalationReassign {
+		return fmt.Errorf("%w: only a reassignment keeps the current deadline", domain.ErrValidation)
+	}
+	if step.Extension < 0 {
+		return fmt.Errorf("%w: an escalation extension cannot be negative", domain.ErrValidation)
+	}
+	if !routed {
+		if step.Route.RouteID != "" || step.Route.Step != 0 {
+			return fmt.Errorf("%w: an unrouted request has no route step", domain.ErrValidation)
+		}
+		return nil
+	}
+	if step.Route.RouteID != request.Route.RouteID {
+		return fmt.Errorf("%w: escalation keeps the route a request was opened under", domain.ErrValidation)
+	}
+	if step.Route.Step < request.Route.Step || step.Route.Step > domain.MaxApprovalEscalationSteps {
+		return fmt.Errorf("%w: escalation moves a route step forward, up to %d", domain.ErrValidation, domain.MaxApprovalEscalationSteps)
+	}
+	return validateAuthority(step.Route)
+}
+
+// validateAuthority checks the routed authority a request is assigned under.
+func validateAuthority(route domain.ApprovalRouteAuthority) error {
+	reference := route.Reference
+	switch {
+	case len(route.RouteID) > 64:
+		return fmt.Errorf("%w: an approval route id holds at most 64 characters", domain.ErrValidation)
+	case reference.Kind != domain.ApproverRole && reference.Kind != domain.ApproverPosition:
+		return fmt.Errorf("%w: unknown approver reference kind %q", domain.ErrValidation, reference.Kind)
+	case strings.TrimSpace(reference.Ref) == "" || len(reference.Ref) > 128:
+		return fmt.Errorf("%w: an approver reference holds 1 to 128 characters", domain.ErrValidation)
+	case route.Step < 0 || route.Step > domain.MaxApprovalEscalationSteps:
+		return fmt.Errorf("%w: a route step is from 0 to %d", domain.ErrValidation, domain.MaxApprovalEscalationSteps)
+	case len(route.Resolution) > maxResolutionBytes:
+		return fmt.Errorf("%w: a route resolution holds at most %d bytes", domain.ErrValidation, maxResolutionBytes)
 	}
 	return nil
+}
+
+func decimalHuman(principal domain.PrincipalRef) bool {
+	if principal.Kind != domain.PrincipalHuman {
+		return false
+	}
+	id, err := strconv.ParseInt(principal.ID, 10, 64)
+	return err == nil && id > 0 && strconv.FormatInt(id, 10) == principal.ID
 }
 
 func validateOpen(request domain.ApprovalRequest) error {
@@ -480,8 +691,39 @@ func validateOpen(request domain.ApprovalRequest) error {
 		return fmt.Errorf("%w: approval needs an output class and a risk tier", domain.ErrValidation)
 	case request.RevisesStepID < 0 || request.RevisesStepID == request.ExecutionStepID:
 		return fmt.Errorf("%w: a revision revises another step of its turn", domain.ErrValidation)
+	case (request.Approver.Kind == "") != (strings.TrimSpace(request.Approver.ID) == ""):
+		return fmt.Errorf("%w: an approver needs both kind and id", domain.ErrValidation)
+	case (request.Requester.Kind == "") != (strings.TrimSpace(request.Requester.ID) == ""):
+		return fmt.Errorf("%w: a requester needs both kind and id", domain.ErrValidation)
+	case !knownSource(request.Source):
+		return fmt.Errorf("%w: unknown approval source %q", domain.ErrValidation, request.Source)
+	case strings.TrimSpace(request.RuleID) == "" || len(request.RuleID) > maxRuleIDLength:
+		return fmt.Errorf("%w: an approval names a rule of 1 to %d characters", domain.ErrValidation, maxRuleIDLength)
+	case request.ReleaseVersion != "" && (request.Principal.Kind != domain.PrincipalAgent || len(request.ReleaseVersion) > 80):
+		return fmt.Errorf("%w: only an agent's request names its release", domain.ErrValidation)
 	}
-	return nil
+	if request.Route.RouteID == "" {
+		if request.Route != (domain.ApprovalRouteAuthority{}) {
+			return fmt.Errorf("%w: an unrouted request carries no routed authority", domain.ErrValidation)
+		}
+		return nil
+	}
+	if request.ReleaseVersion == "" {
+		return fmt.Errorf("%w: a routed request names the release whose routing applies", domain.ErrValidation)
+	}
+	if request.Approver.ID != "" && !decimalHuman(request.Approver) {
+		return fmt.Errorf("%w: a routed approver is a person with a user account id", domain.ErrValidation)
+	}
+	return validateAuthority(request.Route)
+}
+
+func knownSource(source domain.ApprovalSource) bool {
+	switch source {
+	case domain.ApprovalSourceAutonomy, domain.ApprovalSourcePolicy, domain.ApprovalSourceGuardrail:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateVerdict(verdict domain.ApprovalVerdict) error {
@@ -505,6 +747,9 @@ func validateVerdict(verdict domain.ApprovalVerdict) error {
 	}
 	if len(verdict.ProposedDigest) != 64 {
 		return fmt.Errorf("%w: a verdict must name the proposal it decides", domain.ErrValidation)
+	}
+	if verdict.Assignment.Step < 0 || verdict.Assignment.Step > domain.MaxApprovalEscalationSteps {
+		return fmt.Errorf("%w: a verdict's assignment step is from 0 to %d", domain.ErrValidation, domain.MaxApprovalEscalationSteps)
 	}
 	revised := strings.TrimSpace(verdict.Revision.URI) != ""
 	switch {
@@ -543,6 +788,7 @@ func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 	resolved, _ := common.AsTimeOK(row[21])
 	notified, _ := common.AsInt64OK(row[22])
 	revises, _ := common.AsInt64OK(row[23])
+	step, _ := common.AsInt64OK(row[31])
 	return domain.ApprovalRequest{
 		ID: common.AsInt64(row[0]), TenantID: tenantID, RequestID: common.AsString(row[1]),
 		ConversationID: common.AsString(row[2]), ExecutionStepID: common.AsInt64(row[3]),
@@ -555,7 +801,13 @@ func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 		Evidence:       domain.ObjectRef{URI: common.AsString(row[15]), Digest: common.AsString(row[16])},
 		ProposedDigest: common.AsString(row[17]), Status: domain.ApprovalStatus(common.AsString(row[18])),
 		DeadlineAt: deadline, CreatedAt: common.AsTime(row[20]), ResolvedAt: resolved,
-		NotificationEventID: notified, RevisesStepID: revises,
+		NotificationEventID: notified, RevisesStepID: revises, ReleaseVersion: common.AsString(row[24]),
+		Requester: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[25])), ID: common.AsString(row[26])},
+		Source:    domain.ApprovalSource(common.AsString(row[27])),
+		Route: domain.ApprovalRouteAuthority{
+			RouteID: common.AsString(row[28]), Step: int(step), Resolution: common.AsString(row[32]),
+			Reference: domain.ApproverReference{Kind: domain.ApproverReferenceKind(common.AsString(row[29])), Ref: common.AsString(row[30])},
+		},
 	}
 }
 

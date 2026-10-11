@@ -23,6 +23,46 @@ than its type**.
 never upgrades one. A running instance's pinned version is its contract, and silently re-pointing it
 would change what already-approved work is allowed to do.
 
+## Templates and portable definitions
+
+An agent may start from a template or a Charter document, and `agent_draft_origin` records which.
+Every freeze copies that origin into the release definition as `derived_from` — Charter's
+`derivedFrom`: source kind (`AgentTemplate` or `AgentDefinition`), id, namespace, version, and
+digest — which the definition digest covers only when it is set. Drift lists `derived_from` when
+the draft's origin differs from the active release's, and a restore carries the restored version's.
+
+**Export and import.** `controlplane.StudioPortability` renders an agent's active release as a
+Charter `AgentDefinition` through `charter.AgentDocuments` (`Namespace` required, `Enterprise`
+optional). The ten governance members come from the frozen governance section; Scout's frozen
+definition rides in the `scout:definition` extension; the draft's agent-scope bindings, guardrails,
+origin, and byte-exact frozen settings ride in `scout:agent`; and `scout:digest` digests the
+canonical document. An agent id that is not a Charter identifier maps deterministically to one.
+Credentials, secrets, other scopes' bindings, and product binding kinds never leave, and an agent
+binding product kinds is not exported. Import creates a disabled, unpublished agent (`CREATE` on the
+type) or replaces an agent's draft (`EDIT`, at the expected draft revision) and records the
+document as its origin. The document must decode strictly and re-render byte for byte, its
+definition and settings digests must recompute, its type, models, tools, skills, and prompt
+captions must be ones the importing tenant has, and its guardrails must pass the composed
+`StudioGuardrails` (without it a document carrying any is refused). Bindings compile over the target
+scope chain as a setting save does: wider sets, extra policy allows, and anything under a sealed
+scope are refused, and budget, autonomy, and limits values clamp to the tighter value. Every
+knowledge and entitlement value, and every approval route's approver (`role:<ref>` or
+`position:<ref>`), must be mapped to one of the importing tenant (`references`), so no source
+tenant's value survives. A client posts the downloaded bytes; rewritten number literals
+break the digest.
+
+**Templates.** A template is platform-owned or tenant-owned, with immutable sequential versions of
+agent-scope bindings and **slots**: the knowledge and entitlement names and approval route approvers
+a create must map, never the owner's ids or roles. Every declared slot is used, and templates carry no guardrails, models, or
+extension. `controlplane.StudioTemplates` saves an agent's own bindings as a template or its next
+version (`EDIT` on the agent and `TEMPLATE` on its type, within
+`agent_studio_max_templates_per_type` and `agent_studio_max_template_versions`), lists the newest
+version of every template a tenant may use, shares a tenant template with listed tenants or all
+(`TEMPLATE_PUBLISH`), and reports whether an agent's template has a newer version. A product
+registers platform templates with `RegisterPlatform`. With `StudioService.Templates` composed,
+Studio's create takes a `template_id` and optional `template_version`: the type version comes from
+the template, every slot is mapped through `references`, and the origin is the template version.
+
 ## Lifecycle
 
 `agent_profile.state_code` over the `agent_state` catalog holds an agent's state, with
@@ -66,6 +106,25 @@ transports that deliver work are product wiring.
 An enterprise may own the fields instead. Every field a `contract.GovernanceSource` snapshot sets is
 read-only in Studio and never stored by Scout, and the release freezes the snapshot's document,
 version, and digest. An unusable snapshot or a source error fails the call.
+
+`charter.GovernanceSource` reads it from a Charter corpus: `Documents` and `Namespace`, mapping a
+tenant to the namespace that owns its agents, are required; `Link` optionally names where a person
+reads or changes the governing definition, and `Now` is the clock. The agent id must name an
+`AgentIdentity` in the tenant's namespace, and only that namespace's `AgentDefinition`s whose
+`agentIdentityId` resolves to it count, so a document in another namespace, malformed or not, never
+affects the tenant. Exactly one must be in force — lifecycle empty or `active`, validity holding on
+the clock's UTC date — or the snapshot fails closed: an unmapped tenant is `ErrNotReady`, an
+unknown agent or none in force `ErrValidation`, and two in force `ErrConflict`. The snapshot carries
+the definition's governance members in Charter's shapes, its id and `definitionVersion`, and a
+`sha256:` digest of them.
+
+`charter.IdentityBinding`, a release writer, keeps one principal across both libraries by the same
+resolution: the published version must be a `definitionVersion` one of the identity's definitions
+in the tenant's namespace declares (`ErrValidation` otherwise), and a release whose governance froze
+a Charter `AgentDefinition` snapshot must have frozen exactly that definition at that version
+(`ErrConflict` otherwise). With both composed, release N publishes only while the definition
+declaring N is the one in force; a restore takes a new version but keeps the restored release's
+snapshot, so restoring a release that froze one is refused.
 
 As a publish guard the same service refuses a release whose governance is malformed, binds a schedule
 or topic the verifier does not prove, lacks a field the active Charter profile requires

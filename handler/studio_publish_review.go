@@ -24,7 +24,7 @@ type StudioPublishReviewHandler struct {
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts these routes.
 func (h *StudioPublishReviewHandler) Feature() api.StudioFeature {
 	return api.StudioFeature{ID: StudioFeaturePublishReview, Version: 1, Actions: []string{
-		string(domain.StudioView), string(domain.StudioEdit), string(domain.StudioApprovePublish)}}
+		string(domain.StudioView), string(domain.StudioEdit), string(domain.StudioRestore), string(domain.StudioApprovePublish)}}
 }
 
 // Routes returns the review routes; the review path answers GET (show) and POST (request).
@@ -45,7 +45,7 @@ func (h *StudioPublishReviewHandler) Routes() map[string]http.HandlerFunc {
 
 func (h *StudioPublishReviewHandler) request(ctx context.Context, actor domain.StudioActor, request api.PublishReviewRequest) (any, error) {
 	review, err := h.Backend.Request(ctx, actor, domain.PublishReviewRequest{AgentID: request.AgentName, Note: request.Note,
-		SodExceptionID: request.SodExceptionID})
+		SodExceptionID: request.SodExceptionID, RestoreVersion: request.RestoreVersion})
 	if err != nil {
 		return nil, err
 	}
@@ -53,12 +53,12 @@ func (h *StudioPublishReviewHandler) request(ctx context.Context, actor domain.S
 }
 
 func (h *StudioPublishReviewHandler) review(ctx context.Context, actor domain.StudioActor, query url.Values) (any, error) {
-	state, err := h.Backend.Review(ctx, actor, query.Get("agent_name"))
+	state, err := h.Backend.Review(ctx, actor, query.Get("agent_name"), domain.PublishReviewKind(query.Get("kind")))
 	if err != nil {
 		return nil, err
 	}
-	result := api.PublishReviewState{AgentName: state.AgentID, Required: state.Required, CurrentDigest: state.CurrentDigest,
-		Stale: state.Stale, OpenComments: apiComments(state.OpenComments)}
+	result := api.PublishReviewState{AgentName: state.AgentID, Kind: string(state.Kind), Required: state.Required,
+		ActiveVersion: state.ActiveVersion, CurrentDigest: state.CurrentDigest, Stale: state.Stale, OpenComments: apiComments(state.OpenComments)}
 	if state.Review != nil {
 		review := apiReview(*state.Review)
 		result.Review = &review
@@ -92,7 +92,7 @@ func apiReview(review domain.PublishReview) api.PublishReview {
 		DraftRevision: review.DraftRevision, PromptProfileRevision: review.PromptProfileRevision, BaseVersion: review.BaseVersion,
 		Status: string(review.Status), RequestedBy: review.RequestedBy, RequestNote: review.RequestNote, RequestedAt: review.RequestedAt,
 		DecidedBy: review.DecidedBy, DecisionNote: review.DecisionNote, DecidedAt: review.DecidedAt,
-		SodExceptionID: review.SodExceptionID, PublishedVersion: review.PublishedVersion,
+		SodExceptionID: review.SodExceptionID, PublishedVersion: review.PublishedVersion, RestoreVersion: review.RestoreVersion,
 		Diff: api.PublishReviewDiff{
 			Editors: append([]int64{}, review.Diff.Editors...),
 			Causes:  nonNil(review.Diff.Causes), ChangedLanguages: nonNil(review.Diff.ChangedLanguages),

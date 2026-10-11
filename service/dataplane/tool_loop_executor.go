@@ -54,8 +54,8 @@ func NewToolLoopExecutor(executor ToolLoopExecutor) (*ToolLoopExecutor, error) {
 	}
 	limits := executor.Limits
 	if limits.MaxIterations <= 0 || limits.MaxToolCalls <= 0 || limits.MaxTokens <= 0 || limits.MaxRepeatedCalls <= 0 ||
-		limits.Deadline <= 0 || limits.MaxCostMinorUnits < 0 {
-		return nil, fmt.Errorf("%w: tool loop iterations, tool calls, tokens, repeated calls, and deadline must be positive", domain.ErrValidation)
+		limits.Deadline <= 0 || limits.MaxCostMinorUnits < 0 || limits.MaxCallRevisions < 0 {
+		return nil, fmt.Errorf("%w: tool loop iterations, tool calls, tokens, repeated calls, and deadline must be positive, and cost and call revisions not negative", domain.ErrValidation)
 	}
 	return &executor, nil
 }
@@ -154,10 +154,12 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 		run.limits.Deadline = requested
 	}
 	run.limits = narrowLoopLimits(run.limits, input.Limits)
+	run.limits.MaxTokens = narrowed64(run.limits.MaxTokens, input.Spend.Tokens)
+	run.limits.MaxCostMinorUnits = narrowedOptional64(run.limits.MaxCostMinorUnits, input.Spend.CostMinorUnits)
 	if input.Bounds.BudgetMinorUnits > 0 && strings.TrimSpace(input.Bounds.Currency) == "" {
 		return nil, fmt.Errorf("%w: a delegated cost budget requires a currency", domain.ErrValidation)
 	}
-	if (run.limits.MaxCostMinorUnits > 0 || input.Bounds.BudgetMinorUnits > 0) && executor.Pricer == nil {
+	if (run.limits.MaxCostMinorUnits > 0 || input.Bounds.BudgetMinorUnits > 0 || input.Spend.PricingRequired) && executor.Pricer == nil {
 		return nil, fmt.Errorf("%w: a cost-bounded tool loop requires a model pricer", domain.ErrDegraded)
 	}
 	if run.config.RequireEvidence && executor.Evidence == nil {
@@ -359,7 +361,7 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		ToolID: tool.ToolID, ToolVersion: tool.ToolVersion, Arguments: call.Arguments,
 		IdempotencyKey: callIdempotencyKey(run.key, call),
 	}
-	wasPending := false
+	wasPending, maxRevisions := false, positiveOr(run.limits.MaxCallRevisions, defaultCallRevisions)
 	for revisions := 0; ; {
 		entry, replayed := run.next(domain.LoopEntryApprovalPending)
 		if !replayed {
@@ -376,8 +378,8 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		if !revised {
 			break
 		}
-		if revisions++; revisions > maxCallRevisions {
-			return domain.ModelToolObservation{}, call, fmt.Errorf("%w: call %q was revised more than %d times", domain.ErrExecutionLimit, call.CallID, maxCallRevisions)
+		if revisions++; revisions > maxRevisions {
+			return domain.ModelToolObservation{}, call, fmt.Errorf("%w: call %q was revised more than %d times", domain.ErrExecutionLimit, call.CallID, maxRevisions)
 		}
 		run.recordRevision(call, reference)
 		call.Arguments, proposal = revision.Arguments, revisedCall(proposal, revision)
@@ -556,6 +558,9 @@ func (run *loopRun) account(usage domain.Usage) error {
 	}
 	if usage.Currency != "" && run.usage.Currency != "" && usage.Currency != run.usage.Currency {
 		return fmt.Errorf("%w: tool loop usage currencies differ", domain.ErrValidation)
+	}
+	if spend := run.input.Spend; spend.PricingRequired && usage.Currency != "" && usage.Currency != spend.Currency {
+		return fmt.Errorf("%w: loop usage currency %s differs from the release budget currency %s", domain.ErrValidation, usage.Currency, spend.Currency)
 	}
 	models, err := mergeModelSpend(run.usage.Models, usage.Models)
 	if err != nil {

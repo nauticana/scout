@@ -30,6 +30,9 @@ type ReleaseCaseExecutor struct {
 	// Sandboxes returns a fresh sandbox per replay, primed with that example's tool results.
 	Sandboxes func(ctx context.Context, example domain.GoldenExample) (contract.ToolSandbox, error)
 	Limits    domain.ToolLoopLimits
+	// ReleaseLimits reads the limits frozen into the replayed release, which only narrow Limits,
+	// MaxSteps, and the replay's duration; pass the data plane's PrincipalLimits.
+	ReleaseLimits contract.PrincipalLimits
 	// Pricer, Evidence and Retrieval are optional as they are in the runtime.
 	Pricer    contract.ModelPricer
 	Evidence  contract.EvidenceValidator
@@ -54,7 +57,7 @@ const (
 // replayOutcomes are failures of the agent under test rather than of the
 // replay: they are scored as a failed trajectory, not returned as errors.
 var replayOutcomes = []error{
-	domain.ErrExecutionLimit, domain.ErrLoopDetected, domain.ErrInvalidModelOutput, domain.ErrUnsupportedClaim,
+	domain.ErrExecutionLimit, domain.ErrBudgetExceeded, domain.ErrLoopDetected, domain.ErrInvalidModelOutput, domain.ErrUnsupportedClaim,
 }
 
 func (executor *ReleaseCaseExecutor) now() time.Time {
@@ -67,8 +70,8 @@ func (executor *ReleaseCaseExecutor) now() time.Time {
 func (executor *ReleaseCaseExecutor) validate() error {
 	switch {
 	case executor.Graphs == nil, executor.Requests == nil, executor.Router == nil, executor.Models == nil,
-		executor.Registry == nil, executor.Payloads == nil, executor.Sandboxes == nil:
-		return fmt.Errorf("release case executor: graphs, request builder, router, model gateway, tool registry, payload reader, and sandboxes are required")
+		executor.Registry == nil, executor.Payloads == nil, executor.Sandboxes == nil, executor.ReleaseLimits == nil:
+		return fmt.Errorf("release case executor: graphs, request builder, router, model gateway, tool registry, payload reader, sandboxes, and release limits are required")
 	case (executor.Guardrails == nil) != (executor.GuardrailConfigs == nil):
 		return fmt.Errorf("release case executor: guardrails and guardrail configs are set together or not at all")
 	case executor.MaxSteps < 0:
@@ -96,6 +99,15 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	decoding, err := parseReplayDecoding(subject.Decoding)
 	if err != nil {
 		return domain.EvaluationCase{}, err
+	}
+	principal := domain.Principal{Kind: domain.PrincipalAgent, ID: subject.AgentID, TenantID: example.TenantID, Release: subject.AgentVersion}
+	limits, err := executor.ReleaseLimits.ExecutionLimits(ctx, principal)
+	if err != nil {
+		return domain.EvaluationCase{}, fmt.Errorf("read limits of %s@%s: %w", subject.AgentID, subject.AgentVersion, err)
+	}
+	budget, err := executor.ReleaseLimits.Budget(ctx, principal)
+	if err != nil {
+		return domain.EvaluationCase{}, fmt.Errorf("read budget of %s@%s: %w", subject.AgentID, subject.AgentVersion, err)
 	}
 	input, err := executor.payload(ctx, example)
 	if err != nil {
@@ -137,8 +149,7 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	}
 	replay := &caseReplay{
 		executor: executor, loop: loop, journal: journal, graph: graph, guardrails: guardrails, input: input, started: executor.now(),
-		principal: domain.Principal{Kind: domain.PrincipalAgent, ID: subject.AgentID, TenantID: example.TenantID, Release: subject.AgentVersion},
-		requestID: "evaluation/" + subject.AgentVersion + "/" + example.ExampleID,
+		principal: principal, limits: limits, budget: budget, requestID: "evaluation/" + subject.AgentVersion + "/" + example.ExampleID,
 	}
 	if err := replay.run(ctx); err != nil {
 		return domain.EvaluationCase{}, err
@@ -168,6 +179,8 @@ type caseReplay struct {
 	graph      domain.ExecutionGraph
 	guardrails domain.GuardrailConfig
 	principal  domain.Principal
+	limits     domain.ExecutionLimits
+	budget     domain.ReleaseBudget
 	requestID  string
 	input      []byte
 	started    time.Time
@@ -177,6 +190,8 @@ type caseReplay struct {
 	trajectory []domain.TrajectoryEvent
 }
 
+// run walks the graph within the release's duration; ctx is the caller's, whose own end is
+// never scored as the agent's.
 func (replay *caseReplay) run(ctx context.Context) error {
 	steps := make(map[string]domain.ExecutionStep, len(replay.graph.Steps))
 	for _, step := range replay.graph.Steps {
@@ -186,11 +201,23 @@ func (replay *caseReplay) run(ctx context.Context) error {
 	if maxSteps == 0 {
 		maxSteps = len(replay.graph.Steps)
 	}
+	if limit := replay.limits.MaxSteps; limit > 0 && limit < maxSteps {
+		maxSteps = limit
+	}
+	walkCtx := ctx
+	if duration := replay.limits.MaxDuration; duration > 0 {
+		var cancel context.CancelFunc
+		walkCtx, cancel = context.WithTimeoutCause(ctx, duration, errReplayDuration)
+		defer cancel()
+	}
 	snapshot := domain.SessionSnapshot{ConversationID: replay.requestID, AgentVersion: replay.principal.Release}
 	stepID := replay.graph.EntryStepID
 	for stepNo := 1; ; stepNo++ {
 		if stepNo > maxSteps {
-			return replay.end(fmt.Errorf("%w: replay exceeded %d steps", domain.ErrExecutionLimit, maxSteps))
+			return replay.end(ctx, fmt.Errorf("%w: replay exceeded %d steps", domain.ErrExecutionLimit, maxSteps))
+		}
+		if duration := replay.limits.MaxDuration; duration > 0 && replay.offset() >= duration {
+			return replay.end(ctx, fmt.Errorf("%w: replay exceeded its %s duration", domain.ErrExecutionLimit, duration))
 		}
 		step, found := steps[stepID]
 		if !found {
@@ -199,8 +226,14 @@ func (replay *caseReplay) run(ctx context.Context) error {
 		if step.Kind != domain.StepKindToolLoop {
 			return fmt.Errorf("%w: replay runs %s steps, not %q", domain.ErrCapabilityUnsupported, domain.StepKindToolLoop, step.Kind)
 		}
-		result, err := replay.loop.Execute(ctx, domain.StepInput{
+		// The release's per-turn budget bounds a replay as it bounds a live turn.
+		spend, err := replay.budget.StepSpend(replay.usage)
+		if err != nil {
+			return replay.end(ctx, err)
+		}
+		result, err := replay.loop.Execute(walkCtx, domain.StepInput{
 			Step: step, Snapshot: snapshot, Principal: replay.principal, RequestID: replay.requestID, Input: replay.input,
+			Limits: replay.limits, Spend: spend,
 		})
 		if recordErr := replay.record(ctx, step); recordErr != nil {
 			return errors.Join(err, recordErr)
@@ -210,10 +243,13 @@ func (replay *caseReplay) run(ctx context.Context) error {
 			replay.usage = addUsage(replay.usage, spent.SpentUsage())
 		}
 		if err != nil {
-			return replay.end(err)
+			return replay.end(ctx, durationOutcome(walkCtx, err))
 		}
 		replay.usage = addUsage(replay.usage, result.Usage)
-		state, blocked, err := replay.guard(ctx, result.State)
+		state, blocked, err := replay.guard(walkCtx, result.State)
+		if err != nil && errors.Is(context.Cause(walkCtx), errReplayDuration) {
+			return replay.end(ctx, durationOutcome(walkCtx, err))
+		}
 		if err != nil || blocked {
 			return err
 		}
@@ -247,9 +283,24 @@ func (replay *caseReplay) guard(ctx context.Context, state []byte) ([]byte, bool
 	return guarded.Payload, false, nil
 }
 
+// errReplayDuration is the cause of a replay stopped by its release's max duration.
+var errReplayDuration = errors.New("replay duration elapsed")
+
+// durationOutcome marks a failure caused by the release's duration running out as the
+// agent's execution limit.
+func durationOutcome(walkCtx context.Context, err error) error {
+	if errors.Is(context.Cause(walkCtx), errReplayDuration) && !errors.Is(err, domain.ErrExecutionLimit) {
+		return fmt.Errorf("%w: replay exceeded its duration: %w", domain.ErrExecutionLimit, err)
+	}
+	return err
+}
+
 // end records a failure of the agent under test as the trajectory's final
-// state and returns every other failure.
-func (replay *caseReplay) end(err error) error {
+// state and returns every other failure, including the caller's own cancellation.
+func (replay *caseReplay) end(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
 	if errors.Is(err, domain.ErrApprovalPending) {
 		replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryState, Name: ReplaySuspended, Offset: replay.offset()})
 		return nil

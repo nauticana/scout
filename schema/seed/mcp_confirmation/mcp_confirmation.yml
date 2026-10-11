@@ -1,0 +1,16 @@
+comment: MCP confirmation code lists
+order: 45
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [mcp_confirmation_channel, Confirmation Channel]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [mcp_confirmation_channel, elicitation, Asked of the maker in the MCP client]
+      - [mcp_confirmation_channel, inbox, Decided by an authorized person outside the MCP client]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [mcp_confirmation_channel, mcp_confirmation, channel_code]

@@ -51,9 +51,9 @@ type SafetyEventSink interface {
 	Record(ctx context.Context, event domain.SafetyEvent) error
 }
 
-// ToolApprovalGate decides whether an irreversible tool call may proceed.
+// ToolApprovalGate decides whether a tool call that needs a person may proceed; ask says why.
 type ToolApprovalGate interface {
-	Decide(ctx context.Context, call domain.ToolCall, ruleID string) (domain.ApprovalDecision, error)
+	Decide(ctx context.Context, call domain.ToolCall, ask domain.ApprovalAsk) (domain.ApprovalDecision, error)
 }
 
 // EvidenceObjectVerifier confirms an immutable object still matches its digest.

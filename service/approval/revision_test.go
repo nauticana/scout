@@ -85,12 +85,12 @@ func newRevisionFixture(t *testing.T) *revisionFixture {
 	if decision, err := f.gate.Decide(context.Background(), f.original, revisionRule); err != nil || decision != domain.ApprovalPending {
 		t.Fatalf("open original: %q, %v", decision, err)
 	}
-	f.key = domain.ApprovalKey{TenantID: 7, RequestID: "request", ExecutionStepID: stepIDFor(f.original)}
+	f.key = domain.ApprovalKey{TenantID: 7, RequestID: "request", ExecutionStepID: stepIDAt(f.original, 0)}
 	return f
 }
 
 // revisionRule is the rule under which the fixture parks its call.
-const revisionRule = "autonomy"
+var revisionRule = autonomyAsk
 
 func (f *revisionFixture) edit(arguments string) (domain.ApprovalRequest, error) {
 	return f.resumer.Resolve(context.Background(), domain.ApprovalVerdict{
@@ -182,7 +182,7 @@ func TestRevisedCallIsApprovedByAnEditorWhoMayDecideIt(t *testing.T) {
 			t.Fatalf("revised call: %q, %v", decision, err)
 		}
 	}
-	revised, err := f.store.Get(context.Background(), domain.ApprovalKey{TenantID: 7, RequestID: "request", ExecutionStepID: stepIDFor(call)})
+	revised, err := f.store.Get(context.Background(), domain.ApprovalKey{TenantID: 7, RequestID: "request", ExecutionStepID: stepIDAt(call, 0)})
 	if err != nil || revised.RevisesStepID != f.key.ExecutionStepID || revised.ProposedDigest != ProposalDigest(call) ||
 		revised.Evidence.Digest != ArgumentsDigest(call.Arguments) || revised.Status != domain.ApprovalStatusApproved {
 		t.Fatalf("revised proposal = %+v, %v", revised, err)

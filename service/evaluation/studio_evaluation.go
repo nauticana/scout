@@ -26,9 +26,13 @@ const (
 	StudioEventCases     = "CASES"
 	StudioEventFreeze    = "CASES_FREEZE"
 	StudioEventEvaluate  = "EVALUATE"
-	studioPageSize       = 50
-	studioMaxPageSize    = 200
 	studioEventDetailMax = 400
+)
+
+// Defaults of StudioEvaluation's result pages: PageSize when a caller names no limit, MaxPageSize the largest.
+const (
+	DefaultStudioPageSize    = 50
+	DefaultStudioMaxPageSize = 200
 )
 
 // StudioEvaluation serves an agent's saved test cases and evaluations to Studio. Every
@@ -42,6 +46,10 @@ type StudioEvaluation struct {
 	Runs        contract.AgentEvaluationStore
 	// MaxOpenRuns caps an agent's queued and running evaluations; zero refuses every evaluation.
 	MaxOpenRuns int
+	// PageSize answers a result page that names no limit and MaxPageSize caps one that does; zero
+	// takes DefaultStudioPageSize and DefaultStudioMaxPageSize. PageSize may not exceed MaxPageSize.
+	PageSize    int
+	MaxPageSize int
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -49,12 +57,21 @@ type StudioEvaluation struct {
 
 var _ contract.StudioEvaluationBackend = (*StudioEvaluation)(nil)
 
+func (s *StudioEvaluation) pageSize() int { return orDefault(s.PageSize, DefaultStudioPageSize) }
+
+func (s *StudioEvaluation) maxPageSize() int {
+	return orDefault(s.MaxPageSize, DefaultStudioMaxPageSize)
+}
+
 func (s *StudioEvaluation) init(ctx context.Context) error {
 	if s.DB == nil || s.Authorizer == nil || s.Drafts == nil || s.GoldenCases == nil || s.Runs == nil {
 		return fmt.Errorf("studio evaluation: database, authorizer, draft freezer, case store, and run store are required")
 	}
 	if s.MaxOpenRuns < 0 {
 		return fmt.Errorf("%w: max open runs cannot be negative", domain.ErrValidation)
+	}
+	if s.PageSize < 0 || s.MaxPageSize < 0 || s.pageSize() > s.maxPageSize() {
+		return fmt.Errorf("%w: result page size %d must be non-negative and within the largest page %d", domain.ErrValidation, s.pageSize(), s.maxPageSize())
 	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, studioEvaluationQueries) })
 	if s.qs == nil {
@@ -192,7 +209,7 @@ func (s *StudioEvaluation) Evaluate(ctx context.Context, actor domain.StudioActo
 		if err != nil {
 			return domain.AgentEvaluationRun{}, err
 		}
-		enqueue.Subject, enqueue.Draft = frozen.Subject(), &frozen.Definition
+		enqueue.Subject, enqueue.Draft, enqueue.DraftSettings = frozen.Subject(), &frozen.Definition, frozen.Settings.Resources
 	}
 	run, err := s.Runs.Enqueue(ctx, enqueue)
 	if err != nil {
@@ -209,16 +226,16 @@ func (s *StudioEvaluation) Evaluate(ctx context.Context, actor domain.StudioActo
 	return run, nil
 }
 
-// Evaluation returns a run and one page of its dev-scope results; limit zero means 50.
+// Evaluation returns a run and one page of its dev-scope results; limit zero means PageSize.
 func (s *StudioEvaluation) Evaluation(ctx context.Context, actor domain.StudioActor, runID int64, before string, limit int) (domain.AgentEvaluationPage, error) {
 	if err := s.init(ctx); err != nil {
 		return domain.AgentEvaluationPage{}, err
 	}
-	if runID <= 0 || limit < 0 || limit > studioMaxPageSize {
-		return domain.AgentEvaluationPage{}, fmt.Errorf("%w: run_id must be positive and limit within 0..%d", domain.ErrValidation, studioMaxPageSize)
+	if runID <= 0 || limit < 0 || limit > s.maxPageSize() {
+		return domain.AgentEvaluationPage{}, fmt.Errorf("%w: run_id must be positive and limit within 0..%d", domain.ErrValidation, s.maxPageSize())
 	}
 	if limit == 0 {
-		limit = studioPageSize
+		limit = s.pageSize()
 	}
 	run, err := s.Runs.Run(ctx, domain.GoldenScopeDev, actor.TenantID, runID)
 	if err != nil {

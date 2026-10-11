@@ -48,13 +48,13 @@ const (
 	// ApprovalObjectType is the keel approval_request object type of a confirmation.
 	ApprovalObjectType = "mcp_confirmation"
 
-	// MaxDocumentBytes bounds the stored payload, preview, requirements, and result.
-	MaxDocumentBytes = 1 << 20
+	// DefaultMaxDocumentBytes bounds the stored payload, preview, requirements, and result by default.
+	DefaultMaxDocumentBytes = 1 << 20
 	// MaxNoteRunes bounds decision, failure, and reconciliation notes.
 	MaxNoteRunes = 500
-	// DefaultBatch and MaxBatch bound one list or sweep.
-	DefaultBatch = 100
-	MaxBatch     = 1000
+	// DefaultBatch is one list or sweep whose caller names no size; DefaultMaxBatch caps any.
+	DefaultBatch    = 100
+	DefaultMaxBatch = 1000
 )
 
 const confirmationColumns = `id, partner_id, maker_kind, maker_id, COALESCE(client_ref, ''), tool, COALESCE(payload, ''),
@@ -173,14 +173,63 @@ type TableStore struct {
 	// NotifyThroughOutbox queues PendingEvent in the transaction that creates an
 	// inbox confirmation, so one never exists without its notice.
 	NotifyThroughOutbox bool
+	// MaxDocumentBytes bounds the stored payload, preview, requirements, and result; zero takes
+	// DefaultMaxDocumentBytes.
+	MaxDocumentBytes int
+	// Batch is one list or sweep whose caller names no size and MaxBatch caps any; zero takes
+	// DefaultBatch and DefaultMaxBatch, and Batch may not exceed MaxBatch.
+	Batch    int
+	MaxBatch int
 
 	once sync.Once
 	qs   keelport.QueryService
 }
 
+func (s *TableStore) documentLimit() int {
+	if s.MaxDocumentBytes > 0 {
+		return s.MaxDocumentBytes
+	}
+	return DefaultMaxDocumentBytes
+}
+
+// batches returns the default and the cap of one list or sweep.
+func (s *TableStore) batches() (size, ceiling int) {
+	size, ceiling = s.Batch, s.MaxBatch
+	if size == 0 {
+		size = DefaultBatch
+	}
+	if ceiling == 0 {
+		ceiling = DefaultMaxBatch
+	}
+	return size, ceiling
+}
+
+// batch is the rows one list or sweep reads: limit, or the default when it names none, capped.
+func (s *TableStore) batch(limit int) int {
+	size, ceiling := s.batches()
+	if limit <= 0 {
+		limit = size
+	}
+	return min(limit, ceiling)
+}
+
+// checkLimits refuses a negative limit or a default batch above its cap.
+func (s *TableStore) checkLimits() error {
+	if s.MaxDocumentBytes < 0 || s.Batch < 0 || s.MaxBatch < 0 {
+		return fmt.Errorf("confirmation store: document and batch limits cannot be negative")
+	}
+	if size, ceiling := s.batches(); size > ceiling {
+		return fmt.Errorf("confirmation store: the batch of %d exceeds the max batch of %d", size, ceiling)
+	}
+	return nil
+}
+
 func (s *TableStore) init(ctx context.Context) error {
 	if s.DB == nil {
 		return fmt.Errorf("%w: confirmation store needs a database", domain.ErrNotReady)
+	}
+	if err := s.checkLimits(); err != nil {
+		return err
 	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, confirmationQueries) })
 	if s.qs == nil {
@@ -206,7 +255,7 @@ func (s *TableStore) Prepare(ctx context.Context, draft domain.MCPConfirmationDr
 	if err := s.init(ctx); err != nil {
 		return domain.MCPConfirmation{}, false, err
 	}
-	requirements, err := ValidateDraft(draft)
+	requirements, err := ValidateDraft(draft, s.documentLimit())
 	if err != nil {
 		return domain.MCPConfirmation{}, false, err
 	}
@@ -408,7 +457,7 @@ func (s *TableStore) Approved(ctx context.Context, limit int) ([]domain.MCPConfi
 	if err := s.init(ctx); err != nil {
 		return nil, err
 	}
-	result, err := s.qs.Query(ctx, qConfirmApproved, batch(limit))
+	result, err := s.qs.Query(ctx, qConfirmApproved, s.batch(limit))
 	if err != nil {
 		return nil, fmt.Errorf("list approved confirmations: %w", err)
 	}
@@ -458,8 +507,8 @@ func (s *TableStore) Complete(ctx context.Context, key domain.MCPConfirmationKey
 	}
 	var stored any
 	if len(result) > 0 {
-		if len(result) > MaxDocumentBytes || !json.Valid(result) {
-			return fmt.Errorf("%w: result must be JSON of at most %d bytes", domain.ErrValidation, MaxDocumentBytes)
+		if limit := s.documentLimit(); len(result) > limit || !json.Valid(result) {
+			return fmt.Errorf("%w: result must be JSON of at most %d bytes", domain.ErrValidation, limit)
 		}
 		stored = string(result)
 	}
@@ -472,7 +521,7 @@ func (s *TableStore) MarkLapsed(ctx context.Context, limit int) (int, error) {
 	if err := s.init(ctx); err != nil {
 		return 0, err
 	}
-	lapsed, err := s.qs.Query(context.WithoutCancel(ctx), qConfirmLapse, batch(limit))
+	lapsed, err := s.qs.Query(context.WithoutCancel(ctx), qConfirmLapse, s.batch(limit))
 	if err != nil {
 		return 0, fmt.Errorf("mark lapsed confirmations unknown: %w", err)
 	}
@@ -484,7 +533,7 @@ func (s *TableStore) ExpireDue(ctx context.Context, limit int) ([]domain.Expired
 	if err := s.init(ctx); err != nil {
 		return nil, err
 	}
-	expired, err := s.qs.Query(context.WithoutCancel(ctx), qConfirmExpire, batch(limit))
+	expired, err := s.qs.Query(context.WithoutCancel(ctx), qConfirmExpire, s.batch(limit))
 	if err != nil {
 		return nil, fmt.Errorf("expire confirmations: %w", err)
 	}
@@ -524,7 +573,7 @@ func (s *TableStore) Purge(ctx context.Context, retention time.Duration, limit i
 	if retention < 24*time.Hour {
 		return 0, fmt.Errorf("%w: retention must be at least a day", domain.ErrValidation)
 	}
-	purged, err := s.qs.Query(context.WithoutCancel(ctx), qConfirmPurge, int64(retention/time.Second), batch(limit))
+	purged, err := s.qs.Query(context.WithoutCancel(ctx), qConfirmPurge, int64(retention/time.Second), s.batch(limit))
 	if err != nil {
 		return 0, fmt.Errorf("purge confirmations: %w", err)
 	}
@@ -539,7 +588,7 @@ func (s *TableStore) List(ctx context.Context, tenantID int64, since time.Time, 
 	if tenantID <= 0 {
 		return nil, fmt.Errorf("%w: tenant is required", domain.ErrValidation)
 	}
-	listed, err := s.qs.Query(ctx, qConfirmList, tenantID, since, batch(limit))
+	listed, err := s.qs.Query(ctx, qConfirmList, tenantID, since, s.batch(limit))
 	if err != nil {
 		return nil, fmt.Errorf("list confirmations: %w", err)
 	}
@@ -565,9 +614,15 @@ func (s *TableStore) guarded(ctx context.Context, verb string, key domain.MCPCon
 	return nil
 }
 
-// ValidateDraft checks a draft as Prepare does and returns its requirements,
-// defaulted to an empty object.
-func ValidateDraft(draft domain.MCPConfirmationDraft) (json.RawMessage, error) {
+// ValidateDraft checks a draft as Prepare does, each document within maxDocumentBytes (zero
+// takes DefaultMaxDocumentBytes), and returns its requirements, defaulted to an empty object.
+func ValidateDraft(draft domain.MCPConfirmationDraft, maxDocumentBytes int) (json.RawMessage, error) {
+	switch {
+	case maxDocumentBytes < 0:
+		return nil, fmt.Errorf("%w: the document limit cannot be negative", domain.ErrValidation)
+	case maxDocumentBytes == 0:
+		maxDocumentBytes = DefaultMaxDocumentBytes
+	}
 	requirements := draft.Requirements
 	if len(requirements) == 0 {
 		requirements = json.RawMessage(`{}`)
@@ -589,8 +644,8 @@ func ValidateDraft(draft domain.MCPConfirmationDraft) (json.RawMessage, error) {
 		return nil, fmt.Errorf("%w: expiry must be between a second and %d seconds", domain.ErrValidation, 1<<31-1)
 	}
 	for name, document := range map[string]json.RawMessage{"payload": draft.Payload, "preview": draft.Preview, "requirements": requirements} {
-		if len(document) == 0 || len(document) > MaxDocumentBytes || !json.Valid(document) {
-			return nil, fmt.Errorf("%w: %s must be JSON of at most %d bytes", domain.ErrValidation, name, MaxDocumentBytes)
+		if len(document) == 0 || len(document) > maxDocumentBytes || !json.Valid(document) {
+			return nil, fmt.Errorf("%w: %s must be JSON of at most %d bytes", domain.ErrValidation, name, maxDocumentBytes)
 		}
 	}
 	return requirements, nil
@@ -619,16 +674,6 @@ func leaseSeconds(lease time.Duration) (int64, error) {
 		return 0, fmt.Errorf("%w: lease must be between a second and %d seconds", domain.ErrValidation, 1<<31-1)
 	}
 	return int64(lease / time.Second), nil
-}
-
-func batch(limit int) int {
-	switch {
-	case limit <= 0:
-		return DefaultBatch
-	case limit > MaxBatch:
-		return MaxBatch
-	}
-	return limit
 }
 
 func truncate(note string) string {

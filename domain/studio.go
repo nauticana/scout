@@ -221,6 +221,9 @@ type AgentTestRequest struct {
 	LanguageCode string
 	Task         string
 	InputData    string
+	// Limits are the limits frozen with the tested definition; the tester bounds the run by
+	// MaxDuration. Studio and the evaluation worker set them, never the caller.
+	Limits ExecutionLimits
 }
 
 // AgentTestResult records test output, definition provenance, latency, and usage.
@@ -245,6 +248,10 @@ type AgentCreateRequest struct {
 	CopyFrom       string
 	TemplateID     string
 	IdempotencyKey string
+	// TemplateVersion selects a version of TemplateID; 0 takes the newest the tenant may use.
+	TemplateVersion int64
+	// References map each knowledge and entitlement slot of the template to a value of the tenant.
+	References map[ResourceKind]map[string]string
 }
 
 // AgentArchiveRequest archives or restores an agent behind its draft revision.

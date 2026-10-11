@@ -66,18 +66,21 @@ func TestScheduledPublishRefusals(t *testing.T) {
 	cases := map[string]struct {
 		pending, deployment [][]any
 		canary              int
-		lead                time.Duration
+		lead, maxLead       time.Duration
 		want                error
 	}{
-		"second pending activation":   {pending: [][]any{{int64(7)}}, lead: time.Hour, want: domain.ErrConflict},
-		"canary without stable":       {canary: 20, lead: time.Hour, want: domain.ErrValidation},
-		"canary out of range":         {deployment: [][]any{{"3", nil}}, canary: 101, lead: time.Hour, want: domain.ErrValidation},
-		"effective time too far away": {lead: MaxActivationLead + time.Hour, want: domain.ErrValidation},
+		"second pending activation":    {pending: [][]any{{int64(7)}}, lead: time.Hour, want: domain.ErrConflict},
+		"canary without stable":        {canary: 20, lead: time.Hour, want: domain.ErrValidation},
+		"canary out of range":          {deployment: [][]any{{"3", nil}}, canary: 101, lead: time.Hour, want: domain.ErrValidation},
+		"effective time too far away":  {lead: DefaultMaxActivationLead + time.Hour, want: domain.ErrValidation},
+		"beyond the configured lead":   {deployment: [][]any{{"3", nil}}, lead: 72 * time.Hour, maxLead: 48 * time.Hour, want: domain.ErrValidation},
+		"negative configured lead cap": {lead: time.Hour, maxLead: -time.Hour, want: domain.ErrValidation},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			service, query := publishService()
 			service.Now = func() time.Time { return scheduledAt }
+			service.MaxActivationLead = tc.maxLead
 			query.rows[qSchedulePending], query.rows[qScheduleDeployment] = tc.pending, tc.deployment
 			_, err := service.Publish(context.Background(), humanActor(8, 9), domain.AgentPublishRequest{
 				AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2,
@@ -266,8 +269,8 @@ func TestActivationReadsTheAgentStateUnderTheDraftLockBeforeTheSwap(t *testing.T
 }
 
 func TestActivationGuardsOnlyTheSettingsTheReleaseDigestCovers(t *testing.T) {
-	published := []domain.EffectiveResource{{ResourceKind: domain.ResourceBudget, ResourceID: "budget", Value: []byte(`{"tokens":1000}`)}}
-	altered := []domain.EffectiveResource{{ResourceKind: domain.ResourceBudget, ResourceID: "budget", Value: []byte(`{"tokens":900000}`)}}
+	published := []domain.EffectiveResource{{ResourceKind: domain.ResourceBudget, ResourceID: "budget", Value: []byte(`{"tokens":1000,"cost_minor_units":0,"period":"turn"}`)}}
+	altered := []domain.EffectiveResource{{ResourceKind: domain.ResourceBudget, ResourceID: "budget", Value: []byte(`{"tokens":900000,"cost_minor_units":0,"period":"turn"}`)}}
 	definition, digest := frozenDefinitionWithSettings(t, scope.SettingsDigest(published))
 	cases := map[string]struct {
 		settings [][]any
@@ -299,7 +302,7 @@ func TestActivationGuardsOnlyTheSettingsTheReleaseDigestCovers(t *testing.T) {
 			}
 			if !tc.refused {
 				if report.Activated != 1 || seen == nil || seen.Settings.AgentVersion != "4" || len(seen.Settings.Resources) != 1 ||
-					string(seen.Settings.Resources[0].Value) != `{"tokens":1000}` {
+					string(seen.Settings.Resources[0].Value) != `{"tokens":1000,"cost_minor_units":0,"period":"turn"}` {
 					t.Fatalf("report = %+v, guarded = %+v", report, seen)
 				}
 				return
@@ -353,9 +356,10 @@ func TestActivationTimeoutIsChargedAsAnAttempt(t *testing.T) {
 		<-guardCtx.Done()
 		return guardCtx.Err()
 	}))
-	activations.Timeout = 10 * time.Millisecond
+	settings := activationSettings()
+	settings.Timeout = 10 * time.Millisecond
 
-	report, err := activations.ActivateDue(context.Background(), activationSettings())
+	report, err := activations.ActivateDue(context.Background(), settings)
 	if !errors.Is(err, context.DeadlineExceeded) || report.Deferred != 1 || !db.called(qActivationDefer) {
 		t.Fatalf("report = %+v, err = %v, queries = %v", report, err, db.names())
 	}
@@ -408,12 +412,24 @@ func TestActivationSkipsWhatAnotherWorkerClaimed(t *testing.T) {
 	}
 }
 
+func TestActivationTimeoutDefaultsWhenZero(t *testing.T) {
+	if got := activationTimeout(activationSettings()); got != DefaultActivationTimeout {
+		t.Fatalf("zero timeout = %s, want %s", got, DefaultActivationTimeout)
+	}
+	settings := activationSettings()
+	settings.Timeout = 30 * time.Second
+	if got := activationTimeout(settings); got != 30*time.Second {
+		t.Fatalf("configured timeout = %s, want 30s", got)
+	}
+}
+
 func TestActivateDueRejectsUnboundedSettings(t *testing.T) {
 	activations := activationService(newScriptedDB())
 	for _, settings := range []domain.ReleaseActivationSettings{
 		{Batch: 0, PollPeriod: time.Minute, MaxAttempts: 3},
 		{Batch: 2, PollPeriod: 0, MaxAttempts: 3},
 		{Batch: 2, PollPeriod: time.Minute, MaxAttempts: 0},
+		{Batch: 2, PollPeriod: time.Minute, MaxAttempts: 3, Timeout: -time.Second},
 	} {
 		if _, err := activations.ActivateDue(context.Background(), settings); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("settings %+v: error = %v", settings, err)

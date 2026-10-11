@@ -18,7 +18,7 @@ type ObjectStorageLoader struct {
 	Storage storage.ObjectStorage
 	// Schemes restricts accepted URI schemes; empty accepts any scheme.
 	Schemes []string
-	// MaxBytes bounds one source object; default 32 MiB.
+	// MaxBytes bounds one source object; zero takes DefaultMaxSourceBytes.
 	MaxBytes int64
 }
 
@@ -27,7 +27,8 @@ var (
 	_ contract.ObjectReader = (*ObjectStorageLoader)(nil)
 )
 
-const defaultMaxSourceBytes = 32 << 20
+// DefaultMaxSourceBytes bounds one source object when MaxBytes is zero.
+const DefaultMaxSourceBytes = 32 << 20
 
 // ParseObjectURI splits <scheme>://bucket/key into its parts.
 func ParseObjectURI(uri string) (scheme, bucket, key string, err error) {
@@ -68,7 +69,7 @@ func (loader *ObjectStorageLoader) download(ctx context.Context, uri string) ([]
 	}
 	maxBytes := loader.MaxBytes
 	if maxBytes == 0 {
-		maxBytes = defaultMaxSourceBytes
+		maxBytes = DefaultMaxSourceBytes
 	}
 	if bucket != loader.Storage.Bucket() {
 		return nil, fmt.Errorf("%w: object URI %q is outside bucket %q", domain.ErrForbidden, uri, loader.Storage.Bucket())

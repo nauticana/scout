@@ -52,7 +52,7 @@ func conflict(verb string, key domain.MCPConfirmationKey) error {
 // Prepare records a pending confirmation, or returns the maker's own open one
 // for the identical action with created false.
 func (s *Store) Prepare(_ context.Context, draft domain.MCPConfirmationDraft) (domain.MCPConfirmation, bool, error) {
-	requirements, err := confirmation.ValidateDraft(draft)
+	requirements, err := confirmation.ValidateDraft(draft, 0)
 	if err != nil {
 		return domain.MCPConfirmation{}, false, err
 	}
@@ -185,8 +185,8 @@ func (s *Store) Complete(_ context.Context, key domain.MCPConfirmationKey, fence
 	default:
 		return fmt.Errorf("%w: %q is not an outcome", domain.ErrValidation, status)
 	}
-	if len(result) > 0 && (len(result) > confirmation.MaxDocumentBytes || !json.Valid(result)) {
-		return fmt.Errorf("%w: result must be JSON of at most %d bytes", domain.ErrValidation, confirmation.MaxDocumentBytes)
+	if len(result) > 0 && (len(result) > confirmation.DefaultMaxDocumentBytes || !json.Valid(result)) {
+		return fmt.Errorf("%w: result must be JSON of at most %d bytes", domain.ErrValidation, confirmation.DefaultMaxDocumentBytes)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -261,8 +261,8 @@ func batch(limit int) int {
 	switch {
 	case limit <= 0:
 		return confirmation.DefaultBatch
-	case limit > confirmation.MaxBatch:
-		return confirmation.MaxBatch
+	case limit > confirmation.DefaultMaxBatch:
+		return confirmation.DefaultMaxBatch
 	}
 	return limit
 }

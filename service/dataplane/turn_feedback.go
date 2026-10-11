@@ -49,6 +49,8 @@ type TurnFeedback struct {
 	Roles contract.PrincipalAuthorizer
 	// Authorizer authorizes Studio's report.
 	Authorizer contract.StudioAuthorizer
+	// MaxWindow bounds one report's span; default DefaultUsageWindow.
+	MaxWindow time.Duration
 
 	once sync.Once
 	qs   port.QueryService
@@ -107,13 +109,16 @@ func (f *TurnFeedback) RecordFeedback(ctx context.Context, tenant domain.TenantC
 	return nil
 }
 
-// Feedback counts the ratings of [from, to) per release; the window spans at most MaxUsageWindow.
+// Feedback counts the ratings of [from, to) per release; the window spans at most MaxWindow.
 func (f *TurnFeedback) Feedback(ctx context.Context, actor domain.StudioActor, agentID string, from, to time.Time) ([]domain.FeedbackSummary, error) {
 	if f.Authorizer == nil {
 		return nil, fmt.Errorf("turn feedback: studio authorizer is required")
 	}
-	if from.IsZero() || !to.After(from) || to.Sub(from) > MaxUsageWindow {
-		return nil, fmt.Errorf("%w: a feedback window ends after it starts and spans at most %d days", domain.ErrValidation, int(MaxUsageWindow.Hours()/24))
+	if f.MaxWindow < 0 {
+		return nil, fmt.Errorf("turn feedback: window limit must not be negative")
+	}
+	if err := checkReportWindow("feedback", from, to, positiveOr(f.MaxWindow, DefaultUsageWindow)); err != nil {
+		return nil, err
 	}
 	if err := f.Authorizer.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return nil, err

@@ -8,14 +8,8 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
-
-// releaseBudget is the budget resource frozen into an effective release.
-type releaseBudget struct {
-	Tokens         int64  `json:"tokens"`
-	CostMinorUnits int64  `json:"cost_minor_units"`
-	Currency       string `json:"currency,omitempty"`
-}
 
 // releaseAutonomy is the autonomy resource, with an optional daily operating
 // window in minutes from midnight UTC.
@@ -38,30 +32,37 @@ type releaseExecutionLimits struct {
 // nothing here re-derives inheritance: it reads one frozen row.
 type ReleaseLimits struct {
 	Releases contract.EffectiveReleaseRepository
-	// Window is the rolling window the returned budget applies to.
-	Window time.Duration
-	// Fallback is returned when the release binds no budget; its zero value means unlimited.
-	Fallback domain.BudgetLimits
+	// Fallback is returned with Source fallback when the release binds no budget; its zero value
+	// is unbounded, and a bounded Fallback needs a valid period.
+	Fallback domain.ReleaseBudget
 }
 
-// Budget returns the principal's ceiling within its tenant envelope.
-func (l *ReleaseLimits) Budget(ctx context.Context, principal domain.Principal) (domain.BudgetLimits, error) {
+// Budget returns the principal's frozen budget and its period.
+func (l *ReleaseLimits) Budget(ctx context.Context, principal domain.Principal) (domain.ReleaseBudget, error) {
 	value, found, err := l.resource(ctx, principal, domain.ResourceBudget)
-	if err != nil || !found {
-		return l.Fallback, err
+	if err != nil {
+		return domain.ReleaseBudget{}, err
 	}
-	var budget releaseBudget
-	if err := json.Unmarshal(value, &budget); err != nil {
-		return domain.BudgetLimits{}, fmt.Errorf("%w: release budget is malformed: %v", domain.ErrValidation, err)
+	if !found {
+		return l.fallback()
 	}
-	window := l.Window
-	if window <= 0 {
-		window = l.Fallback.Window
+	budget, err := scope.DecodeBudget(value)
+	if err != nil {
+		return domain.ReleaseBudget{}, fmt.Errorf("release budget is malformed: %w", err)
 	}
-	return domain.BudgetLimits{
-		WindowTokens: budget.Tokens, WindowCostMinorUnits: budget.CostMinorUnits,
-		Currency: budget.Currency, Window: window,
-	}, nil
+	return budget, nil
+}
+
+func (l *ReleaseLimits) fallback() (domain.ReleaseBudget, error) {
+	if !l.Fallback.Bounded() {
+		return domain.ReleaseBudget{}, nil
+	}
+	if err := l.Fallback.Period.Validate(); err != nil {
+		return domain.ReleaseBudget{}, fmt.Errorf("release limits: fallback budget period: %v", err)
+	}
+	budget := l.Fallback
+	budget.Source = domain.BudgetSourceFallback
+	return budget, nil
 }
 
 // AutonomyMode degrades a bounded mode to execute-with-approval outside its
@@ -94,6 +95,21 @@ func (l *ReleaseLimits) ExecutionLimits(ctx context.Context, principal domain.Pr
 	if err != nil || !found {
 		return domain.ExecutionLimits{}, err
 	}
+	return decodeExecutionLimits(value)
+}
+
+// FrozenExecutionLimits reads the limits binding of settings frozen but not stored, such as a
+// frozen draft's; settings binding none limit nothing.
+func FrozenExecutionLimits(resources []domain.EffectiveResource) (domain.ExecutionLimits, error) {
+	for _, resource := range resources {
+		if resource.ResourceKind == domain.ResourceLimits {
+			return decodeExecutionLimits(resource.Value)
+		}
+	}
+	return domain.ExecutionLimits{}, nil
+}
+
+func decodeExecutionLimits(value []byte) (domain.ExecutionLimits, error) {
 	var frozen releaseExecutionLimits
 	if err := json.Unmarshal(value, &frozen); err != nil {
 		return domain.ExecutionLimits{}, fmt.Errorf("%w: release limits are malformed: %v", domain.ErrValidation, err)

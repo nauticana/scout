@@ -209,12 +209,15 @@ type JudgeVerdict struct {
 
 // EvaluationResult is every score one arm earned on one example.
 type EvaluationResult struct {
-	ManifestID       string
-	ExampleID        string
-	Role             EvaluationRole
-	Scores           []EvaluationScore
-	Latency          time.Duration
-	Usage            Usage
+	ManifestID string
+	ExampleID  string
+	Role       EvaluationRole
+	Scores     []EvaluationScore
+	Latency    time.Duration
+	Usage      Usage
+	// EvaluatorUsage is what model-based evaluators spent scoring the result, kept
+	// apart from the subject's Usage and counted with it in the run's totals.
+	EvaluatorUsage   Usage
 	NeedsHumanReview bool
 	Reason           string
 }

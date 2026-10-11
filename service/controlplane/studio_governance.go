@@ -50,6 +50,8 @@ type StudioGovernance struct {
 	// Required are the fields the active Charter profile requires of a release: nil requires every
 	// field Charter's AgentDefinition requires, an empty list none.
 	Required []domain.GovernanceField
+	// MaxItems caps each governance list Studio authors; zero takes DefaultMaxGovernanceItems.
+	MaxItems int
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -102,7 +104,7 @@ func (s *StudioGovernance) SaveGovernance(ctx context.Context, actor domain.Stud
 	if err != nil {
 		return domain.AgentGovernanceView{}, err
 	}
-	problems := draftProblems(change.Governance, snapshot)
+	problems := draftProblems(change.Governance, snapshot, s.itemLimit())
 	if change.ExpectedDraftRevision <= 0 {
 		problems = append(problems, domain.AgentFieldError{Field: "expected_agent_revision", Message: "must be positive"})
 	}
@@ -208,7 +210,7 @@ func (s *StudioGovernance) CheckPublish(ctx context.Context, candidate domain.Pu
 	if err = sameSnapshot(frozen.Enterprise, snapshot); err != nil {
 		return err
 	}
-	problems := append(frozenProblems(frozen), missingFields(frozen, required)...)
+	problems := append(frozenProblems(frozen, s.itemLimit()), missingFields(frozen, required)...)
 	if len(problems) == 0 {
 		if problems, err = s.bindingProblems(ctx, tenantID, agentID, frozen); err != nil {
 			return err
@@ -226,7 +228,7 @@ func (s *StudioGovernance) view(agentID string, stored domain.AgentGovernance, s
 		return domain.AgentGovernanceView{}, err
 	}
 	effective := effectiveGovernance(stored, snapshot)
-	problems := append(frozenProblems(effective), missingFields(effective, required)...)
+	problems := append(frozenProblems(effective, s.itemLimit()), missingFields(effective, required)...)
 	view := domain.AgentGovernanceView{
 		AgentID: agentID, Effective: effective, Draft: studioDraft(stored, snapshot),
 		Problems: append(problems, s.unprovable(effective)...), DraftRevision: revision,
@@ -276,6 +278,9 @@ func bound(trigger domain.AgentTrigger) bool {
 func bindingField(index int) string { return fmt.Sprintf("triggerChannels[%d].binding", index) }
 
 func (s *StudioGovernance) required() ([]domain.GovernanceField, error) {
+	if err := s.checkLimits(); err != nil {
+		return nil, err
+	}
 	if s.Required == nil {
 		return domain.CharterGovernanceFields(), nil
 	}
@@ -294,9 +299,21 @@ func (s *StudioGovernance) authorize(ctx context.Context, actor domain.StudioAct
 	return s.Authorizer.Authorize(ctx, actor, action, agentID)
 }
 
+func (s *StudioGovernance) checkLimits() error {
+	if s.MaxItems < 0 {
+		return fmt.Errorf("%w: studio governance max items cannot be negative", domain.ErrValidation)
+	}
+	return nil
+}
+
+func (s *StudioGovernance) itemLimit() int { return orDefault(s.MaxItems, DefaultMaxGovernanceItems) }
+
 func (s *StudioGovernance) queries(ctx context.Context) (keelport.QueryService, error) {
 	if s.DB == nil {
 		return nil, fmt.Errorf("studio governance: database is required")
+	}
+	if err := s.checkLimits(); err != nil {
+		return nil, err
 	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, governanceQueries) })
 	return s.qs, nil
@@ -350,7 +367,7 @@ func (s *StudioGovernance) snapshot(ctx context.Context, tenantID int64, agentID
 	if !ok {
 		return nil, nil
 	}
-	if problems := snapshotProblems(snapshot); len(problems) > 0 {
+	if problems := snapshotProblems(snapshot, s.itemLimit()); len(problems) > 0 {
 		return nil, fmt.Errorf("governance source: snapshot of agent %q is unusable: %s %s", agentID, problems[0].Field, problems[0].Message)
 	}
 	return &snapshot, nil

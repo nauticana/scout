@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	qPauseLiveTurns = "scout_pause_live_turns"
-	pauseBatch      = 200
+	qPauseLiveTurns   = "scout_pause_live_turns"
+	defaultPauseBatch = 200
 )
 
 // Turns already asked to stop drop out, so the batches end.
@@ -40,6 +40,8 @@ type StudioPause struct {
 	DB        port.DatabaseRepository
 	Studio    contract.AgentStudioHTTPBackend
 	Canceller contract.TurnCanceller
+	// Batch is how many live turns one listing asks to stop; default 200.
+	Batch int
 
 	once sync.Once
 	qs   port.QueryService
@@ -50,6 +52,9 @@ var _ contract.StudioPauseBackend = (*StudioPause)(nil)
 func (p *StudioPause) Pause(ctx context.Context, actor domain.StudioActor, request domain.AgentPauseRequest) (domain.AgentPauseResult, error) {
 	if p.DB == nil || p.Studio == nil || p.Canceller == nil {
 		return domain.AgentPauseResult{}, fmt.Errorf("studio pause: database, studio, and canceller are required")
+	}
+	if p.Batch < 0 {
+		return domain.AgentPauseResult{}, fmt.Errorf("studio pause: batch must not be negative")
 	}
 	reason := strings.TrimSpace(request.Reason)
 	if reason == "" || request.Policy != domain.PauseFinish && request.Policy != domain.PauseCancel {
@@ -66,9 +71,9 @@ func (p *StudioPause) Pause(ctx context.Context, actor domain.StudioActor, reque
 		return result, nil
 	}
 	p.once.Do(func() { p.qs = p.DB.GetQueryService(ctx, pauseQueries) })
-	asked := map[string]bool{}
+	batch, asked := positiveOr(p.Batch, defaultPauseBatch), map[string]bool{}
 	for {
-		live, err := p.qs.Query(ctx, qPauseLiveTurns, actor.TenantID, request.AgentID, pauseBatch)
+		live, err := p.qs.Query(ctx, qPauseLiveTurns, actor.TenantID, request.AgentID, batch)
 		if err != nil {
 			return result, fmt.Errorf("list live turns of %q: %w", request.AgentID, err)
 		}
@@ -87,7 +92,7 @@ func (p *StudioPause) Pause(ctx context.Context, actor domain.StudioActor, reque
 			}
 			result.Cancelled++
 		}
-		if len(live.Rows) < pauseBatch {
+		if len(live.Rows) < batch {
 			return result, nil
 		}
 	}

@@ -86,16 +86,11 @@ seeds:
       - [knowledge, subset, Knowledge bases an agent may retrieve from]
       - [model, subset, Models an agent may route to]
       - [entitlement, subset, Retrieval entitlement labels]
-      - [budget, at_most, Token and cost ceilings]
+      - [budget, at_most, "Token and cost ceilings per turn, rolling window, or calendar day or month"]
       - [autonomy, ordered, Operating mode an agent may act under]
       - [skill, subset, Skills an agent may use]
       - [limits, at_most, "Turn rate, step, tool-call, and duration ceilings"]
-  - table: config_merge_mode
-    columns: [code, description]
-    rows:
-      - [replace, Child value replaces the inherited value]
-      - [append, Child value is appended to the inherited value]
-      - [intersect, Effective value is the intersection with the inherited value]
+      - [approval_routing, routing, "Approval routes: who decides, by when, and how overdue work escalates"]
   # Governance catalogs. audit_decision_outcome classifies every audit_event; the
   # approval catalogs order and label the work a human owes.
   - table: audit_decision_outcome
@@ -126,11 +121,6 @@ seeds:
       - [declined, false, Refused by a person]
       - [withdrawn, false, Retracted by its maker]
       - [expired, false, Not confirmed in time]
-  - table: mcp_confirmation_channel
-    columns: [code, description]
-    rows:
-      - [elicitation, Asked of the maker in the MCP client]
-      - [inbox, Decided by an authorized person outside the MCP client]
   - table: agent_state
     columns: [code, admits_work, is_terminal, description]
     rows:
@@ -147,13 +137,6 @@ seeds:
       - [medium, 2, Reversible with effort]
       - [high, 3, Irreversible or externally visible]
       - [critical, 4, Irreversible with material consequence]
-  - table: agent_output_class
-    columns: [code, description]
-    rows:
-      - [advice, Research or recommendation only]
-      - [draft, Prepared artifact a human edits and submits]
-      - [approval_request, Action awaiting an explicit decision]
-      - [completed_action, Action already performed]
   - table: release_activation_state
     columns: [code, is_terminal, description]
     rows:
@@ -161,13 +144,3 @@ seeds:
       - [activated, true, Took the agent's traffic as scheduled]
       - [refused, true, "Did not activate; the reason says why"]
       - [cancelled, true, Withdrawn before it activated]
-  - table: release_activation_reason
-    columns: [code, description]
-    rows:
-      - [version_missing, The scheduled release no longer exists]
-      - [digest_mismatch, The release definition no longer matches the digest it was scheduled with]
-      - [not_authorized, The person or service that scheduled it no longer holds PUBLISH on the agent]
-      - [agent_archived, The agent was archived]
-      - [guard_refused, A publish guard refused the release]
-      - [deployment_changed, "The agent's deployment changed after it was scheduled"]
-      - [attempts_exhausted, Transient failures used every allowed attempt]

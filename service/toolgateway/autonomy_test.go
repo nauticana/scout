@@ -10,7 +10,7 @@ import (
 	"github.com/nauticana/scout/fake"
 )
 
-func autonomyGateway(mode domain.AutonomyMode, readOnly bool, decision domain.ApprovalDecision, sent *int, asked *[]string) *GovernedGateway {
+func autonomyGateway(mode domain.AutonomyMode, readOnly bool, decision domain.ApprovalDecision, sent *int, asked *[]domain.ApprovalAsk) *GovernedGateway {
 	var calls []string
 	gateway := governedGateway(&calls, fake.ToolTransportFunc(func(context.Context, domain.ToolCall, domain.ToolDefinition, []byte, time.Duration) (domain.ToolResult, error) {
 		*sent++
@@ -22,14 +22,15 @@ func autonomyGateway(mode domain.AutonomyMode, readOnly bool, decision domain.Ap
 	gateway.Limits = &fake.PrincipalLimits{AutonomyModeFunc: func(context.Context, domain.Principal, time.Time) (domain.AutonomyMode, error) {
 		return mode, nil
 	}}
-	gateway.Approvals = fake.ToolApprovalGateFunc(func(_ context.Context, _ domain.ToolCall, ruleID string) (domain.ApprovalDecision, error) {
-		*asked = append(*asked, ruleID)
+	gateway.Approvals = fake.ToolApprovalGateFunc(func(_ context.Context, _ domain.ToolCall, ask domain.ApprovalAsk) (domain.ApprovalDecision, error) {
+		*asked = append(*asked, ask)
 		return decision, nil
 	})
 	return gateway
 }
 
 func TestOperatingModeDecidesWhatAnAgentMayCall(t *testing.T) {
+	autonomyAsk := domain.ApprovalAsk{Source: domain.ApprovalSourceAutonomy, RuleID: "autonomy", RiskTier: domain.RiskHigh}
 	for _, test := range []struct {
 		mode     domain.AutonomyMode
 		readOnly bool
@@ -47,12 +48,12 @@ func TestOperatingModeDecidesWhatAnAgentMayCall(t *testing.T) {
 		{domain.AutonomyBounded, false, "", nil, false},
 	} {
 		sent := 0
-		var asked []string
+		var asked []domain.ApprovalAsk
 		_, err := autonomyGateway(test.mode, test.readOnly, test.decision, &sent, &asked).Invoke(context.Background(), validToolCall())
 		if test.want == nil && err != nil || test.want != nil && !errors.Is(err, test.want) {
 			t.Fatalf("%s read-only=%t: error = %v, want %v", test.mode, test.readOnly, err, test.want)
 		}
-		if (sent == 1) != (test.want == nil) || (len(asked) == 1) != test.asks || test.asks && asked[0] != AutonomyRule {
+		if (sent == 1) != (test.want == nil) || (len(asked) == 1) != test.asks || test.asks && asked[0] != autonomyAsk {
 			t.Fatalf("%s read-only=%t: sent = %d, asked = %v", test.mode, test.readOnly, sent, asked)
 		}
 	}
@@ -60,7 +61,7 @@ func TestOperatingModeDecidesWhatAnAgentMayCall(t *testing.T) {
 
 func TestOperatingModeNeedsAnApprovalGate(t *testing.T) {
 	sent := 0
-	var asked []string
+	var asked []domain.ApprovalAsk
 	gateway := autonomyGateway(domain.AutonomyExecuteWithApproval, false, "", &sent, &asked)
 	gateway.Approvals = nil
 	if _, err := gateway.Invoke(context.Background(), validToolCall()); !errors.Is(err, domain.ErrDegraded) || sent != 0 {

@@ -25,6 +25,9 @@ func (a *RoleAuthorizer) AuthorizeApproval(ctx context.Context, request domain.A
 	if a.Principals == nil || a.Roles == nil {
 		return fmt.Errorf("approval authorizer: principal resolver and role authorizer are required")
 	}
+	if err := awaitsApprover(request); err != nil {
+		return err
+	}
 	if request.Approver.ID != "" && request.Approver != reviewer {
 		return fmt.Errorf("%w: approval %d is assigned to %q", domain.ErrForbidden, request.ID, request.Approver.ID)
 	}

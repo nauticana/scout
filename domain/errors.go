@@ -89,3 +89,16 @@ const (
 	StagePublish    TurnStage = "publish"
 	StageCheckpoint TurnStage = "checkpoint"
 )
+
+// BudgetUnenforceableError reports a bounded release budget that cannot be enforced; it is
+// ErrDegraded, so the work it would bound fails closed.
+type BudgetUnenforceableError struct {
+	Problem BudgetProblem
+	Detail  string
+}
+
+func (e *BudgetUnenforceableError) Error() string {
+	return "budget unenforceable (" + string(e.Problem) + "): " + e.Detail
+}
+
+func (e *BudgetUnenforceableError) Unwrap() error { return ErrDegraded }

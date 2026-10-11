@@ -29,16 +29,9 @@ func (g *Gate) Revision(ctx context.Context, call domain.ToolCall) (domain.CallR
 	if g.Store == nil {
 		return domain.CallRevision{}, false, fmt.Errorf("approval gate: store is required")
 	}
-	key := domain.ApprovalKey{TenantID: call.TenantContext.TenantID, RequestID: call.RequestID, ExecutionStepID: stepIDFor(call)}
-	request, err := g.Store.Get(ctx, key)
-	if errors.Is(err, domain.ErrNotFound) {
-		return domain.CallRevision{}, false, nil
-	}
-	if err != nil {
+	request, key, edited, err := g.edited(ctx, call)
+	if err != nil || !edited {
 		return domain.CallRevision{}, false, err
-	}
-	if request.Status != domain.ApprovalStatusEdited {
-		return domain.CallRevision{}, false, nil
 	}
 	if request.ProposedDigest != ProposalDigest(call) {
 		return domain.CallRevision{}, false, fmt.Errorf("%w: the edited proposal of step %d is not this call", domain.ErrConflict, key.ExecutionStepID)
@@ -58,6 +51,32 @@ func (g *Gate) Revision(ctx context.Context, call domain.ToolCall) (domain.CallR
 		return domain.CallRevision{}, false, fmt.Errorf("%w: revised arguments of step %d no longer match their digest", domain.ErrConflict, key.ExecutionStepID)
 	}
 	return domain.CallRevision{RevisesProposal: key.ExecutionStepID, Arguments: arguments, ArgumentsDigest: edit.Arguments.Digest}, true, nil
+}
+
+// edited walks the call's requests past those approved and reports the first one edited.
+func (g *Gate) edited(ctx context.Context, call domain.ToolCall) (domain.ApprovalRequest, domain.ApprovalKey, bool, error) {
+	maxAsks, err := g.maxAsks()
+	if err != nil {
+		return domain.ApprovalRequest{}, domain.ApprovalKey{}, false, err
+	}
+	for index := 0; index < maxAsks; index++ {
+		key := domain.ApprovalKey{TenantID: call.TenantContext.TenantID, RequestID: call.RequestID, ExecutionStepID: stepIDAt(call, index)}
+		request, err := g.Store.Get(ctx, key)
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.ApprovalRequest{}, key, false, nil
+		}
+		if err != nil {
+			return domain.ApprovalRequest{}, key, false, err
+		}
+		switch request.Status {
+		case domain.ApprovalStatusEdited:
+			return request, key, true, nil
+		case domain.ApprovalStatusApproved:
+		default:
+			return domain.ApprovalRequest{}, key, false, nil
+		}
+	}
+	return domain.ApprovalRequest{}, domain.ApprovalKey{}, false, nil
 }
 
 // edit returns the edit call claims to carry, refusing a call that names a proposal
@@ -101,6 +120,7 @@ func (g *Gate) approveAsEditor(ctx context.Context, revised domain.ApprovalReque
 	verdict := domain.ApprovalVerdict{
 		RequestKey: key, Status: domain.ApprovalStatusApproved, Decider: edit.Editor, Authority: edit.Authority,
 		ProposedDigest: revised.ProposedDigest, Reason: edit.Reason, DecidedAt: g.now(),
+		Assignment: fenceOf(revised),
 	}
 	resolved, err := g.Store.Resolve(ctx, verdict)
 	if errors.Is(err, domain.ErrConflict) {
@@ -123,7 +143,10 @@ func (r *Resumer) archiveRevision(ctx context.Context, request domain.ApprovalRe
 		return verdict, fmt.Errorf("%w: editing a proposal needs an evidence archive", domain.ErrNotReady)
 	}
 	limit := r.MaxRevisedArgumentBytes
-	if limit <= 0 {
+	switch {
+	case limit < 0:
+		return verdict, fmt.Errorf("approval resumer: max revised argument bytes cannot be negative")
+	case limit == 0:
 		limit = DefaultMaxRevisedArgumentBytes
 	}
 	arguments, err := revisedArguments(verdict.RevisedArguments, limit)

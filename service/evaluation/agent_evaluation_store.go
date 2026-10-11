@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 const (
@@ -53,8 +55,8 @@ INSERT INTO evaluation_run (id, partner_id, agent_id, golden_set_id, set_version
 VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?)
 RETURNING queued_at`,
 	qAgentEvalInsertSubj: `
-INSERT INTO evaluation_run_subject (run_id, partner_id, role_code, subject_code, agent_id, agent_version, definition_digest, definition_json)
-VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?)`,
+INSERT INTO evaluation_run_subject (run_id, partner_id, role_code, subject_code, agent_id, agent_version, definition_digest, definition_json, settings_json)
+VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?, ?)`,
 	qAgentEvalRun: `
 SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_code, r.queued_at, r.started_at, r.completed_at,
        r.requested_by_kind, r.requested_by_id, r.sample_count, r.input_tokens, r.output_tokens, r.cost_minor_units, r.currency_code,
@@ -70,7 +72,8 @@ SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_
  WHERE r.partner_id = ? AND r.id = ? AND r.agent_id IS NOT NULL`,
 	qAgentEvalResults: `
 SELECT x.example_id, x.scores, x.latency_ms, x.input_tokens, x.output_tokens, x.cost_minor_units, x.currency_code,
-       COALESCE(c.exponent, 0), x.needs_human_review, x.reason
+       COALESCE(c.exponent, 0), x.needs_human_review, x.reason,
+       x.evaluator_input_tokens, x.evaluator_output_tokens, x.evaluator_cost_minor_units
   FROM evaluation_result x
   JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
                        AND e.set_version = x.set_version AND e.example_id = x.example_id
@@ -81,9 +84,10 @@ SELECT x.example_id, x.scores, x.latency_ms, x.input_tokens, x.output_tokens, x.
  ORDER BY x.example_id DESC
  LIMIT ?`,
 	qAgentEvalDraft: `
-SELECT definition_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND role_code = 'candidate'`,
+SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND role_code = 'candidate'`,
 	qAgentEvalRecorded: `
-SELECT example_id, input_tokens, output_tokens, cost_minor_units, currency_code
+SELECT example_id, input_tokens + evaluator_input_tokens, output_tokens + evaluator_output_tokens,
+       cost_minor_units + evaluator_cost_minor_units, currency_code, reason
   FROM evaluation_result
  WHERE partner_id = ? AND run_id = ? AND role_code = 'candidate'`,
 	qAgentEvalRenew: `
@@ -93,8 +97,9 @@ UPDATE evaluation_run
 RETURNING golden_set_id, set_version`,
 	qAgentEvalPutResult: `
 INSERT INTO evaluation_result (run_id, partner_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
-                               input_tokens, output_tokens, cost_minor_units, currency_code, needs_human_review, reason)
-VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, ?, ?, ?)
+                               input_tokens, output_tokens, cost_minor_units, currency_code, needs_human_review, reason,
+                               evaluator_input_tokens, evaluator_output_tokens, evaluator_cost_minor_units)
+VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (run_id, example_id, role_code) DO NOTHING
 RETURNING example_id`,
 	qAgentEvalAddTotals: `
@@ -168,8 +173,11 @@ func validEnqueue(request domain.AgentEvaluationEnqueue) error {
 			request.Draft.DefinitionDigest != request.Subject.DefinitionDigest || request.Draft.AgentID != request.AgentID {
 			return fmt.Errorf("%w: a draft subject carries its frozen definition and that definition's digest", domain.ErrValidation)
 		}
+		if request.Draft.SettingsDigest == "" || scope.SettingsDigest(request.DraftSettings) != request.Draft.SettingsDigest {
+			return fmt.Errorf("%w: a draft subject carries the settings its definition digests", domain.ErrValidation)
+		}
 	case domain.SubjectRelease:
-		if request.Draft != nil || strings.TrimSpace(request.Subject.Version) == "" {
+		if request.Draft != nil || request.DraftSettings != nil || strings.TrimSpace(request.Subject.Version) == "" {
 			return fmt.Errorf("%w: a release subject names a version and carries no draft", domain.ErrValidation)
 		}
 	default:
@@ -183,13 +191,17 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 	if err := validEnqueue(request); err != nil {
 		return domain.AgentEvaluationRun{}, err
 	}
-	var definition any
+	var definition, settings any
 	if request.Draft != nil {
 		encoded, err := json.Marshal(request.Draft)
 		if err != nil {
 			return domain.AgentEvaluationRun{}, fmt.Errorf("encode frozen draft: %w", err)
 		}
 		definition = string(encoded)
+		if encoded, err = json.Marshal(append([]domain.EffectiveResource{}, request.DraftSettings...)); err != nil {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("encode frozen draft settings: %w", err)
+		}
+		settings = string(encoded)
 	}
 	tx, err := store.begin(ctx, "agent evaluation store", agentEvaluationQueries)
 	if err != nil {
@@ -249,7 +261,7 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 		run.QueuedAt = common.AsTime(inserted.Rows[0][0])
 	}
 	if _, err = tx.Query(ctx, qAgentEvalInsertSubj, run.RunID, run.TenantID, string(run.Subject.Kind), run.AgentID,
-		nullable(run.Subject.Version), run.Subject.DefinitionDigest, definition); err != nil {
+		nullable(run.Subject.Version), run.Subject.DefinitionDigest, definition, settings); err != nil {
 		return domain.AgentEvaluationRun{}, fmt.Errorf("pin evaluation subject: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -332,14 +344,18 @@ func (store *AgentEvaluationStore) Results(ctx context.Context, scope domain.Gol
 	}
 	results := make([]domain.AgentCaseResult, 0, len(rows.Rows))
 	for _, row := range rows.Rows {
-		if len(row) < 10 {
-			return nil, fmt.Errorf("evaluation result row: expected 10 columns, got %d", len(row))
+		if len(row) < 13 {
+			return nil, fmt.Errorf("evaluation result row: expected 13 columns, got %d", len(row))
 		}
 		result := domain.AgentCaseResult{
 			ExampleID: common.AsString(row[0]), Latency: time.Duration(common.AsInt64(row[2])) * time.Millisecond,
 			Usage: domain.Usage{InputTokens: common.AsInt64(row[3]), OutputTokens: common.AsInt64(row[4]),
 				CostMinorUnits: common.AsInt64(row[5]), Currency: strings.TrimSpace(common.AsString(row[6]))},
 			Exponent: int(common.AsInt64(row[7])), NeedsHumanReview: common.AsBool(row[8]), Reason: common.AsString(row[9]),
+		}
+		result.EvaluatorUsage = domain.Usage{InputTokens: common.AsInt64(row[10]), OutputTokens: common.AsInt64(row[11]), CostMinorUnits: common.AsInt64(row[12])}
+		if result.EvaluatorUsage.CostMinorUnits > 0 {
+			result.EvaluatorUsage.Currency = result.Usage.Currency
 		}
 		if raw := common.AsString(row[1]); raw != "" && raw != "null" {
 			if err := json.Unmarshal([]byte(raw), &result.Scores); err != nil {
@@ -370,7 +386,7 @@ func (store *AgentEvaluationStore) Load(ctx context.Context, lease domain.AgentE
 	if run.Status != domain.EvaluationRunning || token != lease.Token {
 		return domain.AgentEvaluationClaim{}, fmt.Errorf("%w: run %d is not held by this lease", domain.ErrConflict, lease.RunID)
 	}
-	claim := domain.AgentEvaluationClaim{Lease: lease, Run: run, Recorded: map[string]domain.Usage{}}
+	claim := domain.AgentEvaluationClaim{Lease: lease, Run: run, Recorded: map[string]domain.Usage{}, Unscored: map[string]string{}}
 	qs, err := store.queries(ctx, "agent evaluation store", agentEvaluationQueries)
 	if err != nil {
 		return domain.AgentEvaluationClaim{}, err
@@ -390,15 +406,30 @@ func (store *AgentEvaluationStore) Load(ctx context.Context, lease domain.AgentE
 		if definition.DefinitionDigest != run.Subject.DefinitionDigest || definition.AgentID != run.AgentID {
 			return domain.AgentEvaluationClaim{}, fmt.Errorf("%w: pinned draft of run %d does not match its digest", domain.ErrConflict, lease.RunID)
 		}
-		claim.Draft = &definition
+		var settings []domain.EffectiveResource
+		if err := json.Unmarshal([]byte(common.AsString(draft.Rows[0][1])), &settings); err != nil {
+			return domain.AgentEvaluationClaim{}, fmt.Errorf("decode pinned draft settings of run %d: %w", lease.RunID, err)
+		}
+		if definition.SettingsDigest == "" || scope.SettingsDigest(settings) != definition.SettingsDigest {
+			return domain.AgentEvaluationClaim{}, fmt.Errorf("%w: pinned draft settings of run %d do not match its definition", domain.ErrConflict, lease.RunID)
+		}
+		claim.Draft, claim.DraftSettings = &definition, settings
 	}
 	recorded, err := qs.Query(ctx, qAgentEvalRecorded, lease.TenantID, lease.RunID)
 	if err != nil {
 		return domain.AgentEvaluationClaim{}, fmt.Errorf("load recorded results: %w", err)
 	}
 	for _, row := range recorded.Rows {
-		claim.Recorded[common.AsString(row[0])] = domain.Usage{InputTokens: common.AsInt64(row[1]), OutputTokens: common.AsInt64(row[2]),
+		if len(row) < 6 {
+			return domain.AgentEvaluationClaim{}, fmt.Errorf("recorded result row: expected 6 columns, got %d", len(row))
+		}
+		exampleID := common.AsString(row[0])
+		claim.Recorded[exampleID] = domain.Usage{InputTokens: common.AsInt64(row[1]), OutputTokens: common.AsInt64(row[2]),
 			CostMinorUnits: common.AsInt64(row[3]), Currency: strings.TrimSpace(common.AsString(row[4]))}
+		// Only a scoring failure records a reason; such an example must fail the run on every attempt.
+		if reason := common.AsString(row[5]); reason != "" {
+			claim.Unscored[exampleID] = reason
+		}
 	}
 	return claim, nil
 }
@@ -409,11 +440,12 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 	if err := validLease(lease); err != nil {
 		return err
 	}
-	if strings.TrimSpace(result.ExampleID) == "" || result.Usage.CostMinorUnits < 0 || result.Usage.InputTokens < 0 || result.Usage.OutputTokens < 0 || result.Latency < 0 {
-		return fmt.Errorf("%w: a result needs an example id and non-negative usage", domain.ErrValidation)
+	if strings.TrimSpace(result.ExampleID) == "" || result.Latency < 0 {
+		return fmt.Errorf("%w: a result needs an example id and a non-negative latency", domain.ErrValidation)
 	}
-	if result.Usage.CostMinorUnits > 0 && len(result.Usage.Currency) != 3 {
-		return fmt.Errorf("%w: a priced result needs an ISO currency", domain.ErrValidation)
+	total, err := resultTotal(result)
+	if err != nil {
+		return err
 	}
 	scores, err := json.Marshal(result.Scores)
 	if err != nil {
@@ -439,23 +471,24 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 	goldenSetID, setVersion := common.AsString(renewed.Rows[0][0]), common.AsInt64(renewed.Rows[0][1])
 	// A free result carries no currency, so it can never fix the run's currency.
 	var currency any
-	if result.Usage.CostMinorUnits > 0 {
-		currency = result.Usage.Currency
+	if total.CostMinorUnits > 0 {
+		currency = total.Currency
 	}
+	evaluator := result.EvaluatorUsage
 	inserted, err := tx.Query(ctx, qAgentEvalPutResult, lease.RunID, lease.TenantID, goldenSetID, setVersion, result.ExampleID, string(scores),
 		result.Latency.Milliseconds(), result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits, currency,
-		result.NeedsHumanReview, nullable(truncate(result.Reason, 400)))
+		result.NeedsHumanReview, nullable(truncate(result.Reason, 400)), evaluator.InputTokens, evaluator.OutputTokens, evaluator.CostMinorUnits)
 	if err != nil {
 		return fmt.Errorf("insert evaluation result %q: %w", result.ExampleID, err)
 	}
 	if len(inserted.Rows) > 0 {
-		totals, err := tx.Query(ctx, qAgentEvalAddTotals, result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits,
+		totals, err := tx.Query(ctx, qAgentEvalAddTotals, total.InputTokens, total.OutputTokens, total.CostMinorUnits,
 			currency, lease.TenantID, lease.RunID, currency, currency)
 		if err != nil {
 			return fmt.Errorf("add evaluation totals: %w", err)
 		}
 		if len(totals.Rows) == 0 {
-			return fmt.Errorf("%w: result %q is priced in %s, unlike the run", domain.ErrValidation, result.ExampleID, result.Usage.Currency)
+			return fmt.Errorf("%w: result %q is priced in %s, unlike the run", domain.ErrValidation, result.ExampleID, total.Currency)
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -463,6 +496,34 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 	}
 	committed = true
 	return nil
+}
+
+// resultTotal is the subject's and the evaluators' spend together, as the run's totals
+// count it: both must be non-negative, priced spend needs an ISO currency, and the two
+// priced parts must share it, since the row keeps one currency.
+func resultTotal(result domain.EvaluationResult) (domain.Usage, error) {
+	subject, evaluator := result.Usage, result.EvaluatorUsage
+	for _, usage := range []domain.Usage{subject, evaluator} {
+		if usage.CostMinorUnits < 0 || usage.InputTokens < 0 || usage.OutputTokens < 0 {
+			return domain.Usage{}, fmt.Errorf("%w: a result needs non-negative usage", domain.ErrValidation)
+		}
+		if usage.CostMinorUnits > 0 && len(usage.Currency) != 3 {
+			return domain.Usage{}, fmt.Errorf("%w: a priced result needs an ISO currency", domain.ErrValidation)
+		}
+	}
+	if subject.CostMinorUnits > 0 && evaluator.CostMinorUnits > 0 && subject.Currency != evaluator.Currency {
+		return domain.Usage{}, fmt.Errorf("%w: evaluator spend in %s differs from the result's %s", domain.ErrValidation, evaluator.Currency, subject.Currency)
+	}
+	if subject.InputTokens > math.MaxInt64-evaluator.InputTokens || subject.OutputTokens > math.MaxInt64-evaluator.OutputTokens ||
+		subject.CostMinorUnits > math.MaxInt64-evaluator.CostMinorUnits {
+		return domain.Usage{}, fmt.Errorf("%w: result usage overflows", domain.ErrValidation)
+	}
+	total := domain.Usage{InputTokens: subject.InputTokens + evaluator.InputTokens, OutputTokens: subject.OutputTokens + evaluator.OutputTokens,
+		CostMinorUnits: subject.CostMinorUnits + evaluator.CostMinorUnits, Currency: subject.Currency}
+	if subject.CostMinorUnits == 0 {
+		total.Currency = evaluator.Currency
+	}
+	return total, nil
 }
 
 // Finish records the terminal status and releases the lease; totals were settled per result.

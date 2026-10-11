@@ -38,7 +38,7 @@ func (s *StudioRestrictions) ready() error {
 		return fmt.Errorf("studio restrictions: restriction reader and writer, principal resolver, role authorizer, and studio are required")
 	}
 	if s.MaxEntries < 0 {
-		return fmt.Errorf("studio restrictions: max entries cannot be negative")
+		return fmt.Errorf("%w: studio restrictions: max entries cannot be negative", domain.ErrValidation)
 	}
 	return nil
 }

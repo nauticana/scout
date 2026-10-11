@@ -5,9 +5,10 @@
 //	set kinds (tool, skill, knowledge, model, entitlement)   ["a","b"]
 //	policy                                                   [{"id":"…","effect":"allow","actions":[…],"resources":[…]}]
 //	prompt_section                                           {"instruction":"…","output":"…"}
-//	budget                                                   {"tokens":0,"cost_minor_units":0,"currency":"EUR"}
+//	budget                                                   {"tokens":0,"cost_minor_units":500,"currency":"EUR","exponent":2,"period":"month","timezone":"Europe/Istanbul"}
 //	autonomy                                                 {"mode":"draft"}
 //	limits                                                   {"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}
+//	approval_routing                                         {"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}
 package scope
 
 import (
@@ -36,12 +37,6 @@ var autonomyRank = map[domain.AutonomyMode]int{
 type promptValue struct {
 	Instruction string `json:"instruction"`
 	Output      string `json:"output,omitempty"`
-}
-
-type budgetValue struct {
-	Tokens         int64  `json:"tokens"`
-	CostMinorUnits int64  `json:"cost_minor_units"`
-	Currency       string `json:"currency,omitempty"`
 }
 
 type autonomyValue struct {
@@ -98,6 +93,14 @@ func decodeStatements(raw []byte) ([]domain.PolicyStatement, error) {
 		if statement.Effect != domain.PolicyAllow && statement.Effect != domain.PolicyDeny {
 			return nil, fmt.Errorf("%w: statement %q has invalid effect %q", domain.ErrValidation, statement.ID, statement.Effect)
 		}
+		for _, obligation := range statement.Obligations {
+			if obligation.Kind != domain.ObligationRequireApproval {
+				continue
+			}
+			if _, err := ApprovalObligationRisk(obligation); err != nil {
+				return nil, fmt.Errorf("statement %q: %w", statement.ID, err)
+			}
+		}
 	}
 	return statements, nil
 }
@@ -123,20 +126,6 @@ func decodePrompt(raw []byte) (promptValue, error) {
 	}
 	if err := strictDecode(raw, &value); err != nil {
 		return value, fmt.Errorf("%w: prompt value must be an instruction/output object: %v", domain.ErrValidation, err)
-	}
-	return value, nil
-}
-
-func decodeBudget(raw []byte) (budgetValue, error) {
-	var value budgetValue
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return value, nil
-	}
-	if err := strictDecode(raw, &value); err != nil {
-		return value, fmt.Errorf("%w: budget value must be a token/cost object: %v", domain.ErrValidation, err)
-	}
-	if value.Tokens < 0 || value.CostMinorUnits < 0 {
-		return value, fmt.Errorf("%w: budget limits cannot be negative", domain.ErrValidation)
 	}
 	return value, nil
 }
@@ -252,17 +241,19 @@ func CanonicalValue(kind domain.ResourceKind, raw []byte) ([]byte, error) {
 			}
 			return json.Marshal(value)
 		}
-		value, err := decodeBudget(raw)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(value)
+		return canonicalBudget(raw)
 	case NarrowOrdered:
 		value, err := decodeAutonomy(raw)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(value)
+	case NarrowRouting:
+		routing, err := DecodeApprovalRouting(raw)
+		if err != nil {
+			return nil, err
+		}
+		return encodeRouting(routing)
 	default:
 		return nil, fmt.Errorf("%w: unknown resource kind %q", domain.ErrValidation, kind)
 	}

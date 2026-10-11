@@ -71,11 +71,11 @@ func (sink *SafetyEventSink) Record(ctx context.Context, event domain.SafetyEven
 }
 
 // ToolApprovalGateFunc adapts a function to contract.ToolApprovalGate.
-type ToolApprovalGateFunc func(context.Context, domain.ToolCall, string) (domain.ApprovalDecision, error)
+type ToolApprovalGateFunc func(context.Context, domain.ToolCall, domain.ApprovalAsk) (domain.ApprovalDecision, error)
 
 // Decide invokes the configured function.
-func (function ToolApprovalGateFunc) Decide(ctx context.Context, call domain.ToolCall, ruleID string) (domain.ApprovalDecision, error) {
-	return function(ctx, call, ruleID)
+func (function ToolApprovalGateFunc) Decide(ctx context.Context, call domain.ToolCall, ask domain.ApprovalAsk) (domain.ApprovalDecision, error) {
+	return function(ctx, call, ask)
 }
 
 // GuardrailOutputSession contains configurable session callbacks; nil funcs pass chunks through.

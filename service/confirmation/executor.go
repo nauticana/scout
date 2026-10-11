@@ -26,8 +26,11 @@ type Executor struct {
 	// OnFailure receives the internal cause of a recorded failure, which people
 	// see only as the client-safe reason.
 	OnFailure func(domain.MCPConfirmationKey, error)
-	// Lease defaults to DefaultLease.
+	// Lease is one claim, renewed every third of itself; zero takes DefaultLease.
 	Lease time.Duration
+	// MaxDocumentBytes is the largest result a run may store, matching the store's limit; zero
+	// takes DefaultMaxDocumentBytes. A larger result is recorded unknown, never run again.
+	MaxDocumentBytes int
 	// Reason maps a failure to the client-safe text stored with it; nil uses a generic one.
 	Reason func(error) string
 }
@@ -46,6 +49,9 @@ func (e *Executor) readyToRun() error {
 	if e.Runner == nil || e.OnFailure == nil {
 		return fmt.Errorf("%w: confirmation execution needs a runner and failure sink", domain.ErrNotReady)
 	}
+	if e.Lease < 0 || e.MaxDocumentBytes < 0 {
+		return fmt.Errorf("confirmation executor: lease and max document bytes cannot be negative")
+	}
 	return nil
 }
 
@@ -54,6 +60,13 @@ func (e *Executor) lease() time.Duration {
 		return e.Lease
 	}
 	return DefaultLease
+}
+
+func (e *Executor) documentLimit() int {
+	if e.MaxDocumentBytes > 0 {
+		return e.MaxDocumentBytes
+	}
+	return DefaultMaxDocumentBytes
 }
 
 // Decide authorizes decider and records the decision. A confirmation owned by
@@ -191,7 +204,7 @@ func (e *Executor) run(ctx context.Context, key domain.MCPConfirmationKey, fence
 	case err != nil:
 		return e.fail(ctx, key, fence, domain.MCPConfirmationFailed, err)
 	}
-	if len(result) > MaxDocumentBytes || (len(result) > 0 && !json.Valid(result)) {
+	if len(result) > e.documentLimit() || (len(result) > 0 && !json.Valid(result)) {
 		// The runner reported success, so the effect likely happened; unknown keeps it from running twice.
 		return e.fail(ctx, key, fence, domain.MCPConfirmationUnknown,
 			fmt.Errorf("%w: confirmation %d ran but its result is not storable JSON: %w", domain.ErrEffectUnknown, key.ID, domain.ErrValidation))

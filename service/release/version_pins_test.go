@@ -171,6 +171,39 @@ func TestTableAgentDeploymentStoreRestorePrevious(t *testing.T) {
 	requireArgs(t, query, qDeploymentRestore, "2", int64(8), "writer-a", "3")
 }
 
+func TestTableAgentDeploymentStoreGuardsReviewedTrafficChanges(t *testing.T) {
+	ctx := context.Background()
+	query := newQueryFake(map[string][][]any{
+		qDeploymentReweight: {{"3"}},
+		qDeploymentPromoted: {{"4"}},
+		qDeploymentClear:    {{"4"}},
+	})
+	store := &TableAgentDeploymentStore{DB: dbFake{query: query}}
+
+	if err := store.ReweightCanary(ctx, 8, "writer-a", "4", 25); err != nil {
+		t.Fatal(err)
+	}
+	requireArgs(t, query, qDeploymentReweight, 25, int64(8), "writer-a", "4")
+	if err := store.PromoteDeployed(ctx, 8, "writer-a", "4"); err != nil {
+		t.Fatal(err)
+	}
+	requireArgs(t, query, qDeploymentPromoted, "4", int64(8), "writer-a", "4", "4")
+	if version, err := store.EndCanary(ctx, 8, "writer-a"); err != nil || version != "4" {
+		t.Fatalf("ended canary at %q: %v", version, err)
+	}
+
+	query.rows = nil
+	if err := store.ReweightCanary(ctx, 8, "writer-a", "2", 25); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("reweight stale canary = %v, want conflict", err)
+	}
+	if err := store.PromoteDeployed(ctx, 8, "writer-a", "2"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("promote stale release = %v, want conflict", err)
+	}
+	if _, err := store.EndCanary(ctx, 8, "writer-a"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("end missing canary = %v, want conflict", err)
+	}
+}
+
 func TestCohortSelectionIsStable(t *testing.T) {
 	cohort := domain.ExperimentCohort{AgentID: "writer-a", ExperimentID: "tone", Percentage: 50, Salt: "s1"}
 	first := CohortSelected(cohort, 8, "conversation-a")

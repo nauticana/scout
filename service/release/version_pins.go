@@ -24,7 +24,9 @@ const (
 	qCohortsForAgent    = "scout_release_cohorts_for_agent"
 	qDeploymentGet      = "scout_release_deployment_get"
 	qDeploymentCanary   = "scout_release_deployment_canary"
+	qDeploymentReweight = "scout_release_deployment_reweight"
 	qDeploymentPromote  = "scout_release_deployment_promote"
+	qDeploymentPromoted = "scout_release_deployment_promoted"
 	qDeploymentPrevious = "scout_release_deployment_previous"
 	qDeploymentRestore  = "scout_release_deployment_restore"
 	qDeploymentClear    = "scout_release_deployment_clear"
@@ -61,10 +63,20 @@ UPDATE agent_deployment
    SET canary_version = ?, canary_percentage = ?, updated_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND agent_id = ? AND stable_version <> ?
 RETURNING stable_version`,
+	qDeploymentReweight: `
+UPDATE agent_deployment
+   SET canary_percentage = ?, updated_at = CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND agent_id = ? AND canary_version = ?
+RETURNING stable_version`,
 	qDeploymentPromote: `
 UPDATE agent_deployment
    SET stable_version = ?, canary_version = NULL, canary_percentage = 0, updated_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND agent_id = ?
+RETURNING stable_version`,
+	qDeploymentPromoted: `
+UPDATE agent_deployment
+   SET stable_version = ?, canary_version = NULL, canary_percentage = 0, updated_at = CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND agent_id = ? AND (stable_version = ? OR canary_version = ?)
 RETURNING stable_version`,
 	qDeploymentClear: `
 UPDATE agent_deployment
@@ -247,7 +259,10 @@ type TableAgentDeploymentStore struct {
 	qs   keelport.QueryService
 }
 
-var _ contract.AgentDeploymentStore = (*TableAgentDeploymentStore)(nil)
+var (
+	_ contract.AgentDeploymentStore               = (*TableAgentDeploymentStore)(nil)
+	_ contract.ReviewedAgentVersionTrafficManager = (*TableAgentDeploymentStore)(nil)
+)
 
 func (store *TableAgentDeploymentStore) init(ctx context.Context) error {
 	if store.DB == nil {
@@ -312,6 +327,54 @@ func (store *TableAgentDeploymentStore) Promote(ctx context.Context, tenantID in
 	return nil
 }
 
+func (store *TableAgentDeploymentStore) ReweightCanary(ctx context.Context, tenantID int64, agentID, version string, percentage int) error {
+	if percentage < 1 || percentage > 100 || strings.TrimSpace(version) == "" {
+		return fmt.Errorf("%w: canary needs a version and a percentage between 1 and 100", domain.ErrValidation)
+	}
+	if err := store.init(ctx); err != nil {
+		return err
+	}
+	result, err := store.qs.Query(ctx, qDeploymentReweight, percentage, tenantID, agentID, version)
+	if err != nil {
+		return fmt.Errorf("reweight canary: %w", err)
+	}
+	if len(result.Rows) == 0 {
+		return fmt.Errorf("%w: %s is not the deployed canary for agent %s", domain.ErrConflict, version, agentID)
+	}
+	return nil
+}
+
+func (store *TableAgentDeploymentStore) PromoteDeployed(ctx context.Context, tenantID int64, agentID, version string) error {
+	if strings.TrimSpace(version) == "" {
+		return fmt.Errorf("%w: promote needs a version", domain.ErrValidation)
+	}
+	if err := store.init(ctx); err != nil {
+		return err
+	}
+	result, err := store.qs.Query(ctx, qDeploymentPromoted, version, tenantID, agentID, version, version)
+	if err != nil {
+		return fmt.Errorf("promote deployed version: %w", err)
+	}
+	if len(result.Rows) == 0 {
+		return fmt.Errorf("%w: %s is not deployed for agent %s", domain.ErrConflict, version, agentID)
+	}
+	return nil
+}
+
+func (store *TableAgentDeploymentStore) EndCanary(ctx context.Context, tenantID int64, agentID string) (string, error) {
+	if err := store.init(ctx); err != nil {
+		return "", err
+	}
+	result, err := store.qs.Query(ctx, qDeploymentClear, tenantID, agentID)
+	if err != nil {
+		return "", fmt.Errorf("end canary: %w", err)
+	}
+	if len(result.Rows) == 0 {
+		return "", fmt.Errorf("%w: agent %s has no deployed canary", domain.ErrConflict, agentID)
+	}
+	return common.AsString(result.Rows[0][0]), nil
+}
+
 func (store *TableAgentDeploymentStore) RestorePrevious(ctx context.Context, tenantID int64, agentID string) (string, error) {
 	if err := store.init(ctx); err != nil {
 		return "", err
@@ -366,8 +429,9 @@ type PinnedTrafficManager struct {
 }
 
 var (
-	_ contract.AgentVersionTrafficManager      = (*PinnedTrafficManager)(nil)
-	_ contract.AgentVersionResolutionExplainer = (*PinnedTrafficManager)(nil)
+	_ contract.AgentVersionTrafficManager         = (*PinnedTrafficManager)(nil)
+	_ contract.AgentVersionResolutionExplainer    = (*PinnedTrafficManager)(nil)
+	_ contract.ReviewedAgentVersionTrafficManager = (*PinnedTrafficManager)(nil)
 )
 
 func (manager *PinnedTrafficManager) now() time.Time {
@@ -517,6 +581,60 @@ func (manager *PinnedTrafficManager) Promote(ctx context.Context, tenantID int64
 		return err
 	}
 	return manager.auditChange(ctx, tenantID, agentID, "agent_version.promoted", version, 100)
+}
+
+func (manager *PinnedTrafficManager) reviewed() (contract.ReviewedAgentVersionTrafficManager, error) {
+	reviewed, ok := manager.Deployments.(contract.ReviewedAgentVersionTrafficManager)
+	if !ok {
+		return nil, fmt.Errorf("%w: deployment store does not support reviewed traffic changes", domain.ErrNotReady)
+	}
+	return reviewed, nil
+}
+
+func (manager *PinnedTrafficManager) ReweightCanary(ctx context.Context, tenantID int64, agentID, version string, percentage int) error {
+	if err := manager.validate(); err != nil {
+		return err
+	}
+	reviewed, err := manager.reviewed()
+	if err != nil {
+		return err
+	}
+	if err = reviewed.ReweightCanary(ctx, tenantID, agentID, version, percentage); err != nil {
+		return err
+	}
+	return manager.auditChange(ctx, tenantID, agentID, "agent_version.canary", version, percentage)
+}
+
+func (manager *PinnedTrafficManager) PromoteDeployed(ctx context.Context, tenantID int64, agentID, version string) error {
+	if err := manager.validate(); err != nil {
+		return err
+	}
+	reviewed, err := manager.reviewed()
+	if err != nil {
+		return err
+	}
+	if err = reviewed.PromoteDeployed(ctx, tenantID, agentID, version); err != nil {
+		return err
+	}
+	return manager.auditChange(ctx, tenantID, agentID, "agent_version.promoted", version, 100)
+}
+
+func (manager *PinnedTrafficManager) EndCanary(ctx context.Context, tenantID int64, agentID string) (string, error) {
+	if err := manager.validate(); err != nil {
+		return "", err
+	}
+	reviewed, err := manager.reviewed()
+	if err != nil {
+		return "", err
+	}
+	version, err := reviewed.EndCanary(ctx, tenantID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if err = manager.auditChange(ctx, tenantID, agentID, "agent_version.rolled_back", version, 100); err != nil {
+		return "", err
+	}
+	return version, nil
 }
 
 // Rollback changes only new conversation assignments; live conversations stay on their persisted version.

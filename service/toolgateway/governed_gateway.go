@@ -1,9 +1,11 @@
 package toolgateway
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/stage"
+	"github.com/nauticana/scout/service/scope"
 )
 
 // GovernedGateway applies policy, guardrails, credentials, resilience, and validation to tool calls.
@@ -86,10 +89,15 @@ func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall
 	if err := gateway.Authorizer.Authorize(ctx, call, definition); err != nil {
 		return domain.ToolResult{}, err
 	}
-	if err := gateway.decide(ctx, call, definition); err != nil {
+	policyAsk, err := gateway.decide(ctx, call, definition)
+	if err != nil {
 		return domain.ToolResult{}, err
 	}
-	if err := gateway.autonomy(ctx, call, definition); err != nil {
+	autonomyAsks, err := gateway.autonomy(ctx, call, definition)
+	if err != nil {
+		return domain.ToolResult{}, err
+	}
+	if err := gateway.approve(ctx, call, policyAsk, autonomyAsks); err != nil {
 		return domain.ToolResult{}, err
 	}
 	// Guardrails run before egress and credentials so blocked arguments never leave the platform.
@@ -194,6 +202,9 @@ func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	if gateway.Timeout <= 0 {
 		return fmt.Errorf("%w: tool timeout must be positive", domain.ErrValidation)
 	}
+	if gateway.Approvals != nil && gateway.enforcerFor(domain.ObligationRequireApproval) != nil {
+		return fmt.Errorf("tool gateway: require_approval is enforced by the approval gate; an enforcer of it as well is ambiguous")
+	}
 	if call.TenantContext.TenantID <= 0 || strings.TrimSpace(call.RequestID) == "" || strings.TrimSpace(call.ToolID) == "" || strings.TrimSpace(call.ToolVersion) == "" {
 		return fmt.Errorf("%w: tenant, request, tool, and version are required", domain.ErrValidation)
 	}
@@ -206,12 +217,13 @@ func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	return nil
 }
 
-// decide asks the policy decision point and applies every obligation it
-// attached. An unrecognized obligation is a hard failure: silently ignoring one
-// would turn a conditional allow into an unconditional one.
-func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) error {
+// decide asks the policy decision point and applies every obligation it attached. An
+// unrecognized obligation is a hard failure: silently ignoring one would turn a conditional
+// allow into an unconditional one. With an approval gate composed, require_approval becomes
+// one ask at the riskiest tier its obligations name, which approve then puts to a person.
+func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) (*domain.ApprovalAsk, error) {
 	if gateway.Policy == nil {
-		return nil
+		return nil, nil
 	}
 	subject := domain.DecisionSubject{
 		Principal: call.Principal, Action: domain.PolicyActionToolInvoke, Resource: definition.ToolID,
@@ -219,61 +231,93 @@ func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall
 	}
 	decision, err := gateway.Policy.Decide(ctx, subject)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if decision.Outcome != domain.DecisionAllow {
-		return fmt.Errorf("%w: %s", domain.ErrForbidden, decision.Reason)
+		return nil, fmt.Errorf("%w: %s", domain.ErrForbidden, decision.Reason)
 	}
+	var ask *domain.ApprovalAsk
 	for _, obligation := range decision.Obligations {
+		if obligation.Kind == domain.ObligationRequireApproval && gateway.Approvals != nil {
+			risk, err := scope.ApprovalObligationRisk(obligation)
+			if err != nil {
+				return nil, err
+			}
+			if ask == nil || scope.ApprovalRiskRank(risk) > scope.ApprovalRiskRank(ask.RiskTier) {
+				ask = &domain.ApprovalAsk{Source: domain.ApprovalSourcePolicy, RuleID: string(domain.ApprovalSourcePolicy), RiskTier: risk}
+			}
+			continue
+		}
 		enforcer := gateway.enforcerFor(obligation.Kind)
 		if enforcer == nil {
-			return fmt.Errorf("%w: no enforcer for obligation %q", domain.ErrDegraded, obligation.Kind)
+			return nil, fmt.Errorf("%w: no enforcer for obligation %q", domain.ErrDegraded, obligation.Kind)
 		}
 		if err := enforcer.Enforce(ctx, subject, obligation); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return ask, nil
 }
 
-// AutonomyRule is the approval rule id under which an operating mode routes a call to a person.
-const AutonomyRule = "autonomy"
-
-// autonomy applies the agent's operating mode: human_only acts on nothing; advise and draft
-// call only read-only tools; execute_with_approval calls read-only tools and asks a person
-// for every other call; bounded_autonomous acts within policy, and outside its window the
-// mode has already degraded to execute_with_approval. An unbound mode is human_only.
-func (gateway *GovernedGateway) autonomy(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) error {
+// autonomy applies the agent's operating mode and reports whether it routes the call to a
+// person: human_only acts on nothing; advise and draft call only read-only tools;
+// execute_with_approval calls read-only tools and asks a person for every other call;
+// bounded_autonomous acts within policy, and outside its window the mode has already degraded
+// to execute_with_approval. An unbound mode is human_only.
+func (gateway *GovernedGateway) autonomy(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) (bool, error) {
 	now := time.Now()
 	if gateway.Clock != nil {
 		now = gateway.Clock.Now()
 	}
 	mode, err := gateway.Limits.AutonomyMode(ctx, call.Principal, now)
 	if err != nil {
-		return fmt.Errorf("resolve operating mode of %q: %w", call.Principal.ID, err)
+		return false, fmt.Errorf("resolve operating mode of %q: %w", call.Principal.ID, err)
 	}
 	switch {
 	case mode == domain.AutonomyBounded:
-		return nil
+		return false, nil
 	case definition.ReadOnly && (mode == domain.AutonomyAdvise || mode == domain.AutonomyDraft || mode == domain.AutonomyExecuteWithApproval):
-		return nil
+		return false, nil
 	case mode != domain.AutonomyExecuteWithApproval:
-		return fmt.Errorf("%w: operating mode %q does not let %q call %q", domain.ErrForbidden, mode, call.Principal.ID, call.ToolID)
-	case gateway.Approvals == nil:
-		return fmt.Errorf("%w: operating mode %q needs a tool approval gate", domain.ErrDegraded, mode)
+		return false, fmt.Errorf("%w: operating mode %q does not let %q call %q", domain.ErrForbidden, mode, call.Principal.ID, call.ToolID)
 	}
-	decision, err := gateway.Approvals.Decide(ctx, call, AutonomyRule)
-	if err != nil {
-		return err
+	return true, nil
+}
+
+// approve puts each ask policy and the operating mode make of a call to the approval gate, the
+// riskiest first (the mode asks at the default tier), and stops at the first not yet approved.
+// The gate lets an approval decide a later ask only when it covers that ask's risk and route.
+func (gateway *GovernedGateway) approve(ctx context.Context, call domain.ToolCall, policyAsk *domain.ApprovalAsk, autonomyAsks bool) error {
+	var asks []domain.ApprovalAsk
+	if policyAsk != nil {
+		asks = append(asks, *policyAsk)
 	}
-	switch decision {
-	case domain.ApprovalApproved:
+	if autonomyAsks {
+		asks = append(asks, domain.ApprovalAsk{Source: domain.ApprovalSourceAutonomy, RuleID: string(domain.ApprovalSourceAutonomy), RiskTier: domain.DefaultApprovalRiskTier})
+	}
+	if len(asks) == 0 {
 		return nil
-	case domain.ApprovalPending:
-		return fmt.Errorf("%w: tool %q awaits a person's approval", domain.ErrApprovalPending, call.ToolID)
-	default:
-		return fmt.Errorf("%w: a person refused tool call %q", domain.ErrForbidden, call.ToolID)
 	}
+	if gateway.Approvals == nil {
+		return fmt.Errorf("%w: tool %q needs a person's approval but no tool approval gate is composed", domain.ErrDegraded, call.ToolID)
+	}
+	slices.SortStableFunc(asks, func(a, b domain.ApprovalAsk) int {
+		return cmp.Compare(scope.ApprovalRiskRank(b.RiskTier), scope.ApprovalRiskRank(a.RiskTier))
+	})
+	for _, ask := range asks {
+		decision, err := gateway.Approvals.Decide(ctx, call, ask)
+		if err != nil {
+			return err
+		}
+		switch decision {
+		case domain.ApprovalApproved:
+		case domain.ApprovalPending:
+			return fmt.Errorf("%w: tool %q awaits a person's approval", domain.ErrApprovalPending, call.ToolID)
+		default:
+			return fmt.Errorf("%w: a person refused tool call %q", domain.ErrForbidden, call.ToolID)
+		}
+	}
+	return nil
 }
 
 func (gateway *GovernedGateway) enforcerFor(kind domain.ObligationKind) contract.ObligationEnforcer {

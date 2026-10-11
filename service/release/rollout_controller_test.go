@@ -37,7 +37,7 @@ func newControllerFixture(t *testing.T, stage domain.RolloutStage) *controllerFi
 		States: fixture.states,
 		Lease:  fixture.states,
 		Audit:  fixture.audit,
-		Health: fake.DetailedRolloutHealthEvaluatorFunc(func(context.Context, domain.RolloutTarget) (domain.RolloutHealth, error) {
+		Health: fake.RolloutHealthEvaluatorFunc(func(context.Context, domain.RolloutTarget) (domain.RolloutHealth, error) {
 			return fixture.health, fixture.healthErr
 		}),
 		Bundles:                &fake.ReleaseBundleStore{Bundles: map[string]domain.ReleaseBundle{"2026.08.1": {PlatformVersion: "2026.08.1", RollbackTarget: "2026.07.9"}}},
@@ -151,34 +151,6 @@ func TestRolloutControllerEvaluationErrorIsInconclusive(t *testing.T) {
 	}
 	if !fixture.state(t).Paused {
 		t.Fatal("evaluation error did not pause the rollout")
-	}
-}
-
-func TestRolloutControllerLegacyEvaluatorMapsThreeStates(t *testing.T) {
-	cases := []struct {
-		name    string
-		healthy bool
-		err     error
-		stage   domain.RolloutStage
-		paused  bool
-	}{
-		{"true advances", true, nil, domain.StageRegionalRamp, false},
-		{"false rolls back", false, nil, domain.StageTenantCanary, false},
-		{"error pauses", false, errors.New("no data"), domain.StageTenantCanary, true},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			fixture := newControllerFixture(t, domain.StageTenantCanary)
-			fixture.controller.Health = nil
-			fixture.controller.Legacy = fake.RolloutHealthEvaluatorFunc(func(context.Context, domain.RolloutTarget) (bool, error) {
-				return testCase.healthy, testCase.err
-			})
-			_ = fixture.controller.Advance(context.Background(), "2026.08.1")
-			state := fixture.state(t)
-			if state.Stage != testCase.stage || state.Paused != testCase.paused {
-				t.Fatalf("state = %+v", state)
-			}
-		})
 	}
 }
 

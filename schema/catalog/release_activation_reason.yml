@@ -1,8 +1,0 @@
-table: release_activation_reason
-comment: Why a scheduled release activation was refused
-columns:
-  - name: code
-    type: VARCHAR(30)
-  - name: description
-    type: VARCHAR(200)
-primary_key: [code]

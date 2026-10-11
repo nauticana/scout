@@ -58,12 +58,14 @@ type ReleaseActivationCancel struct {
 }
 
 // ReleaseActivationSettings bound the activation worker: Batch activations per poll,
-// one poll every PollPeriod, and MaxAttempts deliveries of a transient failure before
-// the activation is refused.
+// one poll every PollPeriod, MaxAttempts deliveries of a transient failure before the
+// activation is refused, and Timeout on one activation's checks and swap, zero taking
+// the activation service's default.
 type ReleaseActivationSettings struct {
 	Batch       int
 	PollPeriod  time.Duration
 	MaxAttempts int
+	Timeout     time.Duration
 }
 
 // ReleaseActivationReport counts one pass of the activation worker.

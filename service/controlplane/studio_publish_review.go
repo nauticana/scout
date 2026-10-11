@@ -32,8 +32,14 @@ const (
 	qReviewConsume      = "scout_review_consume"
 	qReviewOpenComments = "scout_review_open_comments"
 	qReviewActive       = "scout_review_active_definition"
+	qReviewActiveLocked = "scout_review_active_definition_locked"
 	qReviewAudit        = "scout_review_audit"
 	qReviewDraftEditors = "scout_review_draft_editors"
+
+	qReviewSupersedeRestore = "scout_review_supersede_restore"
+	qReviewLatestRestore    = "scout_review_latest_restore"
+	qReviewClaimRestore     = "scout_review_claim_restore"
+	qReviewVersion          = "scout_review_version"
 
 	reviewCatalogID     = "scout.controlplane.publish_review"
 	maxReviewNote       = 400
@@ -43,13 +49,21 @@ const (
 
 const reviewColumns = `id, definition_digest, draft_revision, prompt_profile_revision, base_version, diff, evaluations,
        status_code, requested_by, request_note, requested_at, decided_by, decision_note, decided_at,
-       sod_exception_id, published_version`
+       sod_exception_id, published_version, restore_version`
 
-// reviewLatest is the agent's current review: a newer request withdraws any earlier approval.
+// reviewLatest is the agent's current publish review: a newer request withdraws any earlier approval.
 const reviewLatest = `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
- WHERE partner_id = ? AND agent_id = ? AND status_code <> 'superseded'
+ WHERE partner_id = ? AND agent_id = ? AND status_code <> 'superseded' AND restore_version IS NULL
+ ORDER BY id DESC
+ LIMIT 1`
+
+// reviewLatestRestore is the agent's current restore review, whichever version it names.
+const reviewLatestRestore = `
+SELECT ` + reviewColumns + `
+  FROM agent_publish_review
+ WHERE partner_id = ? AND agent_id = ? AND status_code <> 'superseded' AND restore_version IS NOT NULL
  ORDER BY id DESC
  LIMIT 1`
 
@@ -58,13 +72,21 @@ var reviewQueries = map[string]string{
 SELECT draft_revision FROM agent_draft WHERE partner_id = ? AND agent_id = ? FOR UPDATE`,
 	qReviewSupersede: `
 UPDATE agent_publish_review SET status_code = 'superseded'
- WHERE partner_id = ? AND agent_id = ? AND status_code = 'requested'`,
+ WHERE partner_id = ? AND agent_id = ? AND status_code = 'requested' AND restore_version IS NULL`,
+	qReviewSupersedeRestore: `
+UPDATE agent_publish_review SET status_code = 'superseded'
+ WHERE partner_id = ? AND agent_id = ? AND status_code = 'requested' AND restore_version IS NOT NULL`,
 	qReviewInsert: `
 INSERT INTO agent_publish_review (id, partner_id, agent_id, definition_digest, draft_revision, prompt_profile_revision,
-       base_version, diff, evaluations, status_code, requested_by, request_note, sod_exception_id)
-VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)
+       base_version, restore_version, diff, evaluations, status_code, requested_by, request_note, sod_exception_id)
+VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)
 RETURNING id, requested_at`,
-	qReviewLatest: reviewLatest,
+	qReviewLatest:        reviewLatest,
+	qReviewLatestRestore: reviewLatestRestore,
+	qReviewClaimRestore: reviewLatestRestore + `
+   FOR UPDATE`,
+	qReviewVersion: `
+SELECT definition FROM agent_version WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 	qReviewGet: `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
@@ -87,6 +109,13 @@ SELECT v.agent_version, v.definition
   FROM agent_deployment dep
   JOIN agent_version v ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
  WHERE dep.partner_id = ? AND dep.agent_id = ?`,
+	// In the restore transaction the deployment stays locked until the restore deploys over it.
+	qReviewActiveLocked: `
+SELECT v.agent_version, v.definition
+  FROM agent_deployment dep
+  JOIN agent_version v ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
+ WHERE dep.partner_id = ? AND dep.agent_id = ?
+   FOR UPDATE OF dep`,
 	// The people who changed the agent's draft since its last publish or restore.
 	qReviewDraftEditors: `
 SELECT DISTINCT e.principal_id
@@ -111,6 +140,8 @@ VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?, ?)`,
 // unconsumed review of the candidate digest, its publisher is none of its authors (save the
 // requester under the exception they named, while Separation still admits it), and no draft
 // comment is open. The release writer re-checks under a row lock and consumes the review.
+// Restores where Separation requires it take a restore review of the exact version over the
+// release active when it was requested; its only author is its requester.
 type StudioPublishReviews struct {
 	Studio     *StudioService
 	Separation contract.PublishSeparation
@@ -148,12 +179,17 @@ func (r *StudioPublishReviews) now() time.Time {
 	return r.Studio.now()
 }
 
-// Request records a review of the agent's current draft, superseding any review still open.
+// Request records a review of the agent's current draft, or of restoring RestoreVersion,
+// superseding any review of the same kind still open.
 func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioActor, request domain.PublishReviewRequest) (domain.PublishReview, error) {
 	if err := r.init(ctx); err != nil {
 		return domain.PublishReview{}, err
 	}
-	if _, err := r.Studio.editable(ctx, actor, domain.StudioEdit, request.AgentID); err != nil {
+	kind, action := domain.PublishReviewOfPublish, domain.StudioEdit
+	if request.RestoreVersion != "" {
+		kind, action = domain.PublishReviewOfRestore, domain.StudioRestore
+	}
+	if _, err := r.Studio.editable(ctx, actor, action, request.AgentID); err != nil {
 		return domain.PublishReview{}, err
 	}
 	requester := actorUserID(actor)
@@ -167,24 +203,44 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	if len(exception) > maxReviewException {
 		return domain.PublishReview{}, validationError("sod_exception_id", "must not exceed 200 characters")
 	}
-	if exception != "" {
-		if err := r.Separation.Excuse(ctx, actor.TenantID, request.AgentID, exception, actor.Principal, r.now()); err != nil {
+	if kind == domain.PublishReviewOfRestore {
+		if err := validateRestoreVersion(request.RestoreVersion); err != nil {
 			return domain.PublishReview{}, err
 		}
 	}
-	draft, candidate, err := r.Studio.publishCandidate(ctx, actor, request.AgentID)
-	if err != nil {
-		return domain.PublishReview{}, err
+	if exception != "" {
+		if err := r.Separation.Excuse(ctx, actor.TenantID, request.AgentID, kind, exception, actor.Principal, r.now()); err != nil {
+			return domain.PublishReview{}, err
+		}
 	}
-	diff, err := r.diff(ctx, actor.TenantID, draft, candidate)
-	if err != nil {
-		return domain.PublishReview{}, err
+	var review domain.PublishReview
+	var candidate domain.PublishCandidate
+	if kind == domain.PublishReviewOfRestore {
+		var err error
+		if review, candidate, err = r.restoreCandidate(ctx, actor, request.AgentID, request.RestoreVersion); err != nil {
+			return domain.PublishReview{}, err
+		}
+	} else {
+		draft, draftCandidate, err := r.Studio.publishCandidate(ctx, actor, request.AgentID)
+		if err != nil {
+			return domain.PublishReview{}, err
+		}
+		diff, err := r.diff(ctx, actor.TenantID, draft, draftCandidate)
+		if err != nil {
+			return domain.PublishReview{}, err
+		}
+		candidate = draftCandidate
+		review = domain.PublishReview{
+			AgentID: request.AgentID, DefinitionDigest: candidate.Definition.DefinitionDigest,
+			DraftRevision: draft.ExpectedDraftRevision, PromptProfileRevision: draft.ExpectedPromptProfileRevision,
+			BaseVersion: diff.ActiveVersion, Diff: diff,
+		}
 	}
 	evaluations, err := r.evaluations(ctx, candidate)
 	if err != nil {
 		return domain.PublishReview{}, err
 	}
-	encodedDiff, err := json.Marshal(diff)
+	encodedDiff, err := json.Marshal(review.Diff)
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("encode review diff: %w", err)
 	}
@@ -196,12 +252,8 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 		}
 		encodedEvaluations = string(raw)
 	}
-	review := domain.PublishReview{
-		AgentID: request.AgentID, DefinitionDigest: candidate.Definition.DefinitionDigest,
-		DraftRevision: draft.ExpectedDraftRevision, PromptProfileRevision: draft.ExpectedPromptProfileRevision,
-		BaseVersion: diff.ActiveVersion, Diff: diff, Evaluations: evaluations, Status: domain.PublishReviewRequested,
-		RequestedBy: *requester, RequestNote: note, SodExceptionID: exception,
-	}
+	review.Evaluations, review.Status = evaluations, domain.PublishReviewRequested
+	review.RequestedBy, review.RequestNote, review.SodExceptionID = *requester, note, exception
 
 	tx, err := r.Studio.DB.BeginTx(ctx, reviewQueries)
 	if err != nil {
@@ -220,15 +272,22 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	if len(lock.Rows) == 0 {
 		return domain.PublishReview{}, domain.ErrNotFound
 	}
-	if common.AsInt64(lock.Rows[0][0]) != review.DraftRevision {
+	// A restore reinstates a published version, so only a publish review is bound to the draft revision.
+	supersede, event, detail := qReviewSupersede, "PUBLISH_REVIEW_REQUEST", "of definition "+review.DefinitionDigest
+	if kind == domain.PublishReviewOfRestore {
+		supersede, event, detail = qReviewSupersedeRestore, "RESTORE_REVIEW_REQUEST", "restoring version "+review.RestoreVersion
+		if review.BaseVersion != "" {
+			detail += " over " + review.BaseVersion
+		}
+	} else if common.AsInt64(lock.Rows[0][0]) != review.DraftRevision {
 		return domain.PublishReview{}, domain.ErrRevisionConflict
 	}
-	if _, err = tx.Query(ctx, qReviewSupersede, actor.TenantID, request.AgentID); err != nil {
+	if _, err = tx.Query(ctx, supersede, actor.TenantID, request.AgentID); err != nil {
 		return domain.PublishReview{}, fmt.Errorf("supersede open reviews: %w", err)
 	}
 	inserted, err := tx.Query(ctx, qReviewInsert, actor.TenantID, request.AgentID, review.DefinitionDigest, review.DraftRevision,
-		review.PromptProfileRevision, nullableString(review.BaseVersion), string(encodedDiff), encodedEvaluations, *requester, nullableString(note),
-		nullableString(exception))
+		review.PromptProfileRevision, nullableString(review.BaseVersion), nullableString(review.RestoreVersion), string(encodedDiff),
+		encodedEvaluations, *requester, nullableString(note), nullableString(exception))
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("insert publish review: %w", err)
 	}
@@ -237,11 +296,11 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	}
 	review.ReviewID = common.AsInt64(inserted.Rows[0][0])
 	review.RequestedAt = common.AsTime(inserted.Rows[0][1])
-	detail := fmt.Sprintf("review %d of definition %s", review.ReviewID, review.DefinitionDigest)
+	detail = fmt.Sprintf("review %d %s", review.ReviewID, detail)
 	if exception != "" {
 		detail += " naming separation exception " + exception
 	}
-	if _, err = tx.Query(ctx, qReviewAudit, actor.TenantID, request.AgentID, "PUBLISH_REVIEW_REQUEST", detail,
+	if _, err = tx.Query(ctx, qReviewAudit, actor.TenantID, request.AgentID, event, detail,
 		string(actor.Principal.Kind), actor.Principal.ID); err != nil {
 		return domain.PublishReview{}, fmt.Errorf("record studio audit: %w", err)
 	}
@@ -252,19 +311,29 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	return review, nil
 }
 
-// Review returns the agent's latest review against its current draft, with the open comments.
-func (r *StudioPublishReviews) Review(ctx context.Context, actor domain.StudioActor, agentID string) (domain.PublishReviewState, error) {
+// Review returns the agent's latest review of kind (publish when empty): a publish review
+// against its current draft with the open comments, or a restore review against the active release.
+func (r *StudioPublishReviews) Review(ctx context.Context, actor domain.StudioActor, agentID string, kind domain.PublishReviewKind) (domain.PublishReviewState, error) {
+	if kind == "" {
+		kind = domain.PublishReviewOfPublish
+	}
+	if kind != domain.PublishReviewOfPublish && kind != domain.PublishReviewOfRestore {
+		return domain.PublishReviewState{}, validationError("kind", "must be publish or restore")
+	}
 	if err := r.init(ctx); err != nil {
 		return domain.PublishReviewState{}, err
 	}
 	if err := r.Studio.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return domain.PublishReviewState{}, err
 	}
-	required, err := r.Separation.Required(ctx, actor.TenantID, agentID, r.now())
+	required, err := r.Separation.Required(ctx, actor.TenantID, agentID, kind, r.now())
 	if err != nil {
 		return domain.PublishReviewState{}, fmt.Errorf("resolve publish separation: %w", err)
 	}
-	state := domain.PublishReviewState{AgentID: agentID, Required: required}
+	state := domain.PublishReviewState{AgentID: agentID, Kind: kind, Required: required}
+	if kind == domain.PublishReviewOfRestore {
+		return r.restoreState(ctx, actor.TenantID, state)
+	}
 	_, candidate, err := r.Studio.publishCandidate(ctx, actor, agentID)
 	switch {
 	case err == nil:
@@ -284,33 +353,45 @@ func (r *StudioPublishReviews) Review(ctx context.Context, actor domain.StudioAc
 		state.Review = &review
 		state.Stale = review.DefinitionDigest != state.CurrentDigest
 	}
-	state.OpenComments, err = listComments(ctx, r.qs, actor.TenantID, agentID, domain.DraftCommentOpen)
+	state.OpenComments, err = listComments(ctx, r.qs, actor.TenantID, agentID, domain.DraftCommentOpen, r.Studio.commentLimit())
 	if err != nil {
 		return domain.PublishReviewState{}, err
 	}
 	return state, nil
 }
 
-// Approve approves a requested review while the draft still matches it. None of its authors may.
+// Approve approves a requested review while the draft, or for a restore the version and the
+// active release, still match it. None of its authors may.
 func (r *StudioPublishReviews) Approve(ctx context.Context, actor domain.StudioActor, decision domain.PublishReviewDecision) (domain.PublishReview, error) {
 	review, err := r.decidable(ctx, actor, decision)
 	if err != nil {
 		return domain.PublishReview{}, err
 	}
-	_, candidate, err := r.Studio.publishCandidate(ctx, actor, decision.AgentID)
-	if candidateProblem(err) {
-		return domain.PublishReview{}, fmt.Errorf("%w: the draft of review %d no longer compiles: %v", domain.ErrConflict, review.ReviewID, err)
-	}
-	if err != nil {
+	if review.RestoreVersion != "" {
+		if err = r.restoreUnchanged(ctx, r.qs, actor.TenantID, review); err != nil {
+			return domain.PublishReview{}, err
+		}
+	} else if err = r.draftUnchanged(ctx, actor, review); err != nil {
 		return domain.PublishReview{}, err
-	}
-	if candidate.Definition.DefinitionDigest != review.DefinitionDigest {
-		return domain.PublishReview{}, fmt.Errorf("%w: the draft changed after review %d was requested", domain.ErrConflict, review.ReviewID)
 	}
 	if approver := *actorUserID(actor); reviewAuthor(review, approver) {
 		return domain.PublishReview{}, fmt.Errorf("%w: user %d authored review %d and cannot approve it", domain.ErrForbidden, approver, review.ReviewID)
 	}
 	return r.decide(ctx, actor, review, domain.PublishReviewApproved, strings.TrimSpace(decision.Note))
+}
+
+func (r *StudioPublishReviews) draftUnchanged(ctx context.Context, actor domain.StudioActor, review domain.PublishReview) error {
+	_, candidate, err := r.Studio.publishCandidate(ctx, actor, review.AgentID)
+	if candidateProblem(err) {
+		return fmt.Errorf("%w: the draft of review %d no longer compiles: %v", domain.ErrConflict, review.ReviewID, err)
+	}
+	if err != nil {
+		return err
+	}
+	if candidate.Definition.DefinitionDigest != review.DefinitionDigest {
+		return fmt.Errorf("%w: the draft changed after review %d was requested", domain.ErrConflict, review.ReviewID)
+	}
+	return nil
 }
 
 // Reject closes a requested review without approving it.
@@ -378,9 +459,13 @@ func (r *StudioPublishReviews) decide(ctx context.Context, actor domain.StudioAc
 	if len(decided.Rows) == 0 {
 		return domain.PublishReview{}, fmt.Errorf("%w: publish review %d was decided or superseded concurrently", domain.ErrConflict, review.ReviewID)
 	}
-	event, detail := "PUBLISH_REVIEW_REJECT", fmt.Sprintf("review %d", review.ReviewID)
+	prefix, detail := "PUBLISH_REVIEW_", fmt.Sprintf("review %d", review.ReviewID)
+	if review.RestoreVersion != "" {
+		prefix = "RESTORE_REVIEW_"
+	}
+	event := prefix + "REJECT"
 	if status == domain.PublishReviewApproved {
-		event = "PUBLISH_REVIEW_APPROVE"
+		event = prefix + "APPROVE"
 	}
 	if _, err = tx.Query(ctx, qReviewAudit, actor.TenantID, review.AgentID, event, detail, string(actor.Principal.Kind), actor.Principal.ID); err != nil {
 		return domain.PublishReview{}, fmt.Errorf("record studio audit: %w", err)
@@ -394,26 +479,26 @@ func (r *StudioPublishReviews) decide(ctx context.Context, actor domain.StudioAc
 	return review, nil
 }
 
-// CheckPublish refuses a publish the tenant's separation requires reviewing without an
-// admissible review. A restore or a scheduled activation deploys a release already admitted and passes.
+// CheckPublish refuses a publish or a restore the tenant's separation requires reviewing without
+// an admissible review. A scheduled activation deploys a release already admitted and passes.
 func (r *StudioPublishReviews) CheckPublish(ctx context.Context, candidate domain.PublishCandidate) error {
-	if candidate.RestoredFrom != "" || candidate.Activation {
+	if candidate.Activation {
 		return nil
 	}
 	if err := r.init(ctx); err != nil {
 		return err
 	}
-	_, err := r.admit(ctx, r.qs, qReviewLatest, candidate.Actor.TenantID, candidate.Definition.AgentID,
-		candidate.Definition.DefinitionDigest, candidate.Actor.Principal)
+	target, lookup := reviewTarget{kind: domain.PublishReviewOfPublish, digest: candidate.Definition.DefinitionDigest}, qReviewLatest
+	if candidate.RestoredFrom != "" {
+		target.kind, target.restoreVersion, lookup = domain.PublishReviewOfRestore, candidate.RestoredFrom, qReviewLatestRestore
+	}
+	_, err := r.admit(ctx, r.qs, lookup, candidate.Actor.TenantID, candidate.Definition.AgentID, target, candidate.Actor.Principal)
 	return err
 }
 
-// WriteRelease checks the review again under a row lock in the publish transaction and
-// consumes it with the new version, recording an event that names any exception relied on.
+// WriteRelease checks the review again under a row lock in the publish or restore transaction
+// and consumes it with the new version, recording an event that names any exception relied on.
 func (r *StudioPublishReviews) WriteRelease(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
-	if definition.RestoredFromVersion != "" {
-		return nil
-	}
 	if r.Studio == nil || r.Separation == nil {
 		return fmt.Errorf("%w: publish reviews need the studio service and a publish separation", domain.ErrNotReady)
 	}
@@ -426,7 +511,12 @@ func (r *StudioPublishReviews) WriteRelease(ctx context.Context, tx keelport.TxQ
 	if definition.PublishedBy != nil {
 		publisher = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.FormatInt(*definition.PublishedBy, 10)}
 	}
-	admitted, err := r.admit(ctx, qs, qReviewClaim, tenantID, definition.AgentID, definition.DefinitionDigest, publisher)
+	target, claim, event := reviewTarget{kind: domain.PublishReviewOfPublish, digest: definition.DefinitionDigest}, qReviewClaim, "PUBLISH_REVIEWED"
+	if definition.RestoredFromVersion != "" {
+		target.kind, target.restoreVersion = domain.PublishReviewOfRestore, definition.RestoredFromVersion
+		claim, event = qReviewClaimRestore, "RESTORE_REVIEWED"
+	}
+	admitted, err := r.admit(ctx, qs, claim, tenantID, definition.AgentID, target, publisher)
 	if err != nil || admitted == nil {
 		return err
 	}
@@ -437,7 +527,11 @@ func (r *StudioPublishReviews) WriteRelease(ctx context.Context, tx keelport.TxQ
 	if len(consumed.Rows) == 0 {
 		return fmt.Errorf("%w: publish review %d was consumed concurrently", domain.ErrConflict, admitted.ReviewID)
 	}
-	detail := fmt.Sprintf("version %s approved in review %d", definition.Version, admitted.ReviewID)
+	detail := "version " + definition.Version
+	if target.restoreVersion != "" {
+		detail += " restoring " + target.restoreVersion
+	}
+	detail += fmt.Sprintf(" approved in review %d", admitted.ReviewID)
 	if admitted.exception != "" {
 		detail += " under separation exception " + admitted.exception
 	}
@@ -445,10 +539,17 @@ func (r *StudioPublishReviews) WriteRelease(ctx context.Context, tx keelport.TxQ
 	if publisher.ID != "" {
 		kind, id = string(publisher.Kind), publisher.ID
 	}
-	if _, err = qs.Query(ctx, qReviewAudit, tenantID, definition.AgentID, "PUBLISH_REVIEWED", detail, kind, id); err != nil {
+	if _, err = qs.Query(ctx, qReviewAudit, tenantID, definition.AgentID, event, detail, kind, id); err != nil {
 		return fmt.Errorf("record studio audit: %w", err)
 	}
 	return nil
+}
+
+// reviewTarget is what a publish or a restore asks a review to admit.
+type reviewTarget struct {
+	kind           domain.PublishReviewKind
+	digest         string
+	restoreVersion string
 }
 
 // admission is the review a publish relies on and the separation exception it relied on, if any.
@@ -457,11 +558,11 @@ type admission struct {
 	exception string
 }
 
-// admit returns the agent's latest review when it is an approved, unconsumed review of digest,
-// or nil when it is not and the tenant does not require one.
-func (r *StudioPublishReviews) admit(ctx context.Context, qs keelport.QueryService, lookup string, tenantID int64, agentID, digest string, publisher domain.PrincipalRef) (*admission, error) {
+// admit returns the agent's latest review of the target's kind when it is an approved,
+// unconsumed review of the target, or nil when it is not and the tenant does not require one.
+func (r *StudioPublishReviews) admit(ctx context.Context, qs keelport.QueryService, lookup string, tenantID int64, agentID string, target reviewTarget, publisher domain.PrincipalRef) (*admission, error) {
 	now := r.now()
-	required, err := r.Separation.Required(ctx, tenantID, agentID, now)
+	required, err := r.Separation.Required(ctx, tenantID, agentID, target.kind, now)
 	if err != nil {
 		return nil, fmt.Errorf("resolve publish separation: %w", err)
 	}
@@ -471,12 +572,21 @@ func (r *StudioPublishReviews) admit(ctx context.Context, qs keelport.QueryServi
 	}
 	var problem error
 	var review domain.PublishReview
-	if len(res.Rows) == 0 {
-		problem = fmt.Errorf("%w: agent %q needs an approved publish review of definition %s", domain.ErrConflict, agentID, digest)
-	} else if review, err = scanReview(agentID, res.Rows[0]); err != nil {
-		return nil, err
-	} else {
-		problem = admissible(review, digest)
+	switch {
+	case len(res.Rows) == 0:
+		problem = fmt.Errorf("%w: agent %q needs an approved %s review of definition %s", domain.ErrConflict, agentID, target.kind, target.digest)
+	default:
+		if review, err = scanReview(agentID, res.Rows[0]); err != nil {
+			return nil, err
+		}
+		problem = admissible(review, target)
+	}
+	if problem == nil && target.kind == domain.PublishReviewOfRestore {
+		active := qReviewActive
+		if lookup == qReviewClaimRestore {
+			active = qReviewActiveLocked
+		}
+		problem = r.activeUnchanged(ctx, qs, active, tenantID, review)
 	}
 	if problem != nil {
 		if required {
@@ -493,12 +603,16 @@ func (r *StudioPublishReviews) admit(ctx context.Context, qs keelport.QueryServi
 	}
 	if publisherID, isPerson := personID(publisher); isPerson && reviewAuthor(review, publisherID) {
 		if publisherID != review.RequestedBy || review.SodExceptionID == "" {
-			return nil, fmt.Errorf("%w: user %d authored review %d and cannot publish it", domain.ErrForbidden, publisherID, review.ReviewID)
+			return nil, fmt.Errorf("%w: user %d authored review %d and cannot carry it out", domain.ErrForbidden, publisherID, review.ReviewID)
 		}
-		if err = r.Separation.Excuse(ctx, tenantID, agentID, review.SodExceptionID, publisher, now); err != nil {
+		if err = r.Separation.Excuse(ctx, tenantID, agentID, target.kind, review.SodExceptionID, publisher, now); err != nil {
 			return nil, err
 		}
 		admitted.exception = review.SodExceptionID
+	}
+	// Draft comments concern the draft; a restore reinstates a published version.
+	if target.kind == domain.PublishReviewOfRestore {
+		return admitted, nil
 	}
 	open, err := qs.Query(ctx, qReviewOpenComments, tenantID, agentID)
 	if err != nil {
@@ -510,15 +624,17 @@ func (r *StudioPublishReviews) admit(ctx context.Context, qs keelport.QueryServi
 	return admitted, nil
 }
 
-// admissible explains why the agent's latest review does not let digest publish, or returns nil.
-func admissible(review domain.PublishReview, digest string) error {
+// admissible explains why the agent's latest review does not admit the target, or returns nil.
+func admissible(review domain.PublishReview, target reviewTarget) error {
 	switch {
 	case review.Status != domain.PublishReviewApproved:
-		return fmt.Errorf("%w: the latest publish review %d is %s", domain.ErrConflict, review.ReviewID, review.Status)
+		return fmt.Errorf("%w: the latest %s review %d is %s", domain.ErrConflict, target.kind, review.ReviewID, review.Status)
 	case review.PublishedVersion != "":
-		return fmt.Errorf("%w: publish review %d was consumed by version %s", domain.ErrConflict, review.ReviewID, review.PublishedVersion)
-	case review.DefinitionDigest != digest:
-		return fmt.Errorf("%w: publish review %d approved definition %s, not %s", domain.ErrConflict, review.ReviewID, review.DefinitionDigest, digest)
+		return fmt.Errorf("%w: review %d was consumed by version %s", domain.ErrConflict, review.ReviewID, review.PublishedVersion)
+	case review.RestoreVersion != target.restoreVersion:
+		return fmt.Errorf("%w: review %d approved restoring version %s, not %s", domain.ErrConflict, review.ReviewID, review.RestoreVersion, target.restoreVersion)
+	case review.DefinitionDigest != target.digest:
+		return fmt.Errorf("%w: review %d approved definition %s, not %s", domain.ErrConflict, review.ReviewID, review.DefinitionDigest, target.digest)
 	}
 	return nil
 }
@@ -563,22 +679,11 @@ func (r *StudioPublishReviews) diff(ctx context.Context, tenantID int64, draft d
 	if draft.Drift != nil {
 		diff.Causes, diff.ChangedLanguages = draft.Drift.Causes, draft.Drift.ChangedLanguages
 	}
-	res, err := r.qs.Query(ctx, qReviewActive, tenantID, draft.AgentID)
-	if err != nil {
-		return diff, fmt.Errorf("load active definition: %w", err)
-	}
 	var active domain.AgentDefinition
 	var activeSettings []domain.EffectiveResource
-	if len(res.Rows) > 0 {
-		diff.ActiveVersion = common.AsString(res.Rows[0][0])
-		if active, err = decodeDefinition(res.Rows[0][1]); err != nil {
-			return diff, err
-		}
-		release, getErr := r.releases().Get(ctx, tenantID, draft.AgentID, diff.ActiveVersion)
-		if getErr != nil && !errors.Is(getErr, domain.ErrNotFound) {
-			return diff, fmt.Errorf("load active settings: %w", getErr)
-		}
-		activeSettings = release.Resources
+	var err error
+	if diff.ActiveVersion, active, activeSettings, err = r.activeRelease(ctx, tenantID, draft.AgentID); err != nil {
+		return diff, err
 	}
 	diff.PromptSections = promptSectionChanges(active.Languages, candidate.Definition.Languages)
 	diff.Settings = settingChanges(activeSettings, candidate.Settings.Resources)
@@ -598,6 +703,28 @@ func (r *StudioPublishReviews) diff(ctx context.Context, tenantID int64, draft d
 	}
 	slices.Sort(diff.Editors)
 	return diff, nil
+}
+
+// activeRelease is the agent's stable release with its frozen settings; the version is empty
+// before the first publish, and a release frozen before settings were stored has none.
+func (r *StudioPublishReviews) activeRelease(ctx context.Context, tenantID int64, agentID string) (string, domain.AgentDefinition, []domain.EffectiveResource, error) {
+	res, err := r.qs.Query(ctx, qReviewActive, tenantID, agentID)
+	if err != nil {
+		return "", domain.AgentDefinition{}, nil, fmt.Errorf("load active definition: %w", err)
+	}
+	if len(res.Rows) == 0 {
+		return "", domain.AgentDefinition{}, nil, nil
+	}
+	version := common.AsString(res.Rows[0][0])
+	active, err := decodeDefinition(res.Rows[0][1])
+	if err != nil {
+		return "", domain.AgentDefinition{}, nil, err
+	}
+	release, err := r.releases().Get(ctx, tenantID, agentID, version)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return "", domain.AgentDefinition{}, nil, fmt.Errorf("load active settings: %w", err)
+	}
+	return version, active, release.Resources, nil
 }
 
 func (r *StudioPublishReviews) releases() contract.EffectiveReleaseRepository {
@@ -737,7 +864,7 @@ func scanReview(agentID string, row []any) (domain.PublishReview, error) {
 		DraftRevision: common.AsInt64(row[2]), PromptProfileRevision: common.AsInt64(row[3]), BaseVersion: common.AsString(row[4]),
 		Status: domain.PublishReviewStatus(common.AsString(row[7])), RequestedBy: common.AsInt64(row[8]),
 		RequestNote: common.AsString(row[9]), RequestedAt: common.AsTime(row[10]), DecisionNote: common.AsString(row[12]),
-		SodExceptionID: common.AsString(row[14]), PublishedVersion: common.AsString(row[15]),
+		SodExceptionID: common.AsString(row[14]), PublishedVersion: common.AsString(row[15]), RestoreVersion: common.AsString(row[16]),
 	}
 	if err := json.Unmarshal([]byte(common.AsString(row[5])), &review.Diff); err != nil {
 		return domain.PublishReview{}, fmt.Errorf("decode publish review %d diff: %w", review.ReviewID, err)

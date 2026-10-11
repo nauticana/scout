@@ -2,23 +2,21 @@ package dataplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
-const (
-	qStudioLimitsRelease = "scout_studio_limits_release"
-	qStudioLimitsSpend   = "scout_studio_limits_spend"
-)
+const qStudioLimitsRelease = "scout_studio_limits_release"
 
-var studioLimitsQueries = map[string]string{
+var studioLimitsQueries = common.MergeMaps(scope.CurrencyQueries, map[string]string{
 	// The stable release, and the agent's turns opened in the last minute by the database clock.
 	qStudioLimitsRelease: `
 SELECT d.stable_version,
@@ -29,25 +27,18 @@ SELECT d.stable_version,
            AND t.queued_at > CURRENT_TIMESTAMP - INTERVAL '1 minute')
   FROM agent_deployment d
  WHERE d.partner_id = ? AND d.agent_id = ?`,
-	// Tokens in every currency, cost only in the budget's, and that currency's catalog exponent.
-	qStudioLimitsSpend: `
-SELECT CAST(COALESCE(SUM(u.input_tokens + u.output_tokens), 0) AS BIGINT),
-       CAST(COALESCE(SUM(CASE WHEN u.currency_code = ? THEN u.cost_minor_units ELSE 0 END), 0) AS BIGINT),
-       (SELECT c.exponent FROM currency c WHERE c.code = ?)
-  FROM usage_event u
-  JOIN agent_conversation conv ON conv.partner_id = u.partner_id AND conv.conversation_id = u.conversation_id
- WHERE u.partner_id = ? AND conv.agent_id = ? AND u.occurred_at >= ? AND u.occurred_at < ?`,
-}
+})
 
 // StudioLimits reports the execution limits and budget frozen into an agent's stable release
-// with the agent's current use: the turns it opened in the last minute and its settled usage
-// in the budget's rolling window.
+// with the agent's current use: the turns it opened in the last minute and its spend in the
+// budget's current period, read from the ledger that enforces it.
 type StudioLimits struct {
 	DB         port.DatabaseRepository
 	Authorizer contract.StudioAuthorizer
 	// ReleaseLimits reads the frozen release as the runtime does; pass the data plane's PrincipalLimits.
 	ReleaseLimits contract.PrincipalLimits
-	Now           func() time.Time
+	// Spend reads a period budget's use; pass the data plane's BudgetLedger.
+	Spend contract.PrincipalBudgetSpend
 
 	once sync.Once
 	qs   port.QueryService
@@ -55,10 +46,11 @@ type StudioLimits struct {
 
 var _ contract.StudioLimitsBackend = (*StudioLimits)(nil)
 
-// Limits reports an agent's stable release; an agent with none is ErrNotFound.
+// Limits reports an agent's stable release; an agent with none is ErrNotFound. A budget the
+// ledger cannot enforce is reported with its problem instead of failing the report.
 func (s *StudioLimits) Limits(ctx context.Context, actor domain.StudioActor, agentID string) (domain.AgentLimitsReport, error) {
-	if s.DB == nil || s.Authorizer == nil || s.ReleaseLimits == nil {
-		return domain.AgentLimitsReport{}, fmt.Errorf("studio limits: database, authorizer, and release limits are required")
+	if s.DB == nil || s.Authorizer == nil || s.ReleaseLimits == nil || s.Spend == nil {
+		return domain.AgentLimitsReport{}, fmt.Errorf("studio limits: database, authorizer, release limits, and spend are required")
 	}
 	if err := s.Authorizer.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return domain.AgentLimitsReport{}, err
@@ -82,49 +74,25 @@ func (s *StudioLimits) Limits(ctx context.Context, actor domain.StudioActor, age
 	if err != nil {
 		return domain.AgentLimitsReport{}, err
 	}
-	if budget.WindowTokens == 0 && budget.WindowCostMinorUnits == 0 {
+	if !budget.Bounded() {
 		return report, nil
 	}
 	report.Budget = &budget
-	if budget.Window > 0 {
-		if report.Spend, err = s.spend(ctx, actor.TenantID, agentID, budget); err != nil {
-			return domain.AgentLimitsReport{}, err
+	if budget.Period.Kind == domain.BudgetPerTurn {
+		_, err = scope.CheckBudgetUnit(ctx, s.qs, budget)
+	} else {
+		var spend domain.BudgetSpend
+		if spend, err = s.Spend.Spend(ctx, actor.TenantID, domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: agentID}, budget); err == nil {
+			report.Spend = &spend
 		}
 	}
-	return report, nil
-}
-
-// spend sums the agent's settled usage in the budget's trailing window; cost counts only
-// usage in the budget's currency, reported with that currency's catalog exponent.
-func (s *StudioLimits) spend(ctx context.Context, tenantID int64, agentID string, budget domain.BudgetLimits) (*domain.BudgetSpend, error) {
-	end := s.now().UTC()
-	start := end.Add(-budget.Window)
-	result, err := s.qs.Query(ctx, qStudioLimitsSpend, budget.Currency, budget.Currency, tenantID, agentID, start, end)
+	var unenforceable *domain.BudgetUnenforceableError
+	if errors.As(err, &unenforceable) {
+		report.BudgetProblem = unenforceable.Problem
+		return report, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("read the budget spend of %q: %w", agentID, err)
+		return domain.AgentLimitsReport{}, err
 	}
-	if len(result.Rows) == 0 {
-		return nil, fmt.Errorf("read the budget spend of %q: no aggregate row", agentID)
-	}
-	row := result.Rows[0]
-	spend := &domain.BudgetSpend{
-		PeriodStart: start, PeriodEnd: end, Tokens: common.AsInt64(row[0]),
-		CostMinorUnits: common.AsInt64(row[1]), Currency: budget.Currency,
-	}
-	if budget.Currency == "" {
-		return spend, nil
-	}
-	exponent, known := common.AsInt64OK(row[2])
-	if !known {
-		return nil, fmt.Errorf("%w: budget currency %q is not in the currency catalog", domain.ErrValidation, budget.Currency)
-	}
-	spend.Exponent = int(exponent)
-	return spend, nil
-}
-
-func (s *StudioLimits) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return report, nil
 }

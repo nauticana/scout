@@ -1,5 +1,5 @@
 table: agent_publish_review
-comment: A request that a second person approve publishing one exact agent draft, identified by its definition digest
+comment: A request that a second person approve publishing one exact agent draft, identified by its definition digest, or restoring one published version
 columns:
   - name: id
     type: BIGINT
@@ -49,6 +49,10 @@ columns:
     type: VARCHAR(80)
     nullable: true
     comment: The release that consumed this approval
+  - name: restore_version
+    type: VARCHAR(80)
+    nullable: true
+    comment: The published version a restore review approves restoring over base_version; null for a publish review
 primary_key: [id]
 sequence:
   name: agent_publish_review_seq
@@ -66,6 +70,11 @@ foreign_keys:
       columns: [partner_id, agent_id, agent_version]
   - name: published_version_publish_reviews
     columns: [partner_id, agent_id, published_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: restore_version_publish_reviews
+    columns: [partner_id, agent_id, restore_version]
     references:
       table: agent_version
       columns: [partner_id, agent_id, agent_version]

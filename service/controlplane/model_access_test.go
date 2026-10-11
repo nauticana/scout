@@ -26,6 +26,10 @@ func TestModelAccessGrantsAndRevokesOneModel(t *testing.T) {
 	if query.args[qModelAccessGrant][3] != "batch" {
 		t.Fatalf("a repeated grant updates the priority class, args = %v", query.args[qModelAccessGrant])
 	}
+	configured := &ModelAccess{DB: studioDBFake{qs: query}, PriorityClass: "batch"}
+	if err := configured.Grant(ctx, 7, reference, ""); err != nil || query.args[qModelAccessGrant][3] != "batch" {
+		t.Fatalf("a grant naming no class takes the configured class: %v, args = %v", err, query.args[qModelAccessGrant])
+	}
 	if err := access.Revoke(ctx, 7, reference); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}

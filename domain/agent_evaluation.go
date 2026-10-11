@@ -126,8 +126,10 @@ type AgentEvaluationEnqueue struct {
 	Scope      GoldenScope
 	Subject    AgentEvaluationSubject
 	// Draft is the frozen definition a draft subject runs; nil for a release.
-	Draft       *AgentDefinition
-	RequestedBy PrincipalRef
+	Draft *AgentDefinition
+	// DraftSettings are the settings frozen with Draft, digested by Draft.SettingsDigest; nil for a release.
+	DraftSettings []EffectiveResource
+	RequestedBy   PrincipalRef
 	// MaxOpenRuns caps the agent's queued and running evaluations; zero refuses every enqueue.
 	MaxOpenRuns int
 }
@@ -170,16 +172,23 @@ type AgentEvaluationClaim struct {
 	Run   AgentEvaluationRun
 	// Draft is the pinned frozen definition of a draft subject.
 	Draft *AgentDefinition
-	// Recorded are example ids an earlier attempt already settled, with their usage.
+	// DraftSettings are the settings pinned with Draft, digested by Draft.SettingsDigest.
+	DraftSettings []EffectiveResource
+	// Recorded are example ids an earlier attempt already settled, with their usage
+	// and their evaluators' usage combined.
 	Recorded map[string]Usage
+	// Unscored are recorded example ids whose scoring failed, with the recorded reason.
+	Unscored map[string]string
 }
 
 // AgentCaseResult is one example's scored outcome as the reading scope may see it.
 type AgentCaseResult struct {
-	ExampleID        string
-	Scores           []EvaluationScore
-	Latency          time.Duration
-	Usage            Usage
+	ExampleID string
+	Scores    []EvaluationScore
+	Latency   time.Duration
+	Usage     Usage
+	// EvaluatorUsage is what model-based evaluators spent scoring the case, in Usage's currency.
+	EvaluatorUsage   Usage
 	Exponent         int
 	NeedsHumanReview bool
 	Reason           string

@@ -61,7 +61,7 @@ func (h *StudioHandler) Routes() map[string]http.HandlerFunc {
 }
 
 func (h *StudioHandler) features(context.Context, domain.StudioActor, url.Values) (any, error) {
-	core := api.StudioFeature{ID: StudioFeatureAgents, Version: 1, Actions: []string{
+	core := api.StudioFeature{ID: StudioFeatureAgents, Version: 2, Actions: []string{
 		string(domain.StudioView), string(domain.StudioCreate), string(domain.StudioEdit), string(domain.StudioTest),
 		string(domain.StudioPublish), string(domain.StudioRestore), string(domain.StudioArchive),
 	}}
@@ -210,6 +210,7 @@ func (h *StudioHandler) create(ctx context.Context, actor domain.StudioActor, re
 	result, err := h.Backend.Create(ctx, actor, domain.AgentCreateRequest{
 		AgentTypeID: request.AgentType, DisplayName: request.DisplayName, CopyFrom: request.CopyFrom,
 		TemplateID: request.TemplateID, IdempotencyKey: request.IdempotencyKey,
+		TemplateVersion: request.TemplateVersion, References: domainReferences(request.References),
 	})
 	return apiSummary(result), err
 }
@@ -306,7 +307,7 @@ func (h *StudioHandler) setDefault(ctx context.Context, actor domain.StudioActor
 
 // command serves one authenticated JSON POST: the body decodes into R and the backend decides.
 func command[R any](h *keelhandler.AbstractHandler, call func(context.Context, domain.StudioActor, R) (any, error)) http.HandlerFunc {
-	return bounded(h.JSON(http.MethodPost, func(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+	return bounded(h, h.JSON(http.MethodPost, func(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
 		actor, err := sessionActor(session)
 		if err != nil {
 			return nil, err
@@ -401,6 +402,9 @@ func mapServiceError(result any, err error) (any, error) {
 		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error()), err)
 	case errors.Is(err, domain.ErrNotReady), errors.Is(err, domain.ErrCircuitOpen):
 		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusServiceUnavailable, err.Error()), err)
+	case errors.Is(err, domain.ErrExecutionLimit):
+		// The agent's own configured limit stopped the work; the detail may hold provider text.
+		return nil, keelhandler.NewAPIError(http.StatusUnprocessableEntity, domain.ErrExecutionLimit.Error())
 	default:
 		return nil, err
 	}

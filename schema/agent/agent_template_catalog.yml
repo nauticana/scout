@@ -1,0 +1,18 @@
+table: agent_template_catalog
+comment: Platform agent template identity no tenant owns; every tenant may create agents from its versions
+columns:
+  - name: template_id
+    type: VARCHAR(80)
+  - name: agent_type_id
+    type: VARCHAR(80)
+    comment: Every tenant holds its own agent_type row, so the type is named without a foreign key
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [template_id]
+indexes:
+  - name: agent_template_catalog_type_ix
+    columns: [agent_type_id]
+checks:
+  - name: agent_template_catalog_id_ck
+    expression: template_id NOT LIKE 'tpl-%'

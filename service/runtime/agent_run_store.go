@@ -22,8 +22,8 @@ const (
 	qAgentLastRun      = "scout_runtime_agent_last_run"
 	qPurgeAgentRuns    = "scout_runtime_purge_agent_runs"
 
-	// MaxAgentRunPage bounds one Runs page.
-	MaxAgentRunPage = 500
+	// DefaultAgentRunPage bounds one Runs page when AgentRunStore.MaxPage is zero.
+	DefaultAgentRunPage = 500
 )
 
 var agentRunQueries = map[string]string{
@@ -66,6 +66,8 @@ RETURNING id`,
 // newest successful completion per agent.
 type AgentRunStore struct {
 	DB keelport.DatabaseRepository
+	// MaxPage bounds one Runs page; default DefaultAgentRunPage.
+	MaxPage int
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -145,13 +147,22 @@ func validRunDigest(digest string) bool {
 	return err == nil
 }
 
+func (store *AgentRunStore) maxPage() int {
+	if store.MaxPage > 0 {
+		return store.MaxPage
+	}
+	return DefaultAgentRunPage
+}
+
 // Runs returns one page of the tenant's settled runs, newest first.
 func (store *AgentRunStore) Runs(ctx context.Context, tenantID int64, filter domain.AgentRunFilter) ([]domain.AgentRun, error) {
 	switch {
+	case store.MaxPage < 0:
+		return nil, fmt.Errorf("agent run store: max page must not be negative")
 	case tenantID <= 0:
 		return nil, fmt.Errorf("%w: tenant is required", domain.ErrValidation)
-	case filter.Limit <= 0 || filter.Limit > MaxAgentRunPage:
-		return nil, fmt.Errorf("%w: run page limit must be between 1 and %d", domain.ErrValidation, MaxAgentRunPage)
+	case filter.Limit <= 0 || filter.Limit > store.maxPage():
+		return nil, fmt.Errorf("%w: run page limit must be between 1 and %d", domain.ErrValidation, store.maxPage())
 	case filter.Before < 0:
 		return nil, fmt.Errorf("%w: run cursor cannot be negative", domain.ErrValidation)
 	case filter.Status != "" && !terminalRunStatus(filter.Status):

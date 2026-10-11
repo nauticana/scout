@@ -13,14 +13,14 @@ import (
 // A decider's revision is governed like any proposal: validated, authorized, and decided again.
 func TestRevisedCallPassesTheWholeGovernanceChainAgain(t *testing.T) {
 	sent := 0
-	var asked []string
+	var asked []domain.ApprovalAsk
 	gateway := autonomyGateway(domain.AutonomyExecuteWithApproval, false, domain.ApprovalApproved, &sent, &asked)
 	gateway.Registry = &fake.ToolRegistry{GetFunc: func(context.Context, int64, string, string) (domain.ToolDefinition, error) {
 		return domain.ToolDefinition{ToolID: "search", Version: "v1", Endpoint: "https://example.invalid/tool",
 			InputSchema: []byte(`{"type":"object","required":["qty"]}`)}, nil
 	}}
 	var decided []domain.ToolCall
-	gateway.Approvals = fake.ToolApprovalGateFunc(func(_ context.Context, call domain.ToolCall, ruleID string) (domain.ApprovalDecision, error) {
+	gateway.Approvals = fake.ToolApprovalGateFunc(func(_ context.Context, call domain.ToolCall, ask domain.ApprovalAsk) (domain.ApprovalDecision, error) {
 		decided = append(decided, call)
 		return domain.ApprovalApproved, nil
 	})
@@ -40,9 +40,9 @@ func TestRevisedCallPassesTheWholeGovernanceChainAgain(t *testing.T) {
 
 func TestEditedOriginalIsRefusedWithItsCause(t *testing.T) {
 	sent := 0
-	var asked []string
+	var asked []domain.ApprovalAsk
 	gateway := autonomyGateway(domain.AutonomyExecuteWithApproval, false, "", &sent, &asked)
-	gateway.Approvals = fake.ToolApprovalGateFunc(func(context.Context, domain.ToolCall, string) (domain.ApprovalDecision, error) {
+	gateway.Approvals = fake.ToolApprovalGateFunc(func(context.Context, domain.ToolCall, domain.ApprovalAsk) (domain.ApprovalDecision, error) {
 		return domain.ApprovalDenied, fmt.Errorf("gate: %w", domain.ErrProposalRevised)
 	})
 	if _, err := gateway.Invoke(context.Background(), validToolCall()); !errors.Is(err, domain.ErrProposalRevised) || sent != 0 {

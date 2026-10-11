@@ -18,7 +18,7 @@ import (
 	"github.com/nauticana/scout/service/scope"
 )
 
-// DefaultActivationTimeout bounds one activation's checks and swap when Timeout is zero.
+// DefaultActivationTimeout bounds one activation's checks and swap when the settings' Timeout is zero.
 const DefaultActivationTimeout = 2 * time.Minute
 
 // ReleaseActivations shows and cancels scheduled publishes, and activates due ones. An
@@ -31,8 +31,6 @@ type ReleaseActivations struct {
 	DB keelport.DatabaseRepository
 	// Studio authorizes, recomputes digests, and runs the publish guards.
 	Studio *StudioService
-	// Timeout bounds one activation; zero takes DefaultActivationTimeout.
-	Timeout time.Duration
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -131,9 +129,9 @@ func (s *ReleaseActivations) Cancel(ctx context.Context, actor domain.StudioActo
 // It returns what it did and the transient failures it deferred.
 func (s *ReleaseActivations) ActivateDue(ctx context.Context, settings domain.ReleaseActivationSettings) (domain.ReleaseActivationReport, error) {
 	var report domain.ReleaseActivationReport
-	if settings.Batch <= 0 || settings.PollPeriod <= 0 || settings.MaxAttempts <= 0 {
-		return report, fmt.Errorf("%w: activation needs a positive batch, poll period, and attempt ceiling, got %d/%s/%d",
-			domain.ErrValidation, settings.Batch, settings.PollPeriod, settings.MaxAttempts)
+	if settings.Batch <= 0 || settings.PollPeriod <= 0 || settings.MaxAttempts <= 0 || settings.Timeout < 0 {
+		return report, fmt.Errorf("%w: activation needs a positive batch, poll period, and attempt ceiling and a non-negative timeout, got %d/%s/%d/%s",
+			domain.ErrValidation, settings.Batch, settings.PollPeriod, settings.MaxAttempts, settings.Timeout)
 	}
 	if err := s.ready(ctx); err != nil {
 		return report, err
@@ -168,7 +166,8 @@ func (s *ReleaseActivations) ActivateDue(ctx context.Context, settings domain.Re
 // back and records the attempt; the returned state is what the activation now is, or
 // empty when another worker holds it or it is no longer due.
 func (s *ReleaseActivations) activate(ctx context.Context, id int64, settings domain.ReleaseActivationSettings) (domain.ReleaseActivationState, error) {
-	activation, state, err := s.claimAndSettle(ctx, id)
+	timeout := activationTimeout(settings)
+	activation, state, err := s.claimAndSettle(ctx, id, timeout)
 	if err == nil || activation == nil {
 		return state, err
 	}
@@ -177,21 +176,21 @@ func (s *ReleaseActivations) activate(ctx context.Context, id int64, settings do
 		return "", err
 	}
 	// The claim transaction has rolled back, so the row lock is released before the deferral writes it.
-	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout())
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	return s.deferAttempt(recordCtx, *activation, settings, err)
 }
 
-func (s *ReleaseActivations) timeout() time.Duration {
-	if s.Timeout > 0 {
-		return s.Timeout
+func activationTimeout(settings domain.ReleaseActivationSettings) time.Duration {
+	if settings.Timeout > 0 {
+		return settings.Timeout
 	}
 	return DefaultActivationTimeout
 }
 
 // claimAndSettle returns the claimed activation, or nil when there was none to claim.
-func (s *ReleaseActivations) claimAndSettle(parent context.Context, id int64) (*domain.ReleaseActivation, domain.ReleaseActivationState, error) {
-	ctx, cancel := context.WithTimeout(parent, s.timeout())
+func (s *ReleaseActivations) claimAndSettle(parent context.Context, id int64, timeout time.Duration) (*domain.ReleaseActivation, domain.ReleaseActivationState, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, activationQueries)
 	if err != nil {
@@ -295,6 +294,9 @@ func (s *ReleaseActivations) check(ctx context.Context, tx keelport.TxQueryServi
 	settings, refusal, err := frozenSettings(ctx, tx, activation, definition.SettingsDigest)
 	if refusal != nil || err != nil {
 		return refusal, err
+	}
+	if err = s.Studio.checkBudget(ctx, tx, settings.Resources, definition); err != nil {
+		return refusalOr(err, domain.ActivationGuardRefused)
 	}
 	if err = s.Studio.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings, Activation: true}); err != nil {
 		return refusalOr(err, domain.ActivationGuardRefused)

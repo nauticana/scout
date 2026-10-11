@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/nauticana/keel/common"
@@ -23,7 +24,7 @@ func (s *StudioService) Create(ctx context.Context, actor domain.StudioActor, re
 	if err := s.init(ctx); err != nil {
 		return domain.AgentSummary{}, err
 	}
-	if err := validateCreate(request); err != nil {
+	if err := validateCreate(request, s.referenceLimit()); err != nil {
 		return domain.AgentSummary{}, err
 	}
 	if err := s.authorizeValue(ctx, actor, domain.StudioCreate, agentTypeScopeValue(request.AgentTypeID)); err != nil {
@@ -34,19 +35,40 @@ func (s *StudioService) Create(ctx context.Context, actor domain.StudioActor, re
 			return domain.AgentSummary{}, err
 		}
 	}
+	var prepare func() (*agentSeed, error)
 	if request.TemplateID != "" {
-		return domain.AgentSummary{}, validationError("template_id", "no template catalog is composed")
-	}
-	if s.Kinds != nil {
-		if _, err := s.Kinds.Get(ctx, request.AgentTypeID); errors.Is(err, domain.ErrNotFound) {
-			return domain.AgentSummary{}, validationError("agent_type", "the product does not offer this agent type")
-		} else if err != nil {
-			return domain.AgentSummary{}, fmt.Errorf("load agent type %q: %w", request.AgentTypeID, err)
+		if s.Templates == nil {
+			return domain.AgentSummary{}, validationError("template_id", "no template catalog is composed")
 		}
+		prepare = func() (*agentSeed, error) { return s.templateSeed(ctx, actor, request) }
 	}
-	digest := createDigest(request)
+	if err := s.offered(ctx, request.AgentTypeID); err != nil {
+		return domain.AgentSummary{}, err
+	}
+	return s.create(ctx, actor, request, createDigest(request), prepare)
+}
 
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
+// offered refuses a type the product's catalog does not offer; without a catalog every type is offered.
+func (s *StudioService) offered(ctx context.Context, agentTypeID string) error {
+	if s.Kinds == nil {
+		return nil
+	}
+	if _, err := s.Kinds.Get(ctx, agentTypeID); errors.Is(err, domain.ErrNotFound) {
+		return validationError("agent_type", "the product does not offer this agent type")
+	} else if err != nil {
+		return fmt.Errorf("load agent type %q: %w", agentTypeID, err)
+	}
+	return nil
+}
+
+// create runs one create under the type's lock. A replay of the actor's key returns the agent it
+// made before any seed is prepared, so it answers what the first call created even when the
+// tenant's catalogs have changed since; otherwise prepare, when set, supplies the new agent's seed.
+func (s *StudioService) create(ctx context.Context, actor domain.StudioActor, request domain.AgentCreateRequest, digest string, prepare func() (*agentSeed, error)) (domain.AgentSummary, error) {
+	if err := s.init(ctx); err != nil {
+		return domain.AgentSummary{}, err
+	}
+	tx, err := s.DB.BeginTx(ctx, studioCreateQueries)
 	if err != nil {
 		return domain.AgentSummary{}, fmt.Errorf("begin create transaction: %w", err)
 	}
@@ -68,7 +90,13 @@ func (s *StudioService) Create(ctx context.Context, actor domain.StudioActor, re
 		return domain.AgentSummary{}, err
 	}
 	if !replayed {
-		if agentID, err = s.createAgent(ctx, tx, actor, request, digest); err != nil {
+		var seed *agentSeed
+		if prepare != nil {
+			if seed, err = prepare(); err != nil {
+				return domain.AgentSummary{}, err
+			}
+		}
+		if agentID, err = s.createAgent(ctx, tx, actor, request, digest, seed); err != nil {
 			return domain.AgentSummary{}, err
 		}
 	}
@@ -93,7 +121,7 @@ func (s *StudioService) replayedCreate(ctx context.Context, tx keelport.TxQueryS
 	return common.AsString(prior.Rows[0][1]), true, nil
 }
 
-func (s *StudioService) createAgent(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, request domain.AgentCreateRequest, digest string) (string, error) {
+func (s *StudioService) createAgent(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, request domain.AgentCreateRequest, digest string, seed *agentSeed) (string, error) {
 	census, err := tx.Query(ctx, qStudioTypeCensus, request.DisplayName, actor.TenantID, request.AgentTypeID)
 	if err != nil {
 		return "", fmt.Errorf("count agents of type: %w", err)
@@ -121,6 +149,14 @@ func (s *StudioService) createAgent(ctx context.Context, tx keelport.TxQueryServ
 	if err != nil {
 		return "", err
 	}
+	event, detail := "CREATE", "type defaults"
+	if seed != nil {
+		if err = s.checkSeed(ctx, actor, agentID, scopes, seed); err != nil {
+			return "", err
+		}
+		source.Models, source.Extension = seed.models, seed.extension
+		event, detail = seed.event, seed.detail
+	}
 	if _, err = tx.Query(ctx, qProvisionScope, actor.TenantID, scopes.TypeScopeID, RootPromptScopeID, "agent_type", request.AgentTypeID); err != nil {
 		return "", fmt.Errorf("ensure type scope: %w", err)
 	}
@@ -135,7 +171,11 @@ func (s *StudioService) createAgent(ctx context.Context, tx keelport.TxQueryServ
 		modelProvider(source.Models.Video), modelID(source.Models.Video), nullableJSON(source.Extension), actorUser(actor)); err != nil {
 		return "", fmt.Errorf("create agent draft: %w", err)
 	}
-	detail := "type defaults"
+	if seed != nil {
+		if err = s.plantSeed(ctx, tx, actor, agentID, scopes.AgentScopeID, seed); err != nil {
+			return "", err
+		}
+	}
 	if request.CopyFrom != "" {
 		sourceScopes, scopeErr := s.promptScopes(ctx, actor.TenantID, request.CopyFrom, request.AgentTypeID)
 		if scopeErr != nil {
@@ -157,7 +197,7 @@ func (s *StudioService) createAgent(ctx context.Context, tx keelport.TxQueryServ
 	if len(recorded.Rows) == 0 {
 		return "", fmt.Errorf("%w: idempotency key %q was used concurrently", domain.ErrConflict, request.IdempotencyKey)
 	}
-	return agentID, auditStudio(ctx, tx, actor, agentID, "CREATE", detail)
+	return agentID, auditStudio(ctx, tx, actor, agentID, event, clipDetail(detail))
 }
 
 // Rename changes the display name; grants and evidence key on the permanent agent id.
@@ -327,7 +367,7 @@ func (s *StudioService) newAgentID(agentTypeID string) (string, error) {
 	return prefix + "-" + hex.EncodeToString(suffix), nil
 }
 
-func validateCreate(request domain.AgentCreateRequest) error {
+func validateCreate(request domain.AgentCreateRequest, referenceLimit int) error {
 	var fields []domain.AgentFieldError
 	if strings.TrimSpace(request.AgentTypeID) == "" {
 		fields = append(fields, domain.AgentFieldError{Field: "agent_type", Message: "required"})
@@ -341,6 +381,13 @@ func validateCreate(request domain.AgentCreateRequest) error {
 	if request.CopyFrom != "" && request.TemplateID != "" {
 		fields = append(fields, domain.AgentFieldError{Field: "copy_from", Message: "copy_from and template_id are exclusive"})
 	}
+	if request.TemplateID == "" && (request.TemplateVersion != 0 || len(request.References) > 0) {
+		fields = append(fields, domain.AgentFieldError{Field: "template_id", Message: "template_version and references apply only to a template"})
+	}
+	if len(request.TemplateID) > 80 || request.TemplateVersion < 0 {
+		fields = append(fields, domain.AgentFieldError{Field: "template_id", Message: "must contain at most 80 characters, with a version of 0 or more"})
+	}
+	fields = append(fields, validateReferences("references", request.References, referenceLimit)...)
 	if len(fields) > 0 {
 		return &StudioValidationError{Fields: fields}
 	}
@@ -348,6 +395,10 @@ func validateCreate(request domain.AgentCreateRequest) error {
 }
 
 func createDigest(request domain.AgentCreateRequest) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{request.AgentTypeID, request.DisplayName, request.CopyFrom, request.TemplateID}, "\x1f")))
+	parts := []string{
+		request.AgentTypeID, request.DisplayName, request.CopyFrom, request.TemplateID,
+		strconv.FormatInt(request.TemplateVersion, 10), canonicalReferences(request.References),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
 	return hex.EncodeToString(sum[:])
 }

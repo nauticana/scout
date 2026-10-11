@@ -12,6 +12,12 @@ tables:
   - agent_alias
   - agent_studio_event
   - agent_create_request
+  - agent_template_catalog
+  - agent_template_catalog_version
+  - agent_template
+  - agent_template_version
+  - agent_template_publication
+  - agent_draft_origin
   - agent_version
   - agent_deployment
   - agent_release_activation

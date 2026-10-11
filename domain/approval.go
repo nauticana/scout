@@ -66,6 +66,14 @@ type ApprovalRequest struct {
 	NotificationEventID int64
 	// RevisesStepID is the step of the edited proposal this request revises, in the same turn; zero for an original.
 	RevisesStepID int64
+	// ReleaseVersion is the agent release whose frozen routing applies; empty for other principals.
+	ReleaseVersion string
+	// Requester is the person the turn acts for; nobody approves their own request.
+	Requester PrincipalRef
+	// Source is why the call needs a person; every request records one, with its RuleID.
+	Source ApprovalSource
+	// Route is the routed authority; an empty RouteID is a request routed by scope or a product router.
+	Route ApprovalRouteAuthority
 }
 
 // ApprovalVerdict resolves one request. Decider is the principal that acted and
@@ -82,6 +90,9 @@ type ApprovalVerdict struct {
 	RevisedArguments []byte
 	// Revision is where the revised arguments are archived; the store keeps only this reference.
 	Revision ObjectRef
+	// Assignment is the assignment the decider was authorized against, set by the server from
+	// the request it read; a request reassigned since refuses the verdict.
+	Assignment ApprovalFence
 }
 
 // ApprovalKey identifies one request without its payload.
@@ -101,13 +112,47 @@ type ApprovalFilter struct {
 	Limit     int
 }
 
-// EscalationStep is what happens when a deadline passes with no verdict.
+// EscalationAction is what a sweep does with one overdue or vacant request.
+type EscalationAction string
+
+const (
+	// EscalationReassign hands the request to Backup.
+	EscalationReassign EscalationAction = "reassign"
+	// EscalationVacate moves a routed request to a later step with nobody assigned yet.
+	EscalationVacate EscalationAction = "vacate"
+	// EscalationHold keeps the current assignment open with no deadline.
+	EscalationHold EscalationAction = "hold"
+	// EscalationWait leaves the request untouched for a later sweep.
+	EscalationWait EscalationAction = "wait"
+	// EscalationExpire closes the request as expired, a denial.
+	EscalationExpire EscalationAction = "expire"
+)
+
+// EscalationStep is what happens when a deadline passes with no verdict, or a vacancy waits.
 type EscalationStep struct {
-	// Backup receives the request; an empty backup abandons it instead.
+	// Action is empty to infer it: a set Backup reassigns, otherwise the request expires.
+	Action EscalationAction
+	// Backup receives the request on a reassignment.
 	Backup PrincipalRef
-	// Extension is the new deadline granted to the backup.
+	// Extension is the new deadline from now; zero leaves the request with no deadline.
 	Extension time.Duration
-	Reason    string
+	// KeepDeadline fills a vacancy in place under the current deadline.
+	KeepDeadline bool
+	// Route is the routed authority after the step; an unrouted request leaves it empty.
+	Route  ApprovalRouteAuthority
+	Reason string
+}
+
+// Resolved returns the step's action, inferring it when empty.
+func (s EscalationStep) Resolved() EscalationAction {
+	switch {
+	case s.Action != "":
+		return s.Action
+	case s.Backup.ID != "":
+		return EscalationReassign
+	default:
+		return EscalationExpire
+	}
 }
 
 // Notification is one outbound message about work a principal owes.

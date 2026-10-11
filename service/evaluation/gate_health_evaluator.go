@@ -25,7 +25,7 @@ type GateHealthEvaluator struct {
 	Now          func() time.Time
 }
 
-var _ contract.DetailedRolloutHealthEvaluator = (*GateHealthEvaluator)(nil)
+var _ contract.RolloutHealthEvaluator = (*GateHealthEvaluator)(nil)
 
 func (evaluator *GateHealthEvaluator) now() time.Time {
 	if evaluator.Now != nil {

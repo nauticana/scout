@@ -64,6 +64,9 @@ func TestScoutConfigApply(t *testing.T) {
 	if cfg.AgentPilotMaxMembers != 200 || cfg.AgentPilotPositionTimeout != 2 {
 		t.Fatalf("AgentPilotMaxMembers = %d, AgentPilotPositionTimeout = %d, want 200 and 2", cfg.AgentPilotMaxMembers, cfg.AgentPilotPositionTimeout)
 	}
+	if cfg.AgentStudioMaxTemplatesPerType != 20 || cfg.AgentStudioMaxTemplateVersions != 50 {
+		t.Fatalf("template limits = %d, %d, want 20 and 50", cfg.AgentStudioMaxTemplatesPerType, cfg.AgentStudioMaxTemplateVersions)
+	}
 	if cfg.AgentEvaluationMaxOpenRuns != 4 || cfg.AgentEvaluationLease != 900 || cfg.AgentEvaluationCurrency != "" {
 		t.Fatalf("evaluation settings = %d, %d, %q", cfg.AgentEvaluationMaxOpenRuns, cfg.AgentEvaluationLease, cfg.AgentEvaluationCurrency)
 	}
@@ -245,6 +248,68 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_activation_batch:           "20",
 		agent_activation_poll:            "30",
 		agent_activation_max_attempts:    "5",
+
+		agent_evaluation_judge_provider:        "",
+		agent_evaluation_judge_model:           "",
+		agent_evaluation_judge_model_version:   "",
+		agent_evaluation_judge_min_score:       "1",
+		agent_evaluation_judge_max_score:       "5",
+		agent_evaluation_judge_pass_score:      "4",
+		agent_evaluation_judge_max_tokens:      "512",
+		agent_evaluation_judge_max_input_bytes: "131072",
+		agent_studio_max_templates_per_type:    "20",
+		agent_studio_max_template_versions:     "50",
+
+		agent_cost_window:                         "3600",
+		agent_reply_retention:                     "600",
+		agent_reply_poll_ms:                       "500",
+		agent_reply_record_read:                   "5",
+		agent_cancel_poll_ms:                      "1000",
+		agent_cancel_max_read_failures:            "3",
+		agent_session_revision_memory:             "4096",
+		agent_result_card_max_bytes:               "65536",
+		agent_run_page_max:                        "500",
+		agent_loop_max_call_revisions:             "8",
+		agent_pause_batch:                         "200",
+		agent_studio_report_window_days:           "92",
+		agent_studio_usage_max_lines:              "1000",
+		agent_work_item_max_depth:                 "32",
+		agent_approval_max_candidates:             "20",
+		agent_approval_max_asks_per_call:          "8",
+		agent_approval_max_revised_argument_bytes: "65536",
+		agent_approval_max_routes_per_binding:     "32",
+		agent_approval_max_routes:                 "64",
+		agent_approval_max_route_tools:            "16",
+		agent_approval_min_route_duration:         "60",
+		agent_approval_max_route_duration:         "2592000",
+		agent_approval_max_route_window:           "7776000",
+		agent_confirmation_max_document_bytes:     "1048576",
+		agent_confirmation_batch:                  "100",
+		agent_confirmation_max_batch:              "1000",
+		agent_confirmation_lease:                  "60",
+		agent_activation_timeout:                  "120",
+		agent_activation_max_lead_days:            "366",
+		agent_studio_max_portable_bindings:        "1024",
+		agent_studio_max_references:               "1024",
+		agent_studio_max_portable_extension_bytes: "262144",
+		agent_studio_max_template_audience:        "100",
+		agent_studio_usable_templates:             "200",
+		agent_studio_max_governance_items:         "32",
+		agent_studio_max_comments_shown:           "500",
+		agent_studio_max_restriction_entries:      "256",
+		agent_restriction_cache_ttl_ms:            "5000",
+		agent_restriction_cache_entries:           "4096",
+		agent_audit_max_page_size:                 "1000",
+		agent_safety_event_max_page:               "500",
+		agent_metric_label_max_length:             "64",
+		agent_knowledge_max_source_bytes:          "33554432",
+		agent_knowledge_rrf_offset:                "60",
+		agent_evaluation_page_size:                "50",
+		agent_evaluation_max_page_size:            "200",
+		agent_evaluation_judge_max_verdict_bytes:  "8192",
+		agent_default_language:                    "en-US",
+		agent_default_priority_class:              "standard",
+		agent_default_test_task:                   "",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {
@@ -267,4 +332,22 @@ func allConfigQueryRows(t *testing.T) [][]any {
 		queryRows = append(queryRows, []any{id, row.Value, row.Default, "default"})
 	}
 	return queryRows
+}
+
+func TestScoutConfigDefaultTexts(t *testing.T) {
+	rows := scoutConfigRows()
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(rows); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentDefaultLanguage != "en-US" || cfg.AgentDefaultPriorityClass != "standard" || cfg.AgentDefaultTestTask != "" {
+		t.Fatalf("defaults = %q, %q, %q", cfg.AgentDefaultLanguage, cfg.AgentDefaultPriorityClass, cfg.AgentDefaultTestTask)
+	}
+	for name, value := range map[string]string{agent_default_language: strings.Repeat("x", 17), agent_default_priority_class: strings.Repeat("x", 31)} {
+		rows := scoutConfigRows()
+		rows[name] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s: error = %v, want a refusal naming the flag", name, err)
+		}
+	}
 }

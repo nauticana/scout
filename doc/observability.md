@@ -67,9 +67,11 @@ Fleet series carry no tenant, agent, or person, so per-agent views read exact re
   `TableSafetyEventSink.SafetyEvents` pages one agent's events newest first, at most `MaxSafetyEventPage` per page,
   behind Studio's `safety-events` route.
 - **Limits and spend.** Studio's `limits` report (`dataplane.StudioLimits`) shows the stable release's frozen
-  limits and budget, the agent's turns opened in the last minute, and, when composition sets a budget window, its
-  settled spend over `[now − window, now)` with the currency's catalog exponent. Cost counts only usage in the
-  budget's currency; in-flight reservations are not included.
+  limits, the agent's turns opened in the last minute, and its budget: ceilings, currency and frozen exponent,
+  period with its window or timezone, and `source` (`release`, or `fallback` for the composed default). For a rolling, day, or month budget, `spend` reads the enforcing `BudgetLedger`
+  (`StudioLimits.Spend`) over the current period by the database clock: usage settled in it and live holds,
+  apart, with cost counted only in the budget's currency. A budget the ledger cannot enforce reports its
+  `problem` code instead of spend; see [release budgets](governance.md#release-budgets).
 
 ## Audit trail
 

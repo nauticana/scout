@@ -13,9 +13,12 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// Charter's bounds on AgentDefinition values; the item, binding, and link bounds are Scout's.
+// DefaultMaxGovernanceItems is Scout's cap on one Studio-authored governance list when
+// StudioGovernance.MaxItems is zero.
+const DefaultMaxGovernanceItems = 32
+
+// Charter's bounds on AgentDefinition values; the binding and link bounds are Scout's.
 const (
-	maxGovernanceItems  = 32
 	maxGovernanceText   = 500
 	maxCharterID        = 120
 	maxCharterNamespace = 200
@@ -199,18 +202,18 @@ func (p *fieldProblems) namespace(field, value string, bounds valueBounds) {
 	}
 }
 
-// count holds a Studio list to Scout's item cap; Charter caps no list.
-func (p *fieldProblems) count(field string, items int, bounds valueBounds) bool {
-	if bounds == studioBounds && items > maxGovernanceItems {
-		p.add(field, fmt.Sprintf("must not list more than %d items", maxGovernanceItems))
+// count holds a Studio list to Scout's item cap of maxItems; Charter caps no list.
+func (p *fieldProblems) count(field string, items int, bounds valueBounds, maxItems int) bool {
+	if bounds == studioBounds && items > maxItems {
+		p.add(field, fmt.Sprintf("must not list more than %d items", maxItems))
 		return false
 	}
 	return true
 }
 
 // texts refuses a repeated statement only under Studio's bounds; Charter's statement lists allow one.
-func (p *fieldProblems) texts(field string, values []string, bounds valueBounds) {
-	if !p.count(field, len(values), bounds) {
+func (p *fieldProblems) texts(field string, values []string, bounds valueBounds, maxItems int) {
+	if !p.count(field, len(values), bounds, maxItems) {
 		return
 	}
 	for index, value := range values {
@@ -223,8 +226,8 @@ func (p *fieldProblems) texts(field string, values []string, bounds valueBounds)
 }
 
 // refs refuses a repeated reference under both bounds; Charter's reference lists are unique.
-func (p *fieldProblems) refs(field string, refs []domain.CharterRef, bounds valueBounds) {
-	if !p.count(field, len(refs), bounds) {
+func (p *fieldProblems) refs(field string, refs []domain.CharterRef, bounds valueBounds, maxItems int) {
+	if !p.count(field, len(refs), bounds, maxItems) {
 		return
 	}
 	for index, ref := range refs {
@@ -251,8 +254,8 @@ func (p *fieldProblems) objectRef(field string, ref domain.CharterObjectRef, bou
 
 // channels refuses an unknown channel, a binding on a channel that has none or none where one is
 // needed, a repeated declaration, and a schedule or topic that starts two triggers.
-func (p *fieldProblems) channels(channels []domain.AgentTrigger) {
-	if !p.count("triggerChannels", len(channels), studioBounds) {
+func (p *fieldProblems) channels(channels []domain.AgentTrigger, maxItems int) {
+	if !p.count("triggerChannels", len(channels), studioBounds, maxItems) {
 		return
 	}
 	for index, channel := range channels {
@@ -285,8 +288,8 @@ func (p *fieldProblems) channels(channels []domain.AgentTrigger) {
 }
 
 // governanceProblems reports each malformed value or reference of g; owned are the fields the
-// enterprise supplied, which only Charter's bounds apply to.
-func governanceProblems(g domain.AgentGovernance, owned []domain.GovernanceField) []domain.AgentFieldError {
+// enterprise supplied, which only Charter's bounds apply to, and maxItems caps every other list.
+func governanceProblems(g domain.AgentGovernance, owned []domain.GovernanceField, maxItems int) []domain.AgentFieldError {
 	var problems fieldProblems
 	bounds := boundsOf(owned)
 	if g.Purpose != "" {
@@ -306,18 +309,18 @@ func governanceProblems(g domain.AgentGovernance, owned []domain.GovernanceField
 		{domain.GovernanceConfidenceBoundaries, g.ConfidenceBoundaries},
 		{domain.GovernanceEscalationConditions, g.EscalationConditions},
 	} {
-		problems.texts(string(list.field), list.values, bounds(list.field))
+		problems.texts(string(list.field), list.values, bounds(list.field), maxItems)
 	}
-	problems.refs(string(domain.GovernanceResponsibilities), g.ResponsibilityIDs, bounds(domain.GovernanceResponsibilities))
-	problems.refs(string(domain.GovernanceCapabilities), g.CapabilityIDs, bounds(domain.GovernanceCapabilities))
-	problems.channels(g.TriggerChannels)
+	problems.refs(string(domain.GovernanceResponsibilities), g.ResponsibilityIDs, bounds(domain.GovernanceResponsibilities), maxItems)
+	problems.refs(string(domain.GovernanceCapabilities), g.CapabilityIDs, bounds(domain.GovernanceCapabilities), maxItems)
+	problems.channels(g.TriggerChannels, maxItems)
 	return problems
 }
 
 // draftProblems reports what keeps a save from replacing Studio's governance: a malformed value,
 // a field the enterprise snapshot owns, or a field only publication derives.
-func draftProblems(draft domain.AgentGovernance, snapshot *domain.GovernanceSnapshot) []domain.AgentFieldError {
-	problems := fieldProblems(governanceProblems(draft, nil))
+func draftProblems(draft domain.AgentGovernance, snapshot *domain.GovernanceSnapshot, maxItems int) []domain.AgentFieldError {
+	problems := fieldProblems(governanceProblems(draft, nil, maxItems))
 	if len(draft.Triggers) > 0 {
 		problems.add("triggers", "Studio declares its triggers in triggerChannels")
 	}
@@ -340,12 +343,12 @@ func draftProblems(draft domain.AgentGovernance, snapshot *domain.GovernanceSnap
 
 // frozenProblems reports what keeps a governance from being frozen into a release: a malformed
 // value, triggers that are not those of the trigger channels, or an incomplete enterprise reference.
-func frozenProblems(g domain.AgentGovernance) []domain.AgentFieldError {
+func frozenProblems(g domain.AgentGovernance, maxItems int) []domain.AgentFieldError {
 	var owned []domain.GovernanceField
 	if g.Enterprise != nil {
 		owned = g.Enterprise.Fields
 	}
-	problems := fieldProblems(governanceProblems(g, owned))
+	problems := fieldProblems(governanceProblems(g, owned, maxItems))
 	triggersOwned := false
 	if g.Enterprise != nil {
 		problems = append(problems, snapshotRefProblems(*g.Enterprise)...)
@@ -387,11 +390,11 @@ func snapshotRefProblems(ref domain.GovernanceSnapshotRef) []domain.AgentFieldEr
 // snapshotProblems reports what makes a source's snapshot unusable: an incomplete reference, a link
 // a browser should not follow, Scout's own fields, which no enterprise document carries, or a value
 // Charter's schema refuses.
-func snapshotProblems(snapshot domain.GovernanceSnapshot) []domain.AgentFieldError {
+func snapshotProblems(snapshot domain.GovernanceSnapshot, maxItems int) []domain.AgentFieldError {
 	problems := fieldProblems(snapshotRefProblems(domain.GovernanceSnapshotRef{
 		Document: snapshot.Document, Version: snapshot.Version, Digest: snapshot.Digest,
 	}))
-	problems = append(problems, governanceProblems(snapshot.Governance, domain.CharterGovernanceFields())...)
+	problems = append(problems, governanceProblems(snapshot.Governance, domain.CharterGovernanceFields(), maxItems)...)
 	if snapshot.Link != "" {
 		link, err := url.Parse(snapshot.Link)
 		if err != nil || len(snapshot.Link) > maxGovernanceLink || link.Host == "" || link.Scheme != "https" && link.Scheme != "http" {

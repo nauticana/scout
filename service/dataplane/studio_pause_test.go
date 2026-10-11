@@ -60,7 +60,7 @@ func TestStudioPauseFinishLeavesLiveTurnsAndNeedsAReason(t *testing.T) {
 }
 
 func TestStudioPauseStopsWhenATurnIgnoresItsCancellation(t *testing.T) {
-	query := &queueQueryFake{rows: map[string][][]any{qPauseLiveTurns: make([][]any, pauseBatch)}}
+	query := &queueQueryFake{rows: map[string][][]any{qPauseLiveTurns: make([][]any, defaultPauseBatch)}}
 	for index := range query.rows[qPauseLiveTurns] {
 		query.rows[qPauseLiveTurns][index] = []any{"r-stuck"}
 	}

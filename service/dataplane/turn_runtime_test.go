@@ -383,6 +383,43 @@ func TestTurnRuntimeAbandonRefundsExhaustedDelivery(t *testing.T) {
 	}
 }
 
+// A turn whose prior hold expired and whose budget now refuses a new attempt is still failed.
+func TestTurnRuntimeAbandonFailsATurnTheBudgetNoLongerAdmits(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"exhausted":     domain.ErrBudgetExceeded,
+		"unenforceable": &domain.BudgetUnenforceableError{Problem: domain.BudgetExponentChanged, Detail: "drift"},
+	} {
+		recorder := &runtimeRecorder{}
+		runtime := newTestRuntime(t, recorder)
+		runtime.Budget = &fake.TenantBudgetManager{
+			ReserveFunc: func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error) {
+				return domain.BudgetReservation{}, refusal
+			},
+			CommitFunc:  func(context.Context, domain.BudgetReservation, domain.Usage) error { recorder.committed++; return nil },
+			ReleaseFunc: func(context.Context, domain.BudgetReservation) error { recorder.released++; return nil },
+		}
+		if err := runtime.Abandon(context.Background(), runtimeDispatch(), "retry budget exhausted"); err != nil {
+			t.Fatalf("%s: abandon = %v", name, err)
+		}
+		if recorder.released != 0 || recorder.committed != 0 {
+			t.Errorf("%s: settled a hold that was never recovered", name)
+		}
+		if len(recorder.failures) != 1 || recorder.failures[0] != "failed:execution_limit" {
+			t.Errorf("%s: failures = %v", name, recorder.failures)
+		}
+	}
+	recorder := &runtimeRecorder{}
+	runtime := newTestRuntime(t, recorder)
+	runtime.Budget = &fake.TenantBudgetManager{
+		ReserveFunc: func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error) {
+			return domain.BudgetReservation{}, errors.New("database down")
+		},
+	}
+	if err := runtime.Abandon(context.Background(), runtimeDispatch(), "retry budget exhausted"); err == nil || len(recorder.failures) != 0 {
+		t.Fatalf("a transient reserve failure = %v, failures %v; want the error and no terminal state", err, recorder.failures)
+	}
+}
+
 func TestTurnRuntimeSkipsSettlementWhenAlreadySettled(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)

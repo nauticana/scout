@@ -19,8 +19,8 @@ const (
 	qSafetyEventInsert = "scout_safety_event_insert"
 	qSafetyEventPage   = "scout_safety_event_page"
 
-	// MaxSafetyEventPage bounds one page of safety events.
-	MaxSafetyEventPage = 500
+	// DefaultMaxSafetyEventPage bounds one page of safety events when MaxPage is zero.
+	DefaultMaxSafetyEventPage = 500
 )
 
 var safetyEventQueries = map[string]string{
@@ -42,6 +42,8 @@ SELECT id, principal_kind, principal_id, request_id, stage_code, layer_code, act
 // agent. It keeps rule ids and attribution only; the inspected content is never stored.
 type TableSafetyEventSink struct {
 	DB port.DatabaseRepository
+	// MaxPage bounds one page of safety events; zero takes DefaultMaxSafetyEventPage.
+	MaxPage int
 
 	once sync.Once
 	qs   port.QueryService
@@ -78,8 +80,15 @@ func (sink *TableSafetyEventSink) SafetyEvents(ctx context.Context, tenantID int
 	if tenantID <= 0 || strings.TrimSpace(filter.AgentID) == "" {
 		return nil, fmt.Errorf("%w: tenant and agent are required", domain.ErrValidation)
 	}
-	if filter.Limit < 1 || filter.Limit > MaxSafetyEventPage || filter.Before < 0 {
-		return nil, fmt.Errorf("%w: limit must be within 1..%d and before non-negative", domain.ErrValidation, MaxSafetyEventPage)
+	if sink.MaxPage < 0 {
+		return nil, fmt.Errorf("%w: safety event sink: max page cannot be negative", domain.ErrValidation)
+	}
+	maxPage := sink.MaxPage
+	if maxPage == 0 {
+		maxPage = DefaultMaxSafetyEventPage
+	}
+	if filter.Limit < 1 || filter.Limit > maxPage || filter.Before < 0 {
+		return nil, fmt.Errorf("%w: limit must be within 1..%d and before non-negative", domain.ErrValidation, maxPage)
 	}
 	sink.once.Do(func() { sink.qs = sink.DB.GetQueryService(ctx, safetyEventQueries) })
 	result, err := sink.qs.Query(ctx, qSafetyEventPage, tenantID, filter.AgentID, filter.Before, filter.Before, filter.Limit)

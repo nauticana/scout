@@ -114,7 +114,7 @@ func TestPrepareRefusesAnIncompleteDraft(t *testing.T) {
 		},
 		"expiry": func(d *domain.MCPConfirmationDraft) { d.TTL = time.Millisecond },
 		"oversize": func(d *domain.MCPConfirmationDraft) {
-			d.Payload = json.RawMessage(`"` + strings.Repeat("x", MaxDocumentBytes) + `"`)
+			d.Payload = json.RawMessage(`"` + strings.Repeat("x", DefaultMaxDocumentBytes) + `"`)
 		},
 	} {
 		bad := draft(domain.MCPConfirmationInbox)

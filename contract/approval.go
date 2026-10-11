@@ -24,10 +24,10 @@ type ApprovalStore interface {
 	Revision(ctx context.Context, key domain.ApprovalKey) (domain.ProposalRevision, error)
 }
 
-// ApproverRouter names the principal who decides a request. The product maps the request's
-// rule to its own roles or positions and picks an eligible person; Scout records who it was.
+// ApproverRouter assigns the principal who decides a request and the authority it decides
+// under. Prefer is a principal to choose first when eligible, such as the editor of a revision.
 type ApproverRouter interface {
-	Route(ctx context.Context, request domain.ApprovalRequest) (domain.PrincipalRef, error)
+	Route(ctx context.Context, request domain.ApprovalRequest, prefer domain.PrincipalRef) (domain.ApprovalAssignment, error)
 }
 
 // ApprovalInbox is the reviewer-facing read side.

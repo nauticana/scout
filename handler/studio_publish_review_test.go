@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,16 +21,21 @@ type reviewBackendFake struct {
 	request  domain.PublishReviewRequest
 	decision domain.PublishReviewDecision
 	agentID  string
+	kind     domain.PublishReviewKind
 	err      error
 }
 
 func (f *reviewBackendFake) Request(_ context.Context, actor domain.StudioActor, request domain.PublishReviewRequest) (domain.PublishReview, error) {
 	f.actor, f.request = actor, request
-	return domain.PublishReview{ReviewID: 11, AgentID: request.AgentID, Status: domain.PublishReviewRequested}, f.err
+	return domain.PublishReview{ReviewID: 11, AgentID: request.AgentID, Status: domain.PublishReviewRequested, RestoreVersion: request.RestoreVersion}, f.err
 }
 
-func (f *reviewBackendFake) Review(_ context.Context, actor domain.StudioActor, agentID string) (domain.PublishReviewState, error) {
-	f.actor, f.agentID = actor, agentID
+func (f *reviewBackendFake) Review(_ context.Context, actor domain.StudioActor, agentID string, kind domain.PublishReviewKind) (domain.PublishReviewState, error) {
+	f.actor, f.agentID, f.kind = actor, agentID, kind
+	if kind == domain.PublishReviewOfRestore {
+		return domain.PublishReviewState{AgentID: agentID, Kind: kind, Required: true, ActiveVersion: "3",
+			Review: &domain.PublishReview{ReviewID: 21, BaseVersion: "3", RestoreVersion: "2"}}, f.err
+	}
 	return domain.PublishReviewState{AgentID: agentID, Required: true, Stale: true, Review: &domain.PublishReview{ReviewID: 11,
 			Diff: domain.PublishReviewDiff{Settings: []domain.SettingChange{{ResourceKind: domain.ResourceTool, ResourceID: "tool", Change: domain.DiffAdded, After: json.RawMessage(`["search"]`)}}}},
 			OpenComments: []domain.DraftComment{{CommentID: 3, Anchor: domain.CommentOnDraft, Author: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "10"}}}},
@@ -84,6 +90,38 @@ func TestPublishReviewRoutesDispatchByMethodAndMapTheWire(t *testing.T) {
 	routes[api.StudioPublishReviewRejectPath](recorder, authenticatedRequest(http.MethodPost, api.StudioPublishReviewRejectPath, []byte(`{"agent_name":"writer-a","review_id":11}`)))
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("refused reject status = %d", recorder.Code)
+	}
+}
+
+func TestRestoreReviewTravelsAsRestoreVersionAndKind(t *testing.T) {
+	backend := &reviewBackendFake{}
+	handler := &StudioPublishReviewHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	routes := handler.Routes()
+	if actions := handler.Feature().Actions; !slices.Contains(actions, string(domain.StudioRestore)) {
+		t.Fatalf("feature actions = %v", actions)
+	}
+
+	recorder := httptest.NewRecorder()
+	routes[api.StudioPublishReviewPath](recorder, authenticatedRequest(http.MethodPost, api.StudioPublishReviewPath, []byte(`{"agent_name":"writer-a","restore_version":"2"}`)))
+	var review api.PublishReview
+	if err := unwrapData(recorder.Body.Bytes(), &review); err != nil || recorder.Code != http.StatusOK || backend.request.RestoreVersion != "2" || review.RestoreVersion != "2" {
+		t.Fatalf("request: %d %s %+v", recorder.Code, recorder.Body.String(), backend.request)
+	}
+
+	recorder = httptest.NewRecorder()
+	routes[api.StudioPublishReviewPath](recorder, authenticatedRequest(http.MethodGet, api.StudioPublishReviewPath+"?agent_name=writer-a&kind=restore", nil))
+	var state api.PublishReviewState
+	if err := unwrapData(recorder.Body.Bytes(), &state); err != nil || recorder.Code != http.StatusOK {
+		t.Fatalf("state: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if backend.kind != domain.PublishReviewOfRestore || state.Kind != "restore" || state.ActiveVersion != "3" || state.Review.RestoreVersion != "2" || state.Review.BaseVersion != "3" {
+		t.Fatalf("state = %+v", state)
+	}
+
+	recorder = httptest.NewRecorder()
+	routes[api.StudioPublishReviewPath](recorder, authenticatedRequest(http.MethodGet, api.StudioPublishReviewPath+"?agent_name=writer-a", nil))
+	if recorder.Code != http.StatusOK || backend.kind != "" {
+		t.Fatalf("an absent kind is passed through empty: %d %q", recorder.Code, backend.kind)
 	}
 }
 

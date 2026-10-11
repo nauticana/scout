@@ -16,12 +16,14 @@ import (
 )
 
 const (
-	qScopeNode       = "scout_scope_node"
-	qScopeBindings   = "scout_scope_bindings"
-	qEffectiveGet    = "scout_effective_release_get"
-	qEffectivePut    = "scout_effective_release_put"
-	maxScopeChainRow = 64
+	qScopeNode     = "scout_scope_node"
+	qScopeBindings = "scout_scope_bindings"
+	qEffectiveGet  = "scout_effective_release_get"
+	qEffectivePut  = "scout_effective_release_put"
 )
+
+// MaxScopeChainDepth is the most scope nodes a chain read walks; a configured depth may only tighten it.
+const MaxScopeChainDepth = 64
 
 var scopeQueries = map[string]string{
 	qScopeNode: `
@@ -72,14 +74,14 @@ func (r *TableScopeRepository) Chain(ctx context.Context, tenantID int64, scopeI
 		return nil, fmt.Errorf("%w: scope id is required", domain.ErrValidation)
 	}
 	var reversed domain.ScopeChain
-	seen := make(map[string]struct{}, maxScopeChainRow)
+	seen := make(map[string]struct{}, MaxScopeChainDepth)
 	for current := scopeID; current != ""; {
 		if _, loop := seen[current]; loop {
 			return nil, fmt.Errorf("%w: scope %q is part of a parent cycle", domain.ErrConflict, current)
 		}
 		seen[current] = struct{}{}
-		if len(reversed) >= maxScopeChainRow {
-			return nil, fmt.Errorf("%w: scope chain exceeds %d nodes", domain.ErrValidation, maxScopeChainRow)
+		if len(reversed) >= MaxScopeChainDepth {
+			return nil, fmt.Errorf("%w: scope chain exceeds %d nodes", domain.ErrValidation, MaxScopeChainDepth)
 		}
 		result, err := r.qs.Query(ctx, qScopeNode, tenantID, current)
 		if err != nil {

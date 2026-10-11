@@ -20,10 +20,10 @@ const (
 	qDecisionInsert = "scout_decision_insert"
 	qDecisionPage   = "scout_decision_page"
 
-	// DefaultDecisionPageSize bounds an unbounded audit query.
+	// DefaultDecisionPageSize bounds an unbounded audit query when PageSize is zero.
 	DefaultDecisionPageSize = 100
-	// MaxDecisionPageSize caps what a caller may ask for in one page.
-	MaxDecisionPageSize = 1000
+	// DefaultMaxDecisionPageSize caps what a caller may ask for in one page when MaxPageSize is zero.
+	DefaultMaxDecisionPageSize = 1000
 )
 
 // The read query filters on tenant first and takes every other predicate as an
@@ -67,6 +67,10 @@ type TableAuditSink struct {
 	DB keelport.DatabaseRepository
 	// Evidence is optional; without it a record keeps its typed columns and drops the payload.
 	Evidence EvidenceStore
+	// PageSize answers a query that names no limit and MaxPageSize caps one that does; zero takes
+	// DefaultDecisionPageSize and DefaultMaxDecisionPageSize. PageSize may not exceed MaxPageSize.
+	PageSize    int
+	MaxPageSize int
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -154,6 +158,24 @@ func (sink *TableAuditSink) insert(ctx context.Context, qs keelport.QueryService
 	return nil
 }
 
+// pageBounds resolves the default and largest page, refusing a negative or inverted pair.
+func (sink *TableAuditSink) pageBounds() (int, int, error) {
+	if sink.PageSize < 0 || sink.MaxPageSize < 0 {
+		return 0, 0, fmt.Errorf("%w: audit page sizes cannot be negative", domain.ErrValidation)
+	}
+	pageSize, maxPageSize := sink.PageSize, sink.MaxPageSize
+	if pageSize == 0 {
+		pageSize = DefaultDecisionPageSize
+	}
+	if maxPageSize == 0 {
+		maxPageSize = DefaultMaxDecisionPageSize
+	}
+	if pageSize > maxPageSize {
+		return 0, 0, fmt.Errorf("%w: audit page size %d exceeds the largest page %d", domain.ErrValidation, pageSize, maxPageSize)
+	}
+	return pageSize, maxPageSize, nil
+}
+
 // Decisions returns one page, newest first, always inside a single tenant.
 func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.DecisionQuery) (domain.DecisionPage, error) {
 	if err := sink.init(ctx); err != nil {
@@ -162,13 +184,15 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 	if query.TenantID < 0 {
 		return domain.DecisionPage{}, fmt.Errorf("%w: audit tenant id cannot be negative", domain.ErrValidation)
 	}
+	pageSize, maxPageSize, err := sink.pageBounds()
+	if err != nil {
+		return domain.DecisionPage{}, err
+	}
 	limit := query.Limit
 	if limit <= 0 {
-		limit = DefaultDecisionPageSize
+		limit = pageSize
 	}
-	if limit > MaxDecisionPageSize {
-		limit = MaxDecisionPageSize
-	}
+	limit = min(limit, maxPageSize)
 	var kind, id string
 	if query.Principal != nil {
 		kind, id = string(query.Principal.Kind), query.Principal.ID

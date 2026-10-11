@@ -1,0 +1,64 @@
+table: agent_template_publication
+comment: Effective-dated sharing of a tenant template with one other tenant or, with no audience, every tenant
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+    comment: The owning tenant
+  - name: template_id
+    type: VARCHAR(80)
+  - name: audience_partner_id
+    type: BIGINT
+    nullable: true
+    comment: The tenant it is shared with; NULL shares it with every tenant
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: published_by_kind
+    type: VARCHAR(20)
+  - name: published_by_id
+    type: VARCHAR(120)
+  - name: withdrawn_by_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: withdrawn_by_id
+    type: VARCHAR(120)
+    nullable: true
+primary_key: [id]
+sequence:
+  name: agent_template_publication_seq
+  column: id
+foreign_keys:
+  - name: agent_template_publications
+    columns: [partner_id, template_id]
+    references:
+      table: agent_template
+      columns: [partner_id, template_id]
+  - name: audience_agent_template_publications
+    columns: [audience_partner_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+indexes:
+  - name: agent_template_publication_tenant_uq
+    columns: [partner_id, template_id, audience_partner_id]
+    unique: true
+    where: endda IS NULL AND audience_partner_id IS NOT NULL
+  - name: agent_template_publication_all_uq
+    columns: [partner_id, template_id]
+    unique: true
+    where: endda IS NULL AND audience_partner_id IS NULL
+  - name: agent_template_publication_audience_ix
+    columns: [audience_partner_id]
+    where: endda IS NULL
+checks:
+  - name: agent_template_publication_period_ck
+    expression: endda IS NULL OR endda >= begda
+  - name: agent_template_publication_audience_ck
+    expression: audience_partner_id IS NULL OR audience_partner_id <> partner_id
+  - name: agent_template_publication_withdrawn_ck
+    expression: (endda IS NULL) = (withdrawn_by_kind IS NULL) AND (withdrawn_by_kind IS NULL) = (withdrawn_by_id IS NULL)

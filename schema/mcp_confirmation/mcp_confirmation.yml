@@ -109,11 +109,6 @@ foreign_keys:
     references:
       table: mcp_confirmation_status
       columns: [code]
-  - name: channel_mcp_confirmations
-    columns: [channel_code]
-    references:
-      table: mcp_confirmation_channel
-      columns: [code]
   - name: approval_mcp_confirmations
     columns: [approval_id]
     references:
@@ -134,6 +129,8 @@ indexes:
   - name: mcp_confirmation_tenant_ix
     columns: [partner_id, created_at]
 checks:
+  - name: mcp_confirmation_channel_ck
+    expression: channel_code IN ('elicitation', 'inbox')
   - name: mcp_confirmation_digest_ck
     expression: CHAR_LENGTH(payload_digest) = 64
   - name: mcp_confirmation_counters_ck

@@ -28,18 +28,23 @@ type AgentLimitsReport struct {
 	// TurnsLastMinute counts the agent's turns opened in the last minute by the database clock.
 	TurnsLastMinute int64
 	// Budget is nil when the release binds none.
-	Budget *BudgetLimits
-	// Spend is the use of a day or month budget in its current period; nil for any other budget.
+	Budget *ReleaseBudget
+	// BudgetProblem names why a bound budget cannot be enforced; Spend is then nil.
+	BudgetProblem BudgetProblem
+	// Spend is the spend of the budget's current period; nil for a per-turn budget or when the budget has a problem.
 	Spend *BudgetSpend
 }
 
-// BudgetSpend is an agent's settled usage in its budget's current period [PeriodStart,
-// PeriodEnd). Cost counts only usage in Currency, whose minor units have Exponent decimal places.
+// BudgetSpend is an agent's use of its budget's current period [PeriodStart, PeriodEnd) by the
+// database clock: usage settled in the period and holds still live. Cost counts only Currency,
+// whose minor units have Exponent decimal places.
 type BudgetSpend struct {
-	PeriodStart    time.Time
-	PeriodEnd      time.Time
-	Tokens         int64
-	CostMinorUnits int64
-	Currency       string
-	Exponent       int
+	PeriodStart        time.Time
+	PeriodEnd          time.Time
+	Tokens             int64
+	CostMinorUnits     int64
+	HeldTokens         int64
+	HeldCostMinorUnits int64
+	Currency           string
+	Exponent           int
 }

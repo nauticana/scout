@@ -89,7 +89,7 @@ func TestTableSafetyEventSinkPagesOneAgentNewestFirst(t *testing.T) {
 	}
 
 	for _, filter := range []domain.SafetyEventFilter{
-		{AgentID: "", Limit: 10}, {AgentID: "writer-a", Limit: 0}, {AgentID: "writer-a", Limit: MaxSafetyEventPage + 1},
+		{AgentID: "", Limit: 10}, {AgentID: "writer-a", Limit: 0}, {AgentID: "writer-a", Limit: DefaultMaxSafetyEventPage + 1},
 		{AgentID: "writer-a", Limit: 10, Before: -1},
 	} {
 		if _, err := sink.SafetyEvents(context.Background(), 7, filter); !errors.Is(err, domain.ErrValidation) {

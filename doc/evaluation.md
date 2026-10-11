@@ -43,20 +43,33 @@ nothing persisted) and pinned by definition digest, or one release pinned by
 version and digest. `AgentEvaluationStore.Enqueue` queues the run in
 `evaluation_run` with its subject in `evaluation_run_subject`, and refuses an agent
 already holding `agent_evaluation_max_open_runs` open runs (`ErrRateLimited`) or a
-set version with no examples in the caller's scope. These runs score a single
-subject with `contract.HeuristicEvaluator`s; a run of an agent the caller cannot
-VIEW reads as not found.
+set version with no examples in the caller's scope. A draft run pins the draft's
+frozen settings next to its definition (`evaluation_run_subject.settings_json`),
+checked against the definition's settings digest at enqueue and load. These runs
+score a single subject with `contract.HeuristicEvaluator`s and, when composed, the
+rubric judge; a run of an agent the caller cannot VIEW reads as not found.
 
 ## Ordering
 
 `Runner` replays baseline and candidate on identical examples through an injected
 `CaseExecutor`. `ReleaseCaseExecutor` is the production one: it resolves the arm's
 published graph and runs its tool-loop steps with the release's prompt and tools
-under the executor's tool-loop limits (not the release's `limits` binding), a fresh `ToolSandbox` per example as the only tool path, the arm's
+under the executor's tool-loop limits, a fresh `ToolSandbox` per example as the only tool path, the arm's
 `Decoding` (`temperature`, `max_tokens`; any other key refuses the replay), and the
 release's output guardrails when composed. The example payload is the turn input,
 verified against its digest. An agent that exhausts a limit, loops, or answers
 invalidly ends its trajectory in a failed state instead of failing the run.
+
+The release's frozen `limits` binding, read through `ReleaseLimits` (required: the
+data plane's `PrincipalLimits`) before the payload or a sandbox, only narrows the
+executor's ceilings: `max_tool_calls` and the step deadline narrow the tool loop,
+`max_steps` lowers `MaxSteps`, and `max_duration_seconds` bounds the whole graph
+walk, guardrails included. A per-turn budget bounds every step's spend as it does a
+live turn's. `turns_per_minute` does not apply to a replay. Limits or a budget
+that cannot be read fail the case before any model call; running out of the
+release's steps, duration, or turn budget is the agent's failure, scored as a failed trajectory
+with the usage already spent, while the caller's own cancellation is returned,
+never scored.
 Component versions other than agent and model are labels of what the release pins:
 an ablation arm must name a release that pins its component. When both arms pin the same knowledge base, index, and index
 generation, the candidate is handed the baseline's retrieval so only the changed
@@ -89,7 +102,7 @@ refused with `ErrStaleEvidence`. The canonical payload is signed through the
 pluggable `GateSigner` (`HMACSigner` is the stdlib HMAC-SHA256 reference) and every
 decision is audited.
 
-`GateHealthEvaluator` implements `contract.DetailedRolloutHealthEvaluator`. It
+`GateHealthEvaluator` implements `contract.RolloutHealthEvaluator`. It
 reads the latest decision for a platform build and returns `RolloutInconclusive` —
 never healthy — when it is missing, expired, or fails signature or content-id
 verification, and likewise when online telemetry is stale or under the sample
@@ -109,8 +122,16 @@ ratio.
 `AgentEvaluationWorker` (`NewAgentEvaluationWorker`) is the keel leased queue worker
 (queue `agent-evaluation`) for queued agent runs. A draft subject runs each example
 input, checked against its digest, through the governed
-`contract.AgentDraftTestExecutor` with the pinned definition; a release subject
-replays through `contract.CaseExecutor`. Examples run with bounded concurrency.
+`contract.AgentDraftTestExecutor` with the pinned definition and the limits of its
+pinned settings; a release subject replays through `contract.CaseExecutor`.
+Examples run with bounded concurrency. A draft makes one model call, so only
+`max_duration_seconds` applies to it; settings that do not match their digest,
+or limits that cannot be read, fail the run before any example runs. A draft
+stopped by its own duration is charged for the work that ran, at least
+`MinimumCost` (`runtime.DraftLimitError` carries the usage), and recorded as a
+failed case whose usage counts toward the totals and the cost ceiling; a stop that
+settled no usage fails the run. Studio's draft test applies the same frozen limits
+and answers such a stop with 422.
 Each result is recorded under the lease, which it renews on the store clock, and
 added to the run totals in the same transaction, so a reclaimed run skips what an
 earlier attempt recorded. A run stops as `stopped_early` once its settled cost
@@ -122,6 +143,50 @@ it as unsettled. A lost lease, a store failure, or cancellation leaves the run f
 reclaim, and a lease that expires on the `agent_evaluation_max_attempts`-th claim
 fails it. Reasons carry only the error class and never name a gate example.
 Authorization is checked at enqueue, not again when the worker executes.
+
+## Rubric judge
+
+`evaluation.GatewayRubricJudge` (`NewGatewayRubricJudge`) grades one subject's
+answer against the example's rubric; an example with no rubric is not graded. It
+reads the case input and checks its digest, sends input, expected behavior,
+rubric, and answer as JSON data under fixed instructions stating the integer scale
+and pass score, and calls the pinned judge model through the governed model
+gateway with a strict `rubric_verdict` JSON schema, so the judge route must declare
+`structured_output`. It validates the verdict again: only `score`, `pass`, and
+`rationale`, an integer score in range, a pass flag that agrees with the pass
+score, a non-blank rationale of at most 300 characters, no tool calls, at most
+8 KiB. Anything else is `ErrInvalidModelOutput`, never a pass, and a prompt over
+`MaxInputBytes` is refused before any call. It returns `rubric_score` (normalized
+to 0..1) and `rubric_pass` (1 or 0) under evaluator kind `rubric_judge`, versioned
+by provider, model, model version, and the digest of its instructions and schema.
+A hidden gate example's score carries no model rationale, and no error echoes
+model or example text.
+
+`AgentEvaluationWorker.Judge` runs it after the heuristic evaluators, charging its
+spend to the run's requester; a blank principal is refused. The spend is priced
+in minor units (the provider's price, else the `ModelPricer`), recorded apart from
+the subject's (`evaluation_result.evaluator_*`, `evaluator_cost` in the API), and
+counted in the run totals and against `MaxRunCostMinorUnits`; spend that cannot be
+counted (unpriced, in another currency, or negative) fails the run. Judge calls are
+not conversation turns, so the judge's gateway is composed without the turn
+`BudgetLedger`, whose holds are charged to a conversation's agent; the run's cost
+ceiling bounds them. A case that ended in a failed state, such as a limit or budget
+stop, has no answer to grade and is not judged. A grading
+failure records the example with both spends and no scores and fails the run, and
+an attempt that finds such a recorded example, as after a judge call cut off by
+shutdown, fails the run before anything else runs.
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `agent_evaluation_judge_provider`, `_model`, `_model_version` | empty | Pinned judge model; all empty composes no judge |
+| `agent_evaluation_judge_min_score` | 1 | Lowest grade, at least 0 |
+| `agent_evaluation_judge_max_score` | 5 | Highest grade, at most 100 above the lowest |
+| `agent_evaluation_judge_pass_score` | 4 | Lowest passing grade |
+| `agent_evaluation_judge_max_tokens` | 512 | Verdict output tokens |
+| `agent_evaluation_judge_max_input_bytes` | 131072 | Largest judge prompt; a larger case fails its run |
+
+`ScoutConfig.RubricJudgeSettings()` returns them; a product composes the judge when
+`Configured()` reports a judge model.
 
 ## Sampling, storage, adjudication
 

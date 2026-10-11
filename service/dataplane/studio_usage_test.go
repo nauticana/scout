@@ -42,14 +42,14 @@ func TestStudioUsageReportsCostPerWorkItemWithItsExponent(t *testing.T) {
 	if lines[1].Model.ModelID != "gpt" || lines[1].CostMinorUnits != 30 || lines[2].Model != (domain.ModelReference{}) || lines[2].ToolCalls != 1 {
 		t.Fatalf("per-model lines = %+v", lines)
 	}
-	if args := query.firstArgs(qStudioUsage); args[0] != int64(7) || args[1] != "writer-a" || args[4] != MaxUsageLines+1 {
+	if args := query.firstArgs(qStudioUsage); args[0] != int64(7) || args[1] != "writer-a" || args[4] != DefaultUsageLines+1 {
 		t.Fatalf("args = %v", args)
 	}
 }
 
 func TestStudioUsageRefusesUnboundedOrUngrantedReports(t *testing.T) {
 	usage := &StudioUsage{DB: queueDBFake{query: &queueQueryFake{rows: map[string][][]any{}}}, Authorizer: allowStudio{domain.StudioView}}
-	for name, to := range map[string]time.Time{"backwards": usageFrom.Add(-time.Hour), "too long": usageFrom.Add(MaxUsageWindow + time.Hour)} {
+	for name, to := range map[string]time.Time{"backwards": usageFrom.Add(-time.Hour), "too long": usageFrom.Add(DefaultUsageWindow + time.Hour)} {
 		if _, err := usage.Usage(context.Background(), usageActor, "writer-a", usageFrom, to); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("%s: error = %v, want validation", name, err)
 		}
@@ -58,7 +58,7 @@ func TestStudioUsageRefusesUnboundedOrUngrantedReports(t *testing.T) {
 	if _, err := usage.Usage(context.Background(), usageActor, "writer-a", usageFrom, usageFrom.Add(time.Hour)); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("error = %v, want forbidden", err)
 	}
-	rows := make([][]any, MaxUsageLines+1)
+	rows := make([][]any, DefaultUsageLines+1)
 	for index := range rows {
 		rows[index] = []any{"4", "", "", "", "USD", int64(2), int64(1), int64(1), int64(1), int64(0), int64(1), "", ""}
 	}

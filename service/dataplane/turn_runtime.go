@@ -91,6 +91,7 @@ type turnExecution struct {
 	reservation domain.BudgetReservation
 	settled     bool
 	limits      domain.ExecutionLimits
+	budget      domain.ReleaseBudget
 	// bounds are the delegation limits this turn may pass on; the zero value
 	// means the turn acts on its own authority and delegates nothing.
 	bounds domain.DelegationBounds
@@ -227,6 +228,12 @@ func (runtime *TurnRuntime) execute(ctx context.Context, execution *turnExecutio
 		return domain.TurnResult{}, fmt.Errorf("load release limits: %w", err)
 	}
 	policy = narrowRuntimePolicy(policy, execution.limits)
+	if execution.budget, err = runtime.Limits.Budget(ctx, pinnedPrincipal(turn, snapshot.AgentVersion)); err != nil {
+		return domain.TurnResult{}, fmt.Errorf("load release budget: %w", err)
+	}
+	if policy, err = narrowRuntimeBudget(policy, execution.budget); err != nil {
+		return domain.TurnResult{}, err
+	}
 	permit, err := runtime.Governor.Start(ctx, turn, policy)
 	if err != nil {
 		return domain.TurnResult{}, err
@@ -317,6 +324,10 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		return domain.StepResult{}, stage.At(domain.StageCheckpoint, err)
 	}
 	if !replayed {
+		spend, err := stepSpend(execution)
+		if err != nil {
+			return domain.StepResult{}, err
+		}
 		executor, err := runtime.Executors.ExecutorFor(ctx, step.Kind)
 		if err != nil {
 			return domain.StepResult{}, err
@@ -326,7 +337,7 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 			Input:      execution.dispatch.Turn.Input,
 			Principal:  pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion),
 			OnBehalfOf: actingFor(execution.dispatch.Turn, execution.snapshot), Bounds: execution.bounds, Limits: execution.limits,
-			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth,
+			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth, Spend: spend,
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {
 			spent := spentUsage(err)
@@ -537,6 +548,8 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 		execution.reservation = reservation
 	case errors.Is(err, domain.ErrBudgetSettled):
 		execution.settled = true
+	case errors.Is(err, domain.ErrBudgetExceeded), errors.Is(err, domain.ErrDegraded):
+		// Admission refused a new attempt, so no live hold remains to release.
 	default:
 		return fmt.Errorf("reserve turn budget: %w", err)
 	}
@@ -678,7 +691,8 @@ func usageAttribution(turn domain.TurnRequest) domain.UsageAttribution {
 
 // turnBudgetRequest is the hold one turn asks for, the same at ingress and in the runtime so a
 // replay re-attaches to it. It is attributed to the acting principal, and a delegated hop never
-// holds more cost than the budget its delegator passed down.
+// holds more cost than the budget its delegator passed down. The turn's governors stop its work
+// at a per-turn budget, so the ledger clamps the hold to that budget.
 func turnBudgetRequest(turn domain.TurnRequest, quote domain.Usage) domain.BudgetRequest {
 	cost := quote.CostMinorUnits
 	if bound := turn.DelegationBounds; bound.BudgetMinorUnits > 0 && bound.Currency == quote.Currency && cost > bound.BudgetMinorUnits {
@@ -686,7 +700,7 @@ func turnBudgetRequest(turn domain.TurnRequest, quote domain.Usage) domain.Budge
 	}
 	return domain.BudgetRequest{
 		TenantID: turn.TenantContext.TenantID, RequestID: turn.RequestID, Principal: turnPrincipal(turn),
-		Tokens: quote.InputTokens + quote.OutputTokens, CostMinorUnits: cost, Currency: quote.Currency,
+		Tokens: quote.InputTokens + quote.OutputTokens, CostMinorUnits: cost, Currency: quote.Currency, TurnGoverned: true,
 	}
 }
 

@@ -2,6 +2,7 @@ package isolation
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -26,15 +27,48 @@ func boundAgent() domain.Principal {
 
 func TestBudgetComesFromTheFrozenRelease(t *testing.T) {
 	limits := &ReleaseLimits{
-		Releases: releaseWith(domain.ResourceBudget, `{"tokens":400,"cost_minor_units":5000,"currency":"EUR"}`),
-		Window:   time.Hour,
+		Releases: releaseWith(domain.ResourceBudget, `{"tokens":400,"cost_minor_units":5000,"currency":"EUR","exponent":2,"period":"month","timezone":"Europe/Istanbul"}`),
 	}
 	budget, err := limits.Budget(context.Background(), boundAgent())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if budget.WindowTokens != 400 || budget.WindowCostMinorUnits != 5000 || budget.Currency != "EUR" || budget.Window != time.Hour {
+	if budget.Tokens != 400 || budget.CostMinorUnits != 5000 || budget.Currency != "EUR" || budget.Exponent == nil || *budget.Exponent != 2 ||
+		budget.Source != domain.BudgetSourceRelease || budget.Period != (domain.BudgetPeriod{Kind: domain.BudgetMonthly, Timezone: "Europe/Istanbul"}) {
 		t.Fatalf("budget = %+v", budget)
+	}
+}
+
+func TestReleaseBudgetWithoutAPeriodIsMalformed(t *testing.T) {
+	for name, value := range map[string]string{
+		"no period": `{"tokens":400,"cost_minor_units":5000,"currency":"EUR"}`,
+		"malformed": `{"tokens":"many"}`,
+	} {
+		limits := &ReleaseLimits{Releases: releaseWith(domain.ResourceBudget, value)}
+		if budget, err := limits.Budget(context.Background(), boundAgent()); !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("%s: budget = %+v, %v; want validation", name, budget, err)
+		}
+	}
+}
+
+func TestBudgetFallbackMustNameAValidPeriod(t *testing.T) {
+	daily := domain.ReleaseBudget{Tokens: 10, Period: domain.BudgetPeriod{Kind: domain.BudgetDaily, Timezone: "UTC"}}
+	limits := &ReleaseLimits{Releases: stubReleases{}, Fallback: daily}
+	if budget, err := limits.Budget(context.Background(), boundAgent()); err != nil || budget.Source != domain.BudgetSourceFallback || budget.Tokens != 10 {
+		t.Fatalf("fallback = %+v, %v", budget, err)
+	}
+	for name, fallback := range map[string]domain.ReleaseBudget{
+		"no period":      {Tokens: 10},
+		"invalid period": {Tokens: 10, Period: domain.BudgetPeriod{Kind: domain.BudgetDaily}},
+	} {
+		limits.Fallback = fallback
+		if _, err := limits.Budget(context.Background(), boundAgent()); err == nil || errors.Is(err, domain.ErrValidation) {
+			t.Errorf("%s: error = %v, want a configuration error", name, err)
+		}
+	}
+	limits.Fallback = domain.ReleaseBudget{}
+	if budget, err := limits.Budget(context.Background(), boundAgent()); err != nil || budget != (domain.ReleaseBudget{}) {
+		t.Fatalf("unbounded fallback = %+v, %v", budget, err)
 	}
 }
 
