@@ -19,8 +19,8 @@ type EvaluationGatePolicy struct {
 	RequiredScopes  []string `json:"required_scopes"`
 }
 
-// EvaluationGateRun is one completed run a decision read: role candidate for the decided
-// draft, baseline for the active release.
+// EvaluationGateRun is one completed run a decision read; role is a gate_decision_run_role code
+// (candidate for the decided draft, baseline for the active release).
 type EvaluationGateRun struct {
 	RunID            int64  `json:"run_id"`
 	Role             string `json:"role"`
@@ -30,7 +30,7 @@ type EvaluationGateRun struct {
 	CriticalFailures int64  `json:"critical_failures"`
 }
 
-// EvaluationGateDecision is the gate's verdict (pass, fail, or override) on one definition digest.
+// EvaluationGateDecision is the gate's verdict, a gate_decision_verdict code, on one definition digest.
 type EvaluationGateDecision struct {
 	DefinitionDigest string               `json:"definition_digest"`
 	Verdict          string               `json:"verdict"`

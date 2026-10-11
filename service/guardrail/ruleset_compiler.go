@@ -129,7 +129,7 @@ func (compiler *RuleSetCompiler) compileRestriction(layer domain.GuardrailLayer,
 	set := domain.GuardrailRuleSet{SchemaVersion: RuleSetSchemaVersion, Rules: restriction.Guardrails}
 	compiled, err := compiler.compileSet(set, layer, restriction.Digest, restriction.Digest)
 	if err != nil {
-		return nil, fmt.Errorf("%s restriction layer %s: %w", layer, restriction.Digest, err)
+		return nil, fmt.Errorf("guardrail layer %s restriction %s: %w", layer, restriction.Digest, err)
 	}
 	compiler.cache.Set(key, compiled, 0)
 	return compiled, nil

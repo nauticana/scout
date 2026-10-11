@@ -23,8 +23,8 @@ type ModelRequest struct {
 	Instructions    []byte
 	Prompt          []byte
 	MaxOutputTokens int64
-	// RequiredCapabilities names model capabilities the request cannot do without, e.g. "tools", "vision".
-	RequiredCapabilities []string
+	// RequiredCapabilities names model capabilities the request cannot do without.
+	RequiredCapabilities []ModelCapability
 	// AffinityKey groups requests that benefit from landing on the same route (session or prefix cache).
 	AffinityKey string
 	// Idempotent marks a request safe to hedge or retry on another route.
@@ -50,19 +50,37 @@ type ModelRequest struct {
 	Temperature *float64
 }
 
-// Route capabilities a request can require. Tools and a constrained Output imply
-// theirs, so a caller cannot forget to ask.
+// ModelCapability is a seeded model_capability code: one modality or feature a model serves.
+type ModelCapability string
+
+// Model capabilities. Text, Image, and Video are the modalities Studio assigns;
+// the rest are route capabilities a request can require. Tools and a constrained
+// Output imply theirs, so a caller cannot forget to ask.
 const (
-	CapabilityTools = "tools"
+	CapabilityText  ModelCapability = "TX"
+	CapabilityImage ModelCapability = "IM"
+	CapabilityVideo ModelCapability = "VD"
+	CapabilityTools ModelCapability = "TL"
 	// CapabilitySampling marks a model that accepts sampling parameters.
-	CapabilitySampling         = "sampling"
-	CapabilityStructuredOutput = "structured_output"
+	CapabilitySampling         ModelCapability = "SM"
+	CapabilityStructuredOutput ModelCapability = "SO"
 	// CapabilityWebSearch marks a route that grounds its answer in its own web
 	// search and reports the sources it used.
-	CapabilityWebSearch = "web_search"
+	CapabilityWebSearch ModelCapability = "WS"
 	// CapabilityEmbeddings marks a route that turns content into vectors.
-	CapabilityEmbeddings = "embeddings"
+	CapabilityEmbeddings ModelCapability = "EM"
 )
+
+// Valid reports whether the capability is a seeded model_capability code.
+func (capability ModelCapability) Valid() bool {
+	switch capability {
+	case CapabilityText, CapabilityImage, CapabilityVideo, CapabilityTools, CapabilitySampling,
+		CapabilityStructuredOutput, CapabilityWebSearch, CapabilityEmbeddings:
+		return true
+	default:
+		return false
+	}
+}
 
 // EmbeddingRequest is one bounded batch embedded on one route. Inputs are
 // embedded in order and the result holds exactly one vector per input.
@@ -266,7 +284,7 @@ type ModelCandidate struct {
 	Region           string
 	RouteID          string
 	QualityClass     int
-	Capabilities     []string
+	Capabilities     []ModelCapability
 	MaxContextTokens int64
 	MaxOutputTokens  int64
 	// EmbeddingDimensions is the vector width this route is served at; zero

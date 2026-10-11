@@ -165,7 +165,7 @@ func TestDraftCommentRoutesMapTheAnchor(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	routes[api.StudioCommentPath](recorder, authenticatedRequest(http.MethodPost, api.StudioCommentPath,
-		[]byte(`{"agent_name":"writer-a","draft_revision":4,"anchor":"setting","resource_kind":"budget","resource_id":"budget","body":"high","status":"resolved"}`)))
+		[]byte(`{"agent_name":"writer-a","draft_revision":4,"anchor":"S","resource_kind":"budget","resource_id":"budget","body":"high","status":"R"}`)))
 	var created api.DraftComment
 	if err := unwrapData(recorder.Body.Bytes(), &created); err != nil || recorder.Code != http.StatusOK {
 		t.Fatalf("comment: %d %s", recorder.Code, recorder.Body.String())
@@ -176,7 +176,7 @@ func TestDraftCommentRoutesMapTheAnchor(t *testing.T) {
 	}
 
 	recorder = httptest.NewRecorder()
-	routes[api.StudioCommentsPath](recorder, authenticatedRequest(http.MethodGet, api.StudioCommentsPath+"?agent_name=writer-a&status=open", nil))
+	routes[api.StudioCommentsPath](recorder, authenticatedRequest(http.MethodGet, api.StudioCommentsPath+"?agent_name=writer-a&status="+string(domain.DraftCommentOpen), nil))
 	if recorder.Code != http.StatusOK || backend.status != domain.DraftCommentOpen || strings.Contains(recorder.Body.String(), `"data":null`) {
 		t.Fatalf("list: %d %q", recorder.Code, recorder.Body.String())
 	}
@@ -198,7 +198,7 @@ func TestPromptLayerExposesItsLastEditor(t *testing.T) {
 		t.Fatalf("layers = %+v", layers)
 	}
 	request := api.AgentDraft{AgentName: "writer-a", Languages: []api.AgentLanguageDraft{{LanguageCode: "en-US", PromptSections: []api.AgentPromptSection{{
-		PromptHeaderID: 1, Layers: []api.AgentPromptLayer{{ScopeID: "a:writer-a", ScopeKind: "agent", MergeMode: "replace", Instruction: "x", BoundBy: &editor}},
+		PromptHeaderID: 1, Layers: []api.AgentPromptLayer{{ScopeID: "a:writer-a", ScopeKind: "agent", MergeMode: string(domain.MergeReplace), Instruction: "x", BoundBy: &editor}},
 	}}}}}
 	if layer := domainDraft(request).Languages[0].Sections[0].Layers[0]; layer.BoundBy != nil {
 		t.Fatalf("bound_by must not be read from the request: %+v", layer)

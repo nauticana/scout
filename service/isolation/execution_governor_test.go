@@ -58,7 +58,7 @@ func TestExecutionGovernorAccountsStepsAndTerminalDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: "model"}); err != nil {
+	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: domain.StepKindModel}); err != nil {
 		t.Fatalf("BeforeStep: %v", err)
 	}
 	stepUsage := domain.Usage{InputTokens: 2, CostMinorUnits: 3, Currency: "USD"}
@@ -84,13 +84,13 @@ func TestExecutionGovernorEnforcesStepLimit(t *testing.T) {
 	policy := validRuntimePolicy()
 	policy.MaxSteps = 1
 	permit, _ := executionGovernor(&now, &observed, &recorded).Start(context.Background(), validTurnRequest(), policy)
-	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: "model"}); err != nil {
+	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: domain.StepKindModel}); err != nil {
 		t.Fatalf("BeforeStep: %v", err)
 	}
 	if err := permit.AfterStep(context.Background(), domain.StepResult{}); err != nil {
 		t.Fatalf("AfterStep: %v", err)
 	}
-	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "two", Kind: "model"}); !errors.Is(err, domain.ErrExecutionLimit) {
+	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "two", Kind: domain.StepKindModel}); !errors.Is(err, domain.ErrExecutionLimit) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -102,7 +102,7 @@ func TestExecutionGovernorAccountsBeforeReturningLimitErrors(t *testing.T) {
 	policy := validRuntimePolicy()
 	policy.MaxTokens = 3
 	permit, _ := executionGovernor(&now, &observed, &recorded).Start(context.Background(), validTurnRequest(), policy)
-	_ = permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: "model"})
+	_ = permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: domain.StepKindModel})
 	usage := domain.Usage{InputTokens: 2, OutputTokens: 2}
 	err := permit.AfterStep(context.Background(), domain.StepResult{Usage: usage})
 	if !errors.Is(err, domain.ErrExecutionLimit) || len(recorded) != 1 {
@@ -125,7 +125,7 @@ func TestExecutionGovernorPropagatesLoopDetection(t *testing.T) {
 		Now: func() time.Time { return now },
 	}
 	permit, _ := governor.Start(context.Background(), validTurnRequest(), validRuntimePolicy())
-	_ = permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: "model"})
+	_ = permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: domain.StepKindModel})
 	if err := permit.AfterStep(context.Background(), domain.StepResult{Fingerprint: "same"}); !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
 	}
@@ -139,7 +139,7 @@ func TestExecutionGovernorEnforcesTimeout(t *testing.T) {
 	policy.TurnTimeout = time.Second
 	permit, _ := executionGovernor(&now, &observed, &recorded).Start(context.Background(), validTurnRequest(), policy)
 	now = now.Add(time.Second)
-	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: "model"}); !errors.Is(err, domain.ErrExecutionLimit) {
+	if err := permit.BeforeStep(context.Background(), domain.ExecutionStep{StepID: "one", Kind: domain.StepKindModel}); !errors.Is(err, domain.ErrExecutionLimit) {
 		t.Fatalf("error = %v", err)
 	}
 }

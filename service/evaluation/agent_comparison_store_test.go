@@ -213,7 +213,7 @@ func TestAgentEvaluationStoreRecordsComparisonsUnderTheLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	verdict := query.calls[qAgentEvalPutComparison][0]
-	if verdict[5] != "candidate" || verdict[6] != 0.8 || verdict[7] != "judge" || verdict[10] != "b refunds" || verdict[13] != int64(2) || verdict[14] != "EUR" || verdict[15] != nil {
+	if verdict[5] != string(domain.ComparisonPrefersB) || verdict[6] != 0.8 || verdict[7] != "judge" || verdict[10] != "b refunds" || verdict[13] != int64(2) || verdict[14] != "EUR" || verdict[15] != nil {
 		t.Fatalf("verdict args = %v", verdict)
 	}
 	arms := query.calls[qAgentEvalPutArm]
@@ -253,10 +253,10 @@ func TestAgentEvaluationStorePagesComparisonsInTheReadersScope(t *testing.T) {
 	ctx := context.Background()
 	scores := `[{"Metric":"correctness","Value":0.9,"Evaluator":{"Kind":"judge","Version":"j"}}]`
 	store, query := comparisonStore(map[string][][]any{
-		qAgentEvalComparisons: {{"refund", "candidate", "0.8000", "judge", "j", "b refunds", nil, int64(30), int64(5), int64(2), "EUR", int64(2),
+		qAgentEvalComparisons: {{"refund", string(domain.ComparisonPrefersB), "0.8000", "judge", "j", "b refunds", nil, int64(30), int64(5), int64(2), "EUR", int64(2),
 			"[]", int64(1000), int64(10), int64(0), int64(4), "EUR", int64(2), "object://out/a", sha256Hex([]byte("a")),
 			scores, int64(2000), int64(20), int64(0), int64(6), "EUR", int64(2), "object://out/b", sha256Hex([]byte("b"))}},
-		qAgentEvalTally: {{"candidate", int64(3)}, {"baseline", int64(1)}, {"tie", int64(2)}, {"", int64(1)}},
+		qAgentEvalTally: {{string(domain.ComparisonPrefersB), int64(3)}, {string(domain.ComparisonPrefersA), int64(1)}, {string(domain.ComparisonTie), int64(2)}, {"", int64(1)}},
 	})
 	comparisons, err := store.Comparisons(ctx, domain.GoldenScopeDev, 7, 11, "zeta", 51)
 	if err != nil {
@@ -281,5 +281,10 @@ func TestAgentEvaluationStorePagesComparisonsInTheReadersScope(t *testing.T) {
 		if !strings.Contains(sql, "(e.scope_code = ? OR ? = 'gate')") {
 			t.Fatalf("a comparison read must hide gate examples from a dev reader: %s", sql)
 		}
+	}
+
+	query.rows[qAgentEvalComparisons][0][1] = "candidate"
+	if _, err := store.Comparisons(ctx, domain.GoldenScopeDev, 7, 11, "zeta", 51); err == nil || !strings.Contains(err.Error(), "unknown verdict") {
+		t.Fatalf("legacy verdict = %v", err)
 	}
 }

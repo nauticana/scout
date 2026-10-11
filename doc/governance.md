@@ -44,8 +44,8 @@ decision time on top of the pinned release:
 
 `policy.RestrictedResolver` wraps the release resolver: it appends both layers' denials, and the
 decision's policy version digests the release and both layers. `guardrail.EnforcerConfig.Restrictions`
-runs the layers' rules between the baseline and the release, attributed to the `platform` or `tenant`
-layer in safety events. Reads are cached in each process for `DefaultRestrictionTTL`, which bounds how
+runs the layers' rules between the baseline and the release, attributed to layer `P` (platform) or
+`T` (tenant) in safety events. Reads are cached in each process for `DefaultRestrictionTTL`, which bounds how
 long a new prohibition takes to arrive.
 
 `policy.StudioRestrictions` is Studio's view. `AGENT_RESTRICTION` `VIEW` shows both layers;
@@ -165,7 +165,7 @@ rule `routing`, at agent or type scope) is an ordered list of routes:
 - **Bounds.** At most 32 routes per binding and 64 per agent.
 
 A child scope overlays its parent: parent routes keep their places, replaced in place by a child
-route of the same id, and the child's own routes follow; `intersect` is refused. The child may only
+route of the same id, and the child's own routes follow; merge mode `I` (intersect) is refused. The child may only
 tighten: each parent route keeps its id, order, match, approvers, and step count, deadlines and
 extensions may only shrink, and `hold` may become `expire`, never the reverse.
 
@@ -294,7 +294,7 @@ lower score or sample count, a higher or unset regression bound, fewer required 
 An override is evidence, not a shortcut. A person holding `OVERRIDE_GATE` names the current draft's
 digest and a reason of 1 to 400 characters; the gate refuses it when a current pass already admits
 the digest, and refuses every override without an `Audit` sink. It is stored as the digest's
-`override` decision with a `GATE_OVERRIDE` Studio event and an `override_evaluation_gate` publication
+`O` (override) decision with a `GATE_OVERRIDE` Studio event and an `override_evaluation_gate` publication
 decision naming the policy digest, active release, and golden set version. Every gate decision record
 is written before its transaction commits under a key derived from its inputs, so a retried commit
 replays rather than duplicates it.

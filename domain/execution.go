@@ -9,6 +9,27 @@ type ExecutionGraph struct {
 	Steps       []ExecutionStep
 }
 
+// Execution step kinds, the seeded execution_step_kind codes a compiled graph may contain.
+const (
+	StepKindModel     = "M"
+	StepKindTool      = "T"
+	StepKindKnowledge = "K"
+	StepKindAgent     = "A"
+	StepKindWait      = "W"
+	// StepKindToolLoop runs a bounded model↔tool loop.
+	StepKindToolLoop = "L"
+)
+
+// ValidStepKind reports whether kind is a seeded execution_step_kind code.
+func ValidStepKind(kind string) bool {
+	switch kind {
+	case StepKindModel, StepKindTool, StepKindKnowledge, StepKindAgent, StepKindWait, StepKindToolLoop:
+		return true
+	default:
+		return false
+	}
+}
+
 // ExecutionStep describes one node in an agent execution graph. ExecutionStepID
 // is the compiled surrogate identity persistence keys on; StepID is the logical
 // name authors and transitions use.

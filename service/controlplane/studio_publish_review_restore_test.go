@@ -177,7 +177,7 @@ func TestApproveRestoreReviewNeedsANonRequesterAndTheSameActiveRelease(t *testin
 	if err != nil || approved.Status != domain.PublishReviewApproved || *approved.DecidedBy != 7 || approved.RestoreVersion != "2" {
 		t.Fatalf("approval = %+v, %v", approved, err)
 	}
-	if args := query.args[qReviewDecide]; args[0] != "approved" || args[3] != int64(8) || args[5] != int64(21) || args[6] != restoredDigest {
+	if args := query.args[qReviewDecide]; args[0] != string(domain.PublishReviewApproved) || args[3] != int64(8) || args[5] != int64(21) || args[6] != restoredDigest {
 		t.Fatalf("decide args = %v", args)
 	}
 	if audit := query.args[qReviewAudit]; audit[2] != "RESTORE_REVIEW_APPROVE" {

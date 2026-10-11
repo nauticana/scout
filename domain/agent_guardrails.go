@@ -2,7 +2,7 @@ package domain
 
 // GuardrailLayerType is the rules an agent's type declares. Publication freezes them into
 // the release's own rule set, so the enforcer attributes their hits to the release layer.
-const GuardrailLayerType GuardrailLayer = "type"
+const GuardrailLayerType GuardrailLayer = "Y"
 
 // InheritedGuardrails is one layer of enforced rules an agent inherits: the operator
 // baseline, the platform or tenant restriction layer, or its type. Digest is set for a

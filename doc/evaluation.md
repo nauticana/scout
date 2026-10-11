@@ -82,7 +82,7 @@ digest, when composed), rubric, expected behavior, evidence, and two outputs lab
 A and B in a seed-derived order computed from the content digests alone — never from
 the role — and its scores are mapped back to roles afterwards. It is strict: it calls
 the judge model through the governed gateway with a `pairwise_verdict` JSON schema, so
-the judge route must declare `structured_output`, and accepts only a verdict that scores
+the judge route must declare `SO` (structured output), and accepts only a verdict that scores
 every metric in [0,1] for both outputs, prefers `A`, `B`, or `tie`, states a confidence
 in [0,1], carries no tool call, and fits `MaxVerdictBytes`; anything else is
 `ErrInvalidModelOutput`, never a verdict. A prompt over `MaxInputBytes` is refused
@@ -163,7 +163,7 @@ reads the case input and checks its digest, sends input, expected behavior,
 rubric, and answer as JSON data under fixed instructions stating the integer scale
 and pass score, and calls the pinned judge model through the governed model
 gateway with a strict `rubric_verdict` JSON schema, so the judge route must declare
-`structured_output`. It validates the verdict again: only `score`, `pass`, and
+`SO` (structured output). It validates the verdict again: only `score`, `pass`, and
 `rationale`, an integer score in range, a pass flag that agrees with the pass
 score, a non-blank rationale of at most 300 characters, no tool calls, at most
 8 KiB. Anything else is `ErrInvalidModelOutput`, never a pass, and a prompt over
@@ -267,7 +267,7 @@ on the same version and scope, and a missing release run fails. A run holding mo
 `agent_evaluation_gate_max_results` (default 2000) is refused rather than read in part.
 
 A decision is stored per tenant, agent, and digest in `agent_gate_decision`, with the runs it read
-and their scores in `agent_gate_decision_run`: verdict `pass`, `fail`, or `override`, reason,
+and their scores in `agent_gate_decision_run`: verdict `P` (pass), `F` (fail), or `O` (override), reason,
 policy and its digest, golden set version, active release, and decider. A newer decision for the
 digest replaces it, an evaluation of unchanged inputs returns the stored one, and a failing
 evaluation leaves in place an override that still holds. `GET gate` (`VIEW`) shows the effective
@@ -275,7 +275,7 @@ policy, the decision for the current digest, whether it admits a publish, and wh
 `policy_changed`, `active_release_changed`, or, for a pass only, `set_version_superseded`.
 
 `POST gate/override` (`OVERRIDE_GATE`) admits the current draft's exact digest with a reason, as
-an `override` decision recorded as evidence; it goes stale with the policy or the active release
+an `O` (override) decision recorded as evidence; it goes stale with the policy or the active release
 like any decision. The gate setting is never frozen into a release.
 
 ## Sampling, storage, adjudication
@@ -302,9 +302,9 @@ attach a turn to another agent; a turn that is not completed is refused, a repla
 an agent already holding `agent_review_max_pending` pending items is `ErrRateLimited`, a soft cap
 that concurrent enqueues may overshoot slightly. Rows hold
 references only: the turn's input and response stay in object storage, and who rated a turn stays in `turn_feedback`
-and never reaches an item, a page, or a Studio response. An item is `pending` until it is
-`graded` (a 1 to 5 score, `pass` or `fail`, notes, and optional expected behavior) or
-`dismissed`, and a graded item may be `promoted`; each move happens once, and a different grade or
+and never reaches an item, a page, or a Studio response. An item is `P` (pending) until it is
+`G` (graded: a 1 to 5 score, verdict `P` (pass) or `F` (fail), notes, and optional expected behavior) or
+`D` (dismissed), and a graded item may be `M` (promoted); each move happens once, and a different grade or
 dismissal of a resolved item is `ErrConflict`.
 
 `evaluation.ReviewIntake` (`contract.ProductionReviewIntake`) feeds it from two sources. A

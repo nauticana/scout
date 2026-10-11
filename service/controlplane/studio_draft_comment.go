@@ -29,6 +29,12 @@ const (
 // DefaultMaxCommentsShown bounds one list of draft comments when StudioService.MaxCommentsShown is zero.
 const DefaultMaxCommentsShown = 500
 
+// Status codes quoted for the named SQL below.
+const (
+	sqlCommentOpen     = "'" + string(domain.DraftCommentOpen) + "'"
+	sqlCommentResolved = "'" + string(domain.DraftCommentResolved) + "'"
+)
+
 const commentColumns = `id, draft_revision, anchor_code, prompt_section_id, language_code, resource_kind_code, resource_id,
        body, status_code, author_kind, author_id, created_at, resolved_by_kind, resolved_by_id, resolved_at`
 
@@ -51,7 +57,7 @@ var commentQueries = map[string]string{
 	qCommentInsert: `
 INSERT INTO agent_draft_comment (id, partner_id, agent_id, draft_revision, anchor_code, prompt_section_id, language_code,
        resource_kind_code, resource_id, body, status_code, author_kind, author_id)
-SELECT nextval('agent_draft_comment_seq'), d.partner_id, d.agent_id, d.draft_revision, ?, ?, ?, ?, ?, ?, 'open', ?, ?
+SELECT nextval('agent_draft_comment_seq'), d.partner_id, d.agent_id, d.draft_revision, ?, ?, ?, ?, ?, ?, ` + sqlCommentOpen + `, ?, ?
   FROM agent_draft d
  WHERE d.partner_id = ? AND d.agent_id = ? AND d.draft_revision = ?
 RETURNING id, created_at`,
@@ -59,8 +65,8 @@ RETURNING id, created_at`,
 	qCommentListStatus: commentListStatus,
 	qCommentResolve: `
 UPDATE agent_draft_comment
-   SET status_code = 'resolved', resolved_by_kind = ?, resolved_by_id = ?, resolved_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = 'open'
+   SET status_code = ` + sqlCommentResolved + `, resolved_by_kind = ?, resolved_by_id = ?, resolved_at = CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = ` + sqlCommentOpen + `
 RETURNING ` + commentColumns,
 	qCommentGet: `
 SELECT status_code FROM agent_draft_comment WHERE partner_id = ? AND agent_id = ? AND id = ?`,
@@ -96,7 +102,7 @@ func (c *StudioDraftComments) Comments(ctx context.Context, actor domain.StudioA
 		return nil, err
 	}
 	if status != "" && status != domain.DraftCommentOpen && status != domain.DraftCommentResolved {
-		return nil, validationError("status", "must be open or resolved")
+		return nil, validationError("status", "must be "+string(domain.DraftCommentOpen)+" or "+string(domain.DraftCommentResolved))
 	}
 	if err := c.Studio.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return nil, err
@@ -213,7 +219,7 @@ func (c *StudioDraftComments) validate(ctx context.Context, tenantID int64, comm
 			fields = append(fields, domain.AgentFieldError{Field: "resource_kind", Message: "must be a setting kind other than prompt_section"})
 		}
 	default:
-		fields = append(fields, domain.AgentFieldError{Field: "anchor", Message: "must be draft, prompt_section, or setting"})
+		fields = append(fields, domain.AgentFieldError{Field: "anchor", Message: "must be " + string(domain.CommentOnDraft) + ", " + string(domain.CommentOnPromptSection) + ", or " + string(domain.CommentOnSetting)})
 	}
 	if len(fields) > 0 {
 		return &StudioValidationError{Fields: fields}

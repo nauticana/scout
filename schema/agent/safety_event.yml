@@ -21,7 +21,7 @@ columns:
   - name: stage_code
     type: VARCHAR(30)
   - name: layer_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: action_code
     type: VARCHAR(30)
   - name: severity_code
@@ -65,3 +65,11 @@ indexes:
 checks:
   - name: safety_event_duration_ck
     expression: duration_ms >= 0
+  - name: safety_event_layer_ck
+    expression: layer_code IN ('B', 'P', 'T', 'Y', 'R')
+  - name: safety_event_stage_ck
+    expression: stage_code IN ('input', 'output', 'tool_input', 'tool_output', 'retrieval')
+  - name: safety_event_action_ck
+    expression: action_code IN ('block', 'redact', 'flag')
+  - name: safety_event_severity_ck
+    expression: severity_code IN ('hard', 'soft')

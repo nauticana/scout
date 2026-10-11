@@ -31,8 +31,8 @@ func runtimeGraph() domain.ExecutionGraph {
 	return domain.ExecutionGraph{
 		AgentID: "agent", Version: "v1", EntryStepID: "step-1",
 		Steps: []domain.ExecutionStep{
-			{ExecutionStepID: 1, StepID: "step-1", Kind: "plan"},
-			{ExecutionStepID: 2, StepID: "step-2", Kind: "answer"},
+			{ExecutionStepID: 1, StepID: "step-1", Kind: domain.StepKindModel},
+			{ExecutionStepID: 2, StepID: "step-2", Kind: domain.StepKindTool},
 		},
 	}
 }
@@ -285,7 +285,7 @@ func TestTurnRuntimeUsesGuardedOutputForStateAndTypedResult(t *testing.T) {
 	runtime := newTestRuntime(t, recorder)
 	runtime.Definitions = fake.DefinitionResolverFunc(func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
 		return domain.ExecutionGraph{AgentID: "agent", Version: "v1", EntryStepID: "answer", Steps: []domain.ExecutionStep{
-			{ExecutionStepID: 1, StepID: "answer", Kind: "answer"},
+			{ExecutionStepID: 1, StepID: "answer", Kind: domain.StepKindModel},
 		}}, nil
 	})
 	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
@@ -315,7 +315,7 @@ func TestTurnRuntimeCarriesGuardedCitationsOntoTheResult(t *testing.T) {
 	runtime := newTestRuntime(t, recorder)
 	runtime.Definitions = fake.DefinitionResolverFunc(func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
 		return domain.ExecutionGraph{AgentID: "agent", Version: "v1", EntryStepID: "answer", Steps: []domain.ExecutionStep{
-			{ExecutionStepID: 1, StepID: "answer", Kind: "answer"},
+			{ExecutionStepID: 1, StepID: "answer", Kind: domain.StepKindModel},
 		}}, nil
 	})
 	sources := []domain.Citation{{URL: "https://a.example", Position: 1}, {URL: "https://b.example", Position: 2}}
@@ -461,7 +461,7 @@ func TestTurnRuntimeSettlesUsageWhenLaterStepFails(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
 	runtime.Executors = fake.StepExecutorRegistryFunc(func(_ context.Context, kind string) (contract.StepExecutor, error) {
-		if kind == "answer" {
+		if kind == domain.StepKindTool {
 			return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
 				return domain.StepResult{}, errors.New("provider failed")
 			}), nil

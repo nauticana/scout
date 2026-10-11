@@ -114,8 +114,8 @@ For each resource, per binding in chain order:
 1. If a previous binding was sealed, reject with `domain.ErrSealed`.
 2. Merge the binding onto what was inherited, using the merger for its kind.
 3. Check the **merged result** against what was inherited. Checking the result rather than the
-   candidate is what makes one rule cover every merge mode: a `replace` that grants more and an
-   `append` that widens a set both fail the same subset comparison.
+   candidate is what makes one rule cover every merge mode: a replace (`R`) that grants more and an
+   append (`A`) that widens a set both fail the same subset comparison.
 4. Record provenance; the previous winner moves onto `Superseded`.
 
 `sealed` is set by the binding's own scope, so a company safety clause genuinely cannot be

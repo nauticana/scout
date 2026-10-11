@@ -14,7 +14,7 @@ import (
 )
 
 // judgeGateway is the governed model gateway over one judge route that declares capabilities.
-func judgeGateway(t *testing.T, capabilities []string, requests *[]domain.ModelRequest) *modelgateway.Gateway {
+func judgeGateway(t *testing.T, capabilities []domain.ModelCapability, requests *[]domain.ModelRequest) *modelgateway.Gateway {
 	t.Helper()
 	registry := modelgateway.NewProviderRegistry()
 	if err := registry.Register("judges", &fake.ModelProvider{GenerateFunc: func(_ context.Context, _ domain.ModelSelection, request domain.ModelRequest) (domain.ModelResult, error) {
@@ -69,7 +69,7 @@ func TestRunnerJudgesThroughTheGovernedGateway(t *testing.T) {
 	manifest, examples := gatewayManifest(t)
 	principal := domain.PrincipalRef{Kind: domain.PrincipalService, ID: "release-gate"}
 	var requests []domain.ModelRequest
-	summary, err := gatewayRunner(judgeGateway(t, []string{domain.CapabilityTools, domain.CapabilityStructuredOutput}, &requests), principal).Run(context.Background(), manifest, examples)
+	summary, err := gatewayRunner(judgeGateway(t, []domain.ModelCapability{domain.CapabilityTools, domain.CapabilityStructuredOutput}, &requests), principal).Run(context.Background(), manifest, examples)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,10 +78,10 @@ func TestRunnerJudgesThroughTheGovernedGateway(t *testing.T) {
 	}
 
 	requests = nil
-	if _, err := gatewayRunner(judgeGateway(t, []string{domain.CapabilityTools}, &requests), principal).Run(context.Background(), manifest, examples); err == nil || len(requests) != 0 {
+	if _, err := gatewayRunner(judgeGateway(t, []domain.ModelCapability{domain.CapabilityTools}, &requests), principal).Run(context.Background(), manifest, examples); err == nil || len(requests) != 0 {
 		t.Fatalf("a judge route without structured_output = %v (called %d times)", err, len(requests))
 	}
-	if _, err := gatewayRunner(judgeGateway(t, []string{domain.CapabilityStructuredOutput}, &requests), domain.PrincipalRef{}).Run(context.Background(), manifest, examples); !errors.Is(err, domain.ErrValidation) {
+	if _, err := gatewayRunner(judgeGateway(t, []domain.ModelCapability{domain.CapabilityStructuredOutput}, &requests), domain.PrincipalRef{}).Run(context.Background(), manifest, examples); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a judging runner without a principal = %v", err)
 	}
 }

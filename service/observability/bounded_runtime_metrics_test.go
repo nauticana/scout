@@ -115,8 +115,8 @@ func TestBoundedRuntimeMetricsOutcomesAndRejections(t *testing.T) {
 		t.Fatalf("dependency calls=%+v errors=%+v", calls, failures)
 	}
 
-	metrics.RecordStep(context.Background(), 1, "agent", domain.ExecutionStep{Kind: "tool"}, domain.StepResult{Usage: domain.Usage{ToolCalls: 2}}, nil)
-	if steps := sink.named(MetricStepOutcomes); len(steps) != 1 || steps[0].labels[LabelComponent] != "tool" {
+	metrics.RecordStep(context.Background(), 1, "agent", domain.ExecutionStep{Kind: domain.StepKindTool}, domain.StepResult{Usage: domain.Usage{ToolCalls: 2}}, nil)
+	if steps := sink.named(MetricStepOutcomes); len(steps) != 1 || steps[0].labels[LabelComponent] != domain.StepKindTool {
 		t.Fatalf("steps = %+v", steps)
 	}
 	if tools := sink.named(MetricUsageToolCalls); len(tools) != 1 || tools[0].value != 2 {

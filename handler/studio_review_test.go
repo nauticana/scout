@@ -66,7 +66,7 @@ func TestStudioReviewHandlerMapsItemsWithoutTurnIdentifiers(t *testing.T) {
 	backend := &turnReviewBackendFake{}
 	h := &StudioReviewHandler{Backend: backend}
 	view, err := h.reviews(context.Background(), domain.StudioActor{}, url.Values{
-		"agent_name": {"writer-a"}, "status": {"graded"}, "source": {"feedback"}, "release": {"3"}, "before": {"40"}, "limit": {"10"},
+		"agent_name": {"writer-a"}, "status": {string(domain.ReviewGraded)}, "source": {string(domain.ReviewSourceFeedback)}, "release": {"3"}, "before": {"40"}, "limit": {"10"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestStudioReviewHandlerMapsItemsWithoutTurnIdentifiers(t *testing.T) {
 		t.Fatalf("turn = %+v, %v", turn, err)
 	}
 	if _, err = h.grade(context.Background(), domain.StudioActor{}, api.ReviewGradeRequest{ItemID: 12,
-		ReviewGrade: api.ReviewGrade{Score: 2, Verdict: "fail", ExpectedBehavior: "greets"}}); err != nil {
+		ReviewGrade: api.ReviewGrade{Score: 2, Verdict: string(domain.ReviewFail), ExpectedBehavior: "greets"}}); err != nil {
 		t.Fatal(err)
 	}
 	if backend.grade.Score != 2 || backend.grade.Verdict != domain.ReviewFail || string(backend.grade.ExpectedBehavior) != "greets" {

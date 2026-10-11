@@ -25,6 +25,9 @@ const (
 	qProvisionAutonomy = "scout_provision_autonomy"
 )
 
+// sqlMergeReplace is the replace merge mode quoted for the named SQL below.
+const sqlMergeReplace = "'" + string(domain.MergeReplace) + "'"
+
 // Every statement is idempotent, so a repeated provision run is a no-op.
 var provisionQueries = map[string]string{
 	qProvisionTenant: `
@@ -49,7 +52,7 @@ ON CONFLICT (partner_id, agent_id) DO NOTHING`,
 	qProvisionAutonomy: `
 INSERT INTO config_scope_binding (partner_id, scope_id, resource_kind_code, resource_id, resource_version,
                                   merge_mode_code, sealed, resource_value, resource_value_digest)
-SELECT ?, ?, 'autonomy', 'autonomy', ?, 'replace', FALSE, ?, ?
+SELECT ?, ?, 'autonomy', 'autonomy', ?, ` + sqlMergeReplace + `, FALSE, ?, ?
  WHERE NOT EXISTS (SELECT 1 FROM config_scope_binding
                     WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'autonomy' AND endda IS NULL)`,
 	qProvisionAccess: `

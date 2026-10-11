@@ -122,30 +122,24 @@ func (c *ModelCatalog) Validate(ctx context.Context, _ int64, selection domain.A
 	for _, check := range []struct {
 		field      string
 		reference  *domain.ModelReference
-		capability string
+		capability domain.ModelCapability
+		modality   string
 	}{
-		{"models.text", selection.Text, CapabilityText},
-		{"models.image", selection.Image, CapabilityImage},
-		{"models.video", selection.Video, CapabilityVideo},
+		{"models.text", selection.Text, domain.CapabilityText, "text"},
+		{"models.image", selection.Image, domain.CapabilityImage, "image"},
+		{"models.video", selection.Video, domain.CapabilityVideo, "video"},
 	} {
 		if check.reference == nil {
 			continue
 		}
-		if err := c.validate(ctx, &fields, check.field, *check.reference, check.capability); err != nil {
+		if err := c.validate(ctx, &fields, check.field, *check.reference, check.capability, check.modality); err != nil {
 			return nil, err
 		}
 	}
 	return fields, nil
 }
 
-// Capability codes seeded as the model_capability constant domain.
-const (
-	CapabilityText  = "text"
-	CapabilityImage = "image"
-	CapabilityVideo = "video"
-)
-
-func (c *ModelCatalog) validate(ctx context.Context, fields *[]domain.AgentFieldError, field string, reference domain.ModelReference, capability string) error {
+func (c *ModelCatalog) validate(ctx context.Context, fields *[]domain.AgentFieldError, field string, reference domain.ModelReference, capability domain.ModelCapability, modality string) error {
 	res, err := c.qs.Query(ctx, qCatalogModel, reference.ProviderID, reference.ModelID)
 	if err != nil {
 		return fmt.Errorf("check model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
@@ -158,11 +152,11 @@ func (c *ModelCatalog) validate(ctx context.Context, fields *[]domain.AgentField
 		*fields = append(*fields, domain.AgentFieldError{Field: field, Message: "model " + reference.ModelID + " is not active"})
 	}
 	for _, row := range res.Rows {
-		if strings.TrimSpace(common.AsString(row[1])) == capability {
+		if domain.ModelCapability(strings.TrimSpace(common.AsString(row[1]))) == capability {
 			return nil
 		}
 	}
-	*fields = append(*fields, domain.AgentFieldError{Field: field, Message: "model " + reference.ModelID + " cannot generate " + capability})
+	*fields = append(*fields, domain.AgentFieldError{Field: field, Message: "model " + reference.ModelID + " cannot generate " + modality})
 	return nil
 }
 
@@ -178,18 +172,18 @@ func (c *ModelCatalog) AcceptsSampling(ctx context.Context, reference domain.Mod
 	return slices.Contains(capabilities[reference], domain.CapabilitySampling), nil
 }
 
-func (c *ModelCatalog) capabilities(ctx context.Context) (map[domain.ModelReference][]string, error) {
+func (c *ModelCatalog) capabilities(ctx context.Context) (map[domain.ModelReference][]domain.ModelCapability, error) {
 	res, err := c.qs.Query(ctx, qCatalogCapabilities)
 	if err != nil {
 		return nil, fmt.Errorf("list model capabilities: %w", err)
 	}
-	capabilities := map[domain.ModelReference][]string{}
+	capabilities := map[domain.ModelReference][]domain.ModelCapability{}
 	for _, row := range res.Rows {
 		reference := domain.ModelReference{
 			ProviderID: strings.TrimSpace(common.AsString(row[0])),
 			ModelID:    strings.TrimSpace(common.AsString(row[1])),
 		}
-		capabilities[reference] = append(capabilities[reference], strings.TrimSpace(common.AsString(row[2])))
+		capabilities[reference] = append(capabilities[reference], domain.ModelCapability(strings.TrimSpace(common.AsString(row[2]))))
 	}
 	return capabilities, nil
 }

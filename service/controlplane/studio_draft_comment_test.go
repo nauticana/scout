@@ -27,7 +27,7 @@ func TestCommentIsAnchoredToTheRevisionTheAuthorSaw(t *testing.T) {
 		t.Fatalf("comment = %+v", comment)
 	}
 	args := query.args[qCommentInsert]
-	if args[0] != "prompt_section" || args[1] != int64(1) || args[2] != "en-US" || args[3] != nil || args[7] != "9" || args[10] != int64(4) {
+	if args[0] != string(domain.CommentOnPromptSection) || args[1] != int64(1) || args[2] != "en-US" || args[3] != nil || args[7] != "9" || args[10] != int64(4) {
 		t.Fatalf("insert args = %v", args)
 	}
 
@@ -95,14 +95,14 @@ func TestCommentingNeedsEditOrPublishReview(t *testing.T) {
 
 func TestResolveClosesAnOpenCommentOnce(t *testing.T) {
 	comments, query := commentService()
-	query.rows[qCommentResolve] = [][]any{{int64(5), int64(4), "setting", nil, nil, "tool", "tool", "drop crawl", "resolved",
+	query.rows[qCommentResolve] = [][]any{{int64(5), int64(4), string(domain.CommentOnSetting), nil, nil, "tool", "tool", "drop crawl", string(domain.DraftCommentResolved),
 		"human", "9", reviewedAt, "human", "10", reviewedAt}}
 	resolved, err := comments.Resolve(context.Background(), humanActor(8, 10), "writer-a", 5)
 	if err != nil || resolved.Status != domain.DraftCommentResolved || resolved.ResolvedBy.ID != "10" || resolved.ResourceKind != domain.ResourceTool || resolved.ResolvedAt == nil {
 		t.Fatalf("resolved = %+v, %v", resolved, err)
 	}
 	query.rows[qCommentResolve] = nil
-	query.rows[qCommentGet] = [][]any{{"resolved"}}
+	query.rows[qCommentGet] = [][]any{{string(domain.DraftCommentResolved)}}
 	if _, err = comments.Resolve(context.Background(), humanActor(8, 10), "writer-a", 5); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("resolved twice = %v", err)
 	}

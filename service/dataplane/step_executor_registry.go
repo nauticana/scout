@@ -3,7 +3,6 @@ package dataplane
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/nauticana/scout/contract"
@@ -23,9 +22,8 @@ func NewStepExecutorRegistry() *StepExecutorRegistry {
 
 // Register binds one unique step kind to an executor.
 func (registry *StepExecutorRegistry) Register(stepKind string, executor contract.StepExecutor) error {
-	stepKind = strings.TrimSpace(stepKind)
-	if stepKind == "" || executor == nil {
-		return fmt.Errorf("%w: step kind and executor are required", domain.ErrValidation)
+	if !domain.ValidStepKind(stepKind) || executor == nil {
+		return fmt.Errorf("%w: a known step kind and an executor are required, got %q", domain.ErrValidation, stepKind)
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -44,9 +42,8 @@ func (registry *StepExecutorRegistry) ExecutorFor(ctx context.Context, stepKind 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	stepKind = strings.TrimSpace(stepKind)
-	if stepKind == "" {
-		return nil, fmt.Errorf("%w: step kind is required", domain.ErrValidation)
+	if !domain.ValidStepKind(stepKind) {
+		return nil, fmt.Errorf("%w: unknown step kind %q", domain.ErrValidation, stepKind)
 	}
 	registry.mu.RLock()
 	executor := registry.executors[stepKind]

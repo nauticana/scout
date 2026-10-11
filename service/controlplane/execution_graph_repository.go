@@ -181,8 +181,8 @@ func validateGraph(tenantID int64, graph domain.ExecutionGraph) error {
 	}
 	known := make(map[string]struct{}, len(graph.Steps))
 	for _, step := range graph.Steps {
-		if strings.TrimSpace(step.StepID) == "" || strings.TrimSpace(step.Kind) == "" {
-			return fmt.Errorf("%w: every execution step needs an id and a kind", domain.ErrValidation)
+		if strings.TrimSpace(step.StepID) == "" || !domain.ValidStepKind(step.Kind) {
+			return fmt.Errorf("%w: every execution step needs an id and a known kind, got %q", domain.ErrValidation, step.Kind)
 		}
 		if _, duplicate := known[step.StepID]; duplicate {
 			return fmt.Errorf("%w: execution step %q is declared twice", domain.ErrValidation, step.StepID)
@@ -254,6 +254,11 @@ func (ToolLoopGraphCompiler) Compile(_ context.Context, definition domain.AgentD
 	}
 	if search := definition.ToolLoop.Search; search != nil && search.MaxSearches < 0 {
 		return domain.ExecutionGraph{}, fmt.Errorf("%w: max searches cannot be negative", domain.ErrValidation)
+	}
+	for _, capability := range definition.ToolLoop.Capabilities {
+		if !capability.Valid() {
+			return domain.ExecutionGraph{}, fmt.Errorf("%w: unknown model capability %q", domain.ErrValidation, capability)
+		}
 	}
 	configuration, err := json.Marshal(definition.ToolLoop)
 	if err != nil {

@@ -28,20 +28,30 @@ type EvaluationGatePolicy struct {
 type EvaluationGateVerdict string
 
 const (
-	GateVerdictPass EvaluationGateVerdict = "pass"
-	GateVerdictFail EvaluationGateVerdict = "fail"
+	GateVerdictPass EvaluationGateVerdict = "P"
+	GateVerdictFail EvaluationGateVerdict = "F"
 	// GateVerdictOverride admits a digest the gate did not, on a person's recorded reason.
-	GateVerdictOverride EvaluationGateVerdict = "override"
+	GateVerdictOverride EvaluationGateVerdict = "O"
 )
+
+// Valid reports whether the verdict is a known one.
+func (verdict EvaluationGateVerdict) Valid() bool {
+	return verdict == GateVerdictPass || verdict == GateVerdictFail || verdict == GateVerdictOverride
+}
 
 // GateRunRole says what a run contributed to a decision: the candidate's own score or the
 // active release's baseline.
 type GateRunRole string
 
 const (
-	GateRunCandidate GateRunRole = "candidate"
-	GateRunBaseline  GateRunRole = "baseline"
+	GateRunCandidate GateRunRole = "C"
+	GateRunBaseline  GateRunRole = "B"
 )
+
+// Valid reports whether the role is a known one.
+func (role GateRunRole) Valid() bool {
+	return role == GateRunCandidate || role == GateRunBaseline
+}
 
 // EvaluationGateRun is one completed evaluation run a decision rests on, with its score.
 type EvaluationGateRun struct {

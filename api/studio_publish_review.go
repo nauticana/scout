@@ -11,7 +11,7 @@ const (
 	StudioPublishReviewPath        = StudioBasePath + "publish-review"
 	StudioPublishReviewApprovePath = StudioBasePath + "publish-review/approve"
 	StudioPublishReviewRejectPath  = StudioBasePath + "publish-review/reject"
-	// StudioCommentsPath lists draft comments: GET ?agent_name=&status=open|resolved.
+	// StudioCommentsPath lists draft comments: GET ?agent_name=&status=O|R (open, resolved).
 	StudioCommentsPath       = StudioBasePath + "comments"
 	StudioCommentPath        = StudioBasePath + "comment"
 	StudioCommentResolvePath = StudioBasePath + "comment/resolve"
@@ -107,8 +107,8 @@ type PublishReviewState struct {
 	OpenComments  []DraftComment `json:"open_comments"`
 }
 
-// DraftComment is a remark on draft_revision anchored to the draft ("draft"), a prompt section
-// ("prompt_section": prompt_section_id, optional language_code), or a setting ("setting":
+// DraftComment is a remark on draft_revision anchored to the draft ("D"), a prompt section
+// ("P": prompt_section_id, optional language_code), or a setting ("S":
 // resource_kind and resource_id). On the way in only agent_name, draft_revision, the anchor
 // fields, and body are read.
 type DraftComment struct {

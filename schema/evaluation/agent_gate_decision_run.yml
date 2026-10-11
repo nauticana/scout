@@ -10,8 +10,8 @@ columns:
   - name: run_id
     type: BIGINT
   - name: role_code
-    type: VARCHAR(10)
-    comment: candidate for a run of the decided digest, baseline for a run of the active release
+    type: CHAR(1)
+    comment: C (candidate) for a run of the decided digest, B (baseline) for a run of the active release
   - name: score_bp
     type: INTEGER
     comment: Mean of the gate metric over every result of the run in basis points, rounded down, a result the metric did not score counting 0
@@ -36,6 +36,6 @@ indexes:
     columns: [partner_id, run_id]
 checks:
   - name: agent_gate_decision_run_role_ck
-    expression: role_code IN ('candidate', 'baseline')
+    expression: role_code IN ('C', 'B')
   - name: agent_gate_decision_run_score_ck
     expression: score_bp BETWEEN 0 AND 10000 AND sample_count >= 0 AND critical_count >= 0

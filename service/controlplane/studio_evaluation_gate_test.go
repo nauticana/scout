@@ -138,11 +138,11 @@ func TestEvaluateGatePassesAndRecordsTheRunsItRead(t *testing.T) {
 		t.Fatalf("state = %+v, decision = %+v", state, decision)
 	}
 	inserted := query.args[qGateInsert]
-	if inserted[2] != digest || inserted[3] != "pass" || inserted[4] != nil || inserted[5] != policyDigest(t, devGate) || inserted[8] != nil ||
+	if inserted[2] != digest || inserted[3] != string(domain.GateVerdictPass) || inserted[4] != nil || inserted[5] != policyDigest(t, devGate) || inserted[8] != nil ||
 		inserted[9] != "set-1" || inserted[10] != int64(3) || inserted[11] != "human" || inserted[12] != "9" {
 		t.Fatalf("insert args = %v", inserted)
 	}
-	if run := query.args[qGateInsertRun]; run[3] != int64(41) || run[4] != "candidate" || run[5] != int64(8500) {
+	if run := query.args[qGateInsertRun]; run[3] != int64(41) || run[4] != string(domain.GateRunCandidate) || run[5] != int64(8500) {
 		t.Fatalf("run args = %v", run)
 	}
 	if query.args[qGateAudit][2] != StudioEventGateEvaluate || query.commits != 1 || !slices.Contains(query.queries, qGateDrop) {
@@ -182,7 +182,7 @@ func TestEvaluateGateFailsWithEveryReason(t *testing.T) {
 			t.Errorf("reason %q lacks %q", decision.Reason, want)
 		}
 	}
-	if args := query.args[qGateInsert]; args[3] != "fail" || args[8] != "2" {
+	if args := query.args[qGateInsert]; args[3] != string(domain.GateVerdictFail) || args[8] != "2" {
 		t.Fatalf("insert args = %v", args)
 	}
 
@@ -326,7 +326,7 @@ func TestOverrideGateNeedsItsGrantAReasonAndTheCurrentDigest(t *testing.T) {
 		events[0].PolicyVersion != policyDigest(t, devGate) || events[0].DecisionKey != inputsDigest(*state.Decision) {
 		t.Fatalf("audit = %+v", events)
 	}
-	if args := query.args[qGateInsert]; args[3] != "override" || args[4] != "hotfix for incident 12" || args[12] != "11" ||
+	if args := query.args[qGateInsert]; args[3] != string(domain.GateVerdictOverride) || args[4] != "hotfix for incident 12" || args[12] != "11" ||
 		query.args[qGateAudit][2] != StudioEventGateOverride {
 		t.Fatalf("insert %v, event %v", args, query.args[qGateAudit])
 	}
@@ -340,7 +340,7 @@ func TestOverrideGateNeedsItsGrantAReasonAndTheCurrentDigest(t *testing.T) {
 func TestGateReportsTheCurrentDraftAndItsDecision(t *testing.T) {
 	gate, query, digest := gateService(t, devGate)
 	query.rows[qGateDecision] = [][]any{decisionRow(domain.GateVerdictPass, nil, policyDigest(t, devGate), baseDigest, nil, int64(2))}
-	query.rows[qGateDecisionRuns] = [][]any{{int64(41), "candidate", "dev", int64(8500), int64(2), int64(0)}}
+	query.rows[qGateDecisionRuns] = [][]any{{int64(41), string(domain.GateRunCandidate), "dev", int64(8500), int64(2), int64(0)}}
 	state, err := gate.Gate(context.Background(), humanActor(8, 9), "writer-a")
 	if err != nil {
 		t.Fatal(err)
@@ -352,6 +352,20 @@ func TestGateReportsTheCurrentDraftAndItsDecision(t *testing.T) {
 	gate.Studio.Roles = denyActions(domain.StudioView)
 	if _, err = gate.Gate(context.Background(), humanActor(8, 9), "writer-a"); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("without VIEW = %v", err)
+	}
+}
+
+// A stored decision or run outside the closed code lists is refused, not reported.
+func TestGateRefusesUnknownStoredCodes(t *testing.T) {
+	gate, query, _ := gateService(t, devGate)
+	query.rows[qGateDecision] = [][]any{decisionRow("pass", nil, policyDigest(t, devGate), baseDigest, nil, int64(3))}
+	if _, err := gate.Gate(context.Background(), humanActor(8, 9), "writer-a"); err == nil || !strings.Contains(err.Error(), "unknown verdict") {
+		t.Fatalf("legacy verdict = %v", err)
+	}
+	query.rows[qGateDecision] = [][]any{decisionRow(domain.GateVerdictPass, nil, policyDigest(t, devGate), baseDigest, nil, int64(3))}
+	query.rows[qGateDecisionRuns] = [][]any{{int64(41), "candidate", "dev", int64(8500), int64(2), int64(0)}}
+	if _, err := gate.Gate(context.Background(), humanActor(8, 9), "writer-a"); err == nil || !strings.Contains(err.Error(), "unknown role") {
+		t.Fatalf("legacy role = %v", err)
 	}
 }
 

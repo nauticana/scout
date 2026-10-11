@@ -194,7 +194,7 @@ func TestReleaseCaseExecutorRefusesAReplayItCannotMakeFaithful(t *testing.T) {
 		}, domain.ErrCapabilityUnsupported},
 		{"a step kind the replay does not run", func(harness *replayHarness, _ *domain.EvaluationSubject, _ *domain.GoldenExample, _ *[]domain.KnowledgeMatch) {
 			harness.executor.Graphs = fake.DefinitionResolverFunc(func(context.Context, int64, string, string) (domain.ExecutionGraph, error) {
-				return domain.ExecutionGraph{EntryStepID: "a", Steps: []domain.ExecutionStep{{ExecutionStepID: 1, StepID: "a", Kind: "delegate"}}}, nil
+				return domain.ExecutionGraph{EntryStepID: "a", Steps: []domain.ExecutionStep{{ExecutionStepID: 1, StepID: "a", Kind: domain.StepKindAgent}}}, nil
 			})
 		}, domain.ErrCapabilityUnsupported},
 	}

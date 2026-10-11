@@ -38,7 +38,7 @@ func TestStudioGuardrailsShowAndReplaceOnOnePath(t *testing.T) {
 	var actors []domain.StudioActor
 	var saved domain.AgentGuardrailChange
 	view := domain.AgentGuardrails{
-		AgentID: "writer-a", DraftRevision: 5, Problem: "tenant layer: authority exceeded",
+		AgentID: "writer-a", DraftRevision: 5, Problem: "guardrail layer T: authority exceeded",
 		Inherited: []domain.InheritedGuardrails{{Layer: domain.GuardrailLayerTenant, Digest: "abc", Rules: []domain.GuardrailRule{{ID: "pii", Kind: domain.GuardrailKindPII, Action: domain.GuardrailActionRedact, Severity: domain.GuardrailSeverityHard}}}},
 		Rules: []domain.GuardrailRule{{ID: "size", Kind: domain.GuardrailKindMaxOutputBytes, Stages: []domain.GuardrailStage{domain.GuardrailStageOutput},
 			Action: domain.GuardrailActionBlock, Severity: domain.GuardrailSeverityHard, Params: json.RawMessage(`{"max":500}`)}},
@@ -62,7 +62,7 @@ func TestStudioGuardrailsShowAndReplaceOnOnePath(t *testing.T) {
 	if shown.Code != http.StatusOK || envelopeData(shown, &body) != nil {
 		t.Fatalf("GET = %d %s", shown.Code, shown.Body.String())
 	}
-	if body.AgentName != "writer-a" || body.ExpectedAgentRevision != 5 || body.Problem == "" || body.Inherited[0].Layer != "tenant" ||
+	if body.AgentName != "writer-a" || body.ExpectedAgentRevision != 5 || body.Problem == "" || body.Inherited[0].Layer != string(domain.GuardrailLayerTenant) ||
 		body.Inherited[0].Digest != "abc" || body.Rules[0].Stages[0] != "output" || string(body.Rules[0].Params) != `{"max":500}` {
 		t.Fatalf("GET body = %s", shown.Body.String())
 	}

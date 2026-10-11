@@ -92,7 +92,7 @@ func TestDraftCommentListLimit(t *testing.T) {
 	if _, err := comments.Comments(context.Background(), humanActor(8, 9), "writer-a", domain.DraftCommentOpen); err != nil {
 		t.Fatal(err)
 	}
-	if args := query.args[qCommentListStatus]; args[2] != "open" || args[3] != 3 {
+	if args := query.args[qCommentListStatus]; args[2] != string(domain.DraftCommentOpen) || args[3] != 3 {
 		t.Fatalf("status list args = %v, want the configured limit", args)
 	}
 }

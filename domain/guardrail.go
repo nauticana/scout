@@ -16,10 +16,10 @@ type GuardrailConfig struct {
 type GuardrailLayer string
 
 const (
-	GuardrailLayerBaseline GuardrailLayer = "baseline"
-	GuardrailLayerPlatform GuardrailLayer = "platform"
-	GuardrailLayerTenant   GuardrailLayer = "tenant"
-	GuardrailLayerRelease  GuardrailLayer = "release"
+	GuardrailLayerBaseline GuardrailLayer = "B"
+	GuardrailLayerPlatform GuardrailLayer = "P"
+	GuardrailLayerTenant   GuardrailLayer = "T"
+	GuardrailLayerRelease  GuardrailLayer = "R"
 )
 
 // GuardrailStage is the runtime boundary a rule applies to.

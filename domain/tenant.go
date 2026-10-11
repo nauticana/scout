@@ -23,10 +23,23 @@ const (
 	AdmissionCancelAndReplace TurnAdmissionPolicy = "cancel_replace"
 )
 
+// CapacityClass says whether a tenant's turns run on shared or tenant-isolated capacity.
+type CapacityClass string
+
+const (
+	CapacityShared    CapacityClass = "S"
+	CapacityDedicated CapacityClass = "D"
+)
+
+// Valid reports whether the class is a seeded capacity_class code.
+func (class CapacityClass) Valid() bool {
+	return class == CapacityShared || class == CapacityDedicated
+}
+
 // TenantRuntimePolicy defines hard limits for one tenant turn.
 type TenantRuntimePolicy struct {
 	PriorityClass     string
-	CapacityClass     string
+	CapacityClass     CapacityClass
 	MaxSteps          int
 	MaxTokens         int64
 	MaxCostMinorUnits int64

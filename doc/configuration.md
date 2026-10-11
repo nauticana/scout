@@ -34,7 +34,7 @@ from these flags; a rate and its burst must be both zero (that lane off) or both
 | Flag | Type | Default | Min | Max | Meaning |
 |---|---|---|---|---|---|
 | `agent_max_tokens` | int | 8192 | 1 | — | Output tokens one agent model completion may produce, passed as `BaseDataPlane.MaxOutputTokens`; the data plane refuses to compose without a positive value. |
-| `agent_temperature` | float | `""` | 0.0 | 2.0 | Sampling temperature `provider.Factory` sends only to models whose catalog entry has the `sampling` capability; empty sends none and lets each model use its own default. |
+| `agent_temperature` | float | `""` | 0.0 | 2.0 | Sampling temperature `provider.Factory` sends only to models whose catalog entry has the `SM` (sampling) capability; empty sends none and lets each model use its own default. |
 | `agent_model_region` | string | `""` | — | — | Residency region `TableCandidateCatalog` stamps on a candidate model that has no `model_route` row of its own; empty leaves that model's region unknown. |
 | `agent_turn_rate` | float | 2 | 0 | — | Turns per second one tenant may start (token-bucket refill); 0 turns the per-tenant turn lane off and needs `agent_turn_burst` 0. |
 | `agent_turn_burst` | int | 10 | 0 | — | Turns one tenant may start at once above `agent_turn_rate`; 0 only together with a 0 rate. |
@@ -210,7 +210,7 @@ validates them at load.
 |---|---|---|---|---|---|
 | `agent_activation_batch` | int | 20 | 1 | — | Due scheduled release activations one worker poll handles. |
 | `agent_activation_poll` | int | 30 | 1 | — | Seconds between polls of the release activation worker; a transient failure retries after attempts × this period. |
-| `agent_activation_max_attempts` | int | 5 | 1 | — | Attempts of a scheduled activation that fails transiently before it is refused with `attempts_exhausted`. |
+| `agent_activation_max_attempts` | int | 5 | 1 | — | Attempts of a scheduled activation that fails transiently before it is refused with `AE` (attempts exhausted). |
 | `agent_activation_timeout` | int | 120 | 0 | — | Seconds one scheduled activation's checks and swap may take; 0 uses the default 120. |
 | `agent_activation_max_lead_days` | int | 366 | 0 | — | Days ahead of publication a publish may schedule its activation (`StudioService.MaxActivationLead`); 0 uses the default 366. |
 
@@ -315,8 +315,8 @@ truncation.
 | `evaluation.GoldenCaseStore.{MaxInputBytes,MaxCases,VersionsShown}` | `agent_evaluation_case_max_bytes`, `agent_evaluation_max_cases`, `--evaluation_versions_shown` | non-negative; zero takes 32 KiB / 500 / 20 |
 | `evaluation.NewAgentEvaluationWorker(lease, batch, maxAttempts)` | `agent_evaluation_lease`, `agent_evaluation_batch`, `agent_evaluation_max_attempts` | lease at least 1s and longer than the slowest example; batch and attempts positive |
 | `evaluation.AgentEvaluationWorker.{Concurrency,MaxRunCostMinorUnits,Currency}` | `agent_evaluation_concurrency`, `agent_evaluation_max_run_cost`, `agent_evaluation_currency` | concurrency non-negative, below 2 sequential; cost positive minor units, counting judge spend; a three-letter currency, so an empty flag refuses the worker |
-| `evaluation.NewGatewayRubricJudge(gateway, inputs, pricer, settings)` as `AgentEvaluationWorker.Judge` | `agent_evaluation_judge_*` through `ScoutConfig.RubricJudgeSettings()` | compose only when `Configured()`; settings must `Validate()`; the judge route must declare `structured_output` or every graded run fails |
-| `evaluation.AgentEvaluationWorker.{PairJudge,Outputs}` | — | both required for comparison runs, which otherwise fail; `evaluation.GatewayJudge` calls its route strictly through `structured_output` and charges the run's requester |
+| `evaluation.NewGatewayRubricJudge(gateway, inputs, pricer, settings)` as `AgentEvaluationWorker.Judge` | `agent_evaluation_judge_*` through `ScoutConfig.RubricJudgeSettings()` | compose only when `Configured()`; settings must `Validate()`; the judge route must declare `SO` (structured output) or every graded run fails |
+| `evaluation.AgentEvaluationWorker.{PairJudge,Outputs}` | — | both required for comparison runs, which otherwise fail; `evaluation.GatewayJudge` calls its route strictly through `SO` (structured output) and charges the run's requester |
 | `evaluation.StudioEvaluation.{BaselineStore,Outputs,MaxPageAnswerBytes}` | `agent_evaluation_compare_page_bytes` | the store and reader are required by the `compare` feature only; bytes non-negative, zero takes 1 MiB |
 | `evaluation.EvaluationBaselineStore.{MaxOutputBytes,MaxBaselines}` | `agent_evaluation_baseline_max_bytes`, `agent_evaluation_max_baselines` | non-negative; zero takes 32 KiB / 20 |
 | `controlplane.StudioEvaluationGate.{MaxResults,Audit}` | `agent_evaluation_gate_max_results` | non-negative, zero takes 2000; overrides are refused without `Audit`. Compose it in `StudioService.Guards`, or a publish or restore of a gated agent is refused |

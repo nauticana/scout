@@ -12,7 +12,7 @@ columns:
   - name: step_id
     type: VARCHAR(120)
   - name: step_kind_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: configuration
     type: TEXT
 primary_key: [id]
@@ -35,3 +35,6 @@ indexes:
   - name: execution_step_graph_id_uq
     columns: [partner_id, agent_id, agent_version, id]
     unique: true
+checks:
+  - name: execution_step_kind_ck
+    expression: step_kind_code IN ('M', 'T', 'K', 'A', 'W', 'L')

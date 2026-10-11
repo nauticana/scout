@@ -18,7 +18,7 @@ columns:
   - name: resource_version
     type: VARCHAR(80)
   - name: merge_mode_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: sealed
     type: BOOLEAN
     default: FALSE
@@ -51,7 +51,7 @@ indexes:
     columns: [partner_id, resource_kind_code, resource_id]
 checks:
   - name: config_scope_binding_merge_mode_ck
-    expression: merge_mode_code IN ('replace', 'append', 'intersect')
+    expression: merge_mode_code IN ('R', 'A', 'I')
   - name: config_scope_binding_window_ck
     expression: endda IS NULL OR endda > begda
   - name: config_scope_binding_digest_ck

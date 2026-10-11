@@ -14,7 +14,7 @@ import (
 )
 
 // AgentStepKind is the graph step kind for a delegated agent invocation.
-const AgentStepKind = "agent"
+const AgentStepKind = domain.StepKindAgent
 
 // agentStepConfig is the compiled configuration of one agent step.
 type agentStepConfig struct {

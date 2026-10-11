@@ -260,3 +260,16 @@ func TestOpenRefusesAChangedProposal(t *testing.T) {
 		t.Fatalf("a different proposal for the same step: want ErrConflict, got %v", err)
 	}
 }
+
+func TestOpenAcceptsOnlySeededOutputClassCodes(t *testing.T) {
+	if err := validateOpen(owed("req-class", "")); err != nil {
+		t.Fatalf("a seeded class must open: %v", err)
+	}
+	for _, class := range []domain.OutputClass{"", "approval_request", "advice", "r"} {
+		request := owed("req-class", "")
+		request.Class = class
+		if err := validateOpen(request); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("class %q: want ErrValidation, got %v", class, err)
+		}
+	}
+}

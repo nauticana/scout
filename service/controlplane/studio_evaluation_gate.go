@@ -268,7 +268,7 @@ func (g *StudioEvaluationGate) EvaluateGate(ctx context.Context, actor domain.St
 		return domain.EvaluationGateState{}, err
 	}
 	decision.DecidedBy = actor.Principal
-	detail := fmt.Sprintf("%s of definition %s", decision.Verdict, decision.DefinitionDigest)
+	detail := fmt.Sprintf("verdict %s of definition %s", decision.Verdict, decision.DefinitionDigest)
 	if decision.Reason != "" {
 		detail += ": " + decision.Reason
 	}
@@ -743,6 +743,9 @@ func (g *StudioEvaluationGate) scanDecision(ctx context.Context, qs keelport.Que
 		DecidedBy: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[8])), ID: common.AsString(row[9])},
 		DecidedAt: common.AsTime(row[10]),
 	}
+	if !decision.Verdict.Valid() {
+		return domain.EvaluationGateDecision{}, fmt.Errorf("gate decision of %s: unknown verdict %q", digest, decision.Verdict)
+	}
 	policy, err := scope.DecodeEvaluationGate([]byte(common.AsString(row[3])))
 	if err != nil {
 		return domain.EvaluationGateDecision{}, fmt.Errorf("decode gate decision policy: %w", err)
@@ -756,10 +759,14 @@ func (g *StudioEvaluationGate) scanDecision(ctx context.Context, qs keelport.Que
 		if len(run) < 6 {
 			return domain.EvaluationGateDecision{}, fmt.Errorf("gate decision run row: expected 6 columns, got %d", len(run))
 		}
-		decision.Runs = append(decision.Runs, domain.EvaluationGateRun{
+		gateRun := domain.EvaluationGateRun{
 			RunID: common.AsInt64(run[0]), Role: domain.GateRunRole(common.AsString(run[1])), Scope: domain.GoldenScope(common.AsString(run[2])),
 			ScoreBP: common.AsInt64(run[3]), Samples: common.AsInt64(run[4]), Criticals: common.AsInt64(run[5]),
-		})
+		}
+		if !gateRun.Role.Valid() {
+			return domain.EvaluationGateDecision{}, fmt.Errorf("gate decision run %d: unknown role %q", gateRun.RunID, gateRun.Role)
+		}
+		decision.Runs = append(decision.Runs, gateRun)
 	}
 	return decision, nil
 }

@@ -78,10 +78,10 @@ func (catalog *TableCandidateCatalog) CandidatesFor(ctx context.Context, tenant 
 	if err != nil {
 		return domain.ModelCandidateSet{}, fmt.Errorf("list candidate capabilities: %w", err)
 	}
-	byModel := make(map[domain.ModelReference][]string, len(capabilities.Rows))
+	byModel := make(map[domain.ModelReference][]domain.ModelCapability, len(capabilities.Rows))
 	for _, row := range capabilities.Rows {
 		reference := domain.ModelReference{ProviderID: strings.TrimSpace(common.AsString(row[0])), ModelID: strings.TrimSpace(common.AsString(row[1]))}
-		byModel[reference] = append(byModel[reference], strings.TrimSpace(common.AsString(row[2])))
+		byModel[reference] = append(byModel[reference], domain.ModelCapability(strings.TrimSpace(common.AsString(row[2]))))
 	}
 	models, err := catalog.qs.Query(ctx, qCandidateModels, tenant.TenantID)
 	if err != nil {
@@ -114,7 +114,7 @@ func (catalog *TableCandidateCatalog) CandidatesFor(ctx context.Context, tenant 
 		}
 		set.Candidates = append(set.Candidates, candidate)
 		_, _ = hash.Write([]byte(candidate.RouteID + "|" + candidate.ModelVersion + "|" + candidate.Region + "|" + strconv.Itoa(candidate.QualityClass) + "|" + strconv.Itoa(candidate.EmbeddingDimensions) + "|" + strconv.FormatInt(candidate.MaxContextTokens, 10) + "|" +
-			strconv.FormatInt(candidate.MaxOutputTokens, 10) + "|" + strings.Join(candidate.Capabilities, ",") + "\n"))
+			strconv.FormatInt(candidate.MaxOutputTokens, 10) + "|" + fmt.Sprint(candidate.Capabilities) + "\n"))
 	}
 	set.Generation = int64(hash.Sum64() & math.MaxInt64)
 	return set, nil

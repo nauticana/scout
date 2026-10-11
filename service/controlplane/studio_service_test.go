@@ -141,7 +141,7 @@ func TestSyncPromptBindingsEndsWhatChangedAndBindsTheNewValue(t *testing.T) {
 		t.Fatalf("queries = %v", query.queries)
 	}
 	bound := query.args[qStudioInsertBinding]
-	if bound[1] != "a:writer-a" || bound[2] != "2/en-US" || bound[4] != "replace" || bound[5] != true || bound[6] != `{"instruction":"new"}` || bound[8] != int64(9) {
+	if bound[1] != "a:writer-a" || bound[2] != "2/en-US" || bound[4] != string(domain.MergeReplace) || bound[5] != true || bound[6] != `{"instruction":"new"}` || bound[8] != int64(9) {
 		t.Fatalf("insert args = %v", bound)
 	}
 }

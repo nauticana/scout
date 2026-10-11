@@ -8,7 +8,7 @@ columns:
   - name: definition_digest
     type: CHAR(64)
   - name: verdict_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: reason
     type: VARCHAR(400)
     nullable: true
@@ -59,10 +59,10 @@ foreign_keys:
       columns: [partner_id, golden_set_id, set_version]
 checks:
   - name: agent_gate_decision_verdict_ck
-    expression: verdict_code IN ('pass', 'fail', 'override')
+    expression: verdict_code IN ('P', 'F', 'O')
   - name: agent_gate_decision_reason_ck
-    expression: verdict_code = 'pass' OR reason IS NOT NULL
+    expression: verdict_code = 'P' OR reason IS NOT NULL
   - name: agent_gate_decision_digest_ck
     expression: CHAR_LENGTH(definition_digest) = 64 AND CHAR_LENGTH(policy_digest) = 64 AND CHAR_LENGTH(inputs_digest) = 64
   - name: agent_gate_decision_set_ck
-    expression: (golden_set_id IS NULL) = (set_version IS NULL) AND (verdict_code <> 'pass' OR set_version IS NOT NULL)
+    expression: (golden_set_id IS NULL) = (set_version IS NULL) AND (verdict_code <> 'P' OR set_version IS NOT NULL)

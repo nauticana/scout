@@ -28,7 +28,7 @@ columns:
     type: TEXT
     comment: The product's authorization requirements, re-checked before the action runs
   - name: channel_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: status_code
     type: VARCHAR(20)
     default: pending
@@ -130,7 +130,7 @@ indexes:
     columns: [partner_id, created_at]
 checks:
   - name: mcp_confirmation_channel_ck
-    expression: channel_code IN ('elicitation', 'inbox')
+    expression: channel_code IN ('E', 'I')
   - name: mcp_confirmation_digest_ck
     expression: CHAR_LENGTH(payload_digest) = 64
   - name: mcp_confirmation_counters_ck

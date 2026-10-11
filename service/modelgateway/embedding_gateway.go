@@ -118,7 +118,7 @@ func (embedder *GovernedEmbedder) EmbedBatch(ctx context.Context, tenant domain.
 	}
 	request := domain.ModelRequest{
 		TenantContext: tenant, RequestID: requestID,
-		RequiredCapabilities: []string{domain.CapabilityEmbeddings},
+		RequiredCapabilities: []domain.ModelCapability{domain.CapabilityEmbeddings},
 		Idempotent:           true,
 	}
 	candidate, err := capableCandidate(ctx, embedder.Catalog, embedder.Selection, tenant, request.RequiredCapabilities)

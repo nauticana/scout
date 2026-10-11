@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.3",
+      "title": "Short constant codes",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "Closed code lists use 1- or 2-character codes with captions in constant_value, narrower columns, matching checks, and typed Go constants; the wire carries the codes.",
+      "body_markdown": "Closed code lists use 1- or 2-character codes, with captions in `constant_value`; their columns are `CHAR(1)` or `CHAR(2)` with matching checks, and the wire carries the code. Publish review status `R`/`A`/`X`/`S`; draft comment anchor `D`/`P`/`S` and status `O`/`R`; release activation reason `VM`, `DM`, `NA`, `AA`, `GR`, `DC`, `AE`; guardrail layer `B`/`P`/`T`/`Y`/`R`; merge mode `R`/`A`/`I` (settings, prompt layers, portable documents, and templates); gate verdict `P`/`F`/`O` and run role `C`/`B`; review source `S`/`F`, status `P`/`G`/`D`/`M`, and verdict `P`/`F`; comparison verdict `A`/`B`/`T`; approval output class `A`/`D`/`R`/`C`; MCP confirmation channel `E`/`I`; execution step kind `M`, `T`, `K`, `A`, `W`, `L`; model capability `TX`, `IM`, `VD`, `TL`, `SO`, `SM`, `WS`, `EM` (including `ToolLoopConfig.capabilities`); capacity class `S`/`D`. Language codes and the words inside guardrail rules and approval routing are unchanged.\n\n- `domain.ModelCapability` types `ModelRequest.RequiredCapabilities`, `ModelCandidate.Capabilities`, `StudioModel.Capabilities`, and `ToolLoopConfig.Capabilities`; `controlplane.CapabilityText`, `CapabilityImage`, and `CapabilityVideo` move to `domain`. `domain.CapacityClass` types `TenantRuntimePolicy.CapacityClass`. Step kinds are `domain.StepKind*` constants, and registries and graphs refuse an unknown kind.\n- A product seeding model capabilities or runtime policies uses the codes.\n\n## Schema and seeds\n\nRebuild from the generated DDL and reseed; every column of these lists is `CHAR(1)` or `CHAR(2)`, `safety_event.layer_code`, `execution_step.step_kind_code`, `model_capability.capability_code`, and `tenant_runtime_policy.capacity_class_code` gain checks. Every `constant_lookup` column checks its codes: `safety_event` stage, action, and severity, `agent_draft_comment.anchor_code`, and `prompt_baseline.language_code` gain checks, so a product adding a language extends the seed and the check together."
+    },
+    {
       "version": "v1.2.2",
       "title": "Evaluation comparisons, publish gate, and durable production review",
       "tags": [

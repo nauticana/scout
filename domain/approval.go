@@ -22,11 +22,21 @@ const (
 type OutputClass string
 
 const (
-	OutputAdvice          OutputClass = "advice"
-	OutputDraft           OutputClass = "draft"
-	OutputApprovalRequest OutputClass = "approval_request"
-	OutputCompletedAction OutputClass = "completed_action"
+	OutputAdvice          OutputClass = "A"
+	OutputDraft           OutputClass = "D"
+	OutputApprovalRequest OutputClass = "R"
+	OutputCompletedAction OutputClass = "C"
 )
+
+// Valid reports whether the class is a seeded agent_output_class code.
+func (class OutputClass) Valid() bool {
+	switch class {
+	case OutputAdvice, OutputDraft, OutputApprovalRequest, OutputCompletedAction:
+		return true
+	default:
+		return false
+	}
+}
 
 // RiskTier orders approval requests for a reviewer's attention.
 type RiskTier string

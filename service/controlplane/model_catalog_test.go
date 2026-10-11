@@ -18,9 +18,9 @@ func TestListJoinsCapabilitiesAndRates(t *testing.T) {
 			{"google", "gemini-3.1-flash-image", "Gemini 3.1 Flash (Image)", int64(2048), int64(1024), true},
 		},
 		qCatalogCapabilities: {
-			{"anthropic", "claude-opus-5", "text"},
-			{"google", "gemini-3.1-flash-image", "image"},
-			{"google", "gemini-3.1-flash-image", "text"},
+			{"anthropic", "claude-opus-5", string(domain.CapabilityText)},
+			{"google", "gemini-3.1-flash-image", string(domain.CapabilityImage)},
+			{"google", "gemini-3.1-flash-image", string(domain.CapabilityText)},
 		},
 		qCatalogPrices: {
 			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000)},
@@ -44,7 +44,7 @@ func TestListJoinsCapabilitiesAndRates(t *testing.T) {
 	if len(models[1].Rates) != 1 || models[1].Rates[0].UsageCategory != RateImage {
 		t.Fatalf("media rates = %+v", models[1].Rates)
 	}
-	if len(models[1].Capabilities) != 2 {
+	if len(models[1].Capabilities) != 2 || models[1].Capabilities[0] != domain.CapabilityImage {
 		t.Fatalf("a model may serve several modalities, got %v", models[1].Capabilities)
 	}
 }
@@ -52,7 +52,7 @@ func TestListJoinsCapabilitiesAndRates(t *testing.T) {
 // A model is valid for a slot only if it declares that modality.
 func TestValidateChecksCapability(t *testing.T) {
 	catalog := catalogFake(map[string][][]any{
-		qCatalogModel: {{true, "text"}},
+		qCatalogModel: {{true, string(domain.CapabilityText)}},
 	})
 	fields, err := catalog.Validate(context.Background(), 8, domain.AgentModelSelection{
 		Text:  &domain.ModelReference{ProviderID: "anthropic", ModelID: "claude-opus-5"},
@@ -61,7 +61,7 @@ func TestValidateChecksCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if len(fields) != 1 || fields[0].Field != "models.image" {
+	if len(fields) != 1 || fields[0].Field != "models.image" || fields[0].Message != "model claude-opus-5 cannot generate image" {
 		t.Fatalf("a text-only model must be rejected for the image slot, got %+v", fields)
 	}
 }
@@ -75,7 +75,7 @@ func TestValidateRejectsUnknownAndWithdrawnModels(t *testing.T) {
 		t.Fatalf("unknown model = %+v", fields)
 	}
 
-	withdrawn := catalogFake(map[string][][]any{qCatalogModel: {{false, "text"}}})
+	withdrawn := catalogFake(map[string][][]any{qCatalogModel: {{false, string(domain.CapabilityText)}}})
 	fields, _ = withdrawn.Validate(context.Background(), 8, domain.AgentModelSelection{
 		Text: &domain.ModelReference{ProviderID: "anthropic", ModelID: "retired"},
 	})

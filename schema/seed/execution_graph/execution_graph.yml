@@ -8,12 +8,12 @@ seeds:
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
-      - [execution_step_kind, model, Model Inference]
-      - [execution_step_kind, tool, Governed Tool Invocation]
-      - [execution_step_kind, knowledge, Knowledge Retrieval]
-      - [execution_step_kind, agent, Delegated Agent Invocation]
-      - [execution_step_kind, wait, Suspension Awaiting a Human Decision]
-      - [execution_step_kind, tool_loop, Bounded Model and Tool Loop]
+      - [execution_step_kind, M, Model]
+      - [execution_step_kind, T, Tool]
+      - [execution_step_kind, K, Knowledge]
+      - [execution_step_kind, A, Agent]
+      - [execution_step_kind, W, Wait]
+      - [execution_step_kind, L, Tool Loop]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

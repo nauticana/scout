@@ -16,7 +16,7 @@ var routerNow = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 
 func candidate(provider, model, region, route string, quality int) domain.ModelCandidate {
 	return domain.ModelCandidate{Provider: provider, Model: model, Region: region, RouteID: route, QualityClass: quality,
-		Capabilities: []string{"text"}, MaxContextTokens: 8_000, MaxOutputTokens: 2_000}
+		Capabilities: []domain.ModelCapability{domain.CapabilityText}, MaxContextTokens: 8_000, MaxOutputTokens: 2_000}
 }
 
 func healthy(provider, model, region, route string, queue time.Duration) domain.CapacitySnapshot {
@@ -64,7 +64,7 @@ func newRouterFixture(t *testing.T) *routerFixture {
 
 func routerRequest() domain.ModelRequest {
 	return domain.ModelRequest{TenantContext: domain.TenantContext{TenantID: 7, Region: "eu"}, RequestID: "req", MaxOutputTokens: 100,
-		Prompt: []byte("hello"), RequiredCapabilities: []string{"text"}}
+		Prompt: []byte("hello"), RequiredCapabilities: []domain.ModelCapability{domain.CapabilityText}}
 }
 
 func TestPolicyRouterRanksQualityThenLocality(t *testing.T) {
@@ -134,7 +134,9 @@ func TestPolicyRouterFilters(t *testing.T) {
 		}, ctx: func() (context.Context, context.CancelFunc) {
 			return context.WithDeadline(context.Background(), routerNow.Add(time.Second))
 		}, wantErr: domain.ErrDeadlineInfeasible},
-		{name: "capability required", request: func(request *domain.ModelRequest) { request.RequiredCapabilities = []string{"vision"} }, wantErr: domain.ErrNoRoute},
+		{name: "capability required", request: func(request *domain.ModelRequest) {
+			request.RequiredCapabilities = []domain.ModelCapability{domain.CapabilityImage}
+		}, wantErr: domain.ErrNoRoute},
 		{name: "context limit", request: func(request *domain.ModelRequest) { request.MaxOutputTokens = 3_000 }, wantErr: domain.ErrNoRoute},
 		{name: "excluded route", request: func(request *domain.ModelRequest) { request.ExcludedRouteIDs = []string{"eu-2"} }, wantRoute: "us-1"},
 		{name: "min quality falls to fallback", policy: domain.RoutingPolicy{MinQualityClass: 3, Fallbacks: []domain.ModelReference{{ProviderID: "p", ModelID: "fast"}}}, wantRoute: "eu-1"},

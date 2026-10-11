@@ -42,7 +42,7 @@ columns:
     type: TIMESTAMP
     nullable: true
   - name: reason_code
-    type: VARCHAR(30)
+    type: CHAR(2)
     nullable: true
   - name: detail
     type: VARCHAR(400)
@@ -98,7 +98,7 @@ checks:
   - name: agent_release_activation_attempts_ck
     expression: attempts >= 0
   - name: agent_release_activation_reason_code_ck
-    expression: reason_code IS NULL OR reason_code IN ('version_missing', 'digest_mismatch', 'not_authorized', 'agent_archived', 'guard_refused', 'deployment_changed', 'attempts_exhausted')
+    expression: reason_code IS NULL OR reason_code IN ('VM', 'DM', 'NA', 'AA', 'GR', 'DC', 'AE')
   - name: agent_release_activation_reason_ck
     expression: (state_code = 'refused') = (reason_code IS NOT NULL)
   - name: agent_release_activation_decider_ck

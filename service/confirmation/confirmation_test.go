@@ -103,12 +103,13 @@ func TestPrepareGuardsAnOpenActionPerMaker(t *testing.T) {
 func TestPrepareRefusesAnIncompleteDraft(t *testing.T) {
 	f := newFixture()
 	for name, mutate := range map[string]func(*domain.MCPConfirmationDraft){
-		"tenant":  func(d *domain.MCPConfirmationDraft) { d.TenantID = 0 },
-		"maker":   func(d *domain.MCPConfirmationDraft) { d.Maker.ID = " " },
-		"digest":  func(d *domain.MCPConfirmationDraft) { d.Digest = strings.ToUpper(d.Digest) },
-		"payload": func(d *domain.MCPConfirmationDraft) { d.Payload = json.RawMessage(`{"a":`) },
-		"preview": func(d *domain.MCPConfirmationDraft) { d.Preview = nil },
-		"channel": func(d *domain.MCPConfirmationDraft) { d.Channel = "email" },
+		"tenant":       func(d *domain.MCPConfirmationDraft) { d.TenantID = 0 },
+		"maker":        func(d *domain.MCPConfirmationDraft) { d.Maker.ID = " " },
+		"digest":       func(d *domain.MCPConfirmationDraft) { d.Digest = strings.ToUpper(d.Digest) },
+		"payload":      func(d *domain.MCPConfirmationDraft) { d.Payload = json.RawMessage(`{"a":`) },
+		"preview":      func(d *domain.MCPConfirmationDraft) { d.Preview = nil },
+		"channel":      func(d *domain.MCPConfirmationDraft) { d.Channel = "email" },
+		"word channel": func(d *domain.MCPConfirmationDraft) { d.Channel = "inbox" },
 		"maker-checker channel": func(d *domain.MCPConfirmationDraft) {
 			d.Channel, d.ApprovalRequired = domain.MCPConfirmationElicitation, true
 		},

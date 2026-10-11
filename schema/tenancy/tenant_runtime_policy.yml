@@ -8,7 +8,7 @@ columns:
   - name: priority_class_code
     type: VARCHAR(30)
   - name: capacity_class_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: max_steps
     type: INTEGER
   - name: max_tokens
@@ -43,6 +43,8 @@ indexes:
   - name: tenant_runtime_policy_created_ix
     columns: [partner_id, created_at]
 checks:
+  - name: tenant_runtime_policy_capacity_ck
+    expression: capacity_class_code IN ('S', 'D')
   - name: tenant_runtime_policy_steps_ck
     expression: max_steps > 0
   - name: tenant_runtime_policy_tokens_ck

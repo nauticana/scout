@@ -6,7 +6,7 @@ columns:
   - name: model_id
     type: VARCHAR(120)
   - name: capability_code
-    type: VARCHAR(30)
+    type: CHAR(2)
 primary_key: [provider_id, model_id, capability_code]
 foreign_keys:
   - name: model_capabilities
@@ -14,3 +14,6 @@ foreign_keys:
     references:
       table: model_definition
       columns: [provider_id, model_id]
+checks:
+  - name: model_capability_code_ck
+    expression: capability_code IN ('TX', 'IM', 'VD', 'TL', 'SO', 'SM', 'WS', 'EM')

@@ -503,7 +503,7 @@ type ModelRate struct {
 type StudioModel struct {
 	Reference         ModelReference
 	DisplayName       string
-	Capabilities      []string
+	Capabilities      []ModelCapability
 	ContextTokenLimit int64
 	OutputTokenLimit  int64
 	Active            bool

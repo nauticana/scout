@@ -97,7 +97,7 @@ func TestBaseDataPlaneComposesEveryDefault(t *testing.T) {
 // catalogTableDB answers the candidate catalog's query set; every other set falls back to loopTableFake.
 type catalogTableDB struct {
 	loopTableDB
-	capabilities []string
+	capabilities []domain.ModelCapability
 }
 
 func (db catalogTableDB) GetQueryService(ctx context.Context, queries map[string]string) keelport.QueryService {
@@ -111,14 +111,14 @@ func (db catalogTableDB) GetQueryService(ctx context.Context, queries map[string
 
 type catalogTableFake struct {
 	queries      map[string]string
-	capabilities []string
+	capabilities []domain.ModelCapability
 }
 
 func (table *catalogTableFake) Query(_ context.Context, name string, _ ...any) (*keelmodel.QueryResult, error) {
 	if strings.Contains(table.queries[name], "model_capability") {
 		rows := make([][]any, 0, len(table.capabilities))
 		for _, capability := range table.capabilities {
-			rows = append(rows, []any{"anthropic", "claude", capability})
+			rows = append(rows, []any{"anthropic", "claude", string(capability)})
 		}
 		return &keelmodel.QueryResult{Rows: rows}, nil
 	}
@@ -127,7 +127,7 @@ func (table *catalogTableFake) Query(_ context.Context, name string, _ ...any) (
 
 func (*catalogTableFake) GenID() int64 { return 0 }
 
-func toolCapablePlane(t *testing.T, capabilities ...string) *BaseDataPlane {
+func toolCapablePlane(t *testing.T, capabilities ...domain.ModelCapability) *BaseDataPlane {
 	t.Helper()
 	plane := composablePlane()
 	plane.DB = catalogTableDB{loopTableDB: loopTableDB{table: &loopTableFake{rows: map[string][]any{}}}, capabilities: capabilities}
@@ -169,7 +169,7 @@ func TestBaseDataPlaneRoutesAndConfirmsAToolCapableRequest(t *testing.T) {
 }
 
 func TestBaseDataPlaneRefusesAToolCallOnARouteWithoutTools(t *testing.T) {
-	plane := toolCapablePlane(t, "vision")
+	plane := toolCapablePlane(t, domain.CapabilityImage)
 	ctx, request := context.Background(), toolCapableRequest()
 	selection := domain.ModelSelection{Provider: "anthropic", Model: "claude", RouteID: "anthropic/claude"}
 	if _, err := plane.Models.Generate(ctx, selection, request); !errors.Is(err, domain.ErrCapabilityUnsupported) ||

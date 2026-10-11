@@ -10,8 +10,8 @@ const (
 	StudioReviewPromotePath = StudioBasePath + "review/promote"
 )
 
-// ReviewGrade is a grader's score (1 to 5), pass or fail verdict, notes, and the
-// behavior a promoted golden case expects.
+// ReviewGrade is a grader's score (1 to 5), review_verdict code, notes, and the behavior a
+// promoted golden case expects.
 type ReviewGrade struct {
 	Score            int    `json:"score"`
 	Verdict          string `json:"verdict"`
@@ -20,7 +20,8 @@ type ReviewGrade struct {
 }
 
 // ReviewItem is one sampled or low-rated turn of a release under human review. It never
-// names who rated the turn; reviewer is who graded or dismissed it.
+// names who rated the turn; reviewer is who graded or dismissed it. Source and status are
+// review_source and review_status codes.
 type ReviewItem struct {
 	ItemID       int64        `json:"item_id"`
 	AgentName    string       `json:"agent_name"`

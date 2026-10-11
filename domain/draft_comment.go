@@ -6,17 +6,17 @@ import "time"
 type DraftCommentAnchor string
 
 const (
-	CommentOnDraft         DraftCommentAnchor = "draft"
-	CommentOnPromptSection DraftCommentAnchor = "prompt_section"
-	CommentOnSetting       DraftCommentAnchor = "setting"
+	CommentOnDraft         DraftCommentAnchor = "D"
+	CommentOnPromptSection DraftCommentAnchor = "P"
+	CommentOnSetting       DraftCommentAnchor = "S"
 )
 
 // DraftCommentStatus is open until someone resolves the comment.
 type DraftCommentStatus string
 
 const (
-	DraftCommentOpen     DraftCommentStatus = "open"
-	DraftCommentResolved DraftCommentStatus = "resolved"
+	DraftCommentOpen     DraftCommentStatus = "O"
+	DraftCommentResolved DraftCommentStatus = "R"
 )
 
 // DraftComment is one remark on a draft revision, anchored to the draft as a whole, a prompt

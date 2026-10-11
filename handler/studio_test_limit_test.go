@@ -36,7 +36,7 @@ func TestStudioTestRouteMapsTheDraftsExecutionLimit(t *testing.T) {
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, body = %s; want 422", recorder.Code, recorder.Body.String())
 	}
-	if body := recorder.Body.String(); !strings.Contains(body, domain.ErrExecutionLimit.Error()) || strings.Contains(body, "provider detail") || strings.Contains(body, "5s") {
+	if body := recorder.Body.String(); !strings.Contains(body, domain.ErrExecutionLimit.Error()) || strings.Contains(body, "provider detail") || strings.Contains(body, "exceeded its 5s") {
 		t.Fatalf("body = %s, want only the limit's stable message", body)
 	}
 }

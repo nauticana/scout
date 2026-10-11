@@ -177,7 +177,7 @@ func TestApproveNeedsANonAuthorAndAnUnchangedDraft(t *testing.T) {
 	if err != nil || *approved.DecidedBy != 10 || approved.Status != domain.PublishReviewApproved || approved.SodExceptionID != "EXC-OK" {
 		t.Fatalf("approval = %+v, %v", approved, err)
 	}
-	if args := query.args[qReviewDecide]; len(args) != 7 || args[0] != "approved" || args[1] != int64(10) || args[5] != int64(11) || args[6] != digest {
+	if args := query.args[qReviewDecide]; len(args) != 7 || args[0] != string(domain.PublishReviewApproved) || args[1] != int64(10) || args[5] != int64(11) || args[6] != digest {
 		t.Fatalf("decide args = %v", args)
 	}
 
@@ -209,7 +209,7 @@ func TestRejectClosesARequestedReview(t *testing.T) {
 	query.rows[qReviewGet] = [][]any{reviewRow(11, digest, domain.PublishReviewRequested, 9, nil, nil)}
 	query.rows[qReviewDecide] = [][]any{{reviewedAt}}
 	rejected, err := reviews.Reject(context.Background(), humanActor(8, 10), domain.PublishReviewDecision{AgentID: "writer-a", ReviewID: 11, Note: "tone"})
-	if err != nil || rejected.Status != domain.PublishReviewRejected || query.args[qReviewDecide][0] != "rejected" || query.args[qReviewAudit][2] != "PUBLISH_REVIEW_REJECT" {
+	if err != nil || rejected.Status != domain.PublishReviewRejected || query.args[qReviewDecide][0] != string(domain.PublishReviewRejected) || query.args[qReviewAudit][2] != "PUBLISH_REVIEW_REJECT" {
 		t.Fatalf("rejected = %+v, %v", rejected, err)
 	}
 }
@@ -217,7 +217,7 @@ func TestRejectClosesARequestedReview(t *testing.T) {
 func TestReviewStateReportsStalenessAndOpenComments(t *testing.T) {
 	reviews, query, digest, _ := reviewService(t, true)
 	query.rows[qReviewLatest] = [][]any{reviewRow(11, strings.Repeat("0", 64), domain.PublishReviewApproved, 9, int64(10), nil)}
-	query.rows[qCommentListStatus] = [][]any{{int64(3), int64(4), "draft", nil, nil, nil, nil, "too long", "open", "human", "10", reviewedAt, nil, nil, nil}}
+	query.rows[qCommentListStatus] = [][]any{{int64(3), int64(4), string(domain.CommentOnDraft), nil, nil, nil, nil, "too long", string(domain.DraftCommentOpen), "human", "10", reviewedAt, nil, nil, nil}}
 	state, err := reviews.Review(context.Background(), humanActor(8, 10), "writer-a", "")
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestReviewStateReportsStalenessAndOpenComments(t *testing.T) {
 		state.Review.Diff.Causes[0] != "models" || !slices.Equal(state.Review.Diff.Editors, []int64{7}) || len(state.OpenComments) != 1 || state.OpenComments[0].Author.ID != "10" {
 		t.Fatalf("state = %+v", state)
 	}
-	if query.args[qCommentListStatus][2] != "open" {
+	if query.args[qCommentListStatus][2] != string(domain.DraftCommentOpen) {
 		t.Fatalf("comment filter = %v", query.args[qCommentListStatus])
 	}
 	reviews.Studio.Roles = denyActions(domain.StudioView)
@@ -281,7 +281,7 @@ func TestGuardAdmitsOnlyTheLatestApprovedUnconsumedReviewOfTheDigest(t *testing.
 		}
 	}
 	for _, name := range []string{qReviewLatest, qReviewClaim} {
-		if sql := reviewQueries[name]; !strings.Contains(sql, "status_code <> 'superseded'") || strings.Contains(sql, "status_code = 'approved'") ||
+		if sql := reviewQueries[name]; !strings.Contains(sql, "status_code <> "+sqlReviewSuperseded) || strings.Contains(sql, "status_code = "+sqlReviewApproved) ||
 			strings.Contains(sql, "definition_digest = ?") {
 			t.Fatalf("%s must read the latest review whatever its state or digest:\n%s", name, sql)
 		}

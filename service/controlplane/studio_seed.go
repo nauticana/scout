@@ -490,7 +490,7 @@ func checkPortableShape(path string, binding domain.PortableBinding, sectionIDs 
 			fields = append(fields, domain.AgentFieldError{Field: path + ".language", Message: "must contain 1 to 16 characters"})
 		}
 		if binding.MergeMode != domain.MergeAppend && binding.MergeMode != domain.MergeReplace {
-			fields = append(fields, domain.AgentFieldError{Field: path + ".merge_mode", Message: "must be append or replace"})
+			fields = append(fields, domain.AgentFieldError{Field: path + ".merge_mode", Message: "must be " + string(domain.MergeAppend) + " or " + string(domain.MergeReplace)})
 		}
 		return fields
 	}
@@ -505,7 +505,7 @@ func checkPortableShape(path string, binding domain.PortableBinding, sectionIDs 
 	switch binding.MergeMode {
 	case domain.MergeReplace, domain.MergeAppend, domain.MergeIntersect:
 	default:
-		fields = append(fields, domain.AgentFieldError{Field: path + ".merge_mode", Message: "must be replace, append, or intersect"})
+		fields = append(fields, domain.AgentFieldError{Field: path + ".merge_mode", Message: "must be " + string(domain.MergeReplace) + ", " + string(domain.MergeAppend) + ", or " + string(domain.MergeIntersect)})
 	}
 	return fields
 }

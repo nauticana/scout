@@ -19,7 +19,7 @@ import (
 var (
 	stepNow   = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	stepLease = time.Minute
-	testStep  = domain.ExecutionStep{ExecutionStepID: 91, StepID: "plan", Kind: "model"}
+	testStep  = domain.ExecutionStep{ExecutionStepID: 91, StepID: "plan", Kind: domain.StepKindModel}
 )
 
 func newStepStore(query *persistenceQueryFake, storage *fake.ObjectStorage) *StepIdempotencyStore {

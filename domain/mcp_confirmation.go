@@ -25,10 +25,15 @@ type MCPConfirmationChannel string
 
 const (
 	// MCPConfirmationElicitation asks the maker through an MCP elicitation form.
-	MCPConfirmationElicitation MCPConfirmationChannel = "elicitation"
+	MCPConfirmationElicitation MCPConfirmationChannel = "E"
 	// MCPConfirmationInbox waits for an authorized person outside the MCP client.
-	MCPConfirmationInbox MCPConfirmationChannel = "inbox"
+	MCPConfirmationInbox MCPConfirmationChannel = "I"
 )
+
+// Valid reports whether the channel is a seeded mcp_confirmation_channel code.
+func (channel MCPConfirmationChannel) Valid() bool {
+	return channel == MCPConfirmationElicitation || channel == MCPConfirmationInbox
+}
 
 // MCPConfirmationDraft is an MCP tool call as first prepared. Payload is exactly
 // what will run; Digest identifies the action and guards against preparing it

@@ -687,8 +687,8 @@ func validateOpen(request domain.ApprovalRequest) error {
 		return fmt.Errorf("%w: approval needs the acting principal", domain.ErrPrincipalUnknown)
 	case len(request.ProposedDigest) != 64:
 		return fmt.Errorf("%w: approval needs the digest of the proposed action", domain.ErrValidation)
-	case request.Class == "" || request.RiskTier == "":
-		return fmt.Errorf("%w: approval needs an output class and a risk tier", domain.ErrValidation)
+	case !request.Class.Valid() || request.RiskTier == "":
+		return fmt.Errorf("%w: approval needs a known output class and a risk tier", domain.ErrValidation)
 	case request.RevisesStepID < 0 || request.RevisesStepID == request.ExecutionStepID:
 		return fmt.Errorf("%w: a revision revises another step of its turn", domain.ErrValidation)
 	case (request.Approver.Kind == "") != (strings.TrimSpace(request.Approver.ID) == ""):

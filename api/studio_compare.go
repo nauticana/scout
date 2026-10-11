@@ -77,7 +77,7 @@ type ComparedAnswer struct {
 	Cost          EvaluationCost    `json:"cost"`
 }
 
-// CaseComparison is one case's verdict: a, b, or tie, absent when judging failed and reason
+// CaseComparison is one case's verdict code (evaluation_comparison_verdict), absent when judging failed and reason
 // says why. evaluator is absent when an arm ended in a failed state and no judge was asked;
 // evaluator_cost is what the judge spent.
 type CaseComparison struct {

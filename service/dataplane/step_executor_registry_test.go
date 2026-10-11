@@ -15,10 +15,10 @@ func TestStepExecutorRegistryRegistersAndResolves(t *testing.T) {
 	executor := fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
 		return domain.StepResult{}, nil
 	})
-	if err := registry.Register("model", executor); err != nil {
+	if err := registry.Register(domain.StepKindModel, executor); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	got, err := registry.ExecutorFor(context.Background(), "model")
+	got, err := registry.ExecutorFor(context.Background(), domain.StepKindModel)
 	if err != nil {
 		t.Fatalf("ExecutorFor: %v", err)
 	}
@@ -32,17 +32,25 @@ func TestStepExecutorRegistryRejectsDuplicateAndMissingKinds(t *testing.T) {
 	executor := fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
 		return domain.StepResult{}, nil
 	})
-	if err := registry.Register("model", executor); err != nil {
+	if err := registry.Register(domain.StepKindModel, executor); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := registry.Register("model", executor); !errors.Is(err, domain.ErrConflict) {
+	if err := registry.Register(domain.StepKindModel, executor); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("duplicate error = %v", err)
 	}
-	if _, err := registry.ExecutorFor(context.Background(), "tool"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := registry.ExecutorFor(context.Background(), domain.StepKindTool); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("missing error = %v", err)
 	}
 	var nilExecutor contract.StepExecutor
-	if err := registry.Register("", nilExecutor); !errors.Is(err, domain.ErrValidation) {
+	if err := registry.Register(domain.StepKindTool, nilExecutor); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("validation error = %v", err)
+	}
+	for _, kind := range []string{"", "model", "tool_loop", " M"} {
+		if err := registry.Register(kind, executor); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("Register(%q) error = %v, want validation", kind, err)
+		}
+		if _, err := registry.ExecutorFor(context.Background(), kind); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("ExecutorFor(%q) error = %v, want validation", kind, err)
+		}
 	}
 }

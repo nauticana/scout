@@ -6,23 +6,20 @@ import (
 	"time"
 )
 
-// StepKindToolLoop is the execution step kind that runs a bounded model↔tool loop.
-const StepKindToolLoop = "tool_loop"
-
 // ToolLoopConfig is the ExecutionStep.Configuration of a tool_loop step. Every
 // limit may only narrow the executor's own; zero inherits it.
 type ToolLoopConfig struct {
-	MaxIterations     int             `json:"max_iterations,omitempty"`
-	MaxToolCalls      int             `json:"max_tool_calls,omitempty"`
-	MaxTokens         int64           `json:"max_tokens,omitempty"`
-	MaxCostMinorUnits int64           `json:"max_cost_minor_units,omitempty"`
-	MaxRepeatedCalls  int             `json:"max_repeated_calls,omitempty"`
-	DeadlineSeconds   int64           `json:"deadline_seconds,omitempty"`
-	MaxOutputTokens   int64           `json:"max_output_tokens,omitempty"`
-	Capabilities      []string        `json:"capabilities,omitempty"`
-	OutputSchemaName  string          `json:"output_schema_name,omitempty"`
-	OutputSchema      json.RawMessage `json:"output_schema,omitempty"`
-	RequireEvidence   bool            `json:"require_evidence,omitempty"`
+	MaxIterations     int               `json:"max_iterations,omitempty"`
+	MaxToolCalls      int               `json:"max_tool_calls,omitempty"`
+	MaxTokens         int64             `json:"max_tokens,omitempty"`
+	MaxCostMinorUnits int64             `json:"max_cost_minor_units,omitempty"`
+	MaxRepeatedCalls  int               `json:"max_repeated_calls,omitempty"`
+	DeadlineSeconds   int64             `json:"deadline_seconds,omitempty"`
+	MaxOutputTokens   int64             `json:"max_output_tokens,omitempty"`
+	Capabilities      []ModelCapability `json:"capabilities,omitempty"`
+	OutputSchemaName  string            `json:"output_schema_name,omitempty"`
+	OutputSchema      json.RawMessage   `json:"output_schema,omitempty"`
+	RequireEvidence   bool              `json:"require_evidence,omitempty"`
 	// Search permits provider-native web search on the step's model calls and
 	// bounds it; a task asks for it and may narrow MaxSearches, never widen it,
 	// and its Location replaces the step's.

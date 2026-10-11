@@ -21,7 +21,7 @@ func reviewRow(id int64, status string, score any, verdict, notes, expected, rev
 	if reviewerID != nil {
 		kind = "human"
 	}
-	return []any{id, "writer-a", "3", "feedback", "rated 1 of 5", nil, "c1", int64(2), "req-1",
+	return []any{id, "writer-a", "3", string(domain.ReviewSourceFeedback), "rated 1 of 5", nil, "c1", int64(2), "req-1",
 		"scout://state/in", sha256Hex([]byte("hello")), "scout://state/out", sha256Hex([]byte("hi there")),
 		status, testClock, score, verdict, notes, expected, kind, reviewerID, nil, nil, nil, nil}
 }
@@ -39,7 +39,7 @@ func TestReviewQueueStoreDerivesProductionItemsFromTheCompletedTurn(t *testing.T
 		t.Fatal(err)
 	}
 	args := query.args[qReviewTurnInsert]
-	if len(args) != 9 || args[0] != int64(7) || args[1] != "writer-a" || args[2] != "3" || args[3] != "feedback" || args[6] != "c1" || args[7] != int64(2) {
+	if len(args) != 9 || args[0] != int64(7) || args[1] != "writer-a" || args[2] != "3" || args[3] != string(domain.ReviewSourceFeedback) || args[6] != "c1" || args[7] != int64(2) {
 		t.Fatalf("insert args = %v", args)
 	}
 	if turn := query.args[qReviewTurn]; turn[0] != int64(7) || turn[1] != "req-1" {
@@ -95,14 +95,23 @@ func TestReviewQueueStoreDerivesProductionItemsFromTheCompletedTurn(t *testing.T
 // The pending cap counts only items Studio can resolve, so nothing else can fill it for good.
 func TestReviewQueuePendingCapCountsOnlyResolvableItems(t *testing.T) {
 	sql := reviewQueries[qReviewPending]
-	if !strings.Contains(sql, "status_code = 'pending'") || !strings.Contains(sql, "source_code IN ('sampled', 'feedback')") {
+	if !strings.Contains(sql, "status_code = ? AND source_code IN (?, ?)") {
 		t.Fatalf("pending count = %s", sql)
+	}
+	query := newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), "completed", "writer-a", "3"}}, qReviewPending: {{int64(0)}}})
+	if err := reviewQueue(query).Enqueue(context.Background(), domain.HumanReviewItem{TenantID: 7, Source: domain.ReviewSourceSampled,
+		Reason: "sampled: base", Turn: domain.ReviewTurnRef{RequestID: "req-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if args := query.args[qReviewPending]; len(args) != 5 || args[2] != string(domain.ReviewPending) ||
+		args[3] != string(domain.ReviewSourceSampled) || args[4] != string(domain.ReviewSourceFeedback) {
+		t.Fatalf("pending count args = %v", args)
 	}
 }
 
 func TestReviewQueueStoreListsOneAgentPerTenantWithFilters(t *testing.T) {
 	ctx := context.Background()
-	query := newQueryFake(map[string][][]any{qReviewList: {reviewRow(12, "pending", nil, nil, nil, nil, nil)}})
+	query := newQueryFake(map[string][][]any{qReviewList: {reviewRow(12, string(domain.ReviewPending), nil, nil, nil, nil, nil)}})
 	store := reviewQueue(query)
 	items, err := store.List(ctx, 7, domain.ReviewFilter{AgentID: "writer-a", Status: domain.ReviewPending, Release: "3",
 		Sources: []domain.ReviewSource{domain.ReviewSourceSampled, domain.ReviewSourceFeedback}, Before: 40, Limit: 11})
@@ -110,7 +119,7 @@ func TestReviewQueueStoreListsOneAgentPerTenantWithFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := query.args[qReviewList]
-	if args[0] != int64(7) || args[1] != "writer-a" || args[2] != "pending" || args[4] != "3" || args[6] != ",sampled,feedback," ||
+	if args[0] != int64(7) || args[1] != "writer-a" || args[2] != string(domain.ReviewPending) || args[4] != "3" || args[6] != ","+string(domain.ReviewSourceSampled)+","+string(domain.ReviewSourceFeedback)+"," ||
 		args[8] != int64(40) || args[10] != 11 {
 		t.Fatalf("list args = %v", args)
 	}
@@ -136,7 +145,7 @@ func TestReviewQueueStoreListsOneAgentPerTenantWithFilters(t *testing.T) {
 func TestReviewQueueStoreGradesOnceAndReplaysTheSameGrade(t *testing.T) {
 	ctx := context.Background()
 	grade := domain.ReviewGrade{Score: 2, Verdict: domain.ReviewFail, Notes: "invented a refund rule", ExpectedBehavior: []byte("cites the policy")}
-	graded := reviewRow(12, "graded", int64(2), "fail", "invented a refund rule", "cites the policy", "9")
+	graded := reviewRow(12, string(domain.ReviewGraded), int64(2), string(domain.ReviewFail), "invented a refund rule", "cites the policy", "9")
 	query := newQueryFake(map[string][][]any{qReviewGrade: {{int64(12)}}, qReviewGet: {graded}})
 	store := reviewQueue(query)
 	item, err := store.Grade(ctx, 7, 12, grade, reviewer)
@@ -146,7 +155,8 @@ func TestReviewQueueStoreGradesOnceAndReplaysTheSameGrade(t *testing.T) {
 	if item.Status != domain.ReviewGraded || item.Grade.Score != 2 || string(item.Grade.ExpectedBehavior) != "cites the policy" || item.Reviewer != reviewer {
 		t.Fatalf("graded = %+v", item)
 	}
-	if args := query.args[qReviewGrade]; args[0] != 2 || args[1] != "fail" || args[4] != "human" || args[5] != "9" || args[7] != int64(7) || args[8] != int64(12) {
+	if args := query.args[qReviewGrade]; args[0] != string(domain.ReviewGraded) || args[1] != 2 || args[2] != string(domain.ReviewFail) || args[5] != "human" || args[6] != "9" ||
+		args[8] != int64(7) || args[9] != int64(12) || args[10] != string(domain.ReviewPending) {
 		t.Fatalf("grade args = %v", args)
 	}
 
@@ -162,7 +172,7 @@ func TestReviewQueueStoreGradesOnceAndReplaysTheSameGrade(t *testing.T) {
 	if _, err := replay.Grade(ctx, 7, 12, grade, domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "10"}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("another grader = %v", err)
 	}
-	dismissed := reviewQueue(newQueryFake(map[string][][]any{qReviewGet: {reviewRow(12, "dismissed", nil, nil, "noise", nil, "9")}}))
+	dismissed := reviewQueue(newQueryFake(map[string][][]any{qReviewGet: {reviewRow(12, string(domain.ReviewDismissed), nil, nil, "noise", nil, "9")}}))
 	if _, err := dismissed.Grade(ctx, 7, 12, grade, reviewer); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("grade of a dismissed item = %v", err)
 	}
@@ -191,9 +201,13 @@ func TestReviewQueueStoreGradesOnceAndReplaysTheSameGrade(t *testing.T) {
 
 func TestReviewQueueStoreDismissesAndMarksOnlyGradedTurnsPromoted(t *testing.T) {
 	ctx := context.Background()
-	dismissed := reviewQueue(newQueryFake(map[string][][]any{qReviewGet: {reviewRow(12, "dismissed", nil, nil, "noise", nil, "9")}}))
+	dismissQuery := newQueryFake(map[string][][]any{qReviewGet: {reviewRow(12, string(domain.ReviewDismissed), nil, nil, "noise", nil, "9")}})
+	dismissed := reviewQueue(dismissQuery)
 	if item, err := dismissed.Dismiss(ctx, 7, 12, " noise ", reviewer); err != nil || item.Status != domain.ReviewDismissed || item.Grade.Notes != "noise" {
 		t.Fatalf("dismiss = %+v, %v", item, err)
+	}
+	if args := dismissQuery.args[qReviewDismiss]; args[0] != string(domain.ReviewDismissed) || args[7] != string(domain.ReviewPending) {
+		t.Fatalf("dismiss args = %v", args)
 	}
 	if _, err := dismissed.Dismiss(ctx, 7, 12, "other", reviewer); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("second dismissal = %v", err)
@@ -202,17 +216,18 @@ func TestReviewQueueStoreDismissesAndMarksOnlyGradedTurnsPromoted(t *testing.T) 
 		t.Fatalf("NUL in notes = %v", err)
 	}
 
-	promotedRow := reviewRow(12, "promoted", int64(2), "fail", nil, nil, "9")
+	promotedRow := reviewRow(12, string(domain.ReviewPromoted), int64(2), string(domain.ReviewFail), nil, nil, "9")
 	promotedRow[22], promotedRow[23], promotedRow[24] = "support", "review-12", testClock
 	query := newQueryFake(map[string][][]any{qReviewGet: {promotedRow}})
 	promoted := reviewQueue(query)
 	if item, err := promoted.Promoted(ctx, 7, 12, "support", "review-12"); err != nil || item.PromotedCaseID != "review-12" {
 		t.Fatalf("promoted = %+v, %v", item, err)
 	}
-	if args := query.args[qReviewPromoted]; args[0] != "support" || args[1] != "review-12" || args[3] != int64(7) || args[4] != int64(12) {
+	if args := query.args[qReviewPromoted]; args[0] != string(domain.ReviewPromoted) || args[1] != "support" || args[2] != "review-12" || args[4] != int64(7) ||
+		args[5] != int64(12) || args[6] != string(domain.ReviewGraded) {
 		t.Fatalf("promote args = %v", args)
 	}
-	pending := reviewQueue(newQueryFake(map[string][][]any{qReviewGet: {reviewRow(12, "pending", nil, nil, nil, nil, nil)}}))
+	pending := reviewQueue(newQueryFake(map[string][][]any{qReviewGet: {reviewRow(12, string(domain.ReviewPending), nil, nil, nil, nil, nil)}}))
 	if _, err := pending.Promoted(ctx, 7, 12, "support", "review-12"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("promotion of a pending item = %v", err)
 	}

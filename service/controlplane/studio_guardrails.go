@@ -322,7 +322,7 @@ func carriesTypeRules(typeRules, rules []domain.GuardrailRule) error {
 			return fmt.Errorf("%w: the release drops the type's rule %q", domain.ErrAuthorityExceeded, parent.ID)
 		}
 		if err := guardrail.CheckTightening(parent, rules[index]); err != nil {
-			return fmt.Errorf("%s layer: %w", domain.GuardrailLayerType, err)
+			return fmt.Errorf("guardrail layer %s: %w", domain.GuardrailLayerType, err)
 		}
 	}
 	return nil
@@ -467,7 +467,7 @@ func checkInherited(inherited []domain.InheritedGuardrails, rules []domain.Guard
 		for _, parent := range layer.Rules {
 			if rule, reused := byID[parent.ID]; reused {
 				if err := guardrail.CheckTightening(parent, rule); err != nil {
-					return fmt.Errorf("%s layer: %w", layer.Layer, err)
+					return fmt.Errorf("guardrail layer %s: %w", layer.Layer, err)
 				}
 			}
 		}

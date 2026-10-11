@@ -78,7 +78,7 @@ func (h *StudioCompareHandler) comparison(ctx context.Context, actor domain.Stud
 	}
 	for _, item := range page.Cases {
 		comparison := api.CaseComparison{
-			CaseID: item.ExampleID, Verdict: apiVerdict(item.Verdict), Confidence: item.Confidence, Rationale: item.Rationale, Reason: item.Reason,
+			CaseID: item.ExampleID, Verdict: string(item.Verdict), Confidence: item.Confidence, Rationale: item.Rationale, Reason: item.Reason,
 			EvaluatorCost: apiCost(item.EvaluatorUsage, item.Exponent), A: apiComparedAnswer(item.A), B: apiComparedAnswer(item.B),
 		}
 		if item.Evaluator.Kind != "" {
@@ -104,18 +104,6 @@ func (h *StudioCompareHandler) comparison(ctx context.Context, actor domain.Stud
 		}
 	}
 	return result, nil
-}
-
-func apiVerdict(verdict domain.ComparisonVerdict) string {
-	switch verdict {
-	case domain.ComparisonPrefersA:
-		return "a"
-	case domain.ComparisonPrefersB:
-		return "b"
-	case domain.ComparisonTie:
-		return "tie"
-	}
-	return ""
 }
 
 func apiComparedAnswer(arm domain.AgentCaseResult) api.ComparedAnswer {

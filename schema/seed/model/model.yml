@@ -8,14 +8,14 @@ seeds:
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
-      - [model_capability, text, Text Generation]
-      - [model_capability, image, Image Generation]
-      - [model_capability, video, Video Generation]
-      - [model_capability, tools, Tool Calling]
-      - [model_capability, structured_output, Schema-Constrained Output]
-      - [model_capability, sampling, Accepts Sampling Parameters]
-      - [model_capability, web_search, Web Search Grounding]
-      - [model_capability, embeddings, Text Embeddings]
+      - [model_capability, TX, Text Generation]
+      - [model_capability, IM, Image Generation]
+      - [model_capability, VD, Video Generation]
+      - [model_capability, TL, Tool Calling]
+      - [model_capability, SO, Structured Output]
+      - [model_capability, SM, Sampling Parameters]
+      - [model_capability, WS, Web Search]
+      - [model_capability, EM, Embeddings]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

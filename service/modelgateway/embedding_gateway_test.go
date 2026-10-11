@@ -14,7 +14,7 @@ import (
 func embeddingRoute(dimensions int) *fake.ModelCandidateCatalog {
 	return &fake.ModelCandidateCatalog{Set: domain.ModelCandidateSet{Candidates: []domain.ModelCandidate{{
 		Provider: "openai", Model: "embed", RouteID: "openai/embed",
-		Capabilities: []string{domain.CapabilityEmbeddings}, EmbeddingDimensions: dimensions,
+		Capabilities: []domain.ModelCapability{domain.CapabilityEmbeddings}, EmbeddingDimensions: dimensions,
 	}}}}
 }
 
@@ -118,7 +118,7 @@ func TestGovernedEmbedderRefusesARouteWithoutTheCapability(t *testing.T) {
 		return nil, nil
 	})
 	catalog := embeddingRoute(768)
-	catalog.Set.Candidates[0].Capabilities = []string{domain.CapabilityTools}
+	catalog.Set.Candidates[0].Capabilities = []domain.ModelCapability{domain.CapabilityTools}
 	embedder, _ := embedderUnder(t, catalog, provider, recorder)
 	_, err := embedder.EmbedBatch(context.Background(), domain.TenantContext{TenantID: 7}, [][]byte{[]byte("chunk")})
 	if !errors.Is(err, domain.ErrCapabilityUnsupported) {

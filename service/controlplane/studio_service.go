@@ -1179,7 +1179,7 @@ func validatePromptDraft(draft domain.AgentDraft) []domain.AgentFieldError {
 					fields = append(fields, domain.AgentFieldError{Field: "prompt", Message: "instruction and output must not exceed 16000 characters"})
 				}
 				if layer.MergeMode != "" && layer.MergeMode != domain.MergeAppend && layer.MergeMode != domain.MergeReplace {
-					fields = append(fields, domain.AgentFieldError{Field: "merge_mode", Message: "must be append or replace"})
+					fields = append(fields, domain.AgentFieldError{Field: "merge_mode", Message: "must be " + string(domain.MergeAppend) + " or " + string(domain.MergeReplace)})
 				}
 			}
 		}

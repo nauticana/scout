@@ -33,7 +33,9 @@ func (router *PinnedModelRouter) Select(ctx context.Context, request domain.Mode
 		if candidate.Provider != pinned.ProviderID || candidate.Model != pinned.ModelID || slices.Contains(request.ExcludedRouteIDs, candidate.RouteID) {
 			continue
 		}
-		if slices.ContainsFunc(required, func(capability string) bool { return !slices.Contains(candidate.Capabilities, capability) }) {
+		if slices.ContainsFunc(required, func(capability domain.ModelCapability) bool {
+			return !slices.Contains(candidate.Capabilities, capability)
+		}) {
 			continue
 		}
 		return domain.ModelSelection{

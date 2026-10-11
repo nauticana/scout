@@ -21,8 +21,8 @@ type GuardrailRule struct {
 	Params   json.RawMessage `json:"params,omitempty"`
 }
 
-// InheritedGuardrails is one layer of rules an agent inherits: baseline, platform, tenant,
-// or type. Digest is set for a platform or tenant restriction layer.
+// InheritedGuardrails is one layer of rules an agent inherits: B (baseline), P (platform),
+// T (tenant), or Y (type). Digest is set for a platform or tenant restriction layer.
 type InheritedGuardrails struct {
 	Layer  string          `json:"layer"`
 	Digest string          `json:"digest,omitempty"`

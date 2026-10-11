@@ -558,14 +558,14 @@ func referenceID(value *domain.ModelReference) string {
 	return value.ModelID
 }
 
-func modelType(capabilities []string) string {
+func modelType(capabilities []domain.ModelCapability) string {
 	for _, capability := range capabilities {
 		switch capability {
-		case "text":
+		case domain.CapabilityText:
 			return "T"
-		case "image":
+		case domain.CapabilityImage:
 			return "I"
-		case "video":
+		case domain.CapabilityVideo:
 			return "V"
 		}
 	}

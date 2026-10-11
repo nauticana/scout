@@ -12,9 +12,9 @@ columns:
   - name: example_id
     type: VARCHAR(120)
   - name: verdict_code
-    type: VARCHAR(10)
+    type: CHAR(1)
     nullable: true
-    comment: The preferred arm, baseline (a) or candidate (b), or tie; empty when judging failed and reason says why
+    comment: The preferred arm, A (baseline) or B (candidate), or T (tie); empty when judging failed and reason says why
   - name: confidence
     type: NUMERIC(5,4)
     default: 0
@@ -70,7 +70,7 @@ indexes:
     columns: [partner_id, golden_set_id, set_version, example_id]
 checks:
   - name: evaluation_comparison_verdict_ck
-    expression: verdict_code IN ('baseline', 'candidate', 'tie')
+    expression: verdict_code IN ('A', 'B', 'T')
   - name: evaluation_comparison_outcome_ck
     expression: (verdict_code IS NULL) = (reason IS NOT NULL)
   - name: evaluation_comparison_confidence_ck

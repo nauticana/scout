@@ -14,7 +14,7 @@ import (
 
 // RequiredCapabilities is what a route must declare to serve the request: the
 // explicit list plus what offered tools and a constrained output imply.
-func RequiredCapabilities(request domain.ModelRequest) []string {
+func RequiredCapabilities(request domain.ModelRequest) []domain.ModelCapability {
 	required := slices.Clone(request.RequiredCapabilities)
 	if len(request.Tools) > 0 && !slices.Contains(required, domain.CapabilityTools) {
 		required = append(required, domain.CapabilityTools)
@@ -150,7 +150,7 @@ func checkCapabilities(ctx context.Context, catalog contract.ModelCandidateCatal
 
 // capableCandidate returns the tenant's catalog entry for the selected route,
 // confirming it declares every required capability.
-func capableCandidate(ctx context.Context, catalog contract.ModelCandidateCatalog, selection domain.ModelSelection, tenant domain.TenantContext, required []string) (domain.ModelCandidate, error) {
+func capableCandidate(ctx context.Context, catalog contract.ModelCandidateCatalog, selection domain.ModelSelection, tenant domain.TenantContext, required []domain.ModelCapability) (domain.ModelCandidate, error) {
 	if catalog == nil {
 		return domain.ModelCandidate{}, fmt.Errorf("%w: no candidate catalog to confirm %q", domain.ErrCapabilityUnsupported, required)
 	}

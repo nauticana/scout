@@ -145,7 +145,7 @@ func TestStudioGuardrailsReportOwnRulesAnInheritedLayerOutgrew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(view.Problem, "tenant layer") || !strings.Contains(view.Problem, "threshold") || len(view.Rules) != 1 {
+	if !strings.Contains(view.Problem, "guardrail layer "+string(domain.GuardrailLayerTenant)) || !strings.Contains(view.Problem, "threshold") || len(view.Rules) != 1 {
 		t.Fatalf("view = %+v", view)
 	}
 	h.layersErr = errors.New("store down")

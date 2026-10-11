@@ -11,8 +11,8 @@ import (
 
 func TestPinnedModelRouterRoutesOnlyToTheGrantedPinnedModel(t *testing.T) {
 	router := &PinnedModelRouter{Catalog: &fake.ModelCandidateCatalog{Set: domain.ModelCandidateSet{Generation: 4, Candidates: []domain.ModelCandidate{
-		{Provider: "anthropic", Model: "sonnet", RouteID: "anthropic/sonnet", Capabilities: []string{domain.CapabilityTools}},
-		{Provider: "openai", Model: "gpt", RouteID: "openai/gpt", Capabilities: []string{domain.CapabilityTools, domain.CapabilityStructuredOutput}},
+		{Provider: "anthropic", Model: "sonnet", RouteID: "anthropic/sonnet", Capabilities: []domain.ModelCapability{domain.CapabilityTools}},
+		{Provider: "openai", Model: "gpt", RouteID: "openai/gpt", Capabilities: []domain.ModelCapability{domain.CapabilityTools, domain.CapabilityStructuredOutput}},
 	}}}}
 	request := validModelRequest()
 	request.Tools = []domain.ModelTool{lookupTool}

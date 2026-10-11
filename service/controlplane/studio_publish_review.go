@@ -46,6 +46,13 @@ const (
 	maxReviewEvaluation = 50
 )
 
+// Status codes quoted for the named SQL below.
+const (
+	sqlReviewRequested  = "'" + string(domain.PublishReviewRequested) + "'"
+	sqlReviewApproved   = "'" + string(domain.PublishReviewApproved) + "'"
+	sqlReviewSuperseded = "'" + string(domain.PublishReviewSuperseded) + "'"
+)
+
 const reviewColumns = `id, definition_digest, draft_revision, prompt_profile_revision, base_version, diff, evaluations,
        status_code, requested_by, request_note, requested_at, decided_by, decision_note, decided_at,
        sod_exception_id, published_version, restore_version`
@@ -54,7 +61,7 @@ const reviewColumns = `id, definition_digest, draft_revision, prompt_profile_rev
 const reviewLatest = `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
- WHERE partner_id = ? AND agent_id = ? AND status_code <> 'superseded' AND restore_version IS NULL
+ WHERE partner_id = ? AND agent_id = ? AND status_code <> ` + sqlReviewSuperseded + ` AND restore_version IS NULL
  ORDER BY id DESC
  LIMIT 1`
 
@@ -62,7 +69,7 @@ SELECT ` + reviewColumns + `
 const reviewLatestRestore = `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
- WHERE partner_id = ? AND agent_id = ? AND status_code <> 'superseded' AND restore_version IS NOT NULL
+ WHERE partner_id = ? AND agent_id = ? AND status_code <> ` + sqlReviewSuperseded + ` AND restore_version IS NOT NULL
  ORDER BY id DESC
  LIMIT 1`
 
@@ -70,15 +77,15 @@ var reviewQueries = map[string]string{
 	qReviewLockDraft: `
 SELECT draft_revision FROM agent_draft WHERE partner_id = ? AND agent_id = ? FOR UPDATE`,
 	qReviewSupersede: `
-UPDATE agent_publish_review SET status_code = 'superseded'
- WHERE partner_id = ? AND agent_id = ? AND status_code = 'requested' AND restore_version IS NULL`,
+UPDATE agent_publish_review SET status_code = ` + sqlReviewSuperseded + `
+ WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlReviewRequested + ` AND restore_version IS NULL`,
 	qReviewSupersedeRestore: `
-UPDATE agent_publish_review SET status_code = 'superseded'
- WHERE partner_id = ? AND agent_id = ? AND status_code = 'requested' AND restore_version IS NOT NULL`,
+UPDATE agent_publish_review SET status_code = ` + sqlReviewSuperseded + `
+ WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlReviewRequested + ` AND restore_version IS NOT NULL`,
 	qReviewInsert: `
 INSERT INTO agent_publish_review (id, partner_id, agent_id, definition_digest, draft_revision, prompt_profile_revision,
        base_version, restore_version, diff, evaluations, status_code, requested_by, request_note, sod_exception_id)
-VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)
+VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlReviewRequested + `, ?, ?, ?)
 RETURNING id, requested_at`,
 	qReviewLatest:        reviewLatest,
 	qReviewLatestRestore: reviewLatestRestore,
@@ -93,16 +100,16 @@ SELECT ` + reviewColumns + `
 	qReviewDecide: `
 UPDATE agent_publish_review
    SET status_code = ?, decided_by = ?, decision_note = ?, decided_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = 'requested' AND definition_digest = ?
+ WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = ` + sqlReviewRequested + ` AND definition_digest = ?
 RETURNING decided_at`,
 	qReviewClaim: reviewLatest + `
    FOR UPDATE`,
 	qReviewConsume: `
 UPDATE agent_publish_review SET published_version = ?
- WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = 'approved' AND published_version IS NULL
+ WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = ` + sqlReviewApproved + ` AND published_version IS NULL
 RETURNING id`,
 	qReviewOpenComments: `
-SELECT COUNT(*) FROM agent_draft_comment WHERE partner_id = ? AND agent_id = ? AND status_code = 'open'`,
+SELECT COUNT(*) FROM agent_draft_comment WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlCommentOpen,
 	qReviewActive: `
 SELECT v.agent_version, v.definition
   FROM agent_deployment dep

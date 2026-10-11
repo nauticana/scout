@@ -211,7 +211,7 @@ func RunSchedulerSuite(t *testing.T, newHarness func(*testing.T) QueueHarness) {
 // instead of its side effect.
 func RunIdempotencySuite(t *testing.T, newHarness func(*testing.T) IdempotencyHarness) {
 	t.Helper()
-	step := domain.ExecutionStep{ExecutionStepID: 7, StepID: "step-1", Kind: "deterministic"}
+	step := domain.ExecutionStep{ExecutionStepID: 7, StepID: "step-1", Kind: domain.StepKindModel}
 	t.Run("committed step replays its result", func(t *testing.T) {
 		harness := newHarness(t)
 		if harness.Close != nil {

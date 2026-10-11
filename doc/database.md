@@ -430,7 +430,7 @@ flowchart RL
 
 All relational identifiers are lowercase. Tenant-owned relations carry `partner_id` in every foreign key toward `agent_tenant`, so keel's generic CRUD treats each as partner-specific and pins it to the caller's partner at any depth; `agent_ops_event` reaches `business_partner` directly. Go types keep the name `TenantID` for the same value. Portable structured payloads use canonical JSON stored as `TEXT`; runtime result cards deliberately use PostgreSQL `JSONB` because the durable ledger already relies on PostgreSQL transaction and locking primitives.
 
-`execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. Closed code lists that Scout's code switches on, such as `config_scope_binding.merge_mode_code`, `turn_approval_request.output_class_code`, and `mcp_confirmation.channel_code`, are keel constants too, seeded by the owning module and enforced by a check; a catalog table remains where a code carries attributes or products add codes, as `usage_category` does. The execution kinds are `model`, `tool`, and `knowledge`; the capacity classes are `shared` and `dedicated`.
+`execution_step.step_kind_code`, `tenant_runtime_policy.capacity_class_code`, and Studio prompt language columns use keel constant domains through `constant_lookup`; none is a foreign key or a Scout-owned table. Closed code lists that Scout's code switches on, such as `config_scope_binding.merge_mode_code`, `turn_approval_request.output_class_code`, and `mcp_confirmation.channel_code`, are keel constants too, seeded by the owning module and enforced by a check; a catalog table remains where a code carries attributes or products add codes, as `usage_category` does. A closed code list uses 1- or 2-character codes whose captions come from `constant_value`; language codes and the words inside authored JSON, such as guardrail rules and approval routing, keep their full values. Every column a `constant_lookup` row names has a check listing exactly its domain's codes, which a repository test enforces. The execution kinds are `M` (model), `T` (tool), `K` (knowledge), `A` (agent), `W` (wait), and `L` (tool loop); the capacity classes are `S` (shared) and `D` (dedicated).
 
 ## REST relationship names
 
@@ -499,7 +499,7 @@ erDiagram
         bigint partner_id PK,FK
         varchar policy_version PK
         varchar priority_class_code FK
-        varchar capacity_class_code
+        char capacity_class_code
         char cost_currency_code FK
     }
     tenant_current_policy {
@@ -536,7 +536,7 @@ erDiagram
     model_capability {
         varchar provider_id PK,FK
         varchar model_id PK,FK
-        varchar capability_code PK
+        char capability_code PK
     }
     model_route {
         varchar provider_id PK,FK
@@ -615,7 +615,7 @@ erDiagram
         varchar agent_id FK
         varchar request_id
         varchar stage_code
-        varchar layer_code
+        char layer_code
         varchar action_code
         text rule_ids
         varchar release_version
@@ -677,7 +677,7 @@ erDiagram
         varchar agent_id FK
         varchar agent_version FK
         varchar step_id
-        varchar step_kind_code
+        char step_kind_code
     }
     execution_graph_entry {
         bigint partner_id PK,FK
@@ -866,13 +866,13 @@ erDiagram
         bigint partner_id FK
         varchar agent_id FK
         bigint draft_revision
-        varchar anchor_code
+        char anchor_code
         bigint prompt_section_id FK
         varchar language_code
         varchar resource_kind_code FK
         varchar resource_id
         varchar body
-        varchar status_code
+        char status_code
         varchar author_id
         varchar resolved_by_id
     }
@@ -880,7 +880,7 @@ erDiagram
 
 `agent_alias.revision` guards both alias changes and tenant defaults for that logical kind, preserving one shared optimistic token. Agent overrides are guarded by `agent_draft.draft_revision`. Platform baseline selection is supplied by `PromptBaselineSelector`; baseline data remains product-owned.
 
-`agent_governance` and `agent_draft_guardrail` are optional draft sections behind the same `draft_revision`, and publication freezes both into the release. `agent_governance.governance` is one canonical Charter `AgentDefinition` fragment with the declared trigger channels, validated and frozen whole; fields an enterprise source owns are never stored. `agent_draft_guardrail.rules` are the agent's own guardrail rules; the release also pins them, merged with its type's, as its `guardrail_config` version. `agent_draft_comment` is a remark on one draft revision, anchored by `anchor_code` to the whole draft, a prompt section (optionally one language), or a setting (`resource_kind_code` and `resource_id`); it stays `open` until someone resolves it. Its author and resolver, like the governance and guardrail editors in `modified_by`, are recorded for audit.
+`agent_governance` and `agent_draft_guardrail` are optional draft sections behind the same `draft_revision`, and publication freezes both into the release. `agent_governance.governance` is one canonical Charter `AgentDefinition` fragment with the declared trigger channels, validated and frozen whole; fields an enterprise source owns are never stored. `agent_draft_guardrail.rules` are the agent's own guardrail rules; the release also pins them, merged with its type's, as its `guardrail_config` version. `agent_draft_comment` is a remark on one draft revision, anchored by `anchor_code` to the whole draft, a prompt section (optionally one language), or a setting (`resource_kind_code` and `resource_id`); it stays `O` (open) until someone resolves it. Its author and resolver, like the governance and guardrail editors in `modified_by`, are recorded for audit.
 
 Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions with the acting principal — a person's `user_account.id` or a service's id, so it has no foreign key — and their time. `agent_create_request` is a Studio create's idempotency record: the request digest and the agent it created, keyed by tenant, principal, and key. An archived agent has `agent_profile.state_code` `archived`: it admits no work, keeps its releases, and can return to `suspended`.
 
@@ -919,7 +919,7 @@ erDiagram
         varchar base_version FK
         text diff
         text evaluations
-        varchar status_code
+        char status_code
         bigint requested_by FK
         bigint decided_by FK
         varchar sod_exception_id
@@ -940,7 +940,7 @@ erDiagram
         varchar scheduled_by_id
         int attempts
         timestamp next_attempt_at
-        varchar reason_code FK
+        char reason_code
     }
     release_activation_state {
         varchar code PK
@@ -948,7 +948,7 @@ erDiagram
     }
 ```
 
-`agent_publish_review` asks a second person to approve publishing one exact draft, identified by `definition_digest`. It keeps the draft and prompt-profile revisions, the stable release the diff is taken against (`base_version`), the diff, and optional evaluation results. A new request supersedes one still `requested`, and the approver must not be the requester. When the agent's separation policy requires a review, publication needs the latest review approved for the same digest, refuses while any `agent_draft_comment` is open, and consumes the review by setting `published_version`; `sod_exception_id` is the separation-of-duties exception under which a requester may publish their own approved review.
+`agent_publish_review` asks a second person to approve publishing one exact draft, identified by `definition_digest`. It keeps the draft and prompt-profile revisions, the stable release the diff is taken against (`base_version`), the diff, and optional evaluation results. A new request supersedes one still `R` (requested), and the approver must not be the requester. When the agent's separation policy requires a review, publication needs the latest review approved for the same digest, refuses while any `agent_draft_comment` is open, and consumes the review by setting `published_version`; `sod_exception_id` is the separation-of-duties exception under which a requester may publish their own approved review.
 
 A restore review is the same row with `restore_version` set: it approves restoring that published version over the release active when it was requested (`base_version`), recording the version's digest, its frozen revisions, and the diff from the active release. Publish and restore reviews are separate tracks, so a new request supersedes only an open review of its own kind. When the separation policy requires restore review, a restore needs the agent's latest restore review approved for exactly that version, digest, and base; open draft comments do not block it, and the restore consumes the review by setting `published_version`.
 
@@ -1086,7 +1086,7 @@ erDiagram
         timestamp begda PK
         timestamp endda
         varchar resource_version
-        varchar merge_mode_code
+        char merge_mode_code
         boolean sealed
         text value
         char value_digest
@@ -1180,7 +1180,7 @@ erDiagram
         varchar principal_id
         varchar approver_kind
         varchar approver_id
-        varchar output_class_code
+        char output_class_code
         varchar risk_tier_code FK
         char proposed_digest
         varchar status_code FK
@@ -1291,7 +1291,7 @@ erDiagram
         varchar maker_id
         varchar tool
         char payload_digest
-        varchar channel_code
+        char channel_code
         varchar status_code FK
         boolean approval_required
         bigint approval_id FK
@@ -1791,7 +1791,7 @@ Settlement writes one `usage_event` per model that performed part of the turn, p
 
 `turn_feedback` holds one person's rating, 1 to 5, of one completed turn; the person is kept for audit, and reports count ratings per release, never per person.
 
-`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of a `tool_loop` step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
+`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of an `L` (tool loop) step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
 
 Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry. Each hold is charged to the turn's agent in `principal_kind` and `principal_id`; a release budget — per turn, rolling window, or calendar day or month, with a frozen currency exponent — is enforced against the agent's settled and live holds in the current period, measured by the database clock, which the `budget_reservation_principal_ix` index on principal, status, and `settled_at` serves.
 
@@ -2213,13 +2213,13 @@ erDiagram
         bigint partner_id FK
         varchar agent_id FK
         varchar agent_version FK
-        varchar source_code
+        char source_code
         varchar risk_tier
         varchar conversation_id FK
         bigint turn_no FK
-        varchar status_code
+        char status_code
         smallint score
-        varchar verdict_code
+        char verdict_code
         text expected_behavior
         varchar reviewer_kind
         varchar reviewer_id
@@ -2253,7 +2253,7 @@ erDiagram
         bigint partner_id FK
         varchar golden_set_id FK
         bigint set_version FK
-        varchar verdict_code
+        char verdict_code
         numeric confidence
         varchar evaluator_kind
         varchar evaluator_version
@@ -2266,7 +2266,7 @@ erDiagram
         bigint partner_id PK,FK
         varchar agent_id PK,FK
         char definition_digest PK
-        varchar verdict_code
+        char verdict_code
         varchar reason
         char policy_digest
         text policy_json
@@ -2282,7 +2282,7 @@ erDiagram
         varchar agent_id PK,FK
         char definition_digest PK,FK
         bigint run_id PK,FK
-        varchar role_code PK
+        char role_code PK
         int score_bp
         int sample_count
         int critical_count
@@ -2306,11 +2306,11 @@ erDiagram
 
 Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
 
-A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `baseline` is arm a and `candidate` arm b. Either arm may be a draft, which `provider_id` and `model_id` may pin to another text model, or a release; arm a may instead be an `evaluation_baseline`, which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `baseline`, `candidate`, or `tie`, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
+A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `baseline` is arm a and `candidate` arm b. Either arm may be a draft, which `provider_id` and `model_id` may pin to another text model, or a release; arm a may instead be an `evaluation_baseline`, which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
 
-`agent_gate_decision` is the Studio evaluation gate's verdict on one definition digest of an agent: `pass`, `fail`, or `override`, the canonical gate applied (`policy_json`, `policy_digest`), the active release regression is measured against (`base_version`), and the golden set version decided on. `inputs_digest` lets an evaluation of unchanged inputs replay the decision, and a later decision for the digest replaces it. `agent_gate_decision_run` lists the completed runs it read, `candidate` for the decided digest and `baseline` for the active release, with each run's score in basis points, sample count, and critical failures.
+`agent_gate_decision` is the Studio evaluation gate's verdict on one definition digest of an agent: `P` (pass), `F` (fail), or `O` (override), the canonical gate applied (`policy_json`, `policy_digest`), the active release regression is measured against (`base_version`), and the golden set version decided on. `inputs_digest` lets an evaluation of unchanged inputs replay the decision, and a later decision for the digest replaces it. `agent_gate_decision_run` lists the completed runs it read, role `C` (candidate) for the decided digest and `B` (baseline) for the active release, with each run's score in basis points, sample count, and critical failures.
 
-`human_review_item` is the production review queue: one row per completed turn (`conversation_id`, `turn_no`), `sampled` or rated low (`feedback`), keyed to the release that answered. Rows hold references only; turn content stays in object storage, and who rated a turn stays in `turn_feedback`. A reviewer grades (`score` 1 to 5, `verdict_code` `pass` or `fail`, `notes`, `expected_behavior`) or dismisses a `pending` item, and a graded item may be `promoted` into a dev `golden_case`, which names it through `review_item_id`. The `evaluation` seed registers the code lists `gate_decision_verdict`, `gate_decision_run_role`, `review_source`, `review_status`, `review_verdict`, and `evaluation_comparison_verdict` as keel constants.
+`human_review_item` is the production review queue: one row per completed turn (`conversation_id`, `turn_no`), sampled (`S`) or rated low (`F`, feedback), keyed to the release that answered. Rows hold references only; turn content stays in object storage, and who rated a turn stays in `turn_feedback`. A reviewer grades (`score` 1 to 5, `verdict_code` `P` (pass) or `F` (fail), `notes`, `expected_behavior`) or dismisses a pending item; `status_code` moves from `P` (pending) to `G` (graded) or `D` (dismissed), and a graded item may be promoted (`M`) into a dev `golden_case`, which names it through `review_item_id`. The `evaluation` seed registers the code lists `gate_decision_verdict`, `gate_decision_run_role`, `review_source`, `review_status`, `review_verdict`, and `evaluation_comparison_verdict` as keel constants.
 
 ## Scout table inventory
 

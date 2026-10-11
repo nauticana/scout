@@ -28,9 +28,9 @@ const (
 type MergeMode string
 
 const (
-	MergeReplace   MergeMode = "replace"
-	MergeAppend    MergeMode = "append"
-	MergeIntersect MergeMode = "intersect"
+	MergeReplace   MergeMode = "R"
+	MergeAppend    MergeMode = "A"
+	MergeIntersect MergeMode = "I"
 )
 
 // AutonomyMode is the ordered operating mode a principal may act under; a child

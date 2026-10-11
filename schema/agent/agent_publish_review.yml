@@ -23,7 +23,7 @@ columns:
     type: TEXT
     nullable: true
   - name: status_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: requested_by
     type: BIGINT
   - name: request_note
@@ -95,12 +95,12 @@ indexes:
     columns: [partner_id, agent_id, definition_digest]
 checks:
   - name: agent_publish_review_status_ck
-    expression: status_code IN ('requested', 'approved', 'rejected', 'superseded')
+    expression: status_code IN ('R', 'A', 'X', 'S')
   - name: agent_publish_review_digest_ck
     expression: CHAR_LENGTH(definition_digest) = 64
   - name: agent_publish_review_decision_ck
-    expression: (decided_by IS NULL) = (decided_at IS NULL) AND (status_code IN ('approved', 'rejected')) = (decided_by IS NOT NULL)
+    expression: (decided_by IS NULL) = (decided_at IS NULL) AND (status_code IN ('A', 'X')) = (decided_by IS NOT NULL)
   - name: agent_publish_review_approver_ck
-    expression: status_code <> 'approved' OR decided_by <> requested_by
+    expression: status_code <> 'A' OR decided_by <> requested_by
   - name: agent_publish_review_published_ck
-    expression: published_version IS NULL OR status_code = 'approved'
+    expression: published_version IS NULL OR status_code = 'A'

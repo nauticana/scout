@@ -12,10 +12,10 @@ const StudioApprovePublish StudioAction = "APPROVE_PUBLISH"
 type PublishReviewStatus string
 
 const (
-	PublishReviewRequested  PublishReviewStatus = "requested"
-	PublishReviewApproved   PublishReviewStatus = "approved"
-	PublishReviewRejected   PublishReviewStatus = "rejected"
-	PublishReviewSuperseded PublishReviewStatus = "superseded"
+	PublishReviewRequested  PublishReviewStatus = "R"
+	PublishReviewApproved   PublishReviewStatus = "A"
+	PublishReviewRejected   PublishReviewStatus = "X"
+	PublishReviewSuperseded PublishReviewStatus = "S"
 )
 
 // PublishReviewKind says what a review admits: publishing the draft, or restoring a published version.

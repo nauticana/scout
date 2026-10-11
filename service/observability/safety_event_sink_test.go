@@ -72,7 +72,7 @@ func TestTableSafetyEventSinkRecordsAttributionAndNeverContent(t *testing.T) {
 func TestTableSafetyEventSinkPagesOneAgentNewestFirst(t *testing.T) {
 	at := time.Unix(2000, 0).UTC()
 	query := &safetyQueryFake{args: map[string][]any{}, rows: [][]any{
-		{int64(41), "agent", "writer-a", "r-1", "output", "tenant", "block", "hard", `["tenant.codename"]`, "3", "g1", int64(5), at},
+		{int64(41), "agent", "writer-a", "r-1", "output", string(domain.GuardrailLayerTenant), "block", "hard", `["tenant.codename"]`, "3", "g1", int64(5), at},
 	}}
 	sink := &TableSafetyEventSink{DB: query}
 	page, err := sink.SafetyEvents(context.Background(), 7, domain.SafetyEventFilter{AgentID: "writer-a", Before: 50, Limit: 10})

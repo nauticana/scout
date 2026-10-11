@@ -10,8 +10,8 @@ const StudioReview StudioAction = "REVIEW"
 type ReviewSource string
 
 const (
-	ReviewSourceSampled  ReviewSource = "sampled"
-	ReviewSourceFeedback ReviewSource = "feedback"
+	ReviewSourceSampled  ReviewSource = "S"
+	ReviewSourceFeedback ReviewSource = "F"
 )
 
 // Valid reports whether the source is a known one.
@@ -24,18 +24,18 @@ func (source ReviewSource) Valid() bool {
 type ReviewStatus string
 
 const (
-	ReviewPending   ReviewStatus = "pending"
-	ReviewGraded    ReviewStatus = "graded"
-	ReviewDismissed ReviewStatus = "dismissed"
-	ReviewPromoted  ReviewStatus = "promoted"
+	ReviewPending   ReviewStatus = "P"
+	ReviewGraded    ReviewStatus = "G"
+	ReviewDismissed ReviewStatus = "D"
+	ReviewPromoted  ReviewStatus = "M"
 )
 
 // ReviewVerdict is a grader's pass or fail.
 type ReviewVerdict string
 
 const (
-	ReviewPass ReviewVerdict = "pass"
-	ReviewFail ReviewVerdict = "fail"
+	ReviewPass ReviewVerdict = "P"
+	ReviewFail ReviewVerdict = "F"
 )
 
 // Review grade scale.

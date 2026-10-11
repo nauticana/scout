@@ -15,9 +15,9 @@ func TestStudioDraftLayerMapping(t *testing.T) {
 		Models: api.AgentModelSelection{TextModel: "model-a"}, ExpectedAgentRevision: 3, ExpectedTypeDefaultsRevision: 5,
 		Languages: []api.AgentLanguageDraft{{LanguageCode: "en-US", PromptSections: []api.AgentPromptSection{{
 			PromptHeaderID: 4, Layers: []api.AgentPromptLayer{
-				{ScopeID: "global", ScopeKind: "platform", MergeMode: "replace", Instruction: "base"},
-				{ScopeID: "t:writer", ScopeKind: "agent_type", MergeMode: "append", Sealed: true, Editable: true, Instruction: "tenant"},
-				{ScopeID: "a:writer-a", ScopeKind: "agent", MergeMode: "replace", Instruction: "agent"},
+				{ScopeID: "global", ScopeKind: "platform", MergeMode: string(domain.MergeReplace), Instruction: "base"},
+				{ScopeID: "t:writer", ScopeKind: "agent_type", MergeMode: string(domain.MergeAppend), Sealed: true, Editable: true, Instruction: "tenant"},
+				{ScopeID: "a:writer-a", ScopeKind: "agent", MergeMode: string(domain.MergeReplace), Instruction: "agent"},
 			},
 		}}}},
 	}

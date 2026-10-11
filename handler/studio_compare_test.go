@@ -96,7 +96,7 @@ func TestStudioCompareHandlerMapsRequestsAndPages(t *testing.T) {
 		t.Fatalf("page = %+v", page)
 	}
 	decided, failed := page.Cases[0], page.Cases[1]
-	if decided.Verdict != "a" || decided.Evaluator == nil || decided.A.Output != "human" || decided.A.OutputDigest != "da" || decided.A.LatencyMs != 1000 ||
+	if decided.Verdict != string(domain.ComparisonPrefersA) || decided.Evaluator == nil || decided.A.Output != "human" || decided.A.OutputDigest != "da" || decided.A.LatencyMs != 1000 ||
 		decided.B.Cost.CostMinorUnits != 5 || decided.EvaluatorCost.CostMinorUnits != 3 || decided.EvaluatorCost.Exponent != 2 {
 		t.Fatalf("decided = %+v", decided)
 	}

@@ -636,7 +636,7 @@ func ValidateDraft(draft domain.MCPConfirmationDraft, maxDocumentBytes int) (jso
 		return nil, fmt.Errorf("%w: tool is required", domain.ErrValidation)
 	case !isDigest(draft.Digest):
 		return nil, fmt.Errorf("%w: digest must be 64 lowercase hex characters", domain.ErrValidation)
-	case draft.Channel != domain.MCPConfirmationElicitation && draft.Channel != domain.MCPConfirmationInbox:
+	case !draft.Channel.Valid():
 		return nil, fmt.Errorf("%w: channel %q", domain.ErrValidation, draft.Channel)
 	case draft.ApprovalRequired && draft.Channel != domain.MCPConfirmationInbox:
 		return nil, fmt.Errorf("%w: maker-checker approval requires the inbox channel", domain.ErrValidation)

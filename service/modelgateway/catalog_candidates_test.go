@@ -47,9 +47,9 @@ func TestTableCandidateCatalogDerivesRoutes(t *testing.T) {
 			{"openai", "gpt", int64(128_000), int64(16_000), nil, nil, nil, nil, nil, nil},
 		},
 		qCandidateCapabilities: {
-			{"anthropic", "sonnet", "text"},
-			{"anthropic", "sonnet", "vision"},
-			{"openai", "gpt", "text"},
+			{"anthropic", "sonnet", string(domain.CapabilityText)},
+			{"anthropic", "sonnet", string(domain.CapabilityImage)},
+			{"openai", "gpt", string(domain.CapabilityText)},
 		},
 	}}
 	catalog := &TableCandidateCatalog{DB: catalogDBFake{query: query}, Region: "eu-central"}
@@ -63,9 +63,9 @@ func TestTableCandidateCatalogDerivesRoutes(t *testing.T) {
 	}
 	want := []domain.ModelCandidate{
 		{Provider: "anthropic", Model: "sonnet", Region: "eu-central", RouteID: "anthropic/sonnet",
-			Capabilities: []string{"text", "vision"}, MaxContextTokens: 200_000, MaxOutputTokens: 8_000},
+			Capabilities: []domain.ModelCapability{domain.CapabilityText, domain.CapabilityImage}, MaxContextTokens: 200_000, MaxOutputTokens: 8_000},
 		{Provider: "openai", Model: "gpt", Region: "eu-central", RouteID: "openai/gpt",
-			Capabilities: []string{"text"}, MaxContextTokens: 128_000, MaxOutputTokens: 16_000},
+			Capabilities: []domain.ModelCapability{domain.CapabilityText}, MaxContextTokens: 128_000, MaxOutputTokens: 16_000},
 	}
 	if !reflect.DeepEqual(set.Candidates, want) {
 		t.Fatalf("candidates = %+v", set.Candidates)

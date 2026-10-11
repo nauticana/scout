@@ -34,9 +34,9 @@ type AgentCompareRequest struct {
 type ComparisonVerdict string
 
 const (
-	ComparisonPrefersA ComparisonVerdict = "baseline"
-	ComparisonPrefersB ComparisonVerdict = "candidate"
-	ComparisonTie      ComparisonVerdict = "tie"
+	ComparisonPrefersA ComparisonVerdict = "A"
+	ComparisonPrefersB ComparisonVerdict = "B"
+	ComparisonTie      ComparisonVerdict = "T"
 )
 
 // CaseComparison is one example's pairwise outcome as a worker records it. Verdict is empty

@@ -32,7 +32,7 @@ columns:
   - name: resource_ref
     type: VARCHAR(200)
   - name: output_class_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: risk_tier_code
     type: VARCHAR(20)
   - name: summary
@@ -173,7 +173,7 @@ checks:
   - name: turn_approval_request_approver_kind_ck
     expression: approver_reference_kind IS NULL OR approver_reference_kind IN ('role', 'position')
   - name: turn_approval_request_output_class_ck
-    expression: output_class_code IN ('advice', 'draft', 'approval_request', 'completed_action')
+    expression: output_class_code IN ('A', 'D', 'R', 'C')
   - name: turn_approval_request_route_ck
     expression: (approval_route_id IS NULL AND approver_reference_kind IS NULL AND approver_reference IS NULL AND route_resolution IS NULL AND route_step = 0) OR (approval_route_id IS NOT NULL AND approver_reference_kind IS NOT NULL AND approver_reference IS NOT NULL AND release_version IS NOT NULL)
   - name: turn_approval_request_settled_ck

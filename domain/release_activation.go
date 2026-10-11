@@ -16,13 +16,13 @@ const (
 type ReleaseActivationReason string
 
 const (
-	ActivationVersionMissing    ReleaseActivationReason = "version_missing"
-	ActivationDigestMismatch    ReleaseActivationReason = "digest_mismatch"
-	ActivationNotAuthorized     ReleaseActivationReason = "not_authorized"
-	ActivationAgentArchived     ReleaseActivationReason = "agent_archived"
-	ActivationGuardRefused      ReleaseActivationReason = "guard_refused"
-	ActivationDeploymentChanged ReleaseActivationReason = "deployment_changed"
-	ActivationAttemptsExhausted ReleaseActivationReason = "attempts_exhausted"
+	ActivationVersionMissing    ReleaseActivationReason = "VM"
+	ActivationDigestMismatch    ReleaseActivationReason = "DM"
+	ActivationNotAuthorized     ReleaseActivationReason = "NA"
+	ActivationAgentArchived     ReleaseActivationReason = "AA"
+	ActivationGuardRefused      ReleaseActivationReason = "GR"
+	ActivationDeploymentChanged ReleaseActivationReason = "DC"
+	ActivationAttemptsExhausted ReleaseActivationReason = "AE"
 )
 
 // ReleaseActivation is a published release waiting to take an agent's traffic at

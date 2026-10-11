@@ -8,8 +8,8 @@ seeds:
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
-      - [mcp_confirmation_channel, elicitation, Asked of the maker in the MCP client]
-      - [mcp_confirmation_channel, inbox, Decided by an authorized person outside the MCP client]
+      - [mcp_confirmation_channel, E, Elicitation]
+      - [mcp_confirmation_channel, I, Inbox]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

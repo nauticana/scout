@@ -16,7 +16,7 @@ var lookupTool = domain.ModelTool{
 	InputSchema: []byte(`{"type":"object","required":["q"],"properties":{"q":{"type":"string"}},"additionalProperties":false}`),
 }
 
-func contractGateway(t *testing.T, capabilities []string, result domain.ModelResult) (*Gateway, *int) {
+func contractGateway(t *testing.T, capabilities []domain.ModelCapability, result domain.ModelResult) (*Gateway, *int) {
 	t.Helper()
 	invoked := 0
 	registry := NewProviderRegistry()
@@ -65,7 +65,7 @@ func TestGatewayRejectsARouteWithoutTheRequiredCapabilityBeforeTheProvider(t *te
 		},
 		"web search": func(r *domain.ModelRequest) { r.Search = &domain.SearchGrounding{} },
 	} {
-		gateway, invoked := contractGateway(t, []string{"vision"}, domain.ModelResult{})
+		gateway, invoked := contractGateway(t, []domain.ModelCapability{domain.CapabilityImage}, domain.ModelResult{})
 		request := validModelRequest()
 		mutate(&request)
 		if _, err := gateway.Generate(context.Background(), contractSelection, request); !errors.Is(err, domain.ErrCapabilityUnsupported) {
@@ -81,7 +81,7 @@ func TestGatewayRejectsARouteWithoutTheRequiredCapabilityBeforeTheProvider(t *te
 }
 
 func TestGatewayFailsClosedWithoutACatalog(t *testing.T) {
-	gateway, invoked := contractGateway(t, []string{domain.CapabilityTools}, domain.ModelResult{})
+	gateway, invoked := contractGateway(t, []domain.ModelCapability{domain.CapabilityTools}, domain.ModelResult{})
 	gateway.Catalog = nil
 	request := validModelRequest()
 	request.Tools = []domain.ModelTool{lookupTool}
@@ -103,7 +103,7 @@ func TestGatewayValidatesToolCallsOnUnaryAndStreamedResults(t *testing.T) {
 			{CallID: "a", Name: "lookup", Arguments: []byte(`{"q":"x"}`)}, {CallID: "a", Name: "lookup", Arguments: []byte(`{"q":"y"}`)}}},
 	}
 	for name, test := range cases {
-		gateway, _ := contractGateway(t, []string{domain.CapabilityTools},
+		gateway, _ := contractGateway(t, []domain.ModelCapability{domain.CapabilityTools},
 			domain.ModelResult{ToolCalls: test.calls, FinishReason: domain.FinishReasonToolCalls})
 		request := validModelRequest()
 		request.Tools = []domain.ModelTool{lookupTool}
@@ -126,7 +126,7 @@ func TestGatewayValidatesToolCallsOnUnaryAndStreamedResults(t *testing.T) {
 }
 
 func TestGatewayRejectsToolCallIDsReusedFromConversationHistory(t *testing.T) {
-	gateway, invoked := contractGateway(t, []string{domain.CapabilityTools}, domain.ModelResult{
+	gateway, invoked := contractGateway(t, []domain.ModelCapability{domain.CapabilityTools}, domain.ModelResult{
 		ToolCalls: []domain.ModelToolCall{{CallID: "old", Name: "lookup", Arguments: []byte(`{"q":"new"}`)}},
 	})
 	request := validModelRequest()
@@ -151,7 +151,7 @@ func TestGatewayRejectsMalformedConversationBeforeProviderInvocation(t *testing.
 		"unknown observation":       {{Role: domain.ModelRoleTool, Observations: []domain.ModelToolObservation{{CallID: "ghost", Name: "lookup"}}}},
 		"unoffered historical call": {{Role: domain.ModelRoleAssistant, ToolCalls: []domain.ModelToolCall{{CallID: "a", Name: "delete", Arguments: []byte(`{}`)}}}},
 	} {
-		gateway, invoked := contractGateway(t, []string{domain.CapabilityTools}, domain.ModelResult{})
+		gateway, invoked := contractGateway(t, []domain.ModelCapability{domain.CapabilityTools}, domain.ModelResult{})
 		request := validModelRequest()
 		request.Tools = []domain.ModelTool{lookupTool}
 		request.Messages = messages
@@ -167,7 +167,7 @@ func TestGatewayRejectsMalformedConversationBeforeProviderInvocation(t *testing.
 func TestGatewayValidatesConstrainedOutputAndNeverAcceptsFreeText(t *testing.T) {
 	schema := []byte(`{"type":"object","required":["title"],"properties":{"title":{"type":"string"}}}`)
 	for output, valid := range map[string]bool{`{"title":"ok"}`: true, `Sure! Here is the title: ok`: false, `{"title":7}`: false} {
-		gateway, _ := contractGateway(t, []string{domain.CapabilityStructuredOutput}, domain.ModelResult{Output: []byte(output), FinishReason: "stop"})
+		gateway, _ := contractGateway(t, []domain.ModelCapability{domain.CapabilityStructuredOutput}, domain.ModelResult{Output: []byte(output), FinishReason: "stop"})
 		request := validModelRequest()
 		request.Output = domain.OutputConstraint{Mode: domain.OutputModeJSONSchema, SchemaName: "title", Schema: schema}
 		_, unaryErr := gateway.Generate(context.Background(), contractSelection, request)
@@ -192,7 +192,7 @@ func TestGatewayValidatesCitationsOfAGroundedAnswer(t *testing.T) {
 		"wrong position":       {{URL: "https://a.example/p", Position: 2}},
 		"duplicate source URL": {{URL: "https://a.example/p", Position: 1}, {URL: "https://a.example/p", Position: 2}},
 	} {
-		gateway, _ := contractGateway(t, []string{domain.CapabilityWebSearch},
+		gateway, _ := contractGateway(t, []domain.ModelCapability{domain.CapabilityWebSearch},
 			domain.ModelResult{Output: []byte("grounded"), Citations: citations, FinishReason: "stop"})
 		request := validModelRequest()
 		request.Search = &domain.SearchGrounding{MaxSearches: 3}
@@ -259,7 +259,7 @@ func TestStreamHoldsCitationsUniqueAndContiguousAcrossFrames(t *testing.T) {
 }
 
 func TestGatewayRejectsInvalidSearchBounds(t *testing.T) {
-	gateway, invoked := contractGateway(t, []string{domain.CapabilityWebSearch}, domain.ModelResult{})
+	gateway, invoked := contractGateway(t, []domain.ModelCapability{domain.CapabilityWebSearch}, domain.ModelResult{})
 	request := validModelRequest()
 	for _, search := range []*domain.SearchGrounding{{MaxSearches: -1}, {Location: &domain.SearchLocation{Country: "usa"}}} {
 		request.Search = search

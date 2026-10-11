@@ -71,7 +71,7 @@ side effect (inherent to lease expiry) and the second `Commit` observes `ErrConf
 
 ## Tool-loop journal
 
-A `tool_loop` step is one row of `step_idempotency`, but it makes several decisions and effects before it
+An `L` (tool loop) step is one row of `step_idempotency`, but it makes several decisions and effects before it
 commits. `step_loop_entry` records them one entry at a time, keyed `(tenant, request, execution_step_id, entry_no)`
 and numbered from 1 without gaps; the body is an object, the row keeps URI and digest.
 

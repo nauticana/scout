@@ -14,7 +14,7 @@ columns:
     type: VARCHAR(80)
     comment: The release that answered, copied from the turn's conversation (deliberate denormalization) so a queue is listed per release without a join
   - name: source_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: reason
     type: VARCHAR(400)
   - name: risk_tier
@@ -25,8 +25,8 @@ columns:
   - name: turn_no
     type: BIGINT
   - name: status_code
-    type: VARCHAR(20)
-    default: pending
+    type: CHAR(1)
+    default: P
   - name: enqueued_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -34,7 +34,7 @@ columns:
     type: SMALLINT
     nullable: true
   - name: verdict_code
-    type: VARCHAR(10)
+    type: CHAR(1)
     nullable: true
   - name: notes
     type: VARCHAR(2000)
@@ -93,25 +93,25 @@ indexes:
     columns: [partner_id, agent_id, status_code, id]
 checks:
   - name: human_review_item_source_ck
-    expression: source_code IN ('sampled', 'feedback')
+    expression: source_code IN ('S', 'F')
   - name: human_review_item_status_ck
-    expression: status_code IN ('pending', 'graded', 'dismissed', 'promoted')
+    expression: status_code IN ('P', 'G', 'D', 'M')
   - name: human_review_item_verdict_ck
-    expression: verdict_code IS NULL OR verdict_code IN ('pass', 'fail')
+    expression: verdict_code IS NULL OR verdict_code IN ('P', 'F')
   - name: human_review_item_score_ck
     expression: score IS NULL OR score BETWEEN 1 AND 5
   - name: human_review_item_review_ck
     expression: >-
-      (status_code = 'pending' AND reviewer_kind IS NULL AND reviewer_id IS NULL AND reviewed_at IS NULL
+      (status_code = 'P' AND reviewer_kind IS NULL AND reviewer_id IS NULL AND reviewed_at IS NULL
        AND score IS NULL AND verdict_code IS NULL AND notes IS NULL AND expected_behavior IS NULL)
       OR
-      (status_code = 'dismissed' AND reviewer_kind IS NOT NULL AND reviewer_id IS NOT NULL AND reviewed_at IS NOT NULL
+      (status_code = 'D' AND reviewer_kind IS NOT NULL AND reviewer_id IS NOT NULL AND reviewed_at IS NOT NULL
        AND score IS NULL AND verdict_code IS NULL AND expected_behavior IS NULL)
       OR
-      (status_code IN ('graded', 'promoted') AND reviewer_kind IS NOT NULL AND reviewer_id IS NOT NULL
+      (status_code IN ('G', 'M') AND reviewer_kind IS NOT NULL AND reviewer_id IS NOT NULL
        AND reviewed_at IS NOT NULL AND score IS NOT NULL AND verdict_code IS NOT NULL)
   - name: human_review_item_promoted_ck
     expression: >-
-      (status_code = 'promoted' AND promoted_set_id IS NOT NULL AND promoted_case_id IS NOT NULL AND promoted_at IS NOT NULL)
+      (status_code = 'M' AND promoted_set_id IS NOT NULL AND promoted_case_id IS NOT NULL AND promoted_at IS NOT NULL)
       OR
-      (status_code <> 'promoted' AND promoted_set_id IS NULL AND promoted_case_id IS NULL AND promoted_at IS NULL)
+      (status_code <> 'M' AND promoted_set_id IS NULL AND promoted_case_id IS NULL AND promoted_at IS NULL)

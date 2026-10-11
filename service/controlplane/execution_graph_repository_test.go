@@ -125,9 +125,35 @@ func TestWriteReleasePersistsTheCompiledGraphAndGetReturnsCompiledStepIDs(t *tes
 func TestPutRejectsAnInconsistentGraph(t *testing.T) {
 	repository := &TableExecutionGraphRepository{DB: graphDBFake{fake: newGraphTableFake()}}
 	graph := domain.ExecutionGraph{AgentID: "writer", Version: "1", Digest: strings.Repeat("b", 64), EntryStepID: "missing",
-		Steps: []domain.ExecutionStep{{StepID: "a", Kind: "model", NextStepIDs: []string{"ghost"}}}}
+		Steps: []domain.ExecutionStep{{StepID: "a", Kind: domain.StepKindModel, NextStepIDs: []string{"ghost"}}}}
 	if err := repository.Put(context.Background(), 7, graph); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("want ErrValidation, got %v", err)
+	}
+}
+
+func TestToolLoopCompilerAcceptsOnlySeededCapabilityCodes(t *testing.T) {
+	definition := loopDefinition()
+	definition.ToolLoop.Capabilities = []domain.ModelCapability{domain.CapabilityWebSearch}
+	graph, err := ToolLoopGraphCompiler{}.Compile(context.Background(), definition)
+	if err != nil || !strings.Contains(string(graph.Steps[0].Configuration), `"capabilities":["WS"]`) {
+		t.Fatalf("graph = %+v, %v", graph, err)
+	}
+	for _, capability := range []domain.ModelCapability{"web_search", "vision", ""} {
+		definition.ToolLoop.Capabilities = []domain.ModelCapability{capability}
+		if _, err := (ToolLoopGraphCompiler{}).Compile(context.Background(), definition); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("capability %q: want ErrValidation, got %v", capability, err)
+		}
+	}
+}
+
+func TestPutRejectsAnUnknownStepKind(t *testing.T) {
+	repository := &TableExecutionGraphRepository{DB: graphDBFake{fake: newGraphTableFake()}}
+	for _, kind := range []string{"", "model", "tool_loop", "X"} {
+		graph := domain.ExecutionGraph{AgentID: "writer", Version: "1", Digest: strings.Repeat("b", 64), EntryStepID: "a",
+			Steps: []domain.ExecutionStep{{StepID: "a", Kind: kind}}}
+		if err := repository.Put(context.Background(), 7, graph); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("kind %q: want ErrValidation, got %v", kind, err)
+		}
 	}
 }
 
@@ -136,8 +162,8 @@ func TestPutScopesTransitionsToTheGraphTenant(t *testing.T) {
 	repository := &TableExecutionGraphRepository{DB: graphDBFake{fake: fake}}
 	graph := domain.ExecutionGraph{AgentID: "writer", Version: "1", Digest: strings.Repeat("b", 64), EntryStepID: "a",
 		Steps: []domain.ExecutionStep{
-			{StepID: "a", Kind: "model", NextStepIDs: []string{"b"}},
-			{StepID: "b", Kind: "tool"},
+			{StepID: "a", Kind: domain.StepKindModel, NextStepIDs: []string{"b"}},
+			{StepID: "b", Kind: domain.StepKindTool},
 		}}
 	if err := repository.Put(context.Background(), 7, graph); err != nil {
 		t.Fatal(err)

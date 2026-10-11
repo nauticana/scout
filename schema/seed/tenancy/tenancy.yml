@@ -8,8 +8,8 @@ seeds:
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
-      - [capacity_class, shared, Multi-tenant Shared Capacity]
-      - [capacity_class, dedicated, Tenant-isolated Dedicated Capacity]
+      - [capacity_class, S, Shared]
+      - [capacity_class, D, Dedicated]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

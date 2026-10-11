@@ -51,9 +51,9 @@ func TestPromptRepositoryLayersTheBaselineUnderTheChainsBindings(t *testing.T) {
 			},
 			// Rows arrive in no particular order; the chain orders them.
 			qPromptBindings: {
-				{"a:writer-a", int64(1), "task", "Task", int64(1), "replace", false, "v2", int64(9), `{"instruction":"agent task"}`},
-				{"t:writer", int64(1), "task", "Task", int64(1), "append", true, "v1", nil, `{"instruction":"tenant task","output":"tenant output"}`},
-				{RootPromptScopeID, int64(2), "tone", "Tone", int64(2), "append", false, "v1", nil, `{"instruction":"company tone"}`},
+				{"a:writer-a", int64(1), "task", "Task", int64(1), string(domain.MergeReplace), false, "v2", int64(9), `{"instruction":"agent task"}`},
+				{"t:writer", int64(1), "task", "Task", int64(1), string(domain.MergeAppend), true, "v1", nil, `{"instruction":"tenant task","output":"tenant output"}`},
+				{RootPromptScopeID, int64(2), "tone", "Tone", int64(2), string(domain.MergeAppend), false, "v1", nil, `{"instruction":"company tone"}`},
 			},
 		}},
 	}

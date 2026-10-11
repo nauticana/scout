@@ -62,7 +62,7 @@ func TestEvaluationGateRoutesMapTheWire(t *testing.T) {
 		t.Fatalf("gate: %d %s", recorder.Code, recorder.Body.String())
 	}
 	if state.Policy == nil || state.Policy.MaxRegressionBP == nil || *state.Policy.MaxRegressionBP != 0 || state.Stale == nil ||
-		state.Decision.Verdict != "override" || state.Decision.DecidedByID != "42" || state.Decision.Runs[0].CriticalFailures != 1 || !state.Admitted {
+		state.Decision.Verdict != string(domain.GateVerdictOverride) || state.Decision.DecidedByID != "42" || state.Decision.Runs[0].CriticalFailures != 1 || !state.Admitted {
 		t.Fatalf("state = %+v", state)
 	}
 

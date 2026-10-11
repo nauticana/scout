@@ -188,6 +188,11 @@ func (store *AgentEvaluationStore) Comparisons(ctx context.Context, scope domain
 				CostMinorUnits: common.AsInt64(row[9]), Currency: strings.TrimSpace(common.AsString(row[10]))},
 			Exponent: int(common.AsInt64(row[11])),
 		}
+		switch comparison.Verdict {
+		case domain.ComparisonPrefersA, domain.ComparisonPrefersB, domain.ComparisonTie, "":
+		default:
+			return nil, fmt.Errorf("evaluation comparison %s: unknown verdict %q", comparison.ExampleID, comparison.Verdict)
+		}
 		if comparison.A, err = scanArm(comparison.ExampleID, row[12:21]); err != nil {
 			return nil, err
 		}

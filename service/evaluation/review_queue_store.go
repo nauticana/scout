@@ -47,7 +47,7 @@ SELECT id FROM human_review_item
  WHERE partner_id = ? AND conversation_id = ? AND turn_no = ?`,
 	qReviewPending: `
 SELECT COUNT(*) FROM human_review_item
- WHERE partner_id = ? AND agent_id = ? AND status_code = 'pending' AND source_code IN ('sampled', 'feedback')`,
+ WHERE partner_id = ? AND agent_id = ? AND status_code = ? AND source_code IN (?, ?)`,
 	qReviewTurnInsert: `
 INSERT INTO human_review_item (id, partner_id, agent_id, agent_version, source_code, reason, risk_tier, conversation_id, turn_no, enqueued_at)
 VALUES (NEXTVAL('human_review_item_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -67,19 +67,19 @@ SELECT ` + reviewColumns + `
  LIMIT ?`,
 	qReviewGrade: `
 UPDATE human_review_item
-   SET status_code = 'graded', score = ?, verdict_code = ?, notes = ?, expected_behavior = ?,
+   SET status_code = ?, score = ?, verdict_code = ?, notes = ?, expected_behavior = ?,
        reviewer_kind = ?, reviewer_id = ?, reviewed_at = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'pending'
+ WHERE partner_id = ? AND id = ? AND status_code = ?
 RETURNING id`,
 	qReviewDismiss: `
 UPDATE human_review_item
-   SET status_code = 'dismissed', notes = ?, reviewer_kind = ?, reviewer_id = ?, reviewed_at = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'pending'
+   SET status_code = ?, notes = ?, reviewer_kind = ?, reviewer_id = ?, reviewed_at = ?
+ WHERE partner_id = ? AND id = ? AND status_code = ?
 RETURNING id`,
 	qReviewPromoted: `
 UPDATE human_review_item
-   SET status_code = 'promoted', promoted_set_id = ?, promoted_case_id = ?, promoted_at = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'graded'
+   SET status_code = ?, promoted_set_id = ?, promoted_case_id = ?, promoted_at = ?
+ WHERE partner_id = ? AND id = ? AND status_code = ?
 RETURNING id`,
 }
 
@@ -153,7 +153,8 @@ func (store *ReviewQueueStore) Enqueue(ctx context.Context, item domain.HumanRev
 	if len(existing.Rows) > 0 {
 		return nil
 	}
-	pending, err := qs.Query(ctx, qReviewPending, item.TenantID, agentID)
+	pending, err := qs.Query(ctx, qReviewPending, item.TenantID, agentID, string(domain.ReviewPending),
+		string(domain.ReviewSourceSampled), string(domain.ReviewSourceFeedback))
 	if err != nil {
 		return fmt.Errorf("count pending reviews: %w", err)
 	}
@@ -235,7 +236,7 @@ func (store *ReviewQueueStore) validGrade(grade domain.ReviewGrade) (domain.Revi
 	case grade.Score < domain.ReviewMinScore || grade.Score > domain.ReviewMaxScore:
 		return grade, fmt.Errorf("%w: score must be %d to %d", domain.ErrValidation, domain.ReviewMinScore, domain.ReviewMaxScore)
 	case grade.Verdict != domain.ReviewPass && grade.Verdict != domain.ReviewFail:
-		return grade, fmt.Errorf("%w: verdict must be pass or fail", domain.ErrValidation)
+		return grade, fmt.Errorf("%w: verdict must be %s or %s", domain.ErrValidation, domain.ReviewPass, domain.ReviewFail)
 	case utf8.RuneCountInString(grade.Notes) > reviewNotesMax || !validText([]byte(grade.Notes)):
 		return grade, fmt.Errorf("%w: notes must be at most %d characters of UTF-8 without NUL", domain.ErrValidation, reviewNotesMax)
 	case len(grade.ExpectedBehavior) > maxBytes || !validText(grade.ExpectedBehavior):
@@ -260,8 +261,8 @@ func (store *ReviewQueueStore) Grade(ctx context.Context, tenantID, itemID int64
 	if err != nil {
 		return domain.HumanReviewItem{}, err
 	}
-	if _, err = qs.Query(ctx, qReviewGrade, grade.Score, string(grade.Verdict), nullable(grade.Notes), nullable(string(grade.ExpectedBehavior)),
-		string(reviewer.Kind), reviewer.ID, store.now(), tenantID, itemID); err != nil {
+	if _, err = qs.Query(ctx, qReviewGrade, string(domain.ReviewGraded), grade.Score, string(grade.Verdict), nullable(grade.Notes), nullable(string(grade.ExpectedBehavior)),
+		string(reviewer.Kind), reviewer.ID, store.now(), tenantID, itemID, string(domain.ReviewPending)); err != nil {
 		return domain.HumanReviewItem{}, fmt.Errorf("grade review item: %w", err)
 	}
 	item, err := store.Get(ctx, tenantID, itemID)
@@ -286,7 +287,8 @@ func (store *ReviewQueueStore) Dismiss(ctx context.Context, tenantID, itemID int
 	if err != nil {
 		return domain.HumanReviewItem{}, err
 	}
-	if _, err = qs.Query(ctx, qReviewDismiss, nullable(notes), string(reviewer.Kind), reviewer.ID, store.now(), tenantID, itemID); err != nil {
+	if _, err = qs.Query(ctx, qReviewDismiss, string(domain.ReviewDismissed), nullable(notes), string(reviewer.Kind), reviewer.ID, store.now(),
+		tenantID, itemID, string(domain.ReviewPending)); err != nil {
 		return domain.HumanReviewItem{}, fmt.Errorf("dismiss review item: %w", err)
 	}
 	item, err := store.Get(ctx, tenantID, itemID)
@@ -311,7 +313,8 @@ func (store *ReviewQueueStore) Promoted(ctx context.Context, tenantID, itemID in
 	if err != nil {
 		return domain.HumanReviewItem{}, err
 	}
-	if _, err = qs.Query(ctx, qReviewPromoted, goldenSetID, caseID, store.now(), tenantID, itemID); err != nil {
+	if _, err = qs.Query(ctx, qReviewPromoted, string(domain.ReviewPromoted), goldenSetID, caseID, store.now(), tenantID, itemID,
+		string(domain.ReviewGraded)); err != nil {
 		return domain.HumanReviewItem{}, fmt.Errorf("mark review item promoted: %w", err)
 	}
 	item, err := store.Get(ctx, tenantID, itemID)
