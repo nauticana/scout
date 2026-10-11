@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nauticana/keel/cache"
 	keellimiter "github.com/nauticana/keel/limiter"
 
 	"github.com/nauticana/scout/domain"
@@ -95,14 +94,6 @@ func TestDistributedTenantRateLimiterSharesQuotaAndDegrades(t *testing.T) {
 		t.Fatalf("closed = %v", err)
 	}
 }
-
-func TestDistributedTenantRateLimiterRequiresAnAtomicStore(t *testing.T) {
-	if _, err := NewDistributedTenantRateLimiter(plainStore{}, nil, distributedConfig()); err == nil {
-		t.Fatal("a store without MultiScopeAdmitter must be rejected")
-	}
-}
-
-type plainStore struct{ cache.CacheService }
 
 // Scout translates its config to keel's; a lane or bound Scout accepts that keel would reject must fail here.
 func TestDistributedTenantRateLimiterRejectsInvalidConfig(t *testing.T) {

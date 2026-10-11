@@ -108,11 +108,11 @@ func TestCapabilityGatewayRecordsTheRunsActionAndKeepsTheCall(t *testing.T) {
 	if err != nil || len(*h.inner) != 1 || string(replayed.Output) != `{"outcome":"reserved"}` {
 		t.Fatalf("a replayed key must return the recorded outcome without a second effect: %s, %v, calls %d", replayed.Output, err, len(*h.inner))
 	}
-	actions, err := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-42")
+	actions, err := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-42", 10)
 	if err != nil || len(actions) != 1 || actions[0].Disposition != string(capability.StatusExecuted) || actions[0].CapabilityID.ID != "CAP-RESERVE-ORDER-STOCK" {
 		t.Fatalf("run actions = %+v, %v", actions, err)
 	}
-	if other, _ := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-43"); len(other) != 0 {
+	if other, _ := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-43", 10); len(other) != 0 {
 		t.Fatalf("another run's actions = %+v", other)
 	}
 }
@@ -131,7 +131,7 @@ func TestCapabilityGatewayLinksAReconciliationToTheRun(t *testing.T) {
 	if err != nil || string(result.Output) != `{"outcome":"reserved"}` {
 		t.Fatalf("an observed reservation reconciles the timeout: %s, %v", result.Output, err)
 	}
-	actions, err := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-42")
+	actions, err := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-42", 10)
 	if err != nil || len(actions) != 3 {
 		t.Fatalf("run actions = %+v, %v", actions, err)
 	}
@@ -147,7 +147,7 @@ func TestCapabilityGatewayLinksAReconciliationToTheRun(t *testing.T) {
 	if err != nil || len(*h.inner) != 2 || string(redelivered.Output) != `{"outcome":"reserved"}` {
 		t.Fatalf("a redelivered unknown call must reconcile without a second effect: %s, %v, calls %d", redelivered.Output, err, len(*h.inner))
 	}
-	actions, _ = (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-42")
+	actions, _ = (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-42", 10)
 	settled := 0
 	for _, action := range actions {
 		if action.ReconcilesActionID != nil && action.Disposition == string(capability.StatusExecuted) {

@@ -157,7 +157,7 @@ Zero `owner` rows means `domain.ErrFenceLost`; a follow-up read tells that apart
   - Reuses `agent_cancel_poll_ms`, the max-read-failures setting, and the cache wake-up.
 - On `ErrFenceLost`, `HandleTurn` does not call `fail()`. It makes no terminal audit, settlement, or final frame. The worker treats a lost queue lease while acknowledging or rejecting that stale delivery as benign; it must not retry or dead-letter it. A current delivery that finds `H`/`O` is acknowledged as a no-op.
 - `fail()` publishes and audits only when `Records.Fail` succeeded (fixes G2).
-- **Reply frames.** `TurnReply` and `replyHead` gain `Fence`. Publish compares and advances `(fence, sequence)` atomically: under the hub lock in memory and through a new atomic compare-and-set capability in `CacheReplyHub`. Cache composition fails if the backend cannot provide it; keel's `cache.CacheService` has no compare-and-set today, recorded in `todo_upstream_keel.md`, so until keel adds one turn control composes only with `MemoryReplyHub` or a product hub that provides it. A lower fence returns `ErrFenceLost`; a higher fence requires the `TurnOwner` or transition receipt returned by the guarded store operation, and sequence must still advance by one. This is required, not best effort: a stale token delta after takeover is still an unauthorized response.
+- **Reply frames.** `TurnReply` and `replyHead` gain `Fence`. Publish compares and advances `(fence, sequence)` atomically: under the hub lock in memory and through a new atomic compare-and-set capability in `CacheReplyHub`. `CacheReplyHub` uses keel's `cache.CacheService.CompareAndSet`, a single atomic round trip. A lower fence returns `ErrFenceLost`; a higher fence requires the `TurnOwner` or transition receipt returned by the guarded store operation, and sequence must still advance by one. This is required, not best effort: a stale token delta after takeover is still an unauthorized response.
 - **Store clock.** `hold_until`, `held_at`, `dispatched_at` and `deadline_at` are all `CURRENT_TIMESTAMP`-based. Leases lapse through a sweeper using `CURRENT_TIMESTAMP` with `SKIP LOCKED` batches, the same pattern as `qConfirmLapse` (confirmation/store.go:149-155).
 
 ## 4. Unknown tool outcomes, reconciled first
@@ -365,7 +365,7 @@ Cooperative-hold polling reuses `agent_cancel_poll_ms`.
 |---|---|---|
 | Fenced write (guarded touch of the turn row) | Same statement; a new row version and WAL per write on `conversation_turn` | `fence` is unindexed, so updates stay heap-only; set a lower fillfactor on `conversation_turn` |
 | Intent row per non-read-only call | One small insert; settlement shares the observation's transaction | Read-only calls write none |
-| Reply-head compare-and-set per frame | Free in memory; one round trip in a cache script, two if only read-then-write is available | Require a single atomic operation from the cache backend |
+| Reply-head compare-and-set per frame | Free in memory; one `CompareAndSet` round trip in the cache, the same count as today's write | — |
 | Conversation-order check on claim | One primary-key lookup per claim | — |
 | Control watcher | A few more columns in the existing poll | — |
 

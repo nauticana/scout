@@ -101,13 +101,9 @@ type DistributedTenantRateLimiter struct {
 	shared *keellimiter.DistributedRateLimiter
 }
 
-// NewDistributedTenantRateLimiter binds the lanes to a shared store that admits every scope atomically.
+// NewDistributedTenantRateLimiter binds the lanes to a shared store, which admits every scope atomically.
 func NewDistributedTenantRateLimiter(store cache.CacheService, metrics keelport.MetricsRecorder, config DistributedRateLimiterConfig) (*DistributedTenantRateLimiter, error) {
-	admitter, ok := store.(cache.MultiScopeAdmitter)
-	if !ok {
-		return nil, fmt.Errorf("distributed rate limiter: store %T cannot admit multiple scopes atomically", store)
-	}
-	shared, err := keellimiter.NewDistributedRateLimiter(admitter, keellimiter.DistributedRateLimiterConfig{
+	shared, err := keellimiter.NewDistributedRateLimiter(store, keellimiter.DistributedRateLimiterConfig{
 		Lanes: map[string]keellimiter.WindowLane{
 			laneTurn:  {Partner: config.Turn, Fleet: config.FleetTurn},
 			laneTool:  {Partner: config.Tool, Fleet: config.FleetTool},

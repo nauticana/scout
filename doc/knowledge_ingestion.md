@@ -57,7 +57,8 @@ tables and pages to sections, drops blank ones, and refuses a document with no e
 failures (`extract.ErrTooLarge`, `extract.ErrEncrypted`, `extract.ErrTimeout`, malformed files) are terminal
 `ErrValidation`; a canceled context and `extract.ErrIsolationFailed` stay systemic. `extract_max_bytes` bounds PDF
 decoding inside keel's parser, and a PDF that opens with the empty user password is extracted. A scanned page
-contributes its invisible OCR layer when it has one and nothing otherwise, until keel ships an OCR extractor.
+contributes its invisible OCR layer when it has one; to recognize pages with no text layer, compose keel's
+`extract.OCR` (`extract_mode=gcp_vision`, bounded by `extract_ocr_max_pages`) as the decoder's extractor.
 keel's pinned PDF parser bounds nested form XObjects only by depth, so a crafted file can stall one page without
 checking its context: extract untrusted PDFs with `extract.NewIsolated`, which runs them in a child binary
 (`os.Exit(extract.ChildMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))`, composed downstream) that a deadline kills.

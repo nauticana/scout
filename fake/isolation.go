@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,6 +117,30 @@ func (c *CacheService) Set(_ context.Context, key, value string, _ time.Duration
 	return nil
 }
 
+// CompareAndSet writes value when key holds expected, a missing key holding ""; a negative ttl fails.
+func (c *CacheService) CompareAndSet(_ context.Context, key, expected, value string, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		return false, fmt.Errorf("fake cache: negative ttl")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current, ok := c.values[key]
+	if !ok {
+		if count, counted := c.counts[key]; counted {
+			current = strconv.FormatInt(count, 10)
+		}
+	}
+	if current != expected {
+		return false, nil
+	}
+	if c.values == nil {
+		c.values = make(map[string]string)
+	}
+	delete(c.counts, key)
+	c.values[key] = value
+	return true, nil
+}
+
 func (c *CacheService) Delete(_ context.Context, key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -155,8 +180,6 @@ func (c *CacheService) IncrementByWithTTL(ctx context.Context, key string, n int
 	c.counts[key] += n
 	return c.counts[key], nil
 }
-
-var _ cache.MultiScopeAdmitter = (*CacheService)(nil)
 
 // Admit charges every scope or none, mirroring keel's backends; each scope is recorded as one call.
 func (c *CacheService) Admit(ctx context.Context, scopes ...cache.AdmissionScope) (cache.AdmissionResult, error) {

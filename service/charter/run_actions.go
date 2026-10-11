@@ -32,15 +32,12 @@ func (r *RunActions) RunActions(ctx context.Context, tenantID int64, requestID s
 	if strings.TrimSpace(namespace) == "" {
 		return nil, fmt.Errorf("%w: tenant %d has no Charter namespace", domain.ErrNotReady, tenantID)
 	}
-	records, err := (evidence.Queries{Provider: r.Evidence}).ActionsIn(ctx, namespace, requestID)
+	records, err := (evidence.Queries{Provider: r.Evidence}).ActionsIn(ctx, namespace, requestID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read charter actions of request %q: %w", requestID, err)
 	}
-	actions := make([]domain.CharterAction, 0, min(len(records), limit))
+	actions := make([]domain.CharterAction, 0, len(records))
 	for _, record := range records {
-		if len(actions) == limit {
-			break
-		}
 		if record.Namespace != namespace || record.RuntimeContext.ExecutionContextID != requestID {
 			continue
 		}
