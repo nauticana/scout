@@ -1,0 +1,85 @@
+table: evaluation_comparison
+comment: Pairwise verdict on one example of a comparison run; each arm's answer and spend is its evaluation_result
+columns:
+  - name: run_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: example_id
+    type: VARCHAR(120)
+  - name: verdict_code
+    type: VARCHAR(10)
+    nullable: true
+    comment: The preferred arm, baseline (a) or candidate (b), or tie; empty when judging failed and reason says why
+  - name: confidence
+    type: NUMERIC(5,4)
+    default: 0
+  - name: evaluator_kind
+    type: VARCHAR(40)
+    nullable: true
+  - name: evaluator_version
+    type: VARCHAR(400)
+    nullable: true
+    comment: The judge that decided the verdict; empty when an arm ended in a failed state and no judge was needed
+  - name: input_digest
+    type: CHAR(64)
+    nullable: true
+    comment: SHA-256 of the blinded judge input
+  - name: rationale
+    type: VARCHAR(600)
+    nullable: true
+  - name: evaluator_input_tokens
+    type: BIGINT
+    default: 0
+  - name: evaluator_output_tokens
+    type: BIGINT
+    default: 0
+  - name: evaluator_cost_minor_units
+    type: BIGINT
+    default: 0
+    comment: What the judge spent, in currency_code; the run's totals include it
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+  - name: reason
+    type: VARCHAR(400)
+    nullable: true
+primary_key: [run_id, example_id]
+foreign_keys:
+  - name: evaluation_comparisons
+    columns: [partner_id, run_id]
+    references:
+      table: evaluation_run
+      columns: [partner_id, id]
+  - name: example_evaluation_comparisons
+    columns: [partner_id, golden_set_id, set_version, example_id]
+    references:
+      table: golden_example
+      columns: [partner_id, golden_set_id, set_version, example_id]
+  - name: currency_evaluation_comparisons
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: evaluation_comparison_example_ix
+    columns: [partner_id, golden_set_id, set_version, example_id]
+checks:
+  - name: evaluation_comparison_verdict_ck
+    expression: verdict_code IN ('baseline', 'candidate', 'tie')
+  - name: evaluation_comparison_outcome_ck
+    expression: (verdict_code IS NULL) = (reason IS NOT NULL)
+  - name: evaluation_comparison_confidence_ck
+    expression: confidence >= 0 AND confidence <= 1
+  - name: evaluation_comparison_evaluator_ck
+    expression: (evaluator_kind IS NULL) = (evaluator_version IS NULL)
+  - name: evaluation_comparison_digest_ck
+    expression: input_digest IS NULL OR CHAR_LENGTH(input_digest) = 64
+  - name: evaluation_comparison_usage_ck
+    expression: evaluator_input_tokens >= 0 AND evaluator_output_tokens >= 0 AND evaluator_cost_minor_units >= 0
+  - name: evaluation_comparison_currency_ck
+    expression: evaluator_cost_minor_units = 0 OR currency_code IS NOT NULL

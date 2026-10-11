@@ -15,10 +15,7 @@ Severity: **MED** = needed before a first customer, **LOW** = adopt on demand.
 | V2 | GRC export format over `contract.AuditQuery`. | LOW | a customer naming a format |
 | E1 | OpenFGA (first) or SpiceDB, only when entitlements must derive from relationships rather than label subsets. | LOW | that requirement |
 | C4 | Semantic response cache, default off and shadow-measured. Its namespace is the tenant, the immutable release identity, model and provider version, prompt, guardrail, knowledge and tool-contract versions, entitlement fingerprint, language, and decoding parameters; the tenant filter runs inside the similarity index, never after it; the precision floor cannot be lowered by a caller; non-deterministic, time-sensitive, tool-using, and conversation-state responses are never stored; hit quality is measured, not only hit rate. Stateless deterministic tasks first. | LOW | a leak-safety proof in shadow mode |
-| AS-13 | Compare any two subjects: draft, release, a draft on another model, a recorded human baseline. | MED | build |
-| AS-14 | Evaluation gate on publish keyed by tenant, agent, and definition digest. | LOW | build |
 | AS-15 | Multi-turn and sandboxed tool tests with the trajectory. | LOW | build |
-| AS-16 | Durable review queue (`HumanReviewQueue` is memory-only) and promotion of a graded turn into the golden set; feedback recording and per-release counts are shipped. | LOW | build |
 | AS-22 | Run trace: model steps, tool calls, guardrail hits, approvals, and each governed action's Charter disposition; the run list is shipped. | MED | trace contract |
 | AS-24 | Health detail and alerts per agent, with missing telemetry alerting on its own. | LOW | build |
 | AS-19 | Pilots and version pins can serve an older published release without a restore review where restores are reviewed. | LOW | a tenant requiring it |

@@ -245,6 +245,15 @@ func (p *StudioPortability) replace(ctx context.Context, actor domain.StudioActo
 	if err = studio.checkSeed(ctx, actor, request.AgentID, scopes, seed); err != nil {
 		return domain.AgentSummary{}, err
 	}
+	placed := slices.Clone(seed.bindings)
+	for index := range placed {
+		placed[index].ScopeID = scopes.AgentScopeID
+	}
+	loosening, err := studio.checkGateChange(ctx, actor, request.AgentID, scopes.AgentScopeID,
+		seededScopes{ScopeRepository: studio.scopeRepository(), scopeID: scopes.AgentScopeID, bindings: placed})
+	if err != nil {
+		return domain.AgentSummary{}, err
+	}
 	updated, err := tx.Query(ctx, qStudioUpdateDraft, current.Enabled,
 		modelProvider(seed.models.Text), modelID(seed.models.Text), modelProvider(seed.models.Image), modelID(seed.models.Image),
 		modelProvider(seed.models.Video), modelID(seed.models.Video), nullableJSON(seed.extension), actorUser(actor),
@@ -264,6 +273,9 @@ func (p *StudioPortability) replace(ctx context.Context, actor domain.StudioActo
 		return domain.AgentSummary{}, err
 	}
 	if err = auditStudio(ctx, tx, actor, request.AgentID, seed.event, clipDetail(seed.detail)); err != nil {
+		return domain.AgentSummary{}, err
+	}
+	if err = studio.recordGateLoosening(ctx, tx, actor, loosening); err != nil {
 		return domain.AgentSummary{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {

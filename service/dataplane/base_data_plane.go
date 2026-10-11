@@ -116,6 +116,8 @@ type BaseDataPlane struct {
 	Executors       contract.StepExecutorRegistry
 	TurnRuntime     contract.ConversationRuntime
 	TurnIngress     contract.ConversationIngress
+	// Review offers completed turns to production review; nil offers none.
+	Review contract.ProductionReviewIntake
 
 	closers []io.Closer
 }
@@ -457,7 +459,7 @@ func (plane *BaseDataPlane) composeRuntime() error {
 			Records: plane.Records, Sessions: plane.Sessions, Definitions: plane.Definitions, Policies: plane.Policies,
 			Governor: plane.Governor, Executors: plane.Executors, Idempotency: plane.Idempotency, Guardrails: plane.Guardrails,
 			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Limits: plane.PrincipalLimits, Cancels: plane.Cancels,
-			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, Runs: plane.Runs, OnSettled: plane.OnSettled,
+			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, Runs: plane.Runs, Review: plane.Review, OnSettled: plane.OnSettled,
 			MaxSteps: plane.Settings.TurnMaxSteps,
 		}
 		if recorder, ok := plane.Metrics.(contract.ObservationRecorder); ok {

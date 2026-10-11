@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ const (
 
 var feedbackQueries = map[string]string{
 	qFeedbackTurn: `
-SELECT t.conversation_id, t.turn_no, t.status_code, c.agent_id, c.end_user_ref
+SELECT t.conversation_id, t.turn_no, t.status_code, c.agent_id, c.end_user_ref, c.agent_version
   FROM conversation_turn t
   JOIN agent_conversation c ON c.partner_id = t.partner_id AND c.conversation_id = t.conversation_id
  WHERE t.partner_id = ? AND t.request_id = ?`,
@@ -51,6 +52,10 @@ type TurnFeedback struct {
 	Authorizer contract.StudioAuthorizer
 	// MaxWindow bounds one report's span; default DefaultUsageWindow.
 	MaxWindow time.Duration
+	// Review queues a turn rated at or below its threshold for human review; nil queues none.
+	// It is best-effort: a failure is logged and the stored rating stands. The rating
+	// person is never passed on.
+	Review contract.ProductionReviewIntake
 
 	once sync.Once
 	qs   port.QueryService
@@ -105,6 +110,13 @@ func (f *TurnFeedback) RecordFeedback(ctx context.Context, tenant domain.TenantC
 	if _, err = qs.Query(ctx, qFeedbackPut, tenant.TenantID, common.AsString(row[0]), common.AsInt64(row[1]),
 		string(person.Kind), person.ID, rating, nullableUsageField(reason)); err != nil {
 		return fmt.Errorf("record feedback: %w", err)
+	}
+	if f.Review == nil {
+		return nil
+	}
+	rated := domain.ReviewTurn{TenantContext: tenant, RequestID: requestID, AgentID: common.AsString(row[3]), AgentVersion: common.AsString(row[5])}
+	if err = f.Review.TurnRated(ctx, rated, rating); err != nil {
+		log.Printf("rated turn %s of tenant %d not queued for review: %v", requestID, tenant.TenantID, err)
 	}
 	return nil
 }

@@ -664,3 +664,27 @@ func TestTurnRuntimeRecordsEverySettledTurnAsARun(t *testing.T) {
 		}
 	}
 }
+
+func TestTurnRuntimeOffersOnlyCompletedTurnsToReviewAndSurvivesItsFailure(t *testing.T) {
+	review := &reviewIntakeFake{err: errors.New("review store down")}
+	completed := newTestRuntime(t, &runtimeRecorder{})
+	completed.Review = review
+	if _, err := completed.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+		t.Fatalf("a review failure failed the turn: %v", err)
+	}
+	cancelled := newTestRuntime(t, &runtimeRecorder{})
+	cancelled.Review = review
+	cancelled.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
+		return fake.StepExecutorFunc(func(context.Context, domain.StepInput) (domain.StepResult, error) {
+			return domain.StepResult{}, domain.ErrTurnCanceled
+		}), nil
+	})
+	if _, err := cancelled.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrTurnCanceled) {
+		t.Fatalf("error = %v", err)
+	}
+	dispatch := runtimeDispatch()
+	want := domain.ReviewTurn{TenantContext: dispatch.Turn.TenantContext, RequestID: dispatch.Turn.RequestID, AgentID: dispatch.Turn.AgentID, AgentVersion: "v1"}
+	if len(review.completed) != 1 || review.completed[0] != want {
+		t.Fatalf("offered = %+v", review.completed)
+	}
+}

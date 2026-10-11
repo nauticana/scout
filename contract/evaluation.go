@@ -19,12 +19,24 @@ type JudgeEvaluator interface {
 	Compare(ctx context.Context, pair domain.EvaluationPair) (domain.JudgeVerdict, error)
 }
 
-// HumanReviewQueue holds paired examples awaiting a human verdict.
+// HumanReviewQueue holds production turns awaiting a human grade. Items are tenant-scoped
+// and hold references only, never content. Doubtful evaluation pairs are not queued here:
+// the runner marks them in their EvaluationResult.
 type HumanReviewQueue interface {
+	// Enqueue adds a turn once; a replay is a no-op. An item names only its turn's
+	// RequestID: the store derives the conversation, turn, agent, and release, and refuses
+	// a turn that is not completed. An agent at the pending cap is domain.ErrRateLimited.
 	Enqueue(ctx context.Context, item domain.HumanReviewItem) error
-	// Next returns up to limit unresolved items in enqueue order.
-	Next(ctx context.Context, tenantID int64, limit int) ([]domain.HumanReviewItem, error)
-	Resolve(ctx context.Context, tenantID int64, itemID string, review domain.ExampleReview) error
+	Get(ctx context.Context, tenantID, itemID int64) (domain.HumanReviewItem, error)
+	List(ctx context.Context, tenantID int64, filter domain.ReviewFilter) ([]domain.HumanReviewItem, error)
+	// Grade moves a pending item to graded once; replaying the same grade by the same
+	// reviewer returns the item, any other grade of a resolved item is domain.ErrConflict.
+	Grade(ctx context.Context, tenantID, itemID int64, grade domain.ReviewGrade, reviewer domain.PrincipalRef) (domain.HumanReviewItem, error)
+	// Dismiss moves a pending item to dismissed once, with the same replay rule as Grade.
+	Dismiss(ctx context.Context, tenantID, itemID int64, notes string, reviewer domain.PrincipalRef) (domain.HumanReviewItem, error)
+	// Promoted marks a graded item promoted into the named golden case; replaying the
+	// same case returns the item.
+	Promoted(ctx context.Context, tenantID, itemID int64, goldenSetID, caseID string) (domain.HumanReviewItem, error)
 }
 
 // EvaluationManifestStore persists immutable manifests by content id.

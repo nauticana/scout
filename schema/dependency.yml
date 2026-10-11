@@ -69,7 +69,9 @@ groups:
 
   - name: evaluation
     path: evaluation
-    depends_on: [catalog, tenancy, agent, knowledge, release]
+    seed: seed/evaluation/evaluation.yml
+    depends_on: [catalog, tenancy, model, agent, knowledge, release, runtime]
+    seed_depends_on: [core]
 
   - name: skill
     path: skill

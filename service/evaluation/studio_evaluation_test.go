@@ -26,6 +26,7 @@ type caseStoreFake struct {
 	frozen     string
 	owners     map[string]string
 	associated []domain.GoldenSetAssociation
+	cases      []domain.GoldenCase
 }
 
 func (store *caseStoreFake) SetOwner(_ context.Context, _ int64, goldenSetID string) (string, error) {
@@ -47,7 +48,7 @@ func (store *caseStoreFake) AgentSet(context.Context, int64, string) (string, in
 
 func (store *caseStoreFake) Cases(_ context.Context, scope domain.GoldenScope, _ int64, agentID string) (domain.GoldenCaseSet, error) {
 	store.scopes = append(store.scopes, scope)
-	return domain.GoldenCaseSet{AgentID: agentID, GoldenSetID: "support", Revision: 5}, nil
+	return domain.GoldenCaseSet{AgentID: agentID, GoldenSetID: "support", Revision: 5, Cases: append([]domain.GoldenCase(nil), store.cases...)}, nil
 }
 
 func (store *caseStoreFake) PutCase(_ context.Context, scope domain.GoldenScope, goldenCase domain.GoldenCase, _ int64) (int64, error) {
@@ -62,20 +63,42 @@ func (store *caseStoreFake) Freeze(_ context.Context, _ int64, goldenSetID strin
 }
 
 type runStoreFake struct {
-	enqueued domain.AgentEvaluationEnqueue
-	results  []domain.AgentCaseResult
-	limit    int
-	scopes   []domain.GoldenScope
+	enqueued    domain.AgentEvaluationEnqueue
+	results     []domain.AgentCaseResult
+	limit       int
+	scopes      []domain.GoldenScope
+	run         domain.AgentEvaluationRun
+	comparisons []domain.AgentCaseComparison
+	tally       domain.ComparisonTally
 }
 
 func (store *runStoreFake) Enqueue(_ context.Context, request domain.AgentEvaluationEnqueue) (domain.AgentEvaluationRun, error) {
 	store.enqueued = request
-	return domain.AgentEvaluationRun{RunID: 11, AgentID: request.AgentID, GoldenSetID: "support", SetVersion: request.SetVersion, Subject: request.Subject}, nil
+	run := domain.AgentEvaluationRun{RunID: 11, AgentID: request.AgentID, GoldenSetID: "support", SetVersion: request.SetVersion, Subject: request.Subject}
+	if request.Baseline != nil {
+		run.Baseline = &request.Baseline.Subject
+	}
+	return run, nil
 }
 
-func (store *runStoreFake) Run(_ context.Context, scope domain.GoldenScope, _ int64, runID int64) (domain.AgentEvaluationRun, error) {
+func (store *runStoreFake) Run(_ context.Context, scope domain.GoldenScope, tenantID int64, runID int64) (domain.AgentEvaluationRun, error) {
 	store.scopes = append(store.scopes, scope)
-	return domain.AgentEvaluationRun{RunID: runID, AgentID: "writer-a"}, nil
+	if tenantID != 7 {
+		return domain.AgentEvaluationRun{}, domain.ErrNotFound
+	}
+	run := store.run
+	run.RunID, run.AgentID = runID, "writer-a"
+	return run, nil
+}
+
+func (store *runStoreFake) Comparisons(_ context.Context, scope domain.GoldenScope, _ int64, _ int64, _ string, limit int) ([]domain.AgentCaseComparison, error) {
+	store.scopes, store.limit = append(store.scopes, scope), limit
+	return store.comparisons[:min(limit, len(store.comparisons))], nil
+}
+
+func (store *runStoreFake) Tally(_ context.Context, scope domain.GoldenScope, _ int64, _ int64) (domain.ComparisonTally, error) {
+	store.scopes = append(store.scopes, scope)
+	return store.tally, nil
 }
 
 func (store *runStoreFake) Results(_ context.Context, scope domain.GoldenScope, _ int64, _ int64, _ string, limit int) ([]domain.AgentCaseResult, error) {
@@ -83,10 +106,10 @@ func (store *runStoreFake) Results(_ context.Context, scope domain.GoldenScope, 
 	return store.results[:min(limit, len(store.results))], nil
 }
 
-type freezerFunc func(context.Context, domain.StudioActor, string) (domain.FrozenDraft, error)
+type freezerFunc func(context.Context, domain.StudioActor, string, *domain.ModelReference) (domain.FrozenDraft, error)
 
-func (function freezerFunc) FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string) (domain.FrozenDraft, error) {
-	return function(ctx, actor, agentID)
+func (function freezerFunc) FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string, textModel *domain.ModelReference) (domain.FrozenDraft, error) {
+	return function(ctx, actor, agentID, textModel)
 }
 
 var studioActor = domain.StudioActor{TenantID: 7, Principal: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}}
@@ -95,7 +118,7 @@ func studioEvaluation(allowed grants) (*StudioEvaluation, *caseStoreFake, *runSt
 	query, cases, runs := newQueryFake(nil), &caseStoreFake{}, &runStoreFake{}
 	return &StudioEvaluation{
 		DB: dbFake{query: query}, Authorizer: allowed, GoldenCases: cases, Runs: runs, MaxOpenRuns: 2,
-		Drafts: freezerFunc(func(_ context.Context, _ domain.StudioActor, agentID string) (domain.FrozenDraft, error) {
+		Drafts: freezerFunc(func(_ context.Context, _ domain.StudioActor, agentID string, _ *domain.ModelReference) (domain.FrozenDraft, error) {
 			return domain.FrozenDraft{Definition: domain.AgentDefinition{AgentID: agentID, DefinitionDigest: draftDigest, SettingsDigest: scope.SettingsDigest(draftSettings())},
 				Settings: domain.EffectiveRelease{Resources: draftSettings()}}, nil
 		}),
@@ -130,6 +153,36 @@ func TestStudioEvaluationWorksInTheDevScopeOnly(t *testing.T) {
 	}
 	if _, err := service.ChangeCases(ctx, studioActor, domain.GoldenCaseChange{AgentID: "writer-a", Op: "rename"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("unknown op = %v", err)
+	}
+}
+
+func TestStudioEvaluationWithholdsPromotedTurnInputsFromNonReviewers(t *testing.T) {
+	ctx := context.Background()
+	promoted := []domain.GoldenCase{
+		{CaseID: "authored", Input: []byte("written by an editor")},
+		{CaseID: "review-12", Input: []byte("a customer's words"), ReviewItemID: 12, ReviewAgentID: "writer-a"},
+		{CaseID: "review-30", Input: []byte("another agent's customer"), ReviewItemID: 30, ReviewAgentID: "other-agent"},
+	}
+	viewer, cases, _, _ := studioEvaluation(grants{domain.StudioView: true})
+	cases.cases = promoted
+	set, err := viewer.Cases(ctx, studioActor, "writer-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(set.Cases[0].Input) != "written by an editor" || set.Cases[1].Input != nil || !set.Cases[1].InputWithheld || !set.Cases[2].InputWithheld {
+		t.Fatalf("viewer set = %+v", set.Cases)
+	}
+	reviewer, cases, _, _ := studioEvaluation(grants{domain.StudioView: true, domain.StudioReview: true})
+	cases.cases = promoted
+	if set, err = reviewer.Cases(ctx, studioActor, "writer-a"); err != nil {
+		t.Fatal(err)
+	}
+	// REVIEW on the viewed agent does not open a case promoted from another agent's turn.
+	if string(set.Cases[1].Input) != "a customer's words" || set.Cases[1].InputWithheld || !set.Cases[2].InputWithheld {
+		t.Fatalf("reviewer set = %+v", set.Cases)
+	}
+	if string(promoted[1].Input) != "a customer's words" {
+		t.Fatal("withholding mutated the store's cases")
 	}
 }
 

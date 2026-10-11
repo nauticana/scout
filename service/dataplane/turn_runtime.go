@@ -46,6 +46,9 @@ type TurnRuntime struct {
 	// Runs records each settled turn as an agent run under TurnTaskKind; nil skips.
 	// It is best-effort: the turn is already final when it runs.
 	Runs contract.AgentRunRecorder
+	// Review offers each completed turn to production review; nil skips. Like Runs it is
+	// best-effort: a failure is logged and the final turn stands.
+	Review contract.ProductionReviewIntake
 	// Observations records per-step stage observations; nil skips them.
 	Observations contract.ObservationRecorder
 	// OnSettled runs after a turn's usage event is recorded, on success and on a
@@ -460,7 +463,12 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 		return err
 	}
 	runtime.recordRun(settleCtx, execution, domain.RunCompleted)
-	return runtime.publish(settleCtx, execution, nil, true, "")
+	if err := runtime.publish(settleCtx, execution, nil, true, ""); err != nil {
+		return err
+	}
+	// After the final frame, so a slow review store never delays the reply.
+	runtime.offerReview(settleCtx, execution)
+	return nil
 }
 
 // fail settles work already performed (or refunds an unused hold), records the
@@ -648,6 +656,18 @@ func (runtime *TurnRuntime) recordRun(ctx context.Context, execution *turnExecut
 	}
 	if err := runtime.Runs.Record(ctx, turn.TenantContext.TenantID, run); err != nil {
 		log.Printf("record %s agent run %s for tenant %d: %v", status, turn.RequestID, turn.TenantContext.TenantID, err)
+	}
+}
+
+func (runtime *TurnRuntime) offerReview(ctx context.Context, execution *turnExecution) {
+	if runtime.Review == nil || execution.snapshot.AgentVersion == "" {
+		return
+	}
+	turn := execution.dispatch.Turn
+	if err := runtime.Review.TurnCompleted(ctx, domain.ReviewTurn{
+		TenantContext: turn.TenantContext, RequestID: turn.RequestID, AgentID: turn.AgentID, AgentVersion: execution.snapshot.AgentVersion,
+	}); err != nil {
+		log.Printf("offer turn %s of tenant %d to review: %v", turn.RequestID, turn.TenantContext.TenantID, err)
 	}
 }
 

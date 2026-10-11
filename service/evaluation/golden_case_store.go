@@ -46,8 +46,8 @@ const (
 	GoldenCaseRetention  = "golden_set"
 )
 
-const caseColumns = `case_id, scope_code, name, input_text, language_code, expected_behavior, rubric_ref, risk_tier_code,
-       principal_kind, principal_id, modified_at`
+const caseColumns = `c.case_id, c.scope_code, c.name, c.input_text, c.language_code, c.expected_behavior, c.rubric_ref, c.risk_tier_code,
+       c.principal_kind, c.principal_id, c.modified_at, c.review_item_id, r.agent_id`
 
 // Reads take the caller scope twice: dev callers see only dev rows, gate callers every row.
 var caseQueries = map[string]string{
@@ -60,9 +60,10 @@ SELECT a.golden_set_id, s.working_revision
 SELECT working_revision FROM golden_set WHERE partner_id = ? AND golden_set_id = ?`,
 	qCaseList: `
 SELECT ` + caseColumns + `
-  FROM golden_case
- WHERE partner_id = ? AND golden_set_id = ? AND (scope_code = ? OR ? = 'gate')
- ORDER BY case_id`,
+  FROM golden_case c
+  LEFT JOIN human_review_item r ON r.partner_id = c.partner_id AND r.id = c.review_item_id
+ WHERE c.partner_id = ? AND c.golden_set_id = ? AND (c.scope_code = ? OR ? = 'gate')
+ ORDER BY c.case_id`,
 	qCaseHiddenCount: `
 SELECT COUNT(*) FROM golden_case WHERE partner_id = ? AND golden_set_id = ? AND scope_code = 'gate'`,
 	qCaseVersions: `
@@ -100,13 +101,14 @@ SELECT code FROM approval_risk_tier WHERE code = ?`,
 SELECT COUNT(*) FROM golden_case WHERE partner_id = ? AND golden_set_id = ? AND case_id <> ?`,
 	qCaseUpsert: `
 INSERT INTO golden_case (partner_id, golden_set_id, case_id, scope_code, name, input_text, language_code, expected_behavior,
-                         rubric_ref, risk_tier_code, principal_kind, principal_id, modified_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         rubric_ref, risk_tier_code, principal_kind, principal_id, modified_at, review_item_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, golden_set_id, case_id) DO UPDATE
    SET scope_code = EXCLUDED.scope_code, name = EXCLUDED.name, input_text = EXCLUDED.input_text,
        language_code = EXCLUDED.language_code, expected_behavior = EXCLUDED.expected_behavior,
        rubric_ref = EXCLUDED.rubric_ref, risk_tier_code = EXCLUDED.risk_tier_code,
-       principal_kind = EXCLUDED.principal_kind, principal_id = EXCLUDED.principal_id, modified_at = EXCLUDED.modified_at
+       principal_kind = EXCLUDED.principal_kind, principal_id = EXCLUDED.principal_id, modified_at = EXCLUDED.modified_at,
+       review_item_id = COALESCE(golden_case.review_item_id, EXCLUDED.review_item_id)
  WHERE golden_case.scope_code = EXCLUDED.scope_code OR ? = 'gate'
 RETURNING case_id`,
 	qCaseDelete: `
@@ -324,8 +326,8 @@ func (store *GoldenCaseStore) list(ctx context.Context, qs keelport.QueryService
 	}
 	cases := make([]domain.GoldenCase, 0, len(result.Rows))
 	for _, row := range result.Rows {
-		if len(row) < 11 {
-			return nil, fmt.Errorf("golden case row: expected 11 columns, got %d", len(row))
+		if len(row) < 13 {
+			return nil, fmt.Errorf("golden case row: expected 13 columns, got %d", len(row))
 		}
 		hidden := common.AsString(row[1]) == string(domain.GoldenScopeGate)
 		if hidden && scope != domain.GoldenScopeGate {
@@ -336,7 +338,7 @@ func (store *GoldenCaseStore) list(ctx context.Context, qs keelport.QueryService
 			Name: common.AsString(row[2]), Input: []byte(common.AsString(row[3])), Language: common.AsString(row[4]),
 			RubricRef: common.AsString(row[6]), RiskTier: common.AsString(row[7]),
 			ModifiedBy: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[8])), ID: common.AsString(row[9])},
-			ModifiedAt: common.AsTime(row[10]),
+			ModifiedAt: common.AsTime(row[10]), ReviewItemID: common.AsInt64(row[11]), ReviewAgentID: common.AsString(row[12]),
 		}
 		if expected := common.AsString(row[5]); expected != "" {
 			goldenCase.ExpectedBehavior = []byte(expected)
@@ -371,9 +373,11 @@ func (store *GoldenCaseStore) validCase(scope domain.GoldenScope, goldenCase dom
 	switch {
 	case goldenCase.Name == "" || utf8.RuneCountInString(goldenCase.Name) > 200:
 		return goldenCase, fmt.Errorf("%w: case name must contain 1 to 200 characters", domain.ErrValidation)
-	case len(bytes.TrimSpace(goldenCase.Input)) == 0 || len(goldenCase.Input) > maxBytes || !utf8.Valid(goldenCase.Input):
+	case goldenCase.ReviewItemID < 0:
+		return goldenCase, fmt.Errorf("%w: review item id cannot be negative", domain.ErrValidation)
+	case len(bytes.TrimSpace(goldenCase.Input)) == 0 || len(goldenCase.Input) > maxBytes || !validText(goldenCase.Input):
 		return goldenCase, fmt.Errorf("%w: case input must be 1 to %d bytes of UTF-8", domain.ErrValidation, maxBytes)
-	case len(goldenCase.ExpectedBehavior) > maxBytes || !utf8.Valid(goldenCase.ExpectedBehavior):
+	case len(goldenCase.ExpectedBehavior) > maxBytes || !validText(goldenCase.ExpectedBehavior):
 		return goldenCase, fmt.Errorf("%w: expected behavior must be at most %d bytes of UTF-8", domain.ErrValidation, maxBytes)
 	case len(goldenCase.Language) > 20 || len(goldenCase.RubricRef) > 200:
 		return goldenCase, fmt.Errorf("%w: language is at most 20 and rubric at most 200 characters", domain.ErrValidation)
@@ -409,7 +413,7 @@ func (store *GoldenCaseStore) PutCase(ctx context.Context, scope domain.GoldenSc
 		written, err := tx.Query(ctx, qCaseUpsert,
 			goldenCase.TenantID, goldenCase.GoldenSetID, goldenCase.CaseID, string(scopeOf(goldenCase.Hidden)), goldenCase.Name,
 			string(goldenCase.Input), nullable(goldenCase.Language), nullable(string(goldenCase.ExpectedBehavior)), nullable(goldenCase.RubricRef),
-			goldenCase.RiskTier, kind, id, store.now(), string(scope))
+			goldenCase.RiskTier, kind, id, store.now(), nullableID(goldenCase.ReviewItemID), string(scope))
 		if err != nil {
 			return fmt.Errorf("write golden case: %w", err)
 		}
@@ -573,17 +577,11 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 var errNoRow = errors.New("no row returned")
 
 func (store *GoldenCaseStore) upload(ctx context.Context, tenantID int64, goldenSetID string, input []byte) (domain.ObjectRef, error) {
-	digest := sha256Hex(input)
-	key := fmt.Sprintf("evaluation/golden/%d/%s/%s", tenantID, goldenSetID, digest)
-	err := store.Storage.PutObjectIfAbsent(ctx, key, bytes.NewReader(input), "application/octet-stream", nil)
-	if err != nil && !errors.Is(err, storage.ErrExists) {
+	ref, err := putContent(ctx, store.Storage, store.Scheme, fmt.Sprintf("evaluation/golden/%d/%s", tenantID, goldenSetID), input)
+	if err != nil {
 		return domain.ObjectRef{}, fmt.Errorf("upload golden case input: %w", err)
 	}
-	scheme := store.Scheme
-	if scheme == "" {
-		scheme = "object"
-	}
-	return domain.ObjectRef{URI: scheme + "://" + store.Storage.Bucket() + "/" + key, Digest: digest}, nil
+	return ref, nil
 }
 
 func principalColumns(principal domain.PrincipalRef) (any, any) {
@@ -591,4 +589,16 @@ func principalColumns(principal domain.PrincipalRef) (any, any) {
 		return nil, nil
 	}
 	return string(principal.Kind), principal.ID
+}
+
+// validText accepts UTF-8 without NUL, which PostgreSQL text columns refuse.
+func validText(value []byte) bool {
+	return utf8.Valid(value) && bytes.IndexByte(value, 0) < 0
+}
+
+func nullableID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
 }

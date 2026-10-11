@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"sync"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -144,3 +145,76 @@ var _ contract.GateDecisionStore = (*GateDecisionStore)(nil)
 var _ contract.OnlineMetricsSource = (*OnlineMetricsSource)(nil)
 var _ contract.SamplingPolicyRepository = (*SamplingPolicyRepository)(nil)
 var _ contract.EvaluationResultStore = (*EvaluationResultStore)(nil)
+
+// HumanReviewQueue records enqueued items; the other operations call their functions when set.
+type HumanReviewQueue struct {
+	Items       []domain.HumanReviewItem
+	EnqueueErr  error
+	GetFunc     func(context.Context, int64, int64) (domain.HumanReviewItem, error)
+	ListFunc    func(context.Context, int64, domain.ReviewFilter) ([]domain.HumanReviewItem, error)
+	GradeFunc   func(context.Context, int64, int64, domain.ReviewGrade, domain.PrincipalRef) (domain.HumanReviewItem, error)
+	DismissFunc func(context.Context, int64, int64, string, domain.PrincipalRef) (domain.HumanReviewItem, error)
+	PromoteFunc func(context.Context, int64, int64, string, string) (domain.HumanReviewItem, error)
+
+	mu sync.Mutex
+}
+
+var _ contract.HumanReviewQueue = (*HumanReviewQueue)(nil)
+
+// Enqueue records the item unless EnqueueErr is set.
+func (queue *HumanReviewQueue) Enqueue(_ context.Context, item domain.HumanReviewItem) error {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.EnqueueErr != nil {
+		return queue.EnqueueErr
+	}
+	queue.Items = append(queue.Items, item)
+	return nil
+}
+
+// Enqueued returns a copy of the recorded items.
+func (queue *HumanReviewQueue) Enqueued() []domain.HumanReviewItem {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	return append([]domain.HumanReviewItem(nil), queue.Items...)
+}
+
+// Get invokes GetFunc, or reports the item missing.
+func (queue *HumanReviewQueue) Get(ctx context.Context, tenantID, itemID int64) (domain.HumanReviewItem, error) {
+	if queue.GetFunc == nil {
+		return domain.HumanReviewItem{}, domain.ErrNotFound
+	}
+	return queue.GetFunc(ctx, tenantID, itemID)
+}
+
+// List invokes ListFunc when configured.
+func (queue *HumanReviewQueue) List(ctx context.Context, tenantID int64, filter domain.ReviewFilter) ([]domain.HumanReviewItem, error) {
+	if queue.ListFunc == nil {
+		return nil, nil
+	}
+	return queue.ListFunc(ctx, tenantID, filter)
+}
+
+// Grade invokes GradeFunc when configured.
+func (queue *HumanReviewQueue) Grade(ctx context.Context, tenantID, itemID int64, grade domain.ReviewGrade, reviewer domain.PrincipalRef) (domain.HumanReviewItem, error) {
+	if queue.GradeFunc == nil {
+		return domain.HumanReviewItem{}, domain.ErrNotFound
+	}
+	return queue.GradeFunc(ctx, tenantID, itemID, grade, reviewer)
+}
+
+// Dismiss invokes DismissFunc when configured.
+func (queue *HumanReviewQueue) Dismiss(ctx context.Context, tenantID, itemID int64, notes string, reviewer domain.PrincipalRef) (domain.HumanReviewItem, error) {
+	if queue.DismissFunc == nil {
+		return domain.HumanReviewItem{}, domain.ErrNotFound
+	}
+	return queue.DismissFunc(ctx, tenantID, itemID, notes, reviewer)
+}
+
+// Promoted invokes PromoteFunc when configured.
+func (queue *HumanReviewQueue) Promoted(ctx context.Context, tenantID, itemID int64, goldenSetID, caseID string) (domain.HumanReviewItem, error) {
+	if queue.PromoteFunc == nil {
+		return domain.HumanReviewItem{}, domain.ErrNotFound
+	}
+	return queue.PromoteFunc(ctx, tenantID, itemID, goldenSetID, caseID)
+}

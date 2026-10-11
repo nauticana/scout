@@ -135,7 +135,8 @@ func TestAgentEvaluationStoreRefusesUnpinnableRuns(t *testing.T) {
 func runRow(status string, token any) []any {
 	started := testClock
 	return []any{int64(11), "writer-a", "support", int64(3), "dev", status, testClock, started, nil, "human", "9",
-		int64(2), int64(100), int64(40), int64(12), "EUR", int64(2), nil, "draft", nil, draftDigest, token, int64(1)}
+		int64(2), int64(100), int64(40), int64(12), "EUR", int64(2), nil, "draft", nil, draftDigest, token, int64(1),
+		nil, nil, nil, nil, nil, nil, nil, nil}
 }
 
 func TestAgentEvaluationStoreReadsRunsAndPagesInTheReadersScope(t *testing.T) {

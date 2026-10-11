@@ -10,6 +10,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	keeldata "github.com/nauticana/keel/data"
+	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -31,6 +32,14 @@ const (
 	qAgentEvalPutResult  = "scout_agent_evaluation_put_result"
 	qAgentEvalAddTotals  = "scout_agent_evaluation_add_totals"
 	qAgentEvalFinish     = "scout_agent_evaluation_finish"
+
+	qAgentEvalBaseline        = "scout_agent_evaluation_baseline"
+	qAgentEvalBaselineOutputs = "scout_agent_evaluation_baseline_outputs"
+	qAgentEvalCompared        = "scout_agent_evaluation_compared"
+	qAgentEvalPutComparison   = "scout_agent_evaluation_put_comparison"
+	qAgentEvalPutArm          = "scout_agent_evaluation_put_arm"
+	qAgentEvalComparisons     = "scout_agent_evaluation_comparisons"
+	qAgentEvalTally           = "scout_agent_evaluation_tally"
 )
 
 // The run and results reads take the reader's scope: a dev reader never sees a
@@ -55,19 +64,22 @@ INSERT INTO evaluation_run (id, partner_id, agent_id, golden_set_id, set_version
 VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?)
 RETURNING queued_at`,
 	qAgentEvalInsertSubj: `
-INSERT INTO evaluation_run_subject (run_id, partner_id, role_code, subject_code, agent_id, agent_version, definition_digest, definition_json, settings_json)
-VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?, ?)`,
+INSERT INTO evaluation_run_subject (run_id, partner_id, subject_code, agent_id, agent_version, definition_digest, definition_json, settings_json,
+                                    role_code, baseline_id, provider_id, model_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qAgentEvalRun: `
 SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_code, r.queued_at, r.started_at, r.completed_at,
        r.requested_by_kind, r.requested_by_id, r.sample_count, r.input_tokens, r.output_tokens, r.cost_minor_units, r.currency_code,
        COALESCE(c.exponent, 0), r.reason, s.subject_code, s.agent_version, s.definition_digest, r.lease_token,
-       (SELECT COUNT(*)
+       (SELECT COUNT(DISTINCT x.example_id)
           FROM evaluation_result x
           JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
                                AND e.set_version = x.set_version AND e.example_id = x.example_id
-         WHERE x.partner_id = r.partner_id AND x.run_id = r.id AND e.scope_code = 'gate' AND ? <> 'gate')
+         WHERE x.partner_id = r.partner_id AND x.run_id = r.id AND e.scope_code = 'gate' AND ? <> 'gate'),
+       s.provider_id, s.model_id, b.subject_code, b.agent_version, b.definition_digest, b.baseline_id, b.provider_id, b.model_id
   FROM evaluation_run r
   JOIN evaluation_run_subject s ON s.partner_id = r.partner_id AND s.run_id = r.id AND s.role_code = 'candidate'
+  LEFT JOIN evaluation_run_subject b ON b.partner_id = r.partner_id AND b.run_id = r.id AND b.role_code = 'baseline'
   LEFT JOIN currency c ON c.code = r.currency_code
  WHERE r.partner_id = ? AND r.id = ? AND r.agent_id IS NOT NULL`,
 	qAgentEvalResults: `
@@ -84,7 +96,7 @@ SELECT x.example_id, x.scores, x.latency_ms, x.input_tokens, x.output_tokens, x.
  ORDER BY x.example_id DESC
  LIMIT ?`,
 	qAgentEvalDraft: `
-SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND role_code = 'candidate'`,
+SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND role_code = ?`,
 	qAgentEvalRecorded: `
 SELECT example_id, input_tokens + evaluator_input_tokens, output_tokens + evaluator_output_tokens,
        cost_minor_units + evaluator_cost_minor_units, currency_code, reason
@@ -113,6 +125,56 @@ UPDATE evaluation_run
    SET status_code = ?, completed_at = CURRENT_TIMESTAMP, reason = ?, lease_token = NULL, lease_until = NULL
  WHERE partner_id = ? AND id = ? AND lease_token = ? AND status_code = 'running'
 RETURNING id`,
+	qAgentEvalBaseline: `
+SELECT scope_code FROM evaluation_baseline WHERE partner_id = ? AND id = ? AND golden_set_id = ? AND set_version = ?`,
+	qAgentEvalBaselineOutputs: `
+SELECT example_id, output_uri, output_digest FROM evaluation_baseline_output WHERE partner_id = ? AND baseline_id = ?`,
+	// A comparison and both its arms are recorded in one transaction, so the arms' spend joins the verdict's.
+	qAgentEvalCompared: `
+SELECT c.example_id, c.evaluator_input_tokens + COALESCE(SUM(x.input_tokens), 0),
+       c.evaluator_output_tokens + COALESCE(SUM(x.output_tokens), 0),
+       c.evaluator_cost_minor_units + COALESCE(SUM(x.cost_minor_units), 0),
+       COALESCE(c.currency_code, MAX(x.currency_code)), c.reason
+  FROM evaluation_comparison c
+  LEFT JOIN evaluation_result x ON x.partner_id = c.partner_id AND x.run_id = c.run_id AND x.example_id = c.example_id
+ WHERE c.partner_id = ? AND c.run_id = ?
+ GROUP BY c.example_id, c.evaluator_input_tokens, c.evaluator_output_tokens, c.evaluator_cost_minor_units, c.currency_code, c.reason`,
+	qAgentEvalPutComparison: `
+INSERT INTO evaluation_comparison (run_id, partner_id, golden_set_id, set_version, example_id, verdict_code, confidence,
+                                   evaluator_kind, evaluator_version, input_digest, rationale,
+                                   evaluator_input_tokens, evaluator_output_tokens, evaluator_cost_minor_units, currency_code, reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (run_id, example_id) DO NOTHING
+RETURNING example_id`,
+	qAgentEvalPutArm: `
+INSERT INTO evaluation_result (run_id, partner_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
+                               input_tokens, output_tokens, cost_minor_units, currency_code, output_uri, output_digest)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	qAgentEvalComparisons: `
+SELECT c.example_id, c.verdict_code, CAST(c.confidence AS DOUBLE PRECISION), c.evaluator_kind, c.evaluator_version, c.rationale, c.reason,
+       c.evaluator_input_tokens, c.evaluator_output_tokens, c.evaluator_cost_minor_units, c.currency_code, COALESCE(cc.exponent, 0),
+       a.scores, a.latency_ms, a.input_tokens, a.output_tokens, a.cost_minor_units, a.currency_code, COALESCE(ac.exponent, 0), a.output_uri, a.output_digest,
+       b.scores, b.latency_ms, b.input_tokens, b.output_tokens, b.cost_minor_units, b.currency_code, COALESCE(bc.exponent, 0), b.output_uri, b.output_digest
+  FROM evaluation_comparison c
+  JOIN golden_example e ON e.partner_id = c.partner_id AND e.golden_set_id = c.golden_set_id
+                       AND e.set_version = c.set_version AND e.example_id = c.example_id
+  LEFT JOIN evaluation_result a ON a.partner_id = c.partner_id AND a.run_id = c.run_id AND a.example_id = c.example_id AND a.role_code = 'baseline'
+  LEFT JOIN evaluation_result b ON b.partner_id = c.partner_id AND b.run_id = c.run_id AND b.example_id = c.example_id AND b.role_code = 'candidate'
+  LEFT JOIN currency cc ON cc.code = c.currency_code
+  LEFT JOIN currency ac ON ac.code = a.currency_code
+  LEFT JOIN currency bc ON bc.code = b.currency_code
+ WHERE c.partner_id = ? AND c.run_id = ?
+   AND (e.scope_code = ? OR ? = 'gate')
+   AND (? = '' OR c.example_id < ?)
+ ORDER BY c.example_id DESC
+ LIMIT ?`,
+	qAgentEvalTally: `
+SELECT COALESCE(c.verdict_code, ''), COUNT(*)
+  FROM evaluation_comparison c
+  JOIN golden_example e ON e.partner_id = c.partner_id AND e.golden_set_id = c.golden_set_id
+                       AND e.set_version = c.set_version AND e.example_id = c.example_id
+ WHERE c.partner_id = ? AND c.run_id = ? AND (e.scope_code = ? OR ? = 'gate')
+ GROUP BY c.verdict_code`,
 }
 
 // AgentEvaluationQueueQueries builds the keel leased-queue SQL that claims queued agent
@@ -164,24 +226,52 @@ func validEnqueue(request domain.AgentEvaluationEnqueue) error {
 	if err := validScope(request.Scope); err != nil {
 		return err
 	}
-	if request.Subject.AgentID != request.AgentID {
-		return fmt.Errorf("%w: subject agent %q is not agent %q", domain.ErrValidation, request.Subject.AgentID, request.AgentID)
+	if request.Subject.Kind == domain.SubjectBaseline {
+		return fmt.Errorf("%w: only arm a of a comparison may be a baseline", domain.ErrValidation)
 	}
-	switch request.Subject.Kind {
+	if err := validArm(request.AgentID, domain.EvaluationArm{Subject: request.Subject, Draft: request.Draft, DraftSettings: request.DraftSettings}); err != nil {
+		return err
+	}
+	if request.Baseline != nil {
+		return validArm(request.AgentID, *request.Baseline)
+	}
+	return nil
+}
+
+// validArm checks that an arm pins what its kind executes: a draft its frozen definition, the
+// settings that definition digests, and the model it was frozen on; a release its version; a
+// baseline its id. Recorded outputs are loaded by the worker, never enqueued.
+func validArm(agentID string, arm domain.EvaluationArm) error {
+	subject := arm.Subject
+	if subject.AgentID != agentID {
+		return fmt.Errorf("%w: subject agent %q is not agent %q", domain.ErrValidation, subject.AgentID, agentID)
+	}
+	if arm.Outputs != nil || subject.Model != nil && subject.Kind != domain.SubjectDraft {
+		return fmt.Errorf("%w: only a draft subject names a model, and outputs are never enqueued", domain.ErrValidation)
+	}
+	switch subject.Kind {
 	case domain.SubjectDraft:
-		if request.Draft == nil || request.Subject.Version != "" || !isSHA256Hex(request.Subject.DefinitionDigest) ||
-			request.Draft.DefinitionDigest != request.Subject.DefinitionDigest || request.Draft.AgentID != request.AgentID {
+		draft := arm.Draft
+		if draft == nil || subject.Version != "" || subject.BaselineID != 0 || !isSHA256Hex(subject.DefinitionDigest) ||
+			draft.DefinitionDigest != subject.DefinitionDigest || draft.AgentID != agentID {
 			return fmt.Errorf("%w: a draft subject carries its frozen definition and that definition's digest", domain.ErrValidation)
 		}
-		if request.Draft.SettingsDigest == "" || scope.SettingsDigest(request.DraftSettings) != request.Draft.SettingsDigest {
+		if draft.SettingsDigest == "" || scope.SettingsDigest(arm.DraftSettings) != draft.SettingsDigest {
 			return fmt.Errorf("%w: a draft subject carries the settings its definition digests", domain.ErrValidation)
 		}
+		if model := subject.Model; model != nil && (draft.Models.Text == nil || *draft.Models.Text != *model || model.ProviderID == "" || model.ModelID == "") {
+			return fmt.Errorf("%w: a draft frozen on another model carries that model as its text model", domain.ErrValidation)
+		}
 	case domain.SubjectRelease:
-		if request.Draft != nil || request.DraftSettings != nil || strings.TrimSpace(request.Subject.Version) == "" {
+		if arm.Draft != nil || arm.DraftSettings != nil || strings.TrimSpace(subject.Version) == "" || subject.BaselineID != 0 {
 			return fmt.Errorf("%w: a release subject names a version and carries no draft", domain.ErrValidation)
 		}
+	case domain.SubjectBaseline:
+		if arm.Draft != nil || arm.DraftSettings != nil || subject.Version != "" || subject.DefinitionDigest != "" || subject.BaselineID <= 0 {
+			return fmt.Errorf("%w: a baseline subject names only its baseline", domain.ErrValidation)
+		}
 	default:
-		return fmt.Errorf("%w: unknown evaluation subject %q", domain.ErrValidation, request.Subject.Kind)
+		return fmt.Errorf("%w: unknown evaluation subject %q", domain.ErrValidation, subject.Kind)
 	}
 	return nil
 }
@@ -191,18 +281,7 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 	if err := validEnqueue(request); err != nil {
 		return domain.AgentEvaluationRun{}, err
 	}
-	var definition, settings any
-	if request.Draft != nil {
-		encoded, err := json.Marshal(request.Draft)
-		if err != nil {
-			return domain.AgentEvaluationRun{}, fmt.Errorf("encode frozen draft: %w", err)
-		}
-		definition = string(encoded)
-		if encoded, err = json.Marshal(append([]domain.EffectiveResource{}, request.DraftSettings...)); err != nil {
-			return domain.AgentEvaluationRun{}, fmt.Errorf("encode frozen draft settings: %w", err)
-		}
-		settings = string(encoded)
-	}
+	candidate := domain.EvaluationArm{Subject: request.Subject, Draft: request.Draft, DraftSettings: request.DraftSettings}
 	tx, err := store.begin(ctx, "agent evaluation store", agentEvaluationQueries)
 	if err != nil {
 		return domain.AgentEvaluationRun{}, err
@@ -241,15 +320,18 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 	if common.AsInt64(examples.Rows[0][0]) == 0 {
 		return domain.AgentEvaluationRun{}, fmt.Errorf("%w: golden set %q version %d has no examples in the %s scope", domain.ErrValidation, run.GoldenSetID, request.SetVersion, request.Scope)
 	}
-	if request.Subject.Kind == domain.SubjectRelease {
-		release, err := tx.Query(ctx, qAgentEvalRelease, request.TenantID, request.AgentID, request.Subject.Version)
+	if run.Subject, err = pinSubject(ctx, tx, request, candidate.Subject, run.GoldenSetID); err != nil {
+		return domain.AgentEvaluationRun{}, err
+	}
+	if request.Baseline != nil {
+		subject, err := pinSubject(ctx, tx, request, request.Baseline.Subject, run.GoldenSetID)
 		if err != nil {
-			return domain.AgentEvaluationRun{}, fmt.Errorf("load release: %w", err)
+			return domain.AgentEvaluationRun{}, err
 		}
-		if len(release.Rows) == 0 {
-			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: release %q of agent %q", domain.ErrNotFound, request.Subject.Version, request.AgentID)
+		if subject.DefinitionDigest != "" && subject.DefinitionDigest == run.Subject.DefinitionDigest {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: arms a and b are the same definition", domain.ErrValidation)
 		}
-		run.Subject.DefinitionDigest = strings.TrimSpace(common.AsString(release.Rows[0][0]))
+		run.Baseline = &subject
 	}
 	run.RunID = tx.GenID()
 	kind, id := principalColumns(request.RequestedBy)
@@ -260,15 +342,77 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 	if len(inserted.Rows) > 0 {
 		run.QueuedAt = common.AsTime(inserted.Rows[0][0])
 	}
-	if _, err = tx.Query(ctx, qAgentEvalInsertSubj, run.RunID, run.TenantID, string(run.Subject.Kind), run.AgentID,
-		nullable(run.Subject.Version), run.Subject.DefinitionDigest, definition, settings); err != nil {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("pin evaluation subject: %w", err)
+	candidate.Subject = run.Subject
+	if err = insertSubject(ctx, tx, run, domain.RoleCandidate, candidate); err != nil {
+		return domain.AgentEvaluationRun{}, err
+	}
+	if request.Baseline != nil {
+		baseline := *request.Baseline
+		baseline.Subject = *run.Baseline
+		if err = insertSubject(ctx, tx, run, domain.RoleBaseline, baseline); err != nil {
+			return domain.AgentEvaluationRun{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return domain.AgentEvaluationRun{}, fmt.Errorf("commit evaluation run: %w", err)
 	}
 	committed = true
 	return run, nil
+}
+
+// pinSubject resolves a release subject's digest and checks that a baseline subject answers
+// the run's set version in a scope covering the run's.
+func pinSubject(ctx context.Context, tx keelport.TxQueryService, request domain.AgentEvaluationEnqueue, subject domain.AgentEvaluationSubject, goldenSetID string) (domain.AgentEvaluationSubject, error) {
+	switch subject.Kind {
+	case domain.SubjectRelease:
+		release, err := tx.Query(ctx, qAgentEvalRelease, request.TenantID, request.AgentID, subject.Version)
+		if err != nil {
+			return subject, fmt.Errorf("load release: %w", err)
+		}
+		if len(release.Rows) == 0 {
+			return subject, fmt.Errorf("%w: release %q of agent %q", domain.ErrNotFound, subject.Version, request.AgentID)
+		}
+		subject.DefinitionDigest = strings.TrimSpace(common.AsString(release.Rows[0][0]))
+	case domain.SubjectBaseline:
+		baseline, err := tx.Query(ctx, qAgentEvalBaseline, request.TenantID, subject.BaselineID, goldenSetID, request.SetVersion)
+		if err != nil {
+			return subject, fmt.Errorf("load baseline: %w", err)
+		}
+		if len(baseline.Rows) == 0 {
+			return subject, fmt.Errorf("%w: baseline %d of golden set %q version %d", domain.ErrNotFound, subject.BaselineID, goldenSetID, request.SetVersion)
+		}
+		if recorded := domain.GoldenScope(common.AsString(baseline.Rows[0][0])); recorded != domain.GoldenScopeGate && recorded != request.Scope {
+			return subject, fmt.Errorf("%w: baseline %d does not answer the %s scope", domain.ErrValidation, subject.BaselineID, request.Scope)
+		}
+	}
+	return subject, nil
+}
+
+func insertSubject(ctx context.Context, tx keelport.TxQueryService, run domain.AgentEvaluationRun, role domain.EvaluationRole, arm domain.EvaluationArm) error {
+	var definition, settings, baseline, provider, model any
+	if arm.Draft != nil {
+		encoded, err := json.Marshal(arm.Draft)
+		if err != nil {
+			return fmt.Errorf("encode frozen draft: %w", err)
+		}
+		definition = string(encoded)
+		if encoded, err = json.Marshal(append([]domain.EffectiveResource{}, arm.DraftSettings...)); err != nil {
+			return fmt.Errorf("encode frozen draft settings: %w", err)
+		}
+		settings = string(encoded)
+	}
+	subject := arm.Subject
+	if subject.BaselineID > 0 {
+		baseline = subject.BaselineID
+	}
+	if subject.Model != nil {
+		provider, model = subject.Model.ProviderID, subject.Model.ModelID
+	}
+	if _, err := tx.Query(ctx, qAgentEvalInsertSubj, run.RunID, run.TenantID, string(subject.Kind), run.AgentID,
+		nullable(subject.Version), nullable(subject.DefinitionDigest), definition, settings, string(role), baseline, provider, model); err != nil {
+		return fmt.Errorf("pin evaluation %s subject: %w", role, err)
+	}
+	return nil
 }
 
 // Run returns one agent run of the tenant with the count of results withheld from scope.
@@ -296,8 +440,8 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("%w: evaluation run %d", domain.ErrNotFound, runID)
 	}
 	row := result.Rows[0]
-	if len(row) < 23 {
-		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("evaluation run row: expected 23 columns, got %d", len(row))
+	if len(row) < 31 {
+		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("evaluation run row: expected 31 columns, got %d", len(row))
 	}
 	run := domain.AgentEvaluationRun{
 		RunID: common.AsInt64(row[0]), TenantID: tenantID, AgentID: common.AsString(row[1]), GoldenSetID: common.AsString(row[2]),
@@ -312,7 +456,21 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 			Version: common.AsString(row[19]), DefinitionDigest: strings.TrimSpace(common.AsString(row[20]))},
 		HiddenResults: int(common.AsInt64(row[22])),
 	}
+	run.Subject.Model = optionalModel(row[23], row[24])
+	if kind := common.AsString(row[25]); kind != "" {
+		run.Baseline = &domain.AgentEvaluationSubject{Kind: domain.EvaluationSubjectKind(kind), AgentID: run.AgentID,
+			Version: common.AsString(row[26]), DefinitionDigest: strings.TrimSpace(common.AsString(row[27])), BaselineID: common.AsInt64(row[28]),
+			Model: optionalModel(row[29], row[30])}
+	}
 	return run, common.AsInt64(row[21]), nil
+}
+
+func optionalModel(provider, model any) *domain.ModelReference {
+	reference := domain.ModelReference{ProviderID: strings.TrimSpace(common.AsString(provider)), ModelID: strings.TrimSpace(common.AsString(model))}
+	if reference.ProviderID == "" || reference.ModelID == "" {
+		return nil
+	}
+	return &reference
 }
 
 func optionalTime(value any) *time.Time {
@@ -391,31 +549,20 @@ func (store *AgentEvaluationStore) Load(ctx context.Context, lease domain.AgentE
 	if err != nil {
 		return domain.AgentEvaluationClaim{}, err
 	}
-	if run.Subject.Kind == domain.SubjectDraft {
-		draft, err := qs.Query(ctx, qAgentEvalDraft, lease.TenantID, lease.RunID)
-		if err != nil {
-			return domain.AgentEvaluationClaim{}, fmt.Errorf("load pinned draft: %w", err)
-		}
-		if len(draft.Rows) == 0 {
-			return domain.AgentEvaluationClaim{}, fmt.Errorf("%w: pinned draft of run %d", domain.ErrNotFound, lease.RunID)
-		}
-		var definition domain.AgentDefinition
-		if err := json.Unmarshal([]byte(common.AsString(draft.Rows[0][0])), &definition); err != nil {
-			return domain.AgentEvaluationClaim{}, fmt.Errorf("decode pinned draft of run %d: %w", lease.RunID, err)
-		}
-		if definition.DefinitionDigest != run.Subject.DefinitionDigest || definition.AgentID != run.AgentID {
-			return domain.AgentEvaluationClaim{}, fmt.Errorf("%w: pinned draft of run %d does not match its digest", domain.ErrConflict, lease.RunID)
-		}
-		var settings []domain.EffectiveResource
-		if err := json.Unmarshal([]byte(common.AsString(draft.Rows[0][1])), &settings); err != nil {
-			return domain.AgentEvaluationClaim{}, fmt.Errorf("decode pinned draft settings of run %d: %w", lease.RunID, err)
-		}
-		if definition.SettingsDigest == "" || scope.SettingsDigest(settings) != definition.SettingsDigest {
-			return domain.AgentEvaluationClaim{}, fmt.Errorf("%w: pinned draft settings of run %d do not match its definition", domain.ErrConflict, lease.RunID)
-		}
-		claim.Draft, claim.DraftSettings = &definition, settings
+	candidate, err := store.pinnedArm(ctx, qs, run, domain.RoleCandidate, run.Subject)
+	if err != nil {
+		return domain.AgentEvaluationClaim{}, err
 	}
-	recorded, err := qs.Query(ctx, qAgentEvalRecorded, lease.TenantID, lease.RunID)
+	claim.Draft, claim.DraftSettings = candidate.Draft, candidate.DraftSettings
+	recordedQuery := qAgentEvalRecorded
+	if run.Baseline != nil {
+		baseline, err := store.pinnedArm(ctx, qs, run, domain.RoleBaseline, *run.Baseline)
+		if err != nil {
+			return domain.AgentEvaluationClaim{}, err
+		}
+		claim.Baseline, recordedQuery = &baseline, qAgentEvalCompared
+	}
+	recorded, err := qs.Query(ctx, recordedQuery, lease.TenantID, lease.RunID)
 	if err != nil {
 		return domain.AgentEvaluationClaim{}, fmt.Errorf("load recorded results: %w", err)
 	}
@@ -432,6 +579,50 @@ func (store *AgentEvaluationStore) Load(ctx context.Context, lease domain.AgentE
 		}
 	}
 	return claim, nil
+}
+
+// pinnedArm loads what one arm of a claimed run executes: a draft's pinned definition and
+// settings, checked against their digests, or a baseline's recorded outputs.
+func (store *AgentEvaluationStore) pinnedArm(ctx context.Context, qs keelport.QueryService, run domain.AgentEvaluationRun, role domain.EvaluationRole, subject domain.AgentEvaluationSubject) (domain.EvaluationArm, error) {
+	arm := domain.EvaluationArm{Subject: subject}
+	switch subject.Kind {
+	case domain.SubjectDraft:
+		draft, err := qs.Query(ctx, qAgentEvalDraft, run.TenantID, run.RunID, string(role))
+		if err != nil {
+			return arm, fmt.Errorf("load pinned draft: %w", err)
+		}
+		if len(draft.Rows) == 0 {
+			return arm, fmt.Errorf("%w: pinned draft of run %d", domain.ErrNotFound, run.RunID)
+		}
+		var definition domain.AgentDefinition
+		if err := json.Unmarshal([]byte(common.AsString(draft.Rows[0][0])), &definition); err != nil {
+			return arm, fmt.Errorf("decode pinned draft of run %d: %w", run.RunID, err)
+		}
+		if definition.DefinitionDigest != subject.DefinitionDigest || definition.AgentID != run.AgentID {
+			return arm, fmt.Errorf("%w: pinned draft of run %d does not match its digest", domain.ErrConflict, run.RunID)
+		}
+		var settings []domain.EffectiveResource
+		if err := json.Unmarshal([]byte(common.AsString(draft.Rows[0][1])), &settings); err != nil {
+			return arm, fmt.Errorf("decode pinned draft settings of run %d: %w", run.RunID, err)
+		}
+		if definition.SettingsDigest == "" || scope.SettingsDigest(settings) != definition.SettingsDigest {
+			return arm, fmt.Errorf("%w: pinned draft settings of run %d do not match its definition", domain.ErrConflict, run.RunID)
+		}
+		arm.Draft, arm.DraftSettings = &definition, settings
+	case domain.SubjectBaseline:
+		outputs, err := qs.Query(ctx, qAgentEvalBaselineOutputs, run.TenantID, subject.BaselineID)
+		if err != nil {
+			return arm, fmt.Errorf("load baseline outputs: %w", err)
+		}
+		arm.Outputs = make(map[string]domain.ObjectRef, len(outputs.Rows))
+		for _, row := range outputs.Rows {
+			if len(row) < 3 {
+				return arm, fmt.Errorf("baseline output row: expected 3 columns, got %d", len(row))
+			}
+			arm.Outputs[common.AsString(row[0])] = domain.ObjectRef{URI: common.AsString(row[1]), Digest: strings.TrimSpace(common.AsString(row[2]))}
+		}
+	}
+	return arm, nil
 }
 
 // Record renews the lease, stores one result, and adds it to the run's totals in one

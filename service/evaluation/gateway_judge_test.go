@@ -18,6 +18,7 @@ func judgePair() domain.EvaluationPair {
 		Example:   example,
 		Baseline:  domain.EvaluationCase{Role: domain.RoleBaseline, Output: []byte("answer one"), Retrieval: []domain.KnowledgeMatch{{DocumentID: "d1", Content: []byte("evidence")}}},
 		Candidate: domain.EvaluationCase{Role: domain.RoleCandidate, Output: []byte("answer two")},
+		Principal: domain.PrincipalRef{Kind: domain.PrincipalService, ID: "evaluation"},
 	}
 }
 

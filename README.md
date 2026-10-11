@@ -71,7 +71,7 @@ The detailed [repository contract](doc/engineering-reference.md#repository-contr
 
 | Topic | Contents |
 |---|---|
-| [HTTP API](doc/api_surface.md) | Agent Studio core and optional feature routes (export and import, templates, reviews, limits and budgets, approval routing, evaluation), conversation and approval routes, payload mappings, mutation contracts, and errors |
+| [HTTP API](doc/api_surface.md) | Agent Studio core and optional feature routes (export and import, templates, reviews, limits and budgets, approval routing, evaluation, comparisons, evaluation gates, production review), conversation and approval routes, payload mappings, mutation contracts, and errors |
 | [Engineering reference](doc/engineering-reference.md) | Package map, services, Studio, runtime, MCP, schema, providers, reliability, composition, and testing |
 | [Database reference](doc/database.md) | Module dependencies, ER diagrams, tables, relationships, and storage boundaries |
 | [Configuration](doc/configuration.md) | Configuration flag reference (every catalog flag with type, default, enforced range, and meaning), component limits, admission, budgets, latency, and data-plane settings |

@@ -91,6 +91,9 @@ type StudioService struct {
 	MaxTemplateAudience  int
 	MaxCommentsShown     int
 	Now                  func() time.Time
+	// Audit records a setting change that removes or loosens an evaluation gate, which needs
+	// OVERRIDE_GATE; such a change is refused without it.
+	Audit contract.AuditSink
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -597,6 +600,9 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if aliasRevision != request.ExpectedPromptProfileRevision {
 		return domain.AgentRelease{}, domain.ErrRevisionConflict
 	}
+	if err = s.checkGateInTx(ctx, tx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings}); err != nil {
+		return domain.AgentRelease{}, err
+	}
 	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
 	if err != nil {
 		return domain.AgentRelease{}, err
@@ -672,7 +678,11 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	if err = s.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version}); err != nil {
+	restored := domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version}
+	if err = s.guard(ctx, restored); err != nil {
+		return domain.AgentRelease{}, err
+	}
+	if err = s.checkGateInTx(ctx, tx, restored); err != nil {
 		return domain.AgentRelease{}, err
 	}
 	settings, err := loadRestoredSettings(ctx, tx, actor.TenantID, request.AgentID, request.Version)

@@ -1,0 +1,68 @@
+table: agent_gate_decision
+comment: The evaluation gate's verdict on one definition digest of an agent; a later decision for the digest replaces it
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: definition_digest
+    type: CHAR(64)
+  - name: verdict_code
+    type: VARCHAR(20)
+  - name: reason
+    type: VARCHAR(400)
+    nullable: true
+    comment: Why the gate failed, or the overriding person's reason
+  - name: policy_digest
+    type: CHAR(64)
+    comment: SHA-256 of the canonical evaluation_gate value applied; a decision is stale once the effective gate differs
+  - name: policy_json
+    type: TEXT
+  - name: inputs_digest
+    type: CHAR(64)
+    comment: Digest of the policy, active release, set version, and runs decided on; an evaluation with equal inputs replays the decision
+  - name: base_version
+    type: VARCHAR(80)
+    nullable: true
+    comment: The stable release active when decided, which regression is measured against; null when the agent had none
+  - name: golden_set_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: set_version
+    type: BIGINT
+    nullable: true
+    comment: The newest frozen version of the agent's golden set when decided; a newer one makes the decision stale
+  - name: decided_by_kind
+    type: VARCHAR(20)
+  - name: decided_by_id
+    type: VARCHAR(120)
+    comment: The deciding person's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: decided_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, agent_id, definition_digest]
+foreign_keys:
+  - name: agent_gate_decisions
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+  - name: base_version_gate_decisions
+    columns: [partner_id, agent_id, base_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: golden_set_version_gate_decisions
+    columns: [partner_id, golden_set_id, set_version]
+    references:
+      table: golden_set_version
+      columns: [partner_id, golden_set_id, set_version]
+checks:
+  - name: agent_gate_decision_verdict_ck
+    expression: verdict_code IN ('pass', 'fail', 'override')
+  - name: agent_gate_decision_reason_ck
+    expression: verdict_code = 'pass' OR reason IS NOT NULL
+  - name: agent_gate_decision_digest_ck
+    expression: CHAR_LENGTH(definition_digest) = 64 AND CHAR_LENGTH(policy_digest) = 64 AND CHAR_LENGTH(inputs_digest) = 64
+  - name: agent_gate_decision_set_ck
+    expression: (golden_set_id IS NULL) = (set_version IS NULL) AND (verdict_code <> 'pass' OR set_version IS NOT NULL)

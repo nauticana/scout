@@ -10,6 +10,7 @@ import (
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/scope"
 )
 
 const maxRestoreVersion = 80
@@ -50,8 +51,8 @@ func (r *StudioPublishReviews) restoreCandidate(ctx context.Context, actor domai
 	review := domain.PublishReview{
 		AgentID: agentID, DefinitionDigest: definition.DefinitionDigest, DraftRevision: definition.DraftRevision,
 		PromptProfileRevision: definition.PromptProfileRevision, BaseVersion: base, RestoreVersion: version,
-		Diff: domain.PublishReviewDiff{ActiveVersion: base, PromptSections: promptSectionChanges(active.Languages, definition.Languages),
-			Settings: settingChanges(activeSettings, settings.Resources)},
+		Diff: domain.PublishReviewDiff{ActiveVersion: base, PromptSections: scope.PromptSectionChanges(active.Languages, definition.Languages),
+			Settings: scope.SettingChanges(activeSettings, settings.Resources)},
 	}
 	return review, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings, RestoredFrom: version}, nil
 }

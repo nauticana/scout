@@ -13,7 +13,7 @@ import (
 func TestFreezeDraftDigestsLikePublishWithoutPersisting(t *testing.T) {
 	query := &studioQueryFake{rows: draftRows(), args: map[string][]any{}}
 	service := testDraftService(query, fake.DraftTester{})
-	frozen, err := service.FreezeDraft(context.Background(), humanActor(8, 9), "writer-a")
+	frozen, err := service.FreezeDraft(context.Background(), humanActor(8, 9), "writer-a", nil)
 	if err != nil {
 		t.Fatalf("FreezeDraft: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestFreezeDraftDigestEqualsThePublishedDigest(t *testing.T) {
 	rows[qStudioNextVersion] = [][]any{{int64(1)}}
 	query := &studioQueryFake{rows: rows, args: map[string][]any{}}
 	service := testDraftService(query, fake.DraftTester{})
-	frozen, err := service.FreezeDraft(context.Background(), humanActor(8, 9), "writer-a")
+	frozen, err := service.FreezeDraft(context.Background(), humanActor(8, 9), "writer-a", nil)
 	if err != nil {
 		t.Fatalf("FreezeDraft: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestFreezeDraftRequiresTestGrant(t *testing.T) {
 	service.Roles = fake.PrincipalAuthorizerFunc(func(_ context.Context, _ domain.Principal, _, action, _ string) (domain.AuthorizationGrant, error) {
 		return domain.AuthorizationGrant{Allowed: action != string(domain.StudioTest)}, nil
 	})
-	if _, err := service.FreezeDraft(context.Background(), humanActor(8, 9), "writer-a"); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := service.FreezeDraft(context.Background(), humanActor(8, 9), "writer-a", nil); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("FreezeDraft without TEST = %v, want forbidden", err)
 	}
 	if _, read := query.args[qStudioGetDraft]; read {

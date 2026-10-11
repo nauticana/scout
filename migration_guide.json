@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.2.2",
+      "title": "Evaluation comparisons, publish gate, and durable production review",
+      "tags": [
+        "breaking",
+        "schema",
+        "additive"
+      ],
+      "summary": "Studio compares two evaluation subjects pairwise, including a draft on another model and a recorded human baseline. Publication can require a passing evaluation gate decision per definition digest, with recorded overrides. Sampled and low-rated production turns enter a durable review queue whose graded turns can be promoted into the golden set.",
+      "body_markdown": "## Comparisons (breaking)\n\n- `contract.DraftFreezer.FreezeDraft` takes a `textModel` (nil keeps the draft's model). `AgentEvaluationStore` adds `Comparisons` and `Tally`; `AgentEvaluationQueue` adds `RecordComparison`.\n- `evaluation.GatewayJudge` is strict: its route must declare `structured_output`, a verdict must score every metric for both sides in 0..1 with `preferred` and `confidence`, and a call needs a principal. Set `Runner.Principal` when `Runner.Judge` is set; set `GatewayJudge.Pricer` for comparisons, whose unpriced judge spend fails the run.\n- Compose `AgentEvaluationWorker.PairJudge` and `Outputs` (an object store; `Payloads` must also read baseline outputs), `StudioEvaluation.BaselineStore` (`evaluation.EvaluationBaselineStore`), `Outputs` (a reader of both buckets), and `MaxPageAnswerBytes`, and mount `handler.StudioCompareHandler` with its `Feature()`.\n\n## Evaluation gate (breaking)\n\n- Add `controlplane.StudioEvaluationGate` (with `Audit` and `MaxResults`) to `StudioService.Guards` and mount `handler.StudioEvaluationGateHandler`; a publish or restore of an agent whose settings bind `evaluation_gate` is refused without it. Set `StudioService.Audit`: loosening or removing a gate needs `OVERRIDE_GATE` and records evidence.\n- `evaluation_gate` is never frozen into a release, by Studio or `AgentPublisher`. Grant `AGENT_STUDIO` `OVERRIDE_GATE` deliberately; no seeded role holds it.\n\n## Production review (breaking)\n\n- `contract.HumanReviewQueue` is Enqueue, Get, List, Grade, Dismiss, and Promoted over production turns; `domain.HumanReviewItem` holds references with an int64 id. `evaluation.MemoryReviewQueue` and `Runner.Review` are removed; doubtful evaluation pairs stay in `evaluation_result`.\n- Compose `evaluation.ReviewQueueStore`, `evaluation.ReviewIntake` as `BaseDataPlane.Review` and `TurnFeedback.Review`, and `evaluation.StudioReview` behind `handler.StudioReviewHandler`; grant `AGENT_STUDIO` `REVIEW` to graders. A golden case promoted from a turn withholds its input from actors without `REVIEW` on the turn's agent.\n\n## Schema and seeds\n\nRebuild from the generated DDL and seeds; the `evaluation` module depends on `model` and has its own seed (`schema/seed/evaluation`). New tables hold evaluation baselines and their outputs, comparisons, and gate decisions and their runs; `human_review_item` holds production turns; evaluation subjects may be a baseline or a draft on another model; results reference their stored output; `golden_case.review_item_id` records a promoted turn. New flags: `agent_evaluation_baseline_max_bytes`, `agent_evaluation_max_baselines`, `agent_evaluation_compare_page_bytes`, `agent_evaluation_gate_max_results`, and `agent_review_*` (see `doc/configuration.md`)."
+    },
+    {
       "version": "v1.2.1",
       "title": "Budget periods, approval routing, restore reviews, evaluation limits and rubric judging, portability and templates",
       "tags": [

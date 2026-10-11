@@ -169,21 +169,7 @@ func (judge *GatewayRubricJudge) requestID(prompt []byte) (string, error) {
 // priced returns the judge's spend in a currency: a provider's own price, else the
 // pricer's. Spend neither could price keeps its tokens and is marked unpriced.
 func (judge *GatewayRubricJudge) priced(ctx context.Context, usage domain.Usage) (domain.Usage, bool) {
-	reference := domain.ModelReference{ProviderID: judge.settings.Model.Provider, ModelID: judge.settings.Model.Model}
-	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.SearchQueries == 0 && usage.CostMinorUnits == 0 {
-		return domain.Usage{}, false
-	}
-	if strings.TrimSpace(usage.Currency) != "" {
-		return usage.AttributedTo(reference), false
-	}
-	cost, currency, err := judge.pricer.Cost(context.WithoutCancel(ctx), reference, domain.ModelUsage{
-		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries,
-	})
-	if err != nil || cost < 0 || len(currency) != 3 {
-		return usage, true
-	}
-	usage.CostMinorUnits, usage.Currency = cost, currency
-	return usage.AttributedTo(reference), false
+	return pricedSpend(ctx, judge.pricer, domain.ModelReference{ProviderID: judge.settings.Model.Provider, ModelID: judge.settings.Model.Model}, usage)
 }
 
 // scores validates the verdict strictly: one JSON object matching the schema, an integer

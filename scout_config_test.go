@@ -2,9 +2,11 @@ package scout
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	keelconfig "github.com/nauticana/keel/config"
 	keelmodel "github.com/nauticana/keel/model"
@@ -310,6 +312,16 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_default_language:                    "en-US",
 		agent_default_priority_class:              "standard",
 		agent_default_test_task:                   "",
+
+		agent_review_feedback_threshold:     "2",
+		agent_review_max_pending:            "1000",
+		agent_review_page_size:              "50",
+		agent_review_max_page_size:          "200",
+		agent_review_max_turn_bytes:         "1048576",
+		agent_evaluation_gate_max_results:   "2000",
+		agent_evaluation_baseline_max_bytes: "32768",
+		agent_evaluation_max_baselines:      "20",
+		agent_evaluation_compare_page_bytes: "1048576",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {
@@ -349,5 +361,256 @@ func TestScoutConfigDefaultTexts(t *testing.T) {
 		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), name) {
 			t.Fatalf("%s: error = %v, want a refusal naming the flag", name, err)
 		}
+	}
+}
+
+func TestRuntimeTuningFlagsReachTheSettingsHelpers(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	settings := cfg.DataPlaneSettings()
+	if settings.CostWindow != time.Hour || settings.ReplyRetention != 10*time.Minute || settings.ReplyPollInterval != 500*time.Millisecond ||
+		settings.ReplyRecordReadInterval != 5*time.Second || settings.CancelPollInterval != time.Second || settings.CancelMaxReadFailures != 3 ||
+		settings.SessionRevisionMemory != 4096 || settings.ResultCardMaxBytes != 64<<10 || settings.RunPageMax != 500 {
+		t.Fatalf("data plane settings = %+v", settings)
+	}
+	if limits := cfg.ToolLoopLimits(); limits.MaxCallRevisions != 8 {
+		t.Fatalf("tool loop limits = %+v", limits)
+	}
+	if cfg.AgentPauseBatch != 200 || cfg.AgentStudioReportWindowDays != 92 || cfg.AgentStudioUsageMaxLines != 1000 || cfg.AgentWorkItemMaxDepth != 32 {
+		t.Fatalf("product-wired flags = %d, %d, %d, %d", cfg.AgentPauseBatch, cfg.AgentStudioReportWindowDays, cfg.AgentStudioUsageMaxLines, cfg.AgentWorkItemMaxDepth)
+	}
+
+	rows := scoutConfigRows()
+	rows[agent_reply_poll_ms] = keelconfig.ConfigRow{Value: "250", Default: "500"}
+	rows[agent_cancel_poll_ms] = keelconfig.ConfigRow{Value: "0", Default: "1000"}
+	rows[agent_loop_max_call_revisions] = keelconfig.ConfigRow{Value: "2", Default: "8"}
+	cfg = &ScoutConfig{}
+	if err := cfg.Apply(rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.DataPlaneSettings(); got.ReplyPollInterval != 250*time.Millisecond || got.CancelPollInterval != 0 {
+		t.Fatalf("reply poll = %s, cancel poll = %s; want 250ms and zero (the consumer's default)", got.ReplyPollInterval, got.CancelPollInterval)
+	}
+	if got := cfg.ToolLoopLimits(); got.MaxCallRevisions != 2 {
+		t.Fatalf("call revisions = %d, want 2", got.MaxCallRevisions)
+	}
+}
+
+func TestRuntimeTuningFlagsRefuseNegativeValues(t *testing.T) {
+	for _, flag := range []string{
+		agent_cost_window, agent_reply_retention, agent_reply_poll_ms, agent_reply_record_read, agent_cancel_poll_ms,
+		agent_cancel_max_read_failures, agent_session_revision_memory, agent_result_card_max_bytes, agent_run_page_max,
+		agent_loop_max_call_revisions, agent_pause_batch, agent_studio_report_window_days, agent_studio_usage_max_lines,
+		agent_work_item_max_depth,
+	} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: "-1", Default: rows[flag].Default}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Errorf("%s = -1: error = %v, want a refusal naming the flag", flag, err)
+		}
+	}
+}
+
+func TestLimitFlagsParseAndReachTheSettingsHelpers(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentActivationMaxLeadDays != 366 || cfg.AgentStudioMaxPortableBindings != 1024 || cfg.AgentStudioMaxReferences != 1024 ||
+		cfg.AgentStudioMaxPortableExtensionBytes != 262144 || cfg.AgentStudioMaxTemplateAudience != 100 || cfg.AgentStudioUsableTemplates != 200 ||
+		cfg.AgentStudioMaxGovernanceItems != 32 || cfg.AgentStudioMaxCommentsShown != 500 || cfg.AgentStudioMaxRestrictionEntries != 256 ||
+		cfg.AgentMetricLabelMaxLength != 64 || cfg.AgentKnowledgeMaxSourceBytes != 32<<20 || cfg.AgentKnowledgeRRFOffset != 60 ||
+		cfg.AgentEvaluationPageSize != 50 || cfg.AgentEvaluationMaxPageSize != 200 {
+		t.Fatalf("defaults = %+v", cfg)
+	}
+	if activation := cfg.ReleaseActivationSettings(); activation.Timeout != 2*time.Minute {
+		t.Fatalf("activation timeout = %s, want 2m", activation.Timeout)
+	}
+	plane := cfg.DataPlaneSettings()
+	if plane.AuditPageSize != 100 || plane.AuditMaxPageSize != 1000 || plane.SafetyEventMaxPage != 500 ||
+		plane.RestrictionCacheTTL != 5*time.Second || plane.RestrictionCacheEntries != 4096 {
+		t.Fatalf("data plane settings = %+v", plane)
+	}
+	if judge := cfg.RubricJudgeSettings(); judge.MaxVerdictBytes != 8192 {
+		t.Fatalf("verdict bytes = %d, want 8192", judge.MaxVerdictBytes)
+	}
+
+	rows := scoutConfigRows()
+	rows[agent_restriction_cache_ttl_ms] = keelconfig.ConfigRow{Value: "250"}
+	rows[agent_activation_timeout] = keelconfig.ConfigRow{Value: "45"}
+	rows[agent_max_scope_depth] = keelconfig.ConfigRow{Value: "64"}
+	if err := cfg.Apply(rows); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DataPlaneSettings().RestrictionCacheTTL != 250*time.Millisecond || cfg.ReleaseActivationSettings().Timeout != 45*time.Second ||
+		cfg.AgentMaxScopeDepth != 64 {
+		t.Fatalf("configured values = %+v", cfg)
+	}
+}
+
+func TestLimitFlagsRefuseOutOfRangeValues(t *testing.T) {
+	for flag, change := range map[string]map[string]string{
+		agent_max_scope_depth:                    {agent_max_scope_depth: "65"},
+		agent_studio_max_references:              {agent_studio_max_references: "-1"},
+		agent_restriction_cache_ttl_ms:           {agent_restriction_cache_ttl_ms: "-5"},
+		agent_audit_page_size:                    {agent_audit_page_size: "200", agent_audit_max_page_size: "100"},
+		agent_evaluation_page_size:               {agent_evaluation_max_page_size: "40"},
+		agent_evaluation_judge_max_verdict_bytes: {agent_evaluation_judge_max_verdict_bytes: "-1"},
+	} {
+		rows := scoutConfigRows()
+		for id, value := range change {
+			rows[id] = keelconfig.ConfigRow{Value: value}
+		}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s: Apply error = %v, want a refusal naming the flag", flag, err)
+		}
+	}
+	rows := scoutConfigRows()
+	rows[agent_max_scope_depth] = keelconfig.ConfigRow{Value: "0"}
+	if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), agent_max_scope_depth) {
+		t.Fatalf("a zero scope depth: Apply error = %v", err)
+	}
+}
+
+func TestRubricJudgeSettingsFromFlags(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if settings := cfg.RubricJudgeSettings(); settings.Configured() || settings.MinScore != 1 || settings.MaxScore != 5 || settings.PassScore != 4 ||
+		settings.MaxOutputTokens != 512 || settings.MaxInputBytes != 131072 {
+		t.Fatalf("default settings = %+v, want an unconfigured 1..5 judge passing at 4", settings)
+	}
+
+	rows := scoutConfigRows()
+	rows[agent_evaluation_judge_provider] = keelconfig.ConfigRow{Value: "anthropic"}
+	rows[agent_evaluation_judge_model] = keelconfig.ConfigRow{Value: "judge-large"}
+	rows[agent_evaluation_judge_model_version] = keelconfig.ConfigRow{Value: "2026-01"}
+	if err := cfg.Apply(rows); err != nil {
+		t.Fatal(err)
+	}
+	settings := cfg.RubricJudgeSettings()
+	if !settings.Configured() || settings.Model != (domain.ModelSelection{Provider: "anthropic", Model: "judge-large", ModelVersion: "2026-01"}) {
+		t.Fatalf("settings = %+v", settings)
+	}
+}
+
+func TestRubricJudgeFlagsAreValidatedWhenAJudgeIsConfigured(t *testing.T) {
+	for name, change := range map[string]map[string]string{
+		"unpinned version":      {agent_evaluation_judge_provider: "p", agent_evaluation_judge_model: "m"},
+		"empty range":           {agent_evaluation_judge_max_score: "1"},
+		"pass outside range":    {agent_evaluation_judge_pass_score: "6"},
+		"negative lowest grade": {agent_evaluation_judge_min_score: "-1"},
+		"no output tokens":      {agent_evaluation_judge_max_tokens: "0"},
+		"no input bytes":        {agent_evaluation_judge_max_input_bytes: "0"},
+	} {
+		rows := scoutConfigRows()
+		rows[agent_evaluation_judge_provider] = keelconfig.ConfigRow{Value: "p"}
+		rows[agent_evaluation_judge_model] = keelconfig.ConfigRow{Value: "m"}
+		rows[agent_evaluation_judge_model_version] = keelconfig.ConfigRow{Value: "1"}
+		if name == "unpinned version" {
+			rows[agent_evaluation_judge_model_version] = keelconfig.ConfigRow{}
+		}
+		for id, value := range change {
+			rows[id] = keelconfig.ConfigRow{Value: value}
+		}
+		err := (&ScoutConfig{}).Apply(rows)
+		if !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "agent_evaluation_judge_") {
+			t.Fatalf("%s: Apply error = %v, want a judge validation error", name, err)
+		}
+	}
+
+	rows := scoutConfigRows()
+	rows[agent_evaluation_judge_max_score] = keelconfig.ConfigRow{Value: "1"}
+	if err := (&ScoutConfig{}).Apply(rows); err != nil {
+		t.Fatalf("judge bounds are not validated while no judge model is configured: %v", err)
+	}
+}
+
+func TestApprovalAndConfirmationFlagsDefault(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentApprovalMaxCandidates != 20 || cfg.AgentApprovalMaxAsksPerCall != 8 || cfg.AgentApprovalMaxRevisedArgumentBytes != 65536 {
+		t.Fatalf("approval flags = %d, %d, %d", cfg.AgentApprovalMaxCandidates, cfg.AgentApprovalMaxAsksPerCall, cfg.AgentApprovalMaxRevisedArgumentBytes)
+	}
+	if cfg.AgentConfirmationMaxDocumentBytes != 1<<20 || cfg.AgentConfirmationBatch != 100 ||
+		cfg.AgentConfirmationMaxBatch != 1000 || cfg.AgentConfirmationLease != 60 {
+		t.Fatalf("confirmation flags = %d, %d, %d, %d", cfg.AgentConfirmationMaxDocumentBytes, cfg.AgentConfirmationBatch,
+			cfg.AgentConfirmationMaxBatch, cfg.AgentConfirmationLease)
+	}
+	limits := cfg.ApprovalRoutingLimits()
+	ceilings, err := domain.ApprovalRoutingLimits{}.Resolve()
+	if err != nil || limits != ceilings {
+		t.Fatalf("routing limits = %+v, want the structural bounds %+v (%v)", limits, ceilings, err)
+	}
+}
+
+func TestApprovalRoutingLimitsFromFlags(t *testing.T) {
+	rows := scoutConfigRows()
+	for name, value := range map[string]string{
+		agent_approval_max_routes_per_binding: "4", agent_approval_max_routes: "10", agent_approval_max_route_tools: "2",
+		agent_approval_min_route_duration: "300", agent_approval_max_route_duration: "86400", agent_approval_max_route_window: "172800",
+	} {
+		rows[name] = keelconfig.ConfigRow{Value: value}
+	}
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(rows); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.ApprovalRoutingLimits{MaxRoutesPerBinding: 4, MaxRoutes: 10, MaxToolPatterns: 2,
+		MinDurationSeconds: 300, MaxDurationSeconds: 86400, MaxWindowSeconds: 172800}
+	if got := cfg.ApprovalRoutingLimits(); got != want {
+		t.Fatalf("limits = %+v, want %+v", got, want)
+	}
+}
+
+func TestApprovalAndConfirmationFlagsRefuseOutOfRange(t *testing.T) {
+	for name, value := range map[string]string{
+		agent_approval_max_candidates:             "-1",
+		agent_approval_max_asks_per_call:          "-1",
+		agent_approval_max_revised_argument_bytes: "-1",
+		agent_approval_max_routes_per_binding:     "33",
+		agent_approval_max_routes:                 "65",
+		agent_approval_max_route_tools:            "17",
+		agent_approval_min_route_duration:         "59",
+		agent_approval_max_route_duration:         "2592001",
+		agent_approval_max_route_window:           "7776001",
+		agent_confirmation_max_document_bytes:     "-1",
+		agent_confirmation_batch:                  "-1",
+		agent_confirmation_max_batch:              "-1",
+		agent_confirmation_lease:                  "2147483648",
+	} {
+		rows := scoutConfigRows()
+		rows[name] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s=%s: error = %v, want a refusal naming the flag", name, value, err)
+		}
+	}
+	for name, values := range map[string]map[string]string{
+		agent_approval_min_route_duration: {agent_approval_min_route_duration: "3600", agent_approval_max_route_duration: "600"},
+		agent_confirmation_batch:          {agent_confirmation_batch: "200", agent_confirmation_max_batch: "150"},
+	} {
+		rows := scoutConfigRows()
+		for flag, value := range values {
+			rows[flag] = keelconfig.ConfigRow{Value: value}
+		}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%v: error = %v, want a refusal naming %s", values, err, name)
+		}
+	}
+}
+
+func TestReleaseActivationSettingsFromFlags(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	settings := cfg.ReleaseActivationSettings()
+	if settings.Batch != 20 || settings.PollPeriod != 30*time.Second || settings.MaxAttempts != 5 {
+		t.Fatalf("settings = %+v", settings)
 	}
 }

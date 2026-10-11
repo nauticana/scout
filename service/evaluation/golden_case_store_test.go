@@ -11,7 +11,7 @@ import (
 )
 
 func caseRow(caseID, scope, input string) []any {
-	return []any{caseID, scope, "Name " + caseID, input, "en-US", "polite refusal", "rubric://tone", "low", "human", "9", testClock}
+	return []any{caseID, scope, "Name " + caseID, input, "en-US", "polite refusal", "rubric://tone", "low", "human", "9", testClock, nil, nil}
 }
 
 func caseStore(query *queryFake) (*GoldenCaseStore, *fake.ObjectStorage) {
@@ -69,11 +69,17 @@ func TestGoldenCaseStoreKeepsGateCasesOutOfTheDevScope(t *testing.T) {
 		t.Fatalf("put = %d, %v", revision, err)
 	}
 	args := query.args[qCaseUpsert]
-	if len(args) != 14 || args[3] != "dev" || args[9] != "low" || args[10] != "human" || args[11] != "9" || args[13] != "dev" {
+	if len(args) != 15 || args[3] != "dev" || args[9] != "low" || args[10] != "human" || args[11] != "9" || args[13] != nil || args[14] != "dev" {
 		t.Fatalf("upsert args = %v", args)
 	}
 	if args := query.args[qCaseBumpRevision]; args[2] != int64(4) {
 		t.Fatalf("revision args = %v", args)
+	}
+}
+
+func TestGoldenCaseStorePreservesProductionReviewProvenance(t *testing.T) {
+	if sql := caseQueries[qCaseUpsert]; !strings.Contains(sql, "COALESCE(golden_case.review_item_id, EXCLUDED.review_item_id)") {
+		t.Fatalf("case upsert can erase review provenance: %s", sql)
 	}
 }
 
@@ -93,6 +99,7 @@ func TestGoldenCaseStoreRefusesStaleOrInvalidChanges(t *testing.T) {
 		"blank input":       func(c *domain.GoldenCase) { c.Input = []byte("  ") },
 		"oversized input":   func(c *domain.GoldenCase) { c.Input = []byte(strings.Repeat("x", 32<<10+1)) },
 		"invalid utf-8":     func(c *domain.GoldenCase) { c.Input = []byte{0xff, 0xfe} },
+		"nul in input":      func(c *domain.GoldenCase) { c.Input = []byte("a\x00b") },
 		"blank name":        func(c *domain.GoldenCase) { c.Name = " " },
 		"long rubric":       func(c *domain.GoldenCase) { c.RubricRef = strings.Repeat("r", 201) },
 		"missing tenant":    func(c *domain.GoldenCase) { c.TenantID = 0 },

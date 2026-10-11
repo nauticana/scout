@@ -262,6 +262,43 @@ stable release and the current canary, as [rollout](rollout.md#version-pin-prece
 to the draft, a prompt section (optionally one language), or a setting. Commenting and resolving need
 `EDIT` or `APPROVE_PUBLISH`.
 
+## Evaluation gate
+
+The `evaluation_gate` setting holds an agent's publication to what its stored evaluations show
+([decisions and scoring](evaluation.md#evaluation-gate)). It narrows like any scoped setting — a child
+scope may only tighten it ([scope hierarchy](authority.md#scope-hierarchy)) — and it governs whether a
+release may publish, not how it runs, so no release freezes it and it is no part of a settings digest.
+
+`controlplane.StudioEvaluationGate` is the guard. Composed in `StudioService.Guards`, it checks a
+publish or restore before the release transaction (`CheckPublish`) and again inside it after the
+draft lock (`CheckRelease`, the `EvaluationGateGuard` extension), reading the digest's decision and the
+locked deployment through the transaction, so a decision or release that changes in between cannot
+slip through. A publish is refused with `domain.EvaluationGateRefusal` (`ErrConflict`, HTTP 409) coded
+`missing` when the candidate digest has no decision, `failed` when it failed, and `stale` when it was
+made under another policy, active release, or — for a pass — golden set version. A scheduled
+activation was admitted when it was scheduled and is not checked again. Publish and restore refuse an
+agent bound to a gate when no `EvaluationGateGuard` is composed (`ErrNotReady`, 503), so a bound gate
+is never silently ignored.
+
+A restore admits a version whose digest the gate once passed or a person overrode, however stale that
+decision is now. Any other restore, including a version published before its gate existed, needs
+`OVERRIDE_GATE`; the restore transaction then records a `GATE_RESTORE_OVERRIDE` Studio event and a
+`restore_over_evaluation_gate` decision through the gate's `Audit` sink.
+
+Weakening the gate is itself gated. A settings save, or an import over an existing draft, that
+removes the gate in force at the changed scope or admits anything it refused — another metric, a
+lower score or sample count, a higher or unset regression bound, fewer required scopes — needs
+`OVERRIDE_GATE` and `StudioService.Audit`, and records a `GATE_LOOSEN` Studio event and a
+`loosen_evaluation_gate` decision carrying the value before and after. Tightening needs neither.
+
+An override is evidence, not a shortcut. A person holding `OVERRIDE_GATE` names the current draft's
+digest and a reason of 1 to 400 characters; the gate refuses it when a current pass already admits
+the digest, and refuses every override without an `Audit` sink. It is stored as the digest's
+`override` decision with a `GATE_OVERRIDE` Studio event and an `override_evaluation_gate` publication
+decision naming the policy digest, active release, and golden set version. Every gate decision record
+is written before its transaction commits under a key derived from its inputs, so a retried commit
+replays rather than duplicates it.
+
 ## Confirmed MCP tool calls
 
 An MCP client can call a tool that must not act until a person confirms it. That call is not a turn,

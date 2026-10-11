@@ -1,0 +1,53 @@
+table: evaluation_baseline
+comment: Immutable named set of human reference outputs for one golden set version, one per example visible in its scope
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: name
+    type: VARCHAR(200)
+  - name: scope_code
+    type: VARCHAR(10)
+    comment: The golden scope whose examples the baseline answers; a gate baseline also answers every dev example
+  - name: example_count
+    type: INTEGER
+  - name: content_digest
+    type: CHAR(64)
+    comment: SHA-256 of the example ids with their output digests, in example id order
+  - name: recorded_by_kind
+    type: VARCHAR(20)
+  - name: recorded_by_id
+    type: VARCHAR(120)
+    comment: The recording person's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: recorded_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [id]
+sequence:
+  name: evaluation_baseline_seq
+  column: id
+foreign_keys:
+  - name: golden_set_version_baselines
+    columns: [partner_id, golden_set_id, set_version]
+    references:
+      table: golden_set_version
+      columns: [partner_id, golden_set_id, set_version]
+indexes:
+  - name: evaluation_baseline_partner_uq
+    columns: [partner_id, id]
+    unique: true
+  - name: evaluation_baseline_name_uq
+    columns: [partner_id, golden_set_id, set_version, name]
+    unique: true
+checks:
+  - name: evaluation_baseline_scope_ck
+    expression: scope_code IN ('dev', 'gate')
+  - name: evaluation_baseline_count_ck
+    expression: example_count > 0
+  - name: evaluation_baseline_digest_ck
+    expression: CHAR_LENGTH(content_digest) = 64

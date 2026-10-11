@@ -19,6 +19,9 @@ const (
 	ResourceLimits        ResourceKind = "limits"
 	// ResourceApprovalRouting routes approvals to roles or positions with deadlines and escalation.
 	ResourceApprovalRouting ResourceKind = "approval_routing"
+	// ResourceEvaluationGate is what a draft's evaluations must show before it may be published.
+	// It governs publication, so it is not frozen into a release.
+	ResourceEvaluationGate ResourceKind = "evaluation_gate"
 )
 
 // MergeMode is how a child binding combines with the value it inherits.

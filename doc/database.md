@@ -12,7 +12,7 @@ Scout's schema is seventeen selectable modules declared in `schema/dependency.ym
 
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
-- Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. `schema/dependency.yml` keeps the complete list.
+- Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. Likewise `evaluation` keys into `model` (a comparison arm's text model) and `runtime` (a reviewed turn) but reaches both through `knowledge` and `release`. `schema/dependency.yml` keeps the complete list.
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it. Its only direct key into `prompt` is a draft comment anchored to a prompt section.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
 - `skill` holds versioned procedures an agent loads on demand, and the platform catalog tenants copy them from. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
@@ -62,7 +62,7 @@ flowchart BT
     knowledge_vector["Knowledge Vector<br/>1 table"]
     runtime["Runtime<br/>15 tables"]
     release["Release<br/>16 tables"]
-    evaluation["Evaluation<br/>13 tables"]
+    evaluation["Evaluation<br/>18 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
@@ -72,7 +72,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 60 Scout tables — while the full platform is 138. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 60 Scout tables — while the full platform is 143. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -348,32 +348,45 @@ flowchart RL
     subgraph evaluation["Evaluation"]
         direction BT
         golden_set["golden_set"]
+        human_review_item["human_review_item"]
         golden_set_version["golden_set_version"]
         golden_case["golden_case"]
         agent_golden_set["agent_golden_set"]
         golden_example["golden_example"]
         golden_query["golden_query"]
+        evaluation_baseline["evaluation_baseline"]
+        evaluation_baseline_output["evaluation_baseline_output"]
         evaluation_manifest["evaluation_manifest"]
         evaluation_run["evaluation_run"]
         evaluation_run_subject["evaluation_run_subject"]
         evaluation_result["evaluation_result"]
         gate_decision["gate_decision"]
-        human_review_item["human_review_item"]
         evaluation_sample["evaluation_sample"]
+        agent_gate_decision["agent_gate_decision"]
+        agent_gate_decision_run["agent_gate_decision_run"]
+        evaluation_comparison["evaluation_comparison"]
     end
-    evaluation_result --> evaluation_run
-    evaluation_result --> golden_example
-    human_review_item --> evaluation_run
-    human_review_item --> golden_example
+    human_review_item --> golden_set
     golden_set_version --> golden_set
-    evaluation_manifest --> golden_set_version
-    golden_query --> golden_set_version
+    golden_case --> human_review_item
+    agent_golden_set --> golden_set
     golden_example --> golden_set_version
-    gate_decision --> evaluation_manifest
+    golden_query --> golden_set_version
+    evaluation_baseline --> golden_set_version
+    evaluation_baseline_output --> evaluation_baseline
+    evaluation_baseline_output --> golden_example
+    evaluation_manifest --> golden_set_version
     evaluation_run --> evaluation_manifest
     evaluation_run_subject --> evaluation_run
-    golden_case --> golden_set
-    agent_golden_set --> golden_set
+    evaluation_run_subject --> evaluation_baseline
+    evaluation_result --> evaluation_run
+    evaluation_result --> golden_example
+    gate_decision --> evaluation_manifest
+    agent_gate_decision --> golden_set_version
+    agent_gate_decision_run --> agent_gate_decision
+    agent_gate_decision_run --> evaluation_run
+    evaluation_comparison --> evaluation_run
+    evaluation_comparison --> golden_example
 
     subgraph skill["Skill"]
         direction BT
@@ -2012,9 +2025,7 @@ erDiagram
     golden_set_version ||--o{ evaluation_manifest : evaluation_manifests
     evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
     golden_example ||--o{ evaluation_result : example_evaluation_results
-    golden_example ||--o{ human_review_item : example_human_review_items
     evaluation_run ||--o{ evaluation_result : evaluation_results
-    evaluation_run ||--o{ human_review_item : human_review_items
     agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
     agent_version ||--o{ evaluation_manifest : candidate_evaluation_manifests
     agent_version ||--o{ evaluation_manifest : baseline_evaluation_manifests
@@ -2023,6 +2034,22 @@ erDiagram
     gate_decision }o--|| platform_release : platform_gate_decisions
     agent_tenant ||--o{ evaluation_sample : evaluation_samples
     evaluation_sample }o--|| agent_version : agent_evaluation_samples
+    agent_version ||--o{ human_review_item : agent_version_human_review_items
+    conversation_turn ||--o| human_review_item : turn_human_review_items
+    golden_set |o--o{ human_review_item : promoted_set_human_review_items
+    human_review_item |o--o{ golden_case : review_item_golden_cases
+    golden_set_version ||--o{ evaluation_baseline : golden_set_version_baselines
+    evaluation_baseline ||--o{ evaluation_baseline_output : evaluation_baseline_outputs
+    golden_example ||--o{ evaluation_baseline_output : example_baseline_outputs
+    evaluation_baseline |o--o{ evaluation_run_subject : baseline_evaluation_run_subjects
+    model_definition |o--o{ evaluation_run_subject : model_evaluation_run_subjects
+    evaluation_run ||--o{ evaluation_comparison : evaluation_comparisons
+    golden_example ||--o{ evaluation_comparison : example_evaluation_comparisons
+    agent_profile ||--o{ agent_gate_decision : agent_gate_decisions
+    agent_version |o--o{ agent_gate_decision : base_version_gate_decisions
+    golden_set_version |o--o{ agent_gate_decision : golden_set_version_gate_decisions
+    agent_gate_decision ||--o{ agent_gate_decision_run : agent_gate_decision_runs
+    evaluation_run ||--o{ agent_gate_decision_run : evaluation_run_gate_decisions
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -2043,6 +2070,15 @@ erDiagram
     platform_release {
         varchar platform_version PK
     }
+    conversation_turn {
+        bigint partner_id PK
+        varchar conversation_id PK
+        bigint turn_no PK
+    }
+    model_definition {
+        varchar provider_id PK
+        varchar model_id PK
+    }
     golden_set {
         bigint partner_id PK,FK
         varchar golden_set_id PK
@@ -2059,6 +2095,7 @@ erDiagram
         text expected_behavior
         varchar rubric_ref
         varchar risk_tier_code FK
+        bigint review_item_id FK
     }
     agent_golden_set {
         bigint partner_id PK,FK
@@ -2139,6 +2176,9 @@ erDiagram
         char definition_digest
         text definition_json
         text settings_json
+        bigint baseline_id FK
+        varchar provider_id FK
+        varchar model_id FK
     }
     evaluation_result {
         bigint run_id PK,FK
@@ -2152,6 +2192,8 @@ erDiagram
         bigint evaluator_cost_minor_units
         char currency_code FK
         boolean needs_human_review
+        varchar output_uri
+        char output_digest
     }
     gate_decision {
         char decision_id PK
@@ -2168,12 +2210,82 @@ erDiagram
     }
     human_review_item {
         bigint id PK
-        bigint run_id FK
-        varchar example_id FK
-        varchar approval_risk_tier
+        bigint partner_id FK
+        varchar agent_id FK
+        varchar agent_version FK
+        varchar source_code
+        varchar risk_tier
+        varchar conversation_id FK
+        bigint turn_no FK
         varchar status_code
-        varchar reviewer
-        varchar verdict
+        smallint score
+        varchar verdict_code
+        text expected_behavior
+        varchar reviewer_kind
+        varchar reviewer_id
+        varchar promoted_set_id FK
+        varchar promoted_case_id
+    }
+    evaluation_baseline {
+        bigint id PK
+        bigint partner_id FK
+        varchar golden_set_id FK
+        bigint set_version FK
+        varchar name
+        varchar scope_code
+        int example_count
+        char content_digest
+        varchar recorded_by_kind
+        varchar recorded_by_id
+    }
+    evaluation_baseline_output {
+        bigint baseline_id PK,FK
+        varchar example_id PK,FK
+        bigint partner_id FK
+        varchar golden_set_id FK
+        bigint set_version FK
+        varchar output_uri
+        char output_digest
+    }
+    evaluation_comparison {
+        bigint run_id PK,FK
+        varchar example_id PK,FK
+        bigint partner_id FK
+        varchar golden_set_id FK
+        bigint set_version FK
+        varchar verdict_code
+        numeric confidence
+        varchar evaluator_kind
+        varchar evaluator_version
+        char input_digest
+        bigint evaluator_cost_minor_units
+        char currency_code FK
+        varchar reason
+    }
+    agent_gate_decision {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        char definition_digest PK
+        varchar verdict_code
+        varchar reason
+        char policy_digest
+        text policy_json
+        char inputs_digest
+        varchar base_version FK
+        varchar golden_set_id FK
+        bigint set_version FK
+        varchar decided_by_kind
+        varchar decided_by_id
+    }
+    agent_gate_decision_run {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        char definition_digest PK,FK
+        bigint run_id PK,FK
+        varchar role_code PK
+        int score_bp
+        int sample_count
+        int critical_count
     }
     evaluation_sample {
         bigint partner_id PK,FK
@@ -2190,9 +2302,15 @@ erDiagram
         timestamp expires_at
     }
 ```
- `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring verdict, `human_review_item` the adjudication queue, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
+ `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring platform verdict, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
 
 Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
+
+A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `baseline` is arm a and `candidate` arm b. Either arm may be a draft, which `provider_id` and `model_id` may pin to another text model, or a release; arm a may instead be an `evaluation_baseline`, which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `baseline`, `candidate`, or `tie`, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
+
+`agent_gate_decision` is the Studio evaluation gate's verdict on one definition digest of an agent: `pass`, `fail`, or `override`, the canonical gate applied (`policy_json`, `policy_digest`), the active release regression is measured against (`base_version`), and the golden set version decided on. `inputs_digest` lets an evaluation of unchanged inputs replay the decision, and a later decision for the digest replaces it. `agent_gate_decision_run` lists the completed runs it read, `candidate` for the decided digest and `baseline` for the active release, with each run's score in basis points, sample count, and critical failures.
+
+`human_review_item` is the production review queue: one row per completed turn (`conversation_id`, `turn_no`), `sampled` or rated low (`feedback`), keyed to the release that answered. Rows hold references only; turn content stays in object storage, and who rated a turn stays in `turn_feedback`. A reviewer grades (`score` 1 to 5, `verdict_code` `pass` or `fail`, `notes`, `expected_behavior`) or dismisses a `pending` item, and a graded item may be `promoted` into a dev `golden_case`, which names it through `review_item_id`. The `evaluation` seed registers the code lists `gate_decision_verdict`, `gate_decision_run_role`, `review_source`, `review_status`, `review_verdict`, and `evaluation_comparison_verdict` as keel constants.
 
 ## Scout table inventory
 
@@ -2211,7 +2329,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
-| `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
+| `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |

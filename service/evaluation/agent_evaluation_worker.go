@@ -12,6 +12,7 @@ import (
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/logger"
 	"github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/storage"
 	"github.com/nauticana/keel/worker"
 
 	"github.com/nauticana/scout/contract"
@@ -25,14 +26,15 @@ import (
 // AgentEvaluationWorker is the keel leased queue worker that executes queued agent
 // evaluations. A draft subject runs each example through the governed draft tester
 // with the run's pinned definition; a release subject replays through the release
-// case executor. Examples run with bounded concurrency until the run's cost ceiling,
-// each result is recorded under the lease, and an example an earlier attempt
-// recorded is not run again.
+// case executor; a baseline subject answers with its recorded output. A comparison
+// run executes both arms of each example and has PairJudge decide between them.
+// Examples run with bounded concurrency until the run's cost ceiling, each result is
+// recorded under the lease, and an example an earlier attempt recorded is not run again.
 type AgentEvaluationWorker struct {
 	worker.AbstractWorker
 	Queue    contract.AgentEvaluationQueue
 	Examples contract.GoldenSetStore
-	// Payloads reads a draft example's input; the worker verifies its digest.
+	// Payloads reads a draft example's input and a baseline's recorded output; the worker verifies their digests.
 	Payloads contract.ObjectReader
 	Drafts   contract.AgentDraftTestExecutor
 	Releases contract.CaseExecutor
@@ -49,6 +51,13 @@ type AgentEvaluationWorker struct {
 	MaxRunCostMinorUnits int64
 	// Currency is the ISO code every priced result must carry; another currency fails the run.
 	Currency string
+	// PairJudge decides each example of a comparison run as the run's requester; its spend
+	// counts against the run's cost ceiling. Without it, and Outputs, comparisons fail.
+	PairJudge contract.JudgeEvaluator
+	// Outputs stores each executed answer of a comparison under its content digest.
+	Outputs storage.ObjectStorage
+	// OutputScheme prefixes stored output URIs; empty means "object".
+	OutputScheme string
 	// ExtraQueries joins the worker's named SQL, for services sharing its query service.
 	ExtraQueries map[string]string
 
@@ -137,16 +146,31 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 		return fmt.Errorf("load evaluation run %d: %w", lease.RunID, err)
 	}
 	run := claim.Run
-	switch {
-	case run.Subject.Kind == domain.SubjectDraft && (claim.Draft == nil || w.Drafts == nil || w.Payloads == nil):
-		return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "draft evaluation is not composed")
-	case run.Subject.Kind == domain.SubjectRelease && w.Releases == nil:
-		return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "release evaluation is not composed")
+	arms := []domain.EvaluationArm{{Subject: run.Subject, Draft: claim.Draft, DraftSettings: claim.DraftSettings}}
+	if run.Baseline != nil {
+		switch {
+		case claim.Baseline == nil:
+			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "comparison arm a is not pinned")
+		case w.PairJudge == nil || w.Outputs == nil:
+			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "comparison is not composed")
+		case strings.TrimSpace(run.RequestedBy.ID) == "":
+			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "comparison has no requester to charge")
+		}
+		arms = append(arms, *claim.Baseline)
 	}
-	var draftLimits domain.ExecutionLimits
-	if run.Subject.Kind == domain.SubjectDraft {
-		if draftLimits, err = pinnedDraftLimits(claim); err != nil {
-			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "draft limits cannot be read: "+stage.ErrorClass(err))
+	limits := make([]domain.ExecutionLimits, len(arms))
+	for i, arm := range arms {
+		switch {
+		case arm.Subject.Kind == domain.SubjectDraft && (arm.Draft == nil || w.Drafts == nil || w.Payloads == nil):
+			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "draft evaluation is not composed")
+		case arm.Subject.Kind == domain.SubjectRelease && w.Releases == nil:
+			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "release evaluation is not composed")
+		case arm.Subject.Kind == domain.SubjectBaseline && w.Payloads == nil:
+			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "baseline comparison is not composed")
+		case arm.Subject.Kind == domain.SubjectDraft:
+			if limits[i], err = pinnedDraftLimits(arm); err != nil {
+				return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "draft limits cannot be read: "+stage.ErrorClass(err))
+			}
 		}
 	}
 	examples, err := w.Examples.ListExamples(ctx, run.Scope, run.TenantID, run.GoldenSetID, run.SetVersion)
@@ -186,32 +210,17 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 		if halt {
 			return nil
 		}
-		example := pending[i]
-		evalCase, err := w.execute(ctx, claim, draftLimits, example)
-		if err != nil {
-			return &caseFailure{example: example, err: err}
-		}
-		if err = w.settleable(evalCase); err != nil {
-			return &caseFailure{example: example, err: err, unsettled: true}
-		}
-		result, scoreErr := w.score(ctx, claim.Run.RequestedBy, example, evalCase)
-		// An executed example's usage is settled even when a sibling's failure cancelled the run.
-		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lease.TTL)
-		err = w.Queue.Record(recordCtx, lease, result)
-		cancel()
-		if errors.Is(err, domain.ErrValidation) {
-			return &caseFailure{example: example, err: err, unsettled: true}
-		}
-		if err != nil {
-			return fmt.Errorf("record example %q: %w", example.ExampleID, err)
+		var cost int64
+		var err error
+		if len(arms) == 2 {
+			cost, err = w.compareExample(ctx, claim, arms, limits, pending[i])
+		} else {
+			cost, err = w.evaluateExample(ctx, claim, arms[0], limits[0], pending[i])
 		}
 		mu.Lock()
-		spent = saturate.Add(spent, saturate.Add(result.Usage.CostMinorUnits, result.EvaluatorUsage.CostMinorUnits))
+		spent = saturate.Add(spent, cost)
 		mu.Unlock()
-		if scoreErr != nil {
-			return &caseFailure{example: example, err: scoreErr, unsettled: errors.Is(scoreErr, errJudgeSpendUnsettled)}
-		}
-		return nil
+		return err
 	})
 	var failure *caseFailure
 	switch {
@@ -224,6 +233,34 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 	default:
 		return w.Queue.Finish(ctx, lease, domain.EvaluationCompleted, "")
 	}
+}
+
+// evaluateExample executes, scores, and records one example of a single-subject run and
+// returns the cost it settled.
+func (w *AgentEvaluationWorker) evaluateExample(ctx context.Context, claim domain.AgentEvaluationClaim, arm domain.EvaluationArm, limits domain.ExecutionLimits, example domain.GoldenExample) (int64, error) {
+	evalCase, err := w.execute(ctx, claim, arm, limits, example)
+	if err != nil {
+		return 0, &caseFailure{example: example, err: err}
+	}
+	if err = w.settleable(evalCase); err != nil {
+		return 0, &caseFailure{example: example, err: err, unsettled: true}
+	}
+	result, scoreErr := w.score(ctx, claim.Run.RequestedBy, example, evalCase)
+	// An executed example's usage is settled even when a sibling's failure cancelled the run.
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claim.Lease.TTL)
+	err = w.Queue.Record(recordCtx, claim.Lease, result)
+	cancel()
+	if errors.Is(err, domain.ErrValidation) {
+		return 0, &caseFailure{example: example, err: err, unsettled: true}
+	}
+	if err != nil {
+		return 0, fmt.Errorf("record example %q: %w", example.ExampleID, err)
+	}
+	cost := saturate.Add(result.Usage.CostMinorUnits, result.EvaluatorUsage.CostMinorUnits)
+	if scoreErr != nil {
+		return cost, &caseFailure{example: example, err: scoreErr, unsettled: errors.Is(scoreErr, errJudgeSpendUnsettled)}
+	}
+	return cost, nil
 }
 
 // failureReason names the failing example and the error class, never provider text;
@@ -243,31 +280,51 @@ func failureReason(failure *caseFailure) string {
 	return reason
 }
 
-// pinnedDraftLimits reads the limits frozen with the run's draft, refusing settings its
+// pinnedDraftLimits reads the limits frozen with an arm's draft, refusing settings its
 // definition does not digest.
-func pinnedDraftLimits(claim domain.AgentEvaluationClaim) (domain.ExecutionLimits, error) {
-	if claim.Draft.SettingsDigest == "" || scope.SettingsDigest(claim.DraftSettings) != claim.Draft.SettingsDigest {
+func pinnedDraftLimits(arm domain.EvaluationArm) (domain.ExecutionLimits, error) {
+	if arm.Draft.SettingsDigest == "" || scope.SettingsDigest(arm.DraftSettings) != arm.Draft.SettingsDigest {
 		return domain.ExecutionLimits{}, fmt.Errorf("%w: pinned draft settings do not match the definition", domain.ErrConflict)
 	}
-	return isolation.FrozenExecutionLimits(claim.DraftSettings)
+	return isolation.FrozenExecutionLimits(arm.DraftSettings)
 }
 
-func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentEvaluationClaim, draftLimits domain.ExecutionLimits, example domain.GoldenExample) (domain.EvaluationCase, error) {
+// execute answers the example as the arm: a draft through the draft tester, a release through
+// the case executor, and a baseline with its recorded output, verified against its digest.
+func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentEvaluationClaim, arm domain.EvaluationArm, draftLimits domain.ExecutionLimits, example domain.GoldenExample) (domain.EvaluationCase, error) {
 	if example.TenantID != claim.Run.TenantID {
 		return domain.EvaluationCase{}, fmt.Errorf("%w: example belongs to another tenant", domain.ErrForbidden)
 	}
 	var evalCase domain.EvaluationCase
 	var err error
-	if claim.Run.Subject.Kind == domain.SubjectDraft {
-		evalCase, err = w.executeDraft(ctx, claim, draftLimits, example)
-	} else {
-		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: claim.Run.Subject.Version}, example, nil)
+	switch arm.Subject.Kind {
+	case domain.SubjectDraft:
+		evalCase, err = w.executeDraft(ctx, claim, *arm.Draft, draftLimits, example)
+	case domain.SubjectBaseline:
+		evalCase, err = w.recordedOutput(ctx, arm, example)
+	default:
+		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version}, example, nil)
 	}
 	if err != nil {
 		return domain.EvaluationCase{}, err
 	}
 	evalCase.Example, evalCase.Role = example, domain.RoleCandidate
 	return evalCase, nil
+}
+
+func (w *AgentEvaluationWorker) recordedOutput(ctx context.Context, arm domain.EvaluationArm, example domain.GoldenExample) (domain.EvaluationCase, error) {
+	ref, recorded := arm.Outputs[example.ExampleID]
+	if !recorded {
+		return domain.EvaluationCase{}, fmt.Errorf("%w: the baseline has no output for the example", domain.ErrNotFound)
+	}
+	output, err := w.Payloads.Read(ctx, ref)
+	if err != nil {
+		return domain.EvaluationCase{}, fmt.Errorf("read baseline output: %w", err)
+	}
+	if sha256Hex(output) != strings.ToLower(ref.Digest) {
+		return domain.EvaluationCase{}, fmt.Errorf("%w: baseline output does not match its digest", domain.ErrValidation)
+	}
+	return domain.EvaluationCase{Output: output}, nil
 }
 
 // settleable refuses an outcome the run's totals cannot hold: negative usage or latency, or a priced result in another currency.
@@ -297,7 +354,7 @@ func (w *AgentEvaluationWorker) score(ctx context.Context, principal domain.Prin
 	}
 	verdict, err := w.Judge.Grade(ctx, principal, evalCase)
 	var spendErr error
-	result.EvaluatorUsage, spendErr = w.judgeSpend(verdict)
+	result.EvaluatorUsage, spendErr = w.judgeSpend(verdict.Usage, verdict.Unpriced)
 	if err = errors.Join(spendErr, err); err != nil {
 		result.Scores, result.Reason = nil, "judging failed: "+stage.ErrorClass(err)
 		return result, fmt.Errorf("rubric judge %s: %w", w.Judge.Version().Version, err)
@@ -312,12 +369,11 @@ var errJudgeSpendUnsettled = fmt.Errorf("%w: judge spend cannot be settled", dom
 // judgeSpend is the judge's spend as the result's evaluator usage. Unpriced spend or
 // spend in another currency keeps its tokens only, and negative spend keeps nothing;
 // both fail, since the run's cost ceiling could not count them.
-func (w *AgentEvaluationWorker) judgeSpend(verdict domain.RubricVerdict) (domain.Usage, error) {
-	spend := verdict.Usage
+func (w *AgentEvaluationWorker) judgeSpend(spend domain.Usage, unpriced bool) (domain.Usage, error) {
 	if spend.InputTokens < 0 || spend.OutputTokens < 0 || spend.SearchQueries < 0 || spend.CostMinorUnits < 0 {
 		return domain.Usage{}, errJudgeSpendUnsettled
 	}
-	if verdict.Unpriced || spend.CostMinorUnits > 0 && spend.Currency != w.Currency {
+	if unpriced || spend.CostMinorUnits > 0 && spend.Currency != w.Currency {
 		return domain.Usage{InputTokens: spend.InputTokens, OutputTokens: spend.OutputTokens, SearchQueries: spend.SearchQueries}, errJudgeSpendUnsettled
 	}
 	if spend.CostMinorUnits == 0 {
@@ -328,7 +384,7 @@ func (w *AgentEvaluationWorker) judgeSpend(verdict domain.RubricVerdict) (domain
 
 // executeDraft runs the example's input as the task of a governed draft test of the pinned
 // definition, bounded by the limits frozen with it.
-func (w *AgentEvaluationWorker) executeDraft(ctx context.Context, claim domain.AgentEvaluationClaim, limits domain.ExecutionLimits, example domain.GoldenExample) (domain.EvaluationCase, error) {
+func (w *AgentEvaluationWorker) executeDraft(ctx context.Context, claim domain.AgentEvaluationClaim, draft domain.AgentDefinition, limits domain.ExecutionLimits, example domain.GoldenExample) (domain.EvaluationCase, error) {
 	input, err := w.Payloads.Read(ctx, example.Payload)
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("read input: %w", err)
@@ -337,7 +393,7 @@ func (w *AgentEvaluationWorker) executeDraft(ctx context.Context, claim domain.A
 		return domain.EvaluationCase{}, fmt.Errorf("%w: input does not match its digest", domain.ErrValidation)
 	}
 	actor := domain.StudioActor{TenantID: claim.Run.TenantID, Principal: claim.Run.RequestedBy}
-	result, err := w.Drafts.Execute(ctx, actor, domain.AgentTestRequest{AgentID: claim.Run.AgentID, LanguageCode: example.Language, Task: string(input), Limits: limits}, *claim.Draft)
+	result, err := w.Drafts.Execute(ctx, actor, domain.AgentTestRequest{AgentID: claim.Run.AgentID, LanguageCode: example.Language, Task: string(input), Limits: limits}, draft)
 	var spent interface{ SpentUsage() domain.Usage }
 	if errors.Is(err, domain.ErrExecutionLimit) && ctx.Err() == nil {
 		// A stop is scored only with the usage it settled, so it counts toward the cost ceiling.

@@ -7,10 +7,11 @@ import (
 )
 
 // DraftFreezer freezes an agent's current draft exactly as Publish would, without
-// persisting it, after authorizing the actor to TEST the agent. The definition
-// digest identifies the frozen draft as an evaluation subject.
+// persisting it, after authorizing the actor to TEST the agent. A non-nil textModel
+// replaces the draft's text model before freezing, validated as a draft's own would be.
+// The definition digest identifies the frozen draft as an evaluation subject.
 type DraftFreezer interface {
-	FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string) (domain.FrozenDraft, error)
+	FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string, textModel *domain.ModelReference) (domain.FrozenDraft, error)
 }
 
 // GoldenCaseStore keeps the editable working copy of golden sets and which set
@@ -37,6 +38,10 @@ type AgentEvaluationStore interface {
 	Run(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64) (domain.AgentEvaluationRun, error)
 	// Results pages a run's results visible in the scope in descending example id, strictly before before when set.
 	Results(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64, before string, limit int) ([]domain.AgentCaseResult, error)
+	// Comparisons pages a comparison run's examples visible in the scope like Results.
+	Comparisons(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64, before string, limit int) ([]domain.AgentCaseComparison, error)
+	// Tally counts a comparison run's examples visible in the scope by verdict.
+	Tally(ctx context.Context, scope domain.GoldenScope, tenantID, runID int64) (domain.ComparisonTally, error)
 }
 
 // AgentEvaluationQueue is the worker side of queued agent evaluations. Every
@@ -46,6 +51,8 @@ type AgentEvaluationQueue interface {
 	// Record stores one result and renews the lease; replaying a recorded example is a no-op.
 	// A result the run's totals cannot hold, such as another currency, is domain.ErrValidation.
 	Record(ctx context.Context, lease domain.AgentEvaluationLease, result domain.EvaluationResult) error
+	// RecordComparison stores one example's two arms and verdict like Record.
+	RecordComparison(ctx context.Context, lease domain.AgentEvaluationLease, comparison domain.CaseComparison) error
 	// Finish settles the run's totals from its recorded results and releases the lease.
 	Finish(ctx context.Context, lease domain.AgentEvaluationLease, status, reason string) error
 }

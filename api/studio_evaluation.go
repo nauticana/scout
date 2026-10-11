@@ -19,6 +19,10 @@ type GoldenCase struct {
 	Rubric           string    `json:"rubric,omitempty"`
 	RiskTier         string    `json:"risk_tier,omitempty"`
 	ModifiedAt       time.Time `json:"modified_at,omitzero"`
+	// ReviewItemID names the review item a promoted case came from; its input is withheld
+	// (input_withheld) from a reader without REVIEW on that turn's agent.
+	ReviewItemID  int64 `json:"review_item_id,omitempty"`
+	InputWithheld bool  `json:"input_withheld,omitempty"`
 }
 
 // GoldenSetVersion is one frozen, immutable version of a golden set.

@@ -19,6 +19,10 @@ var studioEvaluationQueries = map[string]string{
 	qStudioEvaluationEvent: `
 INSERT INTO agent_studio_event (id, partner_id, agent_id, event, detail, principal_kind, principal_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?, ?)`,
+	qStudioComparedDraft: `
+SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND subject_code = 'draft'`,
+	qStudioComparedRelease: `
+SELECT definition FROM agent_version WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 }
 
 // Studio lifecycle events this service records.
@@ -50,6 +54,15 @@ type StudioEvaluation struct {
 	// takes DefaultStudioPageSize and DefaultStudioMaxPageSize. PageSize may not exceed MaxPageSize.
 	PageSize    int
 	MaxPageSize int
+	// BaselineStore keeps the human baselines a comparison may name; Outputs reads the stored
+	// answers a comparison page shows. Both are required by the compare feature only.
+	BaselineStore contract.EvaluationBaselineStore
+	Outputs       contract.ObjectReader
+	// Releases reads a compared release's frozen settings for the diff; nil uses scope.TableEffectiveReleaseStore.
+	Releases contract.EffectiveReleaseRepository
+	// MaxPageAnswerBytes bounds the stored answers one comparison page returns; answers past it
+	// are omitted and marked. Zero takes DefaultComparisonPageAnswerBytes.
+	MaxPageAnswerBytes int
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -69,6 +82,9 @@ func (s *StudioEvaluation) init(ctx context.Context) error {
 	}
 	if s.MaxOpenRuns < 0 {
 		return fmt.Errorf("%w: max open runs cannot be negative", domain.ErrValidation)
+	}
+	if s.MaxPageAnswerBytes < 0 {
+		return fmt.Errorf("%w: comparison page answer bytes cannot be negative", domain.ErrValidation)
 	}
 	if s.PageSize < 0 || s.MaxPageSize < 0 || s.pageSize() > s.maxPageSize() {
 		return fmt.Errorf("%w: result page size %d must be non-negative and within the largest page %d", domain.ErrValidation, s.pageSize(), s.maxPageSize())
@@ -100,7 +116,43 @@ func (s *StudioEvaluation) Cases(ctx context.Context, actor domain.StudioActor, 
 	if err := s.authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return domain.GoldenCaseSet{}, err
 	}
-	return s.GoldenCases.Cases(ctx, domain.GoldenScopeDev, actor.TenantID, agentID)
+	return s.devCases(ctx, actor, agentID)
+}
+
+// devCases returns the agent's dev-scope cases with promoted production inputs withheld
+// from an actor lacking REVIEW on the agent they came from.
+func (s *StudioEvaluation) devCases(ctx context.Context, actor domain.StudioActor, agentID string) (domain.GoldenCaseSet, error) {
+	set, err := s.GoldenCases.Cases(ctx, domain.GoldenScopeDev, actor.TenantID, agentID)
+	if err != nil {
+		return domain.GoldenCaseSet{}, err
+	}
+	return withholdReviewInputs(ctx, s.Authorizer, actor, set)
+}
+
+// withholdReviewInputs blanks the input of every case promoted from a production review
+// unless the actor holds REVIEW on the reviewed turn's agent.
+func withholdReviewInputs(ctx context.Context, authorizer contract.StudioAuthorizer, actor domain.StudioActor, set domain.GoldenCaseSet) (domain.GoldenCaseSet, error) {
+	allowed := map[string]bool{}
+	cases := make([]domain.GoldenCase, len(set.Cases))
+	for i, goldenCase := range set.Cases {
+		if goldenCase.ReviewItemID != 0 {
+			reader, known := allowed[goldenCase.ReviewAgentID]
+			if !known {
+				err := authorizer.Authorize(ctx, actor, domain.StudioReview, goldenCase.ReviewAgentID)
+				if err != nil && !errors.Is(err, domain.ErrForbidden) && !errors.Is(err, domain.ErrValidation) {
+					return domain.GoldenCaseSet{}, err
+				}
+				reader = err == nil
+				allowed[goldenCase.ReviewAgentID] = reader
+			}
+			if !reader {
+				goldenCase.Input, goldenCase.InputWithheld = nil, true
+			}
+		}
+		cases[i] = goldenCase
+	}
+	set.Cases = cases
+	return set, nil
 }
 
 // ChangeCases associates the agent with a golden set, or adds, replaces, or removes one dev case.
@@ -144,7 +196,7 @@ func (s *StudioEvaluation) ChangeCases(ctx context.Context, actor domain.StudioA
 	if err := s.audit(ctx, actor, change.AgentID, StudioEventCases, detail); err != nil {
 		return domain.GoldenCaseSet{}, err
 	}
-	return s.GoldenCases.Cases(ctx, domain.GoldenScopeDev, actor.TenantID, change.AgentID)
+	return s.devCases(ctx, actor, change.AgentID)
 }
 
 // shareableOwner returns the owner the actor may associate the agent's set under: a new set
@@ -183,7 +235,7 @@ func (s *StudioEvaluation) FreezeCases(ctx context.Context, actor domain.StudioA
 	if err = s.audit(ctx, actor, agentID, StudioEventFreeze, fmt.Sprintf("%s version %d", goldenSetID, version.SetVersion)); err != nil {
 		return domain.GoldenCaseSet{}, domain.GoldenSetVersion{}, err
 	}
-	set, err := s.GoldenCases.Cases(ctx, domain.GoldenScopeDev, actor.TenantID, agentID)
+	set, err := s.devCases(ctx, actor, agentID)
 	return set, version, err
 }
 
@@ -205,7 +257,7 @@ func (s *StudioEvaluation) Evaluate(ctx context.Context, actor domain.StudioActo
 		RequestedBy: actor.Principal, MaxOpenRuns: s.MaxOpenRuns,
 	}
 	if request.Draft {
-		frozen, err := s.Drafts.FreezeDraft(ctx, actor, request.AgentID)
+		frozen, err := s.Drafts.FreezeDraft(ctx, actor, request.AgentID, nil)
 		if err != nil {
 			return domain.AgentEvaluationRun{}, err
 		}
@@ -237,15 +289,12 @@ func (s *StudioEvaluation) Evaluation(ctx context.Context, actor domain.StudioAc
 	if limit == 0 {
 		limit = s.pageSize()
 	}
-	run, err := s.Runs.Run(ctx, domain.GoldenScopeDev, actor.TenantID, runID)
+	run, err := s.viewableRun(ctx, actor, runID)
 	if err != nil {
 		return domain.AgentEvaluationPage{}, err
 	}
-	if err = s.Authorizer.Authorize(ctx, actor, domain.StudioView, run.AgentID); err != nil {
-		if errors.Is(err, domain.ErrForbidden) {
-			return domain.AgentEvaluationPage{}, fmt.Errorf("%w: evaluation run %d", domain.ErrNotFound, runID)
-		}
-		return domain.AgentEvaluationPage{}, err
+	if run.Baseline != nil {
+		return domain.AgentEvaluationPage{}, fmt.Errorf("%w: evaluation run %d is a comparison", domain.ErrNotFound, runID)
 	}
 	results, err := s.Runs.Results(ctx, domain.GoldenScopeDev, actor.TenantID, runID, before, limit+1)
 	if err != nil {
@@ -257,4 +306,19 @@ func (s *StudioEvaluation) Evaluation(ctx context.Context, actor domain.StudioAc
 		page.NextBefore = results[limit-1].ExampleID
 	}
 	return page, nil
+}
+
+// viewableRun reads a dev-scope run of an agent the actor may VIEW; any other run reads as not found.
+func (s *StudioEvaluation) viewableRun(ctx context.Context, actor domain.StudioActor, runID int64) (domain.AgentEvaluationRun, error) {
+	run, err := s.Runs.Run(ctx, domain.GoldenScopeDev, actor.TenantID, runID)
+	if err != nil {
+		return domain.AgentEvaluationRun{}, err
+	}
+	if err = s.Authorizer.Authorize(ctx, actor, domain.StudioView, run.AgentID); err != nil {
+		if errors.Is(err, domain.ErrForbidden) {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: evaluation run %d", domain.ErrNotFound, runID)
+		}
+		return domain.AgentEvaluationRun{}, err
+	}
+	return run, nil
 }

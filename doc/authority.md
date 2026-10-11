@@ -43,7 +43,10 @@ Scout's own objects are scoped by value. `AGENT_STUDIO` actions are checked at `
 only the agents its actor may view. `AGENT_STUDIO` `APPROVE_PUBLISH`, deciding another person's
 publish or restore review, is checked at `agent:<id>` too, and `TEMPLATE_PUBLISH`, sharing a
 template with other tenants, at `template_audience:all` or `template_audience:tenants`; no role holds
-it by default. `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
+it by default. `OVERRIDE_GATE`, publishing or restoring a draft its [evaluation gate](governance.md#evaluation-gate)
+does not admit and removing or loosening that gate, is checked at `agent:<id>` and seeded to no role.
+`REVIEW`, reading, grading, and dismissing an agent's sampled and low-rated production turns, is
+checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
 layers and are checked at the tenant-wide value `tenant`. `AGENT_APPROVAL` `DECIDE` is checked at the
 request's scope.
 
@@ -71,6 +74,7 @@ Binding values are canonical JSON, fixed per kind:
 | `autonomy` | `{"mode":"draft","window_from_minute":0,"window_to_minute":0}` | `AutonomyMerger` | `ordered` |
 | `limits` | `{"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}` | `LimitsMerger` | `at_most` |
 | `approval_routing` | `{"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}` | `RoutingMerger` | `routing` |
+| `evaluation_gate` | `{"metric":"rubric_score","min_score_bp":8000,"max_regression_bp":200,"min_samples":20,"required_scopes":["dev","gate"]}` | `EvaluationGateMerger` | `gate` |
 
 A set cannot express deny-wins, so `policy` has its own merger and rule: a child may drop an allow or
 add a deny, never add an allow, and an allow it keeps may not widen the parent's actions, resources,
@@ -82,11 +86,15 @@ parent sets, never raise or unset it, and may set one its parent leaves at 0. `b
 over the parent's period, window, timezone, and currency unit (see
 [release budgets](governance.md#release-budgets)). `approval_routing` overlays its parent route by
 route and may only tighten each inherited route (see [approval routing](governance.md#approval-routing)).
+`evaluation_gate` keeps the inherited metric and may only raise `min_score_bp` and `min_samples`, lower
+`max_regression_bp` (never unset it once a parent sets it), and add `required_scopes`. It governs
+publication rather than execution, so no release freezes it (see
+[evaluation gate](governance.md#evaluation-gate)).
 
 `config_resource_kind.narrowing_rule` is the seeded source of that last column; `PlatformNarrowingRules`
 mirrors it in code. An unregistered kind fails compilation and an unmapped rule fails the check —
-both closed, never permissive. Set, budget, autonomy, limits, and approval routing bindings use
-their kind as `resource_id`, while policy may use several ids.
+both closed, never permissive. Set, budget, autonomy, limits, approval routing, and evaluation gate
+bindings use their kind as `resource_id`, while policy may use several ids.
 
 A release's `limits` only lower the tenant runtime policy and the executor's flag ceilings.
 `turns_per_minute` caps the agent's turns opened in any trailing minute, by the database clock, when
@@ -111,8 +119,8 @@ For each resource, per binding in chain order:
 4. Record provenance; the previous winner moves onto `Superseded`.
 
 `sealed` is set by the binding's own scope, so a company safety clause genuinely cannot be
-overridden — unlike a child-controlled override flag. `BudgetMerger`, `AutonomyMerger`, and
-`LimitsMerger` clamp to the tighter inherited value, so a raised ceiling is silently impossible as
+overridden — unlike a child-controlled override flag. `BudgetMerger`, `AutonomyMerger`,
+`LimitsMerger`, and `EvaluationGateMerger` clamp to the tighter inherited value, so a raised ceiling is silently impossible as
 well as explicitly checked.
 
 Compilation is deterministic: resources sort by `(kind, id)`, bindings by scope depth, and `Digest`

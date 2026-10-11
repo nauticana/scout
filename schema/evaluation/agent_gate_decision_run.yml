@@ -1,0 +1,41 @@
+table: agent_gate_decision_run
+comment: One completed evaluation run an agent gate decision read, with the score it earned
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: definition_digest
+    type: CHAR(64)
+  - name: run_id
+    type: BIGINT
+  - name: role_code
+    type: VARCHAR(10)
+    comment: candidate for a run of the decided digest, baseline for a run of the active release
+  - name: score_bp
+    type: INTEGER
+    comment: Mean of the gate metric over every result of the run in basis points, rounded down, a result the metric did not score counting 0
+  - name: sample_count
+    type: INTEGER
+  - name: critical_count
+    type: INTEGER
+primary_key: [partner_id, agent_id, definition_digest, run_id, role_code]
+foreign_keys:
+  - name: agent_gate_decision_runs
+    columns: [partner_id, agent_id, definition_digest]
+    references:
+      table: agent_gate_decision
+      columns: [partner_id, agent_id, definition_digest]
+  - name: evaluation_run_gate_decisions
+    columns: [partner_id, run_id]
+    references:
+      table: evaluation_run
+      columns: [partner_id, id]
+indexes:
+  - name: agent_gate_decision_run_run_ix
+    columns: [partner_id, run_id]
+checks:
+  - name: agent_gate_decision_run_role_ck
+    expression: role_code IN ('candidate', 'baseline')
+  - name: agent_gate_decision_run_score_ck
+    expression: score_bp BETWEEN 0 AND 10000 AND sample_count >= 0 AND critical_count >= 0

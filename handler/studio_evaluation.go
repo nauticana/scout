@@ -96,19 +96,23 @@ func (h *StudioEvaluationHandler) evaluation(ctx context.Context, actor domain.S
 	}
 	result := api.AgentEvaluationPage{Run: apiEvaluationRun(page.Run), Results: make([]api.AgentCaseResult, 0, len(page.Results)), NextBefore: page.NextBefore}
 	for _, item := range page.Results {
-		scores := make([]api.EvaluationScore, 0, len(item.Scores))
-		for _, score := range item.Scores {
-			scores = append(scores, api.EvaluationScore{
-				Metric: score.Metric, Value: score.Value, Confidence: score.Confidence, Rationale: score.Rationale, Critical: score.Critical,
-				Evaluator: api.EvaluatorVersion{Kind: score.Evaluator.Kind, Version: score.Evaluator.Version},
-			})
-		}
 		result.Results = append(result.Results, api.AgentCaseResult{
-			CaseID: item.ExampleID, Scores: scores, LatencyMs: item.Latency.Milliseconds(), Cost: apiCost(item.Usage, item.Exponent),
+			CaseID: item.ExampleID, Scores: apiScores(item.Scores), LatencyMs: item.Latency.Milliseconds(), Cost: apiCost(item.Usage, item.Exponent),
 			EvaluatorCost: apiCost(item.EvaluatorUsage, item.Exponent), NeedsHumanReview: item.NeedsHumanReview, Reason: item.Reason,
 		})
 	}
 	return result, nil
+}
+
+func apiScores(scores []domain.EvaluationScore) []api.EvaluationScore {
+	result := make([]api.EvaluationScore, 0, len(scores))
+	for _, score := range scores {
+		result = append(result, api.EvaluationScore{
+			Metric: score.Metric, Value: score.Value, Confidence: score.Confidence, Rationale: score.Rationale, Critical: score.Critical,
+			Evaluator: api.EvaluatorVersion{Kind: score.Evaluator.Kind, Version: score.Evaluator.Version},
+		})
+	}
+	return result
 }
 
 func optionalBytes(value string) []byte {
@@ -137,7 +141,7 @@ func toCaseSet(set domain.GoldenCaseSet) api.GoldenCaseSet {
 		result.Cases = append(result.Cases, api.GoldenCase{
 			CaseID: goldenCase.CaseID, Name: goldenCase.Name, Input: string(goldenCase.Input), Language: goldenCase.Language,
 			ExpectedBehavior: string(goldenCase.ExpectedBehavior), Rubric: goldenCase.RubricRef, RiskTier: goldenCase.RiskTier,
-			ModifiedAt: goldenCase.ModifiedAt,
+			ModifiedAt: goldenCase.ModifiedAt, ReviewItemID: goldenCase.ReviewItemID, InputWithheld: goldenCase.InputWithheld,
 		})
 	}
 	for _, version := range set.Versions {

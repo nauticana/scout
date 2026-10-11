@@ -20,6 +20,7 @@ type queueFake struct {
 	mu        sync.Mutex
 	claim     domain.AgentEvaluationClaim
 	recorded  []domain.EvaluationResult
+	compared  []domain.CaseComparison
 	recordErr error
 	finished  []string
 }
@@ -37,6 +38,16 @@ func (queue *queueFake) Record(_ context.Context, _ domain.AgentEvaluationLease,
 		return queue.recordErr
 	}
 	queue.recorded = append(queue.recorded, result)
+	return nil
+}
+
+func (queue *queueFake) RecordComparison(_ context.Context, _ domain.AgentEvaluationLease, comparison domain.CaseComparison) error {
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if queue.recordErr != nil {
+		return queue.recordErr
+	}
+	queue.compared = append(queue.compared, comparison)
 	return nil
 }
 

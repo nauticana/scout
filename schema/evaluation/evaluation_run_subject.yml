@@ -1,5 +1,5 @@
 table: evaluation_run_subject
-comment: What one arm of an agent evaluation run executes, a frozen draft or a release, pinned by definition digest
+comment: What one arm of an agent evaluation run executes, a frozen draft or a release pinned by definition digest, or a recorded human baseline
 columns:
   - name: run_id
     type: BIGINT
@@ -16,6 +16,8 @@ columns:
     nullable: true
   - name: definition_digest
     type: CHAR(64)
+    nullable: true
+    comment: Empty for a baseline, which is immutable under its id
   - name: definition_json
     type: TEXT
     nullable: true
@@ -24,6 +26,16 @@ columns:
     type: TEXT
     nullable: true
     comment: The settings frozen with the draft, digested by its settings_digest; a release subject reads its effective_agent_release row
+  - name: baseline_id
+    type: BIGINT
+    nullable: true
+  - name: provider_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: model_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: With provider_id, the text model a draft was frozen on in place of its own
 primary_key: [run_id, role_code]
 foreign_keys:
   - name: evaluation_run_subjects
@@ -41,13 +53,27 @@ foreign_keys:
     references:
       table: agent_version
       columns: [partner_id, agent_id, agent_version]
+  - name: baseline_evaluation_run_subjects
+    columns: [partner_id, baseline_id]
+    references:
+      table: evaluation_baseline
+      columns: [partner_id, id]
+  - name: model_evaluation_run_subjects
+    columns: [provider_id, model_id]
+    references:
+      table: model_definition
+      columns: [provider_id, model_id]
 indexes:
   - name: evaluation_run_subject_digest_ix
     columns: [partner_id, agent_id, definition_digest]
+  - name: evaluation_run_subject_baseline_ix
+    columns: [partner_id, baseline_id]
 checks:
   - name: evaluation_run_subject_role_ck
     expression: role_code IN ('baseline', 'candidate')
   - name: evaluation_run_subject_kind_ck
-    expression: (subject_code = 'draft' AND agent_version IS NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code = 'release' AND agent_version IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL)
+    expression: (subject_code = 'draft' AND agent_version IS NULL AND baseline_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code = 'release' AND agent_version IS NOT NULL AND baseline_id IS NULL AND provider_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL) OR (subject_code = 'baseline' AND role_code = 'baseline' AND baseline_id IS NOT NULL AND agent_version IS NULL AND provider_id IS NULL AND definition_digest IS NULL AND definition_json IS NULL AND settings_json IS NULL)
   - name: evaluation_run_subject_digest_ck
-    expression: CHAR_LENGTH(definition_digest) = 64
+    expression: definition_digest IS NULL OR CHAR_LENGTH(definition_digest) = 64
+  - name: evaluation_run_subject_model_ck
+    expression: (provider_id IS NULL) = (model_id IS NULL)

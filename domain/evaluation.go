@@ -178,11 +178,13 @@ type EvaluationCase struct {
 	Usage      Usage
 }
 
-// EvaluationPair is the blinded input to a pairwise judge.
+// EvaluationPair is the blinded input to a pairwise judge. Principal is whom the judge's
+// model spend is charged to; it may be zero only where the judge's gateway allows it.
 type EvaluationPair struct {
 	Example   GoldenExample
 	Baseline  EvaluationCase
 	Candidate EvaluationCase
+	Principal PrincipalRef
 }
 
 // EvaluationScore is one metric value from one evaluator.
@@ -205,6 +207,10 @@ type JudgeVerdict struct {
 	Rationale  string
 	// InputDigest identifies the blinded judge input for caching and audit.
 	InputDigest string
+	// Usage is the judge's own spend, present even when judging failed after the model ran;
+	// Unpriced marks spend the judge could not price.
+	Usage    Usage
+	Unpriced bool
 }
 
 // EvaluationResult is every score one arm earned on one example.
@@ -220,6 +226,8 @@ type EvaluationResult struct {
 	EvaluatorUsage   Usage
 	NeedsHumanReview bool
 	Reason           string
+	// Output is where the arm's answer was stored; empty when it was not.
+	Output ObjectRef
 }
 
 // EvaluationRun is one execution of a manifest.
@@ -294,21 +302,6 @@ type OnlineMetrics struct {
 	ObservedAt time.Time
 	// Breached lists metrics outside their online thresholds; empty means within bounds.
 	Breached []string
-}
-
-// HumanReviewItem is one paired example routed to a human reviewer.
-type HumanReviewItem struct {
-	ItemID     string
-	TenantID   int64
-	ManifestID string
-	ExampleID  string
-	RiskTier   string
-	Reason     string
-	Pair       EvaluationPair
-	Verdict    JudgeVerdict
-	EnqueuedAt time.Time
-	Review     ExampleReview
-	Resolved   bool
 }
 
 // SamplingPolicy bounds which production turns may become evaluation samples for one tenant.

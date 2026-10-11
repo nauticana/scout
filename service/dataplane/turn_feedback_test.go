@@ -65,3 +65,48 @@ func TestFeedbackSummaryCountsPerReleaseWithoutPeople(t *testing.T) {
 		t.Fatalf("summaries = %+v", summaries)
 	}
 }
+
+type reviewIntakeFake struct {
+	completed []domain.ReviewTurn
+	rated     []domain.ReviewTurn
+	ratings   []int
+	err       error
+}
+
+func (f *reviewIntakeFake) TurnCompleted(_ context.Context, turn domain.ReviewTurn) error {
+	f.completed = append(f.completed, turn)
+	return f.err
+}
+
+func (f *reviewIntakeFake) TurnRated(_ context.Context, turn domain.ReviewTurn, rating int) error {
+	f.rated, f.ratings = append(f.rated, turn), append(f.ratings, rating)
+	return f.err
+}
+
+func TestFeedbackOffersTheRatedTurnToReviewWithoutThePerson(t *testing.T) {
+	tenant := domain.TenantContext{TenantID: 7, Region: "eu"}
+	turnRow := [][]any{{"conversation-1", int64(3), "completed", "writer-a", "42", "3"}}
+	query := &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: turnRow}}
+	review := &reviewIntakeFake{}
+	feedback := feedbackService(query, true)
+	feedback.Review = review
+	if err := feedback.RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 1, "wrong"); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.ReviewTurn{TenantContext: tenant, RequestID: "r-1", AgentID: "writer-a", AgentVersion: "3"}
+	if len(review.rated) != 1 || review.rated[0] != want || review.ratings[0] != 1 {
+		t.Fatalf("offered %+v with %v", review.rated, review.ratings)
+	}
+
+	review.err = domain.ErrRateLimited
+	if err := feedback.RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 1, ""); err != nil {
+		t.Fatalf("a full review queue failed the feedback: %v", err)
+	}
+	review.err = errors.New("review store down")
+	if err := feedback.RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 1, ""); err != nil {
+		t.Fatalf("a review intake failure failed the stored rating: %v", err)
+	}
+	if args := query.firstArgs(qFeedbackPut); args == nil || len(review.rated) != 3 {
+		t.Fatalf("rating stored = %v, offers = %d", args, len(review.rated))
+	}
+}

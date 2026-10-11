@@ -23,14 +23,15 @@ const (
 
 // Runner replays baseline and candidate on identical examples, scores both arms
 // with heuristics, an optional blinded judge, and an optional trajectory
-// evaluator, routes doubtful pairs to human review, and stops early once the
-// primary effect is decided.
+// evaluator, marks doubtful pairs for human review in their results, and stops
+// early once the primary effect is decided.
 type Runner struct {
 	Executor   contract.CaseExecutor
 	Heuristics []contract.HeuristicEvaluator
 	Judge      contract.JudgeEvaluator
+	// Principal is the person or service the judge's model spend is charged to; required with a Judge.
+	Principal  domain.PrincipalRef
 	Trajectory contract.TrajectoryEvaluator
-	Review     contract.HumanReviewQueue
 	// Results persists runs and results when set.
 	Results contract.EvaluationResultStore
 	Scorer  *PairedScorer
@@ -62,11 +63,14 @@ func (runner *Runner) now() time.Time {
 }
 
 func (runner *Runner) validate(manifest domain.EvaluationManifest, examples []domain.GoldenExample) error {
-	if runner.Executor == nil || runner.Scorer == nil || runner.Review == nil {
-		return fmt.Errorf("evaluation runner: executor, scorer, and review queue are required")
+	if runner.Executor == nil || runner.Scorer == nil {
+		return fmt.Errorf("evaluation runner: executor and scorer are required")
 	}
 	if runner.Concurrency < 0 || runner.EarlyStopBatch < 0 || runner.JudgeCacheSize < 0 || runner.JudgeCacheTTL < 0 || runner.MinJudgeConfidence < 0 || runner.MinJudgeConfidence > 1 {
 		return fmt.Errorf("%w: runner limits cannot be negative and judge confidence must be in [0,1]", domain.ErrValidation)
+	}
+	if runner.Judge != nil && (runner.Principal.Kind == "" || strings.TrimSpace(runner.Principal.ID) == "") {
+		return fmt.Errorf("%w: a runner with a judge needs the principal its spend is charged to", domain.ErrValidation)
 	}
 	if err := (&ManifestBuilder{}).Verify(manifest); err != nil {
 		return err
@@ -137,7 +141,6 @@ func (runner *Runner) Run(ctx context.Context, manifest domain.EvaluationManifes
 
 type pairOutcome struct {
 	results []domain.EvaluationResult
-	review  *domain.HumanReviewItem
 }
 
 func (runner *Runner) evaluateAll(ctx context.Context, manifest domain.EvaluationManifest, examples []domain.GoldenExample, run *domain.EvaluationRun) (domain.EvaluationSummary, error) {
@@ -161,11 +164,6 @@ func (runner *Runner) evaluateAll(ctx context.Context, manifest domain.Evaluatio
 		var batchResults []domain.EvaluationResult
 		for _, outcome := range outcomes {
 			batchResults = append(batchResults, outcome.results...)
-			if outcome.review != nil {
-				if err := runner.Review.Enqueue(ctx, *outcome.review); err != nil {
-					return domain.EvaluationSummary{}, fmt.Errorf("enqueue human review: %w", err)
-				}
-			}
 		}
 		if runner.Results != nil {
 			if err := runner.Results.PutResults(ctx, manifest.TenantID, run.RunID, batchResults); err != nil {
@@ -214,7 +212,7 @@ func (runner *Runner) evaluatePair(ctx context.Context, manifest domain.Evaluati
 	var reasons []string
 	var verdict domain.JudgeVerdict
 	if runner.Judge != nil {
-		pair := domain.EvaluationPair{Example: example, Baseline: baseline, Candidate: candidate}
+		pair := domain.EvaluationPair{Example: example, Baseline: baseline, Candidate: candidate, Principal: runner.Principal}
 		verdict, err = runner.judge(ctx, pair)
 		if err != nil {
 			return pairOutcome{}, fmt.Errorf("judge %q: %w", example.ExampleID, err)
@@ -239,19 +237,6 @@ func (runner *Runner) evaluatePair(ctx context.Context, manifest domain.Evaluati
 		{ManifestID: manifest.ManifestID, ExampleID: example.ExampleID, Role: domain.RoleBaseline, Scores: baseScores, Latency: baseline.Latency, Usage: baseline.Usage, NeedsHumanReview: reason != "", Reason: reason},
 		{ManifestID: manifest.ManifestID, ExampleID: example.ExampleID, Role: domain.RoleCandidate, Scores: candScores, Latency: candidate.Latency, Usage: candidate.Usage, NeedsHumanReview: reason != "", Reason: reason},
 	}}
-	if reason != "" {
-		outcome.review = &domain.HumanReviewItem{
-			ItemID:     sha256Hex([]byte(manifest.ManifestID + "|" + example.ExampleID))[:32],
-			TenantID:   manifest.TenantID,
-			ManifestID: manifest.ManifestID,
-			ExampleID:  example.ExampleID,
-			RiskTier:   example.RiskTier,
-			Reason:     reason,
-			Pair:       domain.EvaluationPair{Example: example, Baseline: baseline, Candidate: candidate},
-			Verdict:    verdict,
-			EnqueuedAt: runner.now(),
-		}
-	}
 	return outcome, nil
 }
 

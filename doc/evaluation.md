@@ -77,13 +77,24 @@ component varies. Examples run with bounded ordered concurrency; the first error
 cancels the rest.
 
 Per example: heuristics first (deterministic, no model call), then the judge, then
-routing. `GatewayJudge` sees rubric, expected behavior, evidence, and two outputs
-labelled A and B in a seed-derived order computed from the content digests alone —
-never from the role — and its scores are mapped back to roles afterwards. Judge
-verdicts are cached in a bounded keel `cache.LRU` keyed by the blinded input digest,
-so replays cost nothing. Low judge confidence, heuristic/judge disagreement above
-half a scale point, and configured high-risk tiers route the pair to
-`HumanReviewQueue`; the results still record the reason.
+routing. `GatewayJudge` sees the input (read through `Inputs` and checked against its
+digest, when composed), rubric, expected behavior, evidence, and two outputs labelled
+A and B in a seed-derived order computed from the content digests alone — never from
+the role — and its scores are mapped back to roles afterwards. It is strict: it calls
+the judge model through the governed gateway with a `pairwise_verdict` JSON schema, so
+the judge route must declare `structured_output`, and accepts only a verdict that scores
+every metric in [0,1] for both outputs, prefers `A`, `B`, or `tie`, states a confidence
+in [0,1], carries no tool call, and fits `MaxVerdictBytes`; anything else is
+`ErrInvalidModelOutput`, never a verdict. A prompt over `MaxInputBytes` is refused
+before any call. Every call is charged to a principal — `Runner.Principal` is required
+whenever the runner has a `Judge` — and its spend is priced by the provider, else by
+`Pricer`, and returned with the verdict even when the verdict is refused. A hidden
+example's verdict carries no model rationale. Judge verdicts are cached in a bounded
+keel `cache.LRU` keyed by the blinded input digest, so replays cost nothing. Low judge
+confidence, heuristic/judge disagreement above half a scale point, and configured
+high-risk tiers mark the pair's results `NeedsHumanReview` with the reason; they are
+not queued, since the human review queue holds production turns
+([production review](#production-review)).
 
 `PairedScorer` produces per-slice paired deltas (`all`, `domain:`, `language:`,
 `risk:`) with sample counts and percentile bootstrap confidence intervals from an
@@ -188,6 +199,85 @@ shutdown, fails the run before anything else runs.
 `ScoutConfig.RubricJudgeSettings()` returns them; a product composes the judge when
 `Configured()` reports a judge model.
 
+## Comparisons
+
+Studio's `compare` feature (`handler.StudioCompareHandler` over `evaluation.StudioEvaluation`)
+runs two subjects of an agent side by side on one frozen version of its golden set, in the dev
+scope only. A person holding `TEST` names the set version and two arms: arm `b` is the draft or
+one release, and arm `a` the draft, one release, or a recorded human baseline. A draft arm may
+name a `model`, which replaces the draft's text model before it is frozen exactly as a publish
+would (`DraftFreezer.FreezeDraft`) and is validated as a draft's own model is. Two arms of the
+same definition are refused. The comparison is an `evaluation_run` with two
+`evaluation_run_subject` rows, `baseline` for `a` and `candidate` for `b`, queued under the same
+open-run cap as any evaluation and recorded as a `COMPARE` Studio event.
+
+`AgentEvaluationWorker` answers each example with `a`, then `b`: a draft through the draft tester,
+a release through the case executor, and a baseline with its recorded output, read and checked
+against its digest. It writes each executed answer to `Outputs` under its content digest
+(`evaluation_result.output_uri` and `output_digest`) and records one `evaluation_comparison` row
+per example. An arm that ended in a failed state loses without a judge call, and two such arms
+tie; otherwise `PairJudge`, the strict `GatewayJudge`, decides as the run's requester. Comparison
+runs apply neither the heuristic evaluators nor the rubric judge. Both arms' spend and the judge's
+count in the run totals and against `MaxRunCostMinorUnits`, and are recorded even when an arm, the
+answer storage, or the judge then fails; that record carries a reason and fails the run, so a
+reclaimed attempt never pays for the example again. A judge call cut off by shutdown records
+nothing and the example is compared again. A comparison with no `PairJudge`, no `Outputs`, or no
+requester to charge fails before any example runs.
+
+`GET compare` (`VIEW`) returns the run, a tally of verdicts (`a`, `b`, `tie`, and `failed` for an
+example with none), and a page of dev examples with both stored answers, each checked against its
+digest. Answers past `MaxPageAnswerBytes` on one page are omitted and marked `output_omitted`. When
+one arm is the draft and the other a release, the page also carries what the draft changes
+against that release — models, prompt sections, and settings — from the definitions and settings
+the run pinned. A comparison run reads as not found through the single-subject results route.
+
+A human baseline (`POST baseline`, `EDIT`) is an immutable, named set of reference outputs for a
+frozen version: exactly one output for every dev example of that version, each stored in object
+storage under its content digest by `evaluation.EvaluationBaselineStore`
+(`evaluation_baseline`, `evaluation_baseline_output`). A name the version already holds is a
+conflict. `GET baselines` (`VIEW`) lists a version's baselines newest first.
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `agent_evaluation_baseline_max_bytes` | 32768 | Largest recorded baseline output (`EvaluationBaselineStore.MaxOutputBytes`) |
+| `agent_evaluation_max_baselines` | 20 | Baselines one golden set version may hold (`MaxBaselines`) |
+| `agent_evaluation_compare_page_bytes` | 1048576 | Stored answers one comparison page returns (`StudioEvaluation.MaxPageAnswerBytes`) |
+
+## Evaluation gate
+
+The `evaluation_gate` setting states what an agent's completed evaluations must show before a
+draft may publish; [governance](governance.md#evaluation-gate) describes how publication enforces
+it, and [authority](authority.md#scope-hierarchy) how a child scope may only tighten it.
+
+```json
+{"metric":"rubric_score","min_score_bp":8000,"max_regression_bp":200,"min_samples":20,"required_scopes":["dev","gate"]}
+```
+
+`controlplane.StudioEvaluationGate` decides it for the current draft's definition digest
+(`POST gate/evaluate`, `TEST`). For each required scope it reads the newest completed
+single-subject run of that digest — run as a draft or as a release — on the newest frozen version
+of the agent's golden set; comparison runs are never gate evidence. Studio actors run the dev scope
+only, so a `gate` requirement is met by a run the product queued in the gate scope. Every result
+of the run is a sample: a result the metric did not score counts 0, several scores of the metric
+count the lowest, and a value outside 0..1 counts 0 and fails the gate. The run passes with no
+critical score, at least `min_samples` samples (and at least one), and a mean, in basis points of
+a whole score (0 to 10000), at or above `min_score_bp`. With `max_regression_bp` and an active
+release, the mean may also fall no further below that of the active release's newest completed run
+on the same version and scope, and a missing release run fails. A run holding more results than
+`agent_evaluation_gate_max_results` (default 2000) is refused rather than read in part.
+
+A decision is stored per tenant, agent, and digest in `agent_gate_decision`, with the runs it read
+and their scores in `agent_gate_decision_run`: verdict `pass`, `fail`, or `override`, reason,
+policy and its digest, golden set version, active release, and decider. A newer decision for the
+digest replaces it, an evaluation of unchanged inputs returns the stored one, and a failing
+evaluation leaves in place an override that still holds. `GET gate` (`VIEW`) shows the effective
+policy, the decision for the current digest, whether it admits a publish, and why it is stale:
+`policy_changed`, `active_release_changed`, or, for a pass only, `set_version_superseded`.
+
+`POST gate/override` (`OVERRIDE_GATE`) admits the current draft's exact digest with a reason, as
+an `override` decision recorded as evidence; it goes stale with the policy or the active release
+like any decision. The gate setting is never frozen into a release.
+
 ## Sampling, storage, adjudication
 
 `SamplingPolicyEnforcer` reads a per-tenant `SamplingPolicy` and applies, in order:
@@ -202,6 +292,47 @@ and refuse a sample past its retention. `Adjudicator` folds production failures
 into digest buckets so one recurring failure is reviewed once, and only an explicit
 accept makes a bucket eligible for a golden set. `ScoreDriftDetector` reports a
 practical effect size and only calls drift sustained after consecutive windows.
+
+## Production review
+
+`evaluation.ReviewQueueStore` is the durable `contract.HumanReviewQueue` over
+`human_review_item`. It holds production turns only. An item names its turn's request id, and the
+store derives the conversation, turn, agent, and release from the turn itself, so a caller cannot
+attach a turn to another agent; a turn that is not completed is refused, a replay is a no-op, and
+an agent already holding `agent_review_max_pending` pending items is `ErrRateLimited`, a soft cap
+that concurrent enqueues may overshoot slightly. Rows hold
+references only: the turn's input and response stay in object storage, and who rated a turn stays in `turn_feedback`
+and never reaches an item, a page, or a Studio response. An item is `pending` until it is
+`graded` (a 1 to 5 score, `pass` or `fail`, notes, and optional expected behavior) or
+`dismissed`, and a graded item may be `promoted`; each move happens once, and a different grade or
+dismissal of a resolved item is `ErrConflict`.
+
+`evaluation.ReviewIntake` (`contract.ProductionReviewIntake`) feeds it from two sources. A
+completed turn is offered through the production sampler, so the tenant's sampling policy —
+opt-out, redaction requirement, residency, rates, and window cap — decides; `TurnRuntime` offers
+each completed turn after its final frame, so the review store never delays the reply. A rated
+turn is queued when its rating is at or below `agent_review_feedback_threshold` and the tenant's
+policy admits it; turns are never redacted here, so a tenant that requires redaction contributes
+none. Both offers are best-effort: a failure is logged and the turn or rating stands.
+
+Studio's `review` feature (`handler.StudioReviewHandler` over `evaluation.StudioReview`) lists an
+agent's items newest first, filtered by status, release, and source, and reads one item's turn
+input and response, each checked against its digest and bounded by `agent_review_max_turn_bytes`.
+Listing, reading, grading, and dismissing need `REVIEW` on the item's agent, and an item of an
+agent the actor cannot `VIEW` reads as not found. Promotion also needs `EDIT`: it copies a graded
+turn's input and the grade's expected behavior into the agent's golden set as dev case
+`review-<item id>`, with `golden_case.review_item_id` recording where it came from; the set's case
+limits apply, and a retry after the case was written only marks the item promoted. A promoted
+case's input is production content, so Studio returns it only to actors holding `REVIEW` on the
+agent the turn came from and marks it `input_withheld` for everyone else. Grades, dismissals, and
+promotions are Studio events (`REVIEW_GRADE`, `REVIEW_DISMISS`, `REVIEW_PROMOTE`).
+
+| Flag | Default | Meaning |
+|---|---:|---|
+| `agent_review_feedback_threshold` | 2 | Highest rating, 0 to 5, that queues a rated turn; 0 queues none |
+| `agent_review_max_pending` | 1000 | Pending sampled and rated items one agent's queue holds |
+| `agent_review_page_size`, `agent_review_max_page_size` | 50, 200 | Review page when the caller names no limit, and the largest one |
+| `agent_review_max_turn_bytes` | 1048576 | Bytes of a turn's input or response Studio reads or promotes |
 
 ## Calibration
 

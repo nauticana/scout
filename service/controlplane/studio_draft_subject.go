@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -11,13 +12,26 @@ var _ contract.DraftFreezer = (*StudioService)(nil)
 
 // FreezeDraft validates and freezes the current saved draft as Publish would, without
 // writing a release; the result's definition digest identifies it as an evaluation subject.
-func (s *StudioService) FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string) (domain.FrozenDraft, error) {
+// A textModel, resolved through the catalog when it names no provider, replaces the draft's
+// text model and is held to the catalog and the agent's model setting like the draft's own.
+func (s *StudioService) FreezeDraft(ctx context.Context, actor domain.StudioActor, agentID string, textModel *domain.ModelReference) (domain.FrozenDraft, error) {
 	if err := s.Authorize(ctx, actor, domain.StudioTest, agentID); err != nil {
 		return domain.FrozenDraft{}, err
 	}
 	draft, err := s.draft(ctx, actor.TenantID, agentID)
 	if err != nil {
 		return domain.FrozenDraft{}, err
+	}
+	if textModel != nil {
+		if strings.TrimSpace(textModel.ModelID) == "" {
+			return domain.FrozenDraft{}, validationError("models.text", "a model id is required")
+		}
+		override := *textModel
+		resolved, err := s.resolveModels(ctx, actor.TenantID, domain.AgentModelSelection{Text: &override})
+		if err != nil {
+			return domain.FrozenDraft{}, err
+		}
+		draft.Models.Text = resolved.Text
 	}
 	definition, settings, err := s.frozenDraft(ctx, actor.TenantID, draft, nil)
 	if err != nil {

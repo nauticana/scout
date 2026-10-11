@@ -1,58 +1,117 @@
 table: human_review_item
-comment: Paired example routed to a human reviewer
+comment: >-
+  One production turn awaiting, or given, a human grade. Rows hold references
+  only; turn content stays in object storage. Who rated a turn stays in
+  turn_feedback and is never copied here.
 columns:
   - name: id
     type: BIGINT
   - name: partner_id
     type: BIGINT
-  - name: run_id
-    type: BIGINT
-  - name: golden_set_id
+  - name: agent_id
     type: VARCHAR(80)
-  - name: set_version
-    type: BIGINT
-  - name: example_id
-    type: VARCHAR(120)
-  - name: approval_risk_tier
+  - name: agent_version
+    type: VARCHAR(80)
+    comment: The release that answered, copied from the turn's conversation (deliberate denormalization) so a queue is listed per release without a join
+  - name: source_code
     type: VARCHAR(20)
   - name: reason
     type: VARCHAR(400)
+  - name: risk_tier
+    type: VARCHAR(20)
+    nullable: true
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: BIGINT
   - name: status_code
     type: VARCHAR(20)
     default: pending
   - name: enqueued_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-  - name: resolved_at
-    type: TIMESTAMP
+  - name: score
+    type: SMALLINT
     nullable: true
-  - name: reviewer
-    type: VARCHAR(120)
-    nullable: true
-  - name: verdict
-    type: VARCHAR(40)
+  - name: verdict_code
+    type: VARCHAR(10)
     nullable: true
   - name: notes
+    type: VARCHAR(2000)
+    nullable: true
+  - name: expected_behavior
     type: TEXT
+    nullable: true
+  - name: reviewer_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: reviewer_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The grading person's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: reviewed_at
+    type: TIMESTAMP
+    nullable: true
+  - name: promoted_set_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: promoted_case_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The golden_case the promotion wrote; the working copy may later change or remove it, so it carries no foreign key
+  - name: promoted_at
+    type: TIMESTAMP
     nullable: true
 primary_key: [id]
 sequence:
   name: human_review_item_seq
   column: id
 foreign_keys:
-  - name: human_review_items
-    columns: [partner_id, run_id]
+  - name: agent_version_human_review_items
+    columns: [partner_id, agent_id, agent_version]
     references:
-      table: evaluation_run
-      columns: [partner_id, id]
-  - name: example_human_review_items
-    columns: [partner_id, golden_set_id, set_version, example_id]
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: turn_human_review_items
+    columns: [partner_id, conversation_id, turn_no]
     references:
-      table: golden_example
-      columns: [partner_id, golden_set_id, set_version, example_id]
+      table: conversation_turn
+      columns: [partner_id, conversation_id, turn_no]
+  - name: promoted_set_human_review_items
+    columns: [partner_id, promoted_set_id]
+    references:
+      table: golden_set
+      columns: [partner_id, golden_set_id]
 indexes:
-  - name: human_review_item_status_ix
-    columns: [partner_id, status_code, enqueued_at]
+  - name: human_review_item_partner_uq
+    columns: [partner_id, id]
+    unique: true
+  - name: human_review_item_turn_uq
+    columns: [partner_id, conversation_id, turn_no]
+    unique: true
+  - name: human_review_item_agent_ix
+    columns: [partner_id, agent_id, status_code, id]
 checks:
+  - name: human_review_item_source_ck
+    expression: source_code IN ('sampled', 'feedback')
   - name: human_review_item_status_ck
-    expression: (status_code = 'pending' AND resolved_at IS NULL) OR (status_code = 'resolved' AND resolved_at IS NOT NULL AND reviewer IS NOT NULL AND verdict IS NOT NULL)
+    expression: status_code IN ('pending', 'graded', 'dismissed', 'promoted')
+  - name: human_review_item_verdict_ck
+    expression: verdict_code IS NULL OR verdict_code IN ('pass', 'fail')
+  - name: human_review_item_score_ck
+    expression: score IS NULL OR score BETWEEN 1 AND 5
+  - name: human_review_item_review_ck
+    expression: >-
+      (status_code = 'pending' AND reviewer_kind IS NULL AND reviewer_id IS NULL AND reviewed_at IS NULL
+       AND score IS NULL AND verdict_code IS NULL AND notes IS NULL AND expected_behavior IS NULL)
+      OR
+      (status_code = 'dismissed' AND reviewer_kind IS NOT NULL AND reviewer_id IS NOT NULL AND reviewed_at IS NOT NULL
+       AND score IS NULL AND verdict_code IS NULL AND expected_behavior IS NULL)
+      OR
+      (status_code IN ('graded', 'promoted') AND reviewer_kind IS NOT NULL AND reviewer_id IS NOT NULL
+       AND reviewed_at IS NOT NULL AND score IS NOT NULL AND verdict_code IS NOT NULL)
+  - name: human_review_item_promoted_ck
+    expression: >-
+      (status_code = 'promoted' AND promoted_set_id IS NOT NULL AND promoted_case_id IS NOT NULL AND promoted_at IS NOT NULL)
+      OR
+      (status_code <> 'promoted' AND promoted_set_id IS NULL AND promoted_case_id IS NULL AND promoted_at IS NULL)

@@ -154,6 +154,16 @@ const (
 	agent_default_language                    = "agent_default_language"
 	agent_default_priority_class              = "agent_default_priority_class"
 	agent_default_test_task                   = "agent_default_test_task"
+
+	agent_review_feedback_threshold     = "agent_review_feedback_threshold"
+	agent_review_max_pending            = "agent_review_max_pending"
+	agent_review_page_size              = "agent_review_page_size"
+	agent_review_max_page_size          = "agent_review_max_page_size"
+	agent_review_max_turn_bytes         = "agent_review_max_turn_bytes"
+	agent_evaluation_gate_max_results   = "agent_evaluation_gate_max_results"
+	agent_evaluation_baseline_max_bytes = "agent_evaluation_baseline_max_bytes"
+	agent_evaluation_max_baselines      = "agent_evaluation_max_baselines"
+	agent_evaluation_compare_page_bytes = "agent_evaluation_compare_page_bytes"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -320,6 +330,16 @@ type ScoutConfig struct {
 	AgentDefaultLanguage                 string // agent_default_language en-US Language a runtime or draft test falls back to when the agent has no prompt in the requested one
 	AgentDefaultPriorityClass            string // agent_default_priority_class standard Scheduling class a model access grant takes when none is named
 	AgentDefaultTestTask                 string // agent_default_test_task (Scout's sample task) Task a Studio draft test runs when the caller sends none
+
+	AgentReviewFeedbackThreshold    int // agent_review_feedback_threshold 2 Highest turn rating that queues a rated turn for review; 0 queues none
+	AgentReviewMaxPending           int // agent_review_max_pending 1000 Pending sampled and rated turns one agent's review queue holds; 0 uses Scout's default
+	AgentReviewPageSize             int // agent_review_page_size 50 Review items one Studio page returns when the caller names no limit; 0 uses Scout's default
+	AgentReviewMaxPageSize          int // agent_review_max_page_size 200 Largest review item page a Studio caller may ask for; 0 uses Scout's default
+	AgentReviewMaxTurnBytes         int // agent_review_max_turn_bytes 1048576 Bytes of a reviewed turn's input or response Studio reads or promotes; 0 uses Scout's default
+	AgentEvaluationGateMaxResults   int // agent_evaluation_gate_max_results 2000 Results of one run a gate decision may read; 0 uses Scout's default
+	AgentEvaluationBaselineMaxBytes int // agent_evaluation_baseline_max_bytes 32768 Bytes of one recorded human baseline output; 0 uses Scout's default
+	AgentEvaluationMaxBaselines     int // agent_evaluation_max_baselines 20 Human baselines one golden set version may hold; 0 uses Scout's default
+	AgentEvaluationComparePageBytes int // agent_evaluation_compare_page_bytes 1048576 Bytes of stored answers one comparison page returns; 0 uses Scout's default
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -541,6 +561,15 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentDefaultLanguage = c.String(rows, agent_default_language)
 	c.AgentDefaultPriorityClass = c.String(rows, agent_default_priority_class)
 	c.AgentDefaultTestTask = c.String(rows, agent_default_test_task)
+	c.AgentReviewFeedbackThreshold = c.Int(rows, agent_review_feedback_threshold)
+	c.AgentReviewMaxPending = c.Int(rows, agent_review_max_pending)
+	c.AgentReviewPageSize = c.Int(rows, agent_review_page_size)
+	c.AgentReviewMaxPageSize = c.Int(rows, agent_review_max_page_size)
+	c.AgentReviewMaxTurnBytes = c.Int(rows, agent_review_max_turn_bytes)
+	c.AgentEvaluationGateMaxResults = c.Int(rows, agent_evaluation_gate_max_results)
+	c.AgentEvaluationBaselineMaxBytes = c.Int(rows, agent_evaluation_baseline_max_bytes)
+	c.AgentEvaluationMaxBaselines = c.Int(rows, agent_evaluation_max_baselines)
+	c.AgentEvaluationComparePageBytes = c.Int(rows, agent_evaluation_compare_page_bytes)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -550,7 +579,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 			judgeErr = fmt.Errorf("agent_evaluation_judge_*: %w", judgeErr)
 		}
 	}
-	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors())
+	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors())
 }
 
 // runtimeRangeErr refuses a negative data plane or runtime tuning flag; zero takes Scout's default.
@@ -637,6 +666,10 @@ func (c *ScoutConfig) limitFlagErrors() error {
 		{agent_evaluation_page_size, c.AgentEvaluationPageSize},
 		{agent_evaluation_max_page_size, c.AgentEvaluationMaxPageSize},
 		{agent_evaluation_judge_max_verdict_bytes, c.AgentEvaluationJudgeMaxVerdictBytes},
+		{agent_evaluation_gate_max_results, c.AgentEvaluationGateMaxResults},
+		{agent_evaluation_baseline_max_bytes, c.AgentEvaluationBaselineMaxBytes},
+		{agent_evaluation_max_baselines, c.AgentEvaluationMaxBaselines},
+		{agent_evaluation_compare_page_bytes, c.AgentEvaluationComparePageBytes},
 	} {
 		if flag.value < 0 {
 			errs = append(errs, fmt.Errorf("%s: %d cannot be negative", flag.name, flag.value))
@@ -672,6 +705,31 @@ func (c *ScoutConfig) defaultTextErrors() error {
 		if len(strings.TrimSpace(flag.value)) > flag.max {
 			errs = append(errs, fmt.Errorf("%s: %q is longer than %d bytes", flag.name, flag.value, flag.max))
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// reviewFlagErrors refuses a feedback threshold outside 0..5, a negative review limit, and a
+// default review page larger than the largest page.
+func (c *ScoutConfig) reviewFlagErrors() error {
+	var errs []error
+	if c.AgentReviewFeedbackThreshold < 0 || c.AgentReviewFeedbackThreshold > domain.ReviewMaxScore {
+		errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d", agent_review_feedback_threshold, c.AgentReviewFeedbackThreshold, domain.ReviewMaxScore))
+	}
+	for _, flag := range []struct {
+		name  string
+		value int
+	}{
+		{agent_review_max_pending, c.AgentReviewMaxPending}, {agent_review_page_size, c.AgentReviewPageSize},
+		{agent_review_max_page_size, c.AgentReviewMaxPageSize}, {agent_review_max_turn_bytes, c.AgentReviewMaxTurnBytes},
+	} {
+		if flag.value < 0 {
+			errs = append(errs, fmt.Errorf("%s: %d cannot be negative", flag.name, flag.value))
+		}
+	}
+	size, maxSize := cmp.Or(c.AgentReviewPageSize, evaluation.DefaultReviewPageSize), cmp.Or(c.AgentReviewMaxPageSize, evaluation.DefaultReviewMaxPageSize)
+	if size > maxSize {
+		errs = append(errs, fmt.Errorf("%s: %d exceeds the largest page %d", agent_review_page_size, size, maxSize))
 	}
 	return errors.Join(errs...)
 }

@@ -20,6 +20,12 @@ type GoldenCase struct {
 	Hidden     bool
 	ModifiedBy PrincipalRef
 	ModifiedAt time.Time
+	// ReviewItemID names the production review item the case was promoted from, and
+	// ReviewAgentID that item's agent; such an input is production content only REVIEW
+	// holders on that agent read. InputWithheld marks an Input withheld from the reader.
+	ReviewItemID  int64
+	ReviewAgentID string
+	InputWithheld bool
 }
 
 // GoldenCaseSet is an agent's golden set as one scope sees it: the working copy,
@@ -75,16 +81,23 @@ const (
 	// SubjectDraft is the agent's current draft frozen exactly as Publish would freeze it, never persisted as a release.
 	SubjectDraft   EvaluationSubjectKind = "draft"
 	SubjectRelease EvaluationSubjectKind = "release"
+	// SubjectBaseline is a recorded human baseline: stored reference outputs, never executed.
+	SubjectBaseline EvaluationSubjectKind = "baseline"
 )
 
 // AgentEvaluationSubject pins one arm of an agent evaluation: a frozen draft
-// identified by its definition digest, or a published release.
+// identified by its definition digest, a published release, or a recorded human baseline.
 type AgentEvaluationSubject struct {
 	Kind    EvaluationSubjectKind
 	AgentID string
 	// Version is the release a release subject runs; empty for a draft.
-	Version          string
+	Version string
+	// DefinitionDigest is empty for a baseline.
 	DefinitionDigest string
+	// Model is the text model a draft subject was frozen on in place of its own; nil is its own.
+	Model *ModelReference
+	// BaselineID is the recorded baseline a baseline subject replays.
+	BaselineID int64
 }
 
 // FrozenDraft is an agent's current draft frozen exactly as Publish would freeze
@@ -132,6 +145,8 @@ type AgentEvaluationEnqueue struct {
 	RequestedBy   PrincipalRef
 	// MaxOpenRuns caps the agent's queued and running evaluations; zero refuses every enqueue.
 	MaxOpenRuns int
+	// Baseline is arm a of a comparison, whose arm b is Subject; nil for a single-subject evaluation.
+	Baseline *EvaluationArm
 }
 
 // AgentEvaluationRun is one queued agent evaluation with its settled totals.
@@ -155,6 +170,8 @@ type AgentEvaluationRun struct {
 	// HiddenResults counts results withheld from the reading scope.
 	HiddenResults int
 	Reason        string
+	// Baseline is arm a of a comparison run, whose arm b is Subject; nil for a single-subject run.
+	Baseline *AgentEvaluationSubject
 }
 
 // AgentEvaluationLease fences one worker's claim on a run; every write names it.
@@ -179,6 +196,8 @@ type AgentEvaluationClaim struct {
 	Recorded map[string]Usage
 	// Unscored are recorded example ids whose scoring failed, with the recorded reason.
 	Unscored map[string]string
+	// Baseline is arm a of a comparison run with its pinned draft or recorded outputs.
+	Baseline *EvaluationArm
 }
 
 // AgentCaseResult is one example's scored outcome as the reading scope may see it.
@@ -192,6 +211,12 @@ type AgentCaseResult struct {
 	Exponent         int
 	NeedsHumanReview bool
 	Reason           string
+	// Output is the stored answer of a comparison arm; empty when none was stored.
+	Output ObjectRef
+	// Answer is Output's content, read back and verified for display.
+	Answer []byte
+	// AnswerOmitted marks a stored answer left out to keep a page within its byte budget.
+	AnswerOmitted bool
 }
 
 // AgentEvaluationPage is one page of a run's results in descending example id

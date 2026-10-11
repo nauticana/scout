@@ -34,6 +34,10 @@ columns:
   - name: modified_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
+  - name: review_item_id
+    type: BIGINT
+    nullable: true
+    comment: The production review item the case was promoted from; its input is production content only REVIEW holders read
 primary_key: [partner_id, golden_set_id, case_id]
 foreign_keys:
   - name: golden_cases
@@ -46,6 +50,11 @@ foreign_keys:
     references:
       table: approval_risk_tier
       columns: [code]
+  - name: review_item_golden_cases
+    columns: [partner_id, review_item_id]
+    references:
+      table: human_review_item
+      columns: [partner_id, id]
 checks:
   - name: golden_case_scope_ck
     expression: scope_code IN ('dev', 'gate')

@@ -1,14 +1,19 @@
 tables:
   - golden_set
+  - human_review_item
   - golden_set_version
   - golden_case
   - agent_golden_set
   - golden_example
   - golden_query
+  - evaluation_baseline
+  - evaluation_baseline_output
   - evaluation_manifest
   - evaluation_run
   - evaluation_run_subject
   - evaluation_result
   - gate_decision
-  - human_review_item
   - evaluation_sample
+  - agent_gate_decision
+  - agent_gate_decision_run
+  - evaluation_comparison

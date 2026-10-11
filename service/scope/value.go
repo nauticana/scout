@@ -9,6 +9,7 @@
 //	autonomy                                                 {"mode":"draft"}
 //	limits                                                   {"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}
 //	approval_routing                                         {"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}
+//	evaluation_gate                                          {"metric":"rubric_score","min_score_bp":8000,"max_regression_bp":200,"min_samples":20,"required_scopes":["dev","gate"]}
 package scope
 
 import (
@@ -254,6 +255,12 @@ func CanonicalValue(kind domain.ResourceKind, raw []byte) ([]byte, error) {
 			return nil, err
 		}
 		return encodeRouting(routing)
+	case NarrowGate:
+		value, err := DecodeEvaluationGate(raw)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(value)
 	default:
 		return nil, fmt.Errorf("%w: unknown resource kind %q", domain.ErrValidation, kind)
 	}

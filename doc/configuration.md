@@ -191,6 +191,15 @@ validates them at load.
 | `agent_evaluation_judge_max_tokens` | int | 512 | 1 | — | Output tokens one rubric verdict may use. |
 | `agent_evaluation_judge_max_input_bytes` | int | 131072 | 1 | — | Largest rubric judge prompt in bytes; a case whose prompt is larger fails its run. |
 | `agent_evaluation_judge_max_verdict_bytes` | int | 8192 | 0 | — | Bytes of one raw rubric verdict, rationale included; a larger verdict is an evaluator error; 0 uses the default 8192. |
+| `agent_evaluation_gate_max_results` | int | 2000 | 0 | — | Results of one evaluation run an evaluation gate decision may read (`StudioEvaluationGate.MaxResults`); a larger run refuses the decision; 0 uses the default 2000. |
+| `agent_evaluation_baseline_max_bytes` | int | 32768 | 0 | — | Bytes of one recorded human baseline output (`EvaluationBaselineStore.MaxOutputBytes`); 0 uses the default 32768. |
+| `agent_evaluation_max_baselines` | int | 20 | 0 | — | Human baselines one golden set version may hold (`EvaluationBaselineStore.MaxBaselines`); 0 uses the default 20. |
+| `agent_evaluation_compare_page_bytes` | int | 1048576 | 0 | — | Bytes of stored answers one Studio comparison page returns (`StudioEvaluation.MaxPageAnswerBytes`); an answer past it is omitted and marked; 0 uses the default 1048576. |
+| `agent_review_feedback_threshold` | int | 2 | 0 | 5 | Highest turn rating that queues a rated turn for Studio review (`ReviewIntake.FeedbackThreshold`); 0 queues none. |
+| `agent_review_max_pending` | int | 1000 | 0 | — | Pending sampled and rated turns one agent's review queue holds before new ones are skipped (`ReviewQueueStore.MaxPending`); concurrent enqueues may overshoot it slightly; 0 uses the default 1000. |
+| `agent_review_page_size` | int | 50 | 0 | `agent_review_max_page_size` | Review items one Studio page returns when the caller names no limit; 0 uses the default 50. |
+| `agent_review_max_page_size` | int | 200 | 0, else ≥ `agent_review_page_size` | — | Largest review item page a Studio caller may ask for; 0 uses the default 200. |
+| `agent_review_max_turn_bytes` | int | 1048576 | 0 | — | Bytes of a reviewed turn's input or response Studio reads or promotes (`StudioReview.MaxTurnBytes`); a larger one is refused; 0 uses the default 1048576. |
 
 ### Release activation
 
@@ -307,6 +316,14 @@ truncation.
 | `evaluation.NewAgentEvaluationWorker(lease, batch, maxAttempts)` | `agent_evaluation_lease`, `agent_evaluation_batch`, `agent_evaluation_max_attempts` | lease at least 1s and longer than the slowest example; batch and attempts positive |
 | `evaluation.AgentEvaluationWorker.{Concurrency,MaxRunCostMinorUnits,Currency}` | `agent_evaluation_concurrency`, `agent_evaluation_max_run_cost`, `agent_evaluation_currency` | concurrency non-negative, below 2 sequential; cost positive minor units, counting judge spend; a three-letter currency, so an empty flag refuses the worker |
 | `evaluation.NewGatewayRubricJudge(gateway, inputs, pricer, settings)` as `AgentEvaluationWorker.Judge` | `agent_evaluation_judge_*` through `ScoutConfig.RubricJudgeSettings()` | compose only when `Configured()`; settings must `Validate()`; the judge route must declare `structured_output` or every graded run fails |
+| `evaluation.AgentEvaluationWorker.{PairJudge,Outputs}` | — | both required for comparison runs, which otherwise fail; `evaluation.GatewayJudge` calls its route strictly through `structured_output` and charges the run's requester |
+| `evaluation.StudioEvaluation.{BaselineStore,Outputs,MaxPageAnswerBytes}` | `agent_evaluation_compare_page_bytes` | the store and reader are required by the `compare` feature only; bytes non-negative, zero takes 1 MiB |
+| `evaluation.EvaluationBaselineStore.{MaxOutputBytes,MaxBaselines}` | `agent_evaluation_baseline_max_bytes`, `agent_evaluation_max_baselines` | non-negative; zero takes 32 KiB / 20 |
+| `controlplane.StudioEvaluationGate.{MaxResults,Audit}` | `agent_evaluation_gate_max_results` | non-negative, zero takes 2000; overrides are refused without `Audit`. Compose it in `StudioService.Guards`, or a publish or restore of a gated agent is refused |
+| `controlplane.StudioService.Audit` | — | required to remove or loosen an evaluation gate |
+| `evaluation.StudioReview.{PageSize,MaxPageSize,MaxTurnBytes}` | `agent_review_page_size`, `agent_review_max_page_size`, `agent_review_max_turn_bytes` | non-negative, the page size within the largest page; zero takes 50 / 200 / 1 MiB |
+| `evaluation.ReviewQueueStore.{MaxPending,MaxExpectedBytes}` | `agent_review_max_pending`, `agent_evaluation_case_max_bytes` | non-negative; zero takes 1000 / 32 KiB |
+| `evaluation.ReviewIntake.FeedbackThreshold` | `agent_review_feedback_threshold` | 0 to 5; zero queues no rated turn. Set the intake as `BaseDataPlane.Review` and `TurnFeedback.Review`; both offer turns best-effort |
 | `evaluation.ReleaseCaseExecutor.ReleaseLimits` | — | required: the data plane's `PrincipalLimits`; the replayed release's frozen `limits` only narrow the executor's tool-call, step, and deadline ceilings |
 | `controlplane.StudioService.TemplateLimits.{MaxPerType,MaxVersions}` | `agent_studio_max_templates_per_type`, `agent_studio_max_template_versions` | non-negative; a zero `MaxPerType` refuses every new template and a zero `MaxVersions` every save |
 | `controlplane.ReleaseActivationWorker.Settings` | `agent_activation_batch`, `agent_activation_poll`, `agent_activation_max_attempts` through `ScoutConfig.ReleaseActivationSettings()` | all positive; poll at least 1s; a transient failure retries after attempts × poll |

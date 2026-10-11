@@ -145,6 +145,13 @@ func (s *StudioService) SaveSetting(ctx context.Context, actor domain.StudioActo
 	if _, err = s.compileSettings(ctx, actor.TenantID, scopes.AgentScopeID, change.AgentID, &binding, nil); err != nil {
 		return domain.AgentSettings{}, err
 	}
+	var loosening *gateLoosening
+	if change.ResourceKind == domain.ResourceEvaluationGate {
+		after := changedScopes{ScopeRepository: s.scopeRepository(), change: binding}
+		if loosening, err = s.checkGateChange(ctx, actor, change.AgentID, change.ScopeID, after); err != nil {
+			return domain.AgentSettings{}, err
+		}
+	}
 	bump, args := qStudioBumpDraft, []any{actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision}
 	if change.ScopeID == scopes.TypeScopeID {
 		bump, args = qStudioBumpAlias, []any{actorUser(actor), actor.TenantID, draft.AgentTypeID, change.ExpectedPromptProfileRevision}
@@ -174,6 +181,9 @@ func (s *StudioService) SaveSetting(ctx context.Context, actor domain.StudioActo
 	if err = auditStudio(ctx, tx, actor, change.AgentID, "SETTING", detail); err != nil {
 		return domain.AgentSettings{}, err
 	}
+	if err = s.recordGateLoosening(ctx, tx, actor, loosening); err != nil {
+		return domain.AgentSettings{}, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return domain.AgentSettings{}, fmt.Errorf("commit setting: %w", err)
 	}
@@ -196,6 +206,7 @@ func (s *StudioService) freeze(ctx context.Context, tenantID int64, draft domain
 	if err = validateSingletonSettings(release.Resources); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
+	release = scope.WithoutEvaluationGate(release)
 	if err = s.init(ctx); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
@@ -389,7 +400,8 @@ func settingBinding(actor domain.StudioActor, scopes domain.PromptScopes, change
 func singletonSetting(kind domain.ResourceKind) bool {
 	switch kind {
 	case domain.ResourceTool, domain.ResourceKnowledge, domain.ResourceModel, domain.ResourceEntitlement,
-		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill, domain.ResourceLimits, domain.ResourceApprovalRouting:
+		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill, domain.ResourceLimits, domain.ResourceApprovalRouting,
+		domain.ResourceEvaluationGate:
 		return true
 	default:
 		return false

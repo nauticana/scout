@@ -35,13 +35,13 @@ func judgeOrNil(judge *fake.JudgeEvaluator) contract.JudgeEvaluator {
 	return judge
 }
 
-func testRunner(executor fake.CaseExecutorFunc, judge *fake.JudgeEvaluator, queue *MemoryReviewQueue) *Runner {
+func testRunner(executor fake.CaseExecutorFunc, judge *fake.JudgeEvaluator) *Runner {
 	return &Runner{
-		Executor: executor,
-		Judge:    judgeOrNil(judge),
-		Review:   queue,
-		Scorer:   &PairedScorer{Seed: 9, Resamples: 100, Policy: domain.PromotionPolicy{MinSamples: 1, Tolerances: map[string]float64{domain.MetricCorrectness: 0.5}}},
-		Now:      fixedClock(testClock),
+		Executor:  executor,
+		Judge:     judgeOrNil(judge),
+		Principal: domain.PrincipalRef{Kind: domain.PrincipalService, ID: "evaluation"},
+		Scorer:    &PairedScorer{Seed: 9, Resamples: 100, Policy: domain.PromotionPolicy{MinSamples: 1, Tolerances: map[string]float64{domain.MetricCorrectness: 0.5}}},
+		Now:       fixedClock(testClock),
 	}
 }
 
@@ -58,7 +58,7 @@ func TestRunnerPreservesBaselineRetrievalForTheCandidate(t *testing.T) {
 	})
 	examples := []domain.GoldenExample{testExample("a"), testExample("b")}
 	manifest := testManifest(t, examples...)
-	runner := testRunner(executor, nil, &MemoryReviewQueue{Now: fixedClock(testClock)})
+	runner := testRunner(executor, nil)
 
 	if _, err := runner.Run(context.Background(), manifest, examples); err != nil {
 		t.Fatal(err)
@@ -89,7 +89,6 @@ func TestRunnerRoutesLowConfidenceDisagreementAndHighRiskToReview(t *testing.T) 
 	examples := []domain.GoldenExample{testExample("a"), testExample("b"), testExample("c")}
 	examples[2].RiskTier = "critical"
 	manifest := testManifest(t, examples...)
-	queue := &MemoryReviewQueue{Now: fixedClock(testClock)}
 	judge := &fake.JudgeEvaluator{
 		EvaluatorVersion: domain.EvaluatorVersion{Kind: "judge", Version: "j1"},
 		CompareFunc: func(_ context.Context, pair domain.EvaluationPair) (domain.JudgeVerdict, error) {
@@ -110,7 +109,12 @@ func TestRunnerRoutesLowConfidenceDisagreementAndHighRiskToReview(t *testing.T) 
 			return []domain.EvaluationScore{{Metric: domain.MetricCorrectness, Value: 1, Confidence: 1, Evaluator: domain.EvaluatorVersion{Kind: "heuristic", Version: "h1"}}}, nil
 		},
 	}
-	runner := testRunner(staticExecutor(map[domain.EvaluationRole]string{domain.RoleBaseline: "b", domain.RoleCandidate: "c"}), judge, queue)
+	runner := testRunner(staticExecutor(map[domain.EvaluationRole]string{domain.RoleBaseline: "b", domain.RoleCandidate: "c"}), judge)
+	var persisted []domain.EvaluationResult
+	runner.Results = &fake.EvaluationResultStore{PutResultsFunc: func(_ context.Context, _ int64, _ int64, results []domain.EvaluationResult) error {
+		persisted = append(persisted, results...)
+		return nil
+	}}
 	runner.Heuristics = []contract.HeuristicEvaluator{heuristic}
 	runner.HighRiskTiers = []string{"critical"}
 
@@ -121,13 +125,11 @@ func TestRunnerRoutesLowConfidenceDisagreementAndHighRiskToReview(t *testing.T) 
 	if summary.HumanReviewPending != 6 {
 		t.Fatalf("review pending = %d", summary.HumanReviewPending)
 	}
-	items, err := queue.Next(context.Background(), manifest.TenantID, 10)
-	if err != nil || len(items) != 3 {
-		t.Fatalf("queued = %d, %v", len(items), err)
-	}
 	reasons := map[string]string{}
-	for _, item := range items {
-		reasons[item.ExampleID] = item.Reason
+	for _, result := range persisted {
+		if result.NeedsHumanReview {
+			reasons[result.ExampleID] = result.Reason
+		}
 	}
 	if !strings.Contains(reasons["a"], "confidence") || !strings.Contains(reasons["b"], "disagree") || !strings.Contains(reasons["c"], "high risk") {
 		t.Fatalf("reasons = %v", reasons)
@@ -143,7 +145,7 @@ func TestRunnerCachesJudgeInputsByDigest(t *testing.T) {
 		}}
 	// Both examples produce identical blinded inputs except the example id, so
 	// only a replay of the same example may hit the cache.
-	runner := testRunner(staticExecutor(map[domain.EvaluationRole]string{domain.RoleBaseline: "same", domain.RoleCandidate: "same"}), judge, &MemoryReviewQueue{Now: fixedClock(testClock)})
+	runner := testRunner(staticExecutor(map[domain.EvaluationRole]string{domain.RoleBaseline: "same", domain.RoleCandidate: "same"}), judge)
 	if _, err := runner.Run(context.Background(), manifest, examples); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +186,7 @@ func TestRunnerStopsEarlyWhenTheEffectIsDecided(t *testing.T) {
 			}
 			return []domain.EvaluationScore{{Metric: domain.MetricCorrectness, Value: value, Confidence: 1, Evaluator: domain.EvaluatorVersion{Kind: "heuristic", Version: "h1"}}}, nil
 		}}
-	runner := testRunner(executor, nil, &MemoryReviewQueue{Now: fixedClock(testClock)})
+	runner := testRunner(executor, nil)
 	runner.Heuristics = []contract.HeuristicEvaluator{heuristic}
 	runner.EarlyStopBatch = 2
 	runner.Scorer = &PairedScorer{Seed: 4, Resamples: 200, Policy: domain.PromotionPolicy{MinSamples: 2, Tolerances: map[string]float64{domain.MetricCorrectness: 0.01}}}
@@ -221,7 +223,7 @@ func TestRunnerRecordsRunLifecycleAndFailure(t *testing.T) {
 			return nil
 		},
 	}
-	runner := testRunner(staticExecutor(map[domain.EvaluationRole]string{domain.RoleBaseline: "b", domain.RoleCandidate: "c"}), nil, &MemoryReviewQueue{Now: fixedClock(testClock)})
+	runner := testRunner(staticExecutor(map[domain.EvaluationRole]string{domain.RoleBaseline: "b", domain.RoleCandidate: "c"}), nil)
 	runner.Results = store
 	if _, err := runner.Run(context.Background(), manifest, examples); err != nil {
 		t.Fatal(err)
@@ -232,7 +234,7 @@ func TestRunnerRecordsRunLifecycleAndFailure(t *testing.T) {
 
 	failing := testRunner(fake.CaseExecutorFunc(func(context.Context, domain.EvaluationSubject, domain.GoldenExample, []domain.KnowledgeMatch) (domain.EvaluationCase, error) {
 		return domain.EvaluationCase{}, errors.New("provider down")
-	}), nil, &MemoryReviewQueue{Now: fixedClock(testClock)})
+	}), nil)
 	statuses = nil
 	failing.Results = store
 	if _, err := failing.Run(context.Background(), manifest, examples); err == nil {
@@ -246,7 +248,7 @@ func TestRunnerRecordsRunLifecycleAndFailure(t *testing.T) {
 func TestRunnerValidation(t *testing.T) {
 	examples := []domain.GoldenExample{testExample("a")}
 	manifest := testManifest(t, examples...)
-	runner := testRunner(staticExecutor(nil), nil, &MemoryReviewQueue{})
+	runner := testRunner(staticExecutor(nil), nil)
 	if _, err := runner.Run(context.Background(), manifest, nil); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("no examples = %v", err)
 	}

@@ -1,0 +1,35 @@
+table: evaluation_baseline_output
+comment: One human reference output of a baseline, kept in object storage
+columns:
+  - name: baseline_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: set_version
+    type: BIGINT
+  - name: example_id
+    type: VARCHAR(120)
+  - name: output_uri
+    type: VARCHAR(500)
+  - name: output_digest
+    type: CHAR(64)
+primary_key: [baseline_id, example_id]
+foreign_keys:
+  - name: evaluation_baseline_outputs
+    columns: [partner_id, baseline_id]
+    references:
+      table: evaluation_baseline
+      columns: [partner_id, id]
+  - name: example_baseline_outputs
+    columns: [partner_id, golden_set_id, set_version, example_id]
+    references:
+      table: golden_example
+      columns: [partner_id, golden_set_id, set_version, example_id]
+indexes:
+  - name: evaluation_baseline_output_example_ix
+    columns: [partner_id, golden_set_id, set_version, example_id]
+checks:
+  - name: evaluation_baseline_output_digest_ck
+    expression: CHAR_LENGTH(output_digest) = 64

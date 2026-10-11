@@ -99,7 +99,7 @@ func (enforcer *SamplingPolicyEnforcer) Sample(ctx context.Context, signal domai
 	if err := validateSamplingPolicy(policy); err != nil {
 		return "", err
 	}
-	if policy.OptOut || (policy.RedactionRequired && !signal.Redacted) || (policy.ResidencyRegion != "" && signal.TenantContext.Region != policy.ResidencyRegion) {
+	if !policyAdmits(policy, signal.TenantContext, signal.Redacted) {
 		return "", nil
 	}
 	rate, reason := policy.BaseRate, sampleReasonBase
@@ -149,6 +149,11 @@ func (enforcer *SamplingPolicyEnforcer) uncertaintyThreshold() float64 {
 		return enforcer.UncertaintyThreshold
 	}
 	return 0.5
+}
+
+// policyAdmits applies the tenant's opt-out, redaction requirement, and residency to one turn.
+func policyAdmits(policy domain.SamplingPolicy, tenant domain.TenantContext, redacted bool) bool {
+	return !policy.OptOut && (!policy.RedactionRequired || redacted) && (policy.ResidencyRegion == "" || tenant.Region == policy.ResidencyRegion)
 }
 
 func validateSamplingPolicy(policy domain.SamplingPolicy) error {
