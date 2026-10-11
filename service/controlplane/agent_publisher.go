@@ -14,9 +14,8 @@ import (
 type AgentPublisher struct {
 	Compiler contract.AgentCompiler
 	Store    contract.AgentPublicationStore
-	// Effective and Releases are optional and set together; when present, the
-	// scope chain is compiled and frozen so the runtime never resolves inheritance
-	// on the request path. A binding that broadens what it inherits fails here.
+	// Effective and Releases freeze the scope chain into the release every turn and
+	// tool call reads; a binding that broadens what it inherits fails here.
 	Effective contract.EffectiveConfigCompiler
 	Releases  contract.EffectiveReleaseRepository
 	// ScopeID is the scope a published agent compiles against.
@@ -31,8 +30,8 @@ func (publisher *AgentPublisher) Publish(ctx context.Context, tenantID int64, de
 	if !validSHA256(definition.DefinitionDigest) {
 		return fmt.Errorf("%w: definition digest must contain 64 hexadecimal characters", domain.ErrValidation)
 	}
-	if publisher.Compiler == nil || publisher.Store == nil {
-		return fmt.Errorf("agent publisher: compiler and publication store are required")
+	if publisher.Compiler == nil || publisher.Store == nil || publisher.Effective == nil || publisher.Releases == nil {
+		return fmt.Errorf("agent publisher: compiler, publication store, effective compiler, and release repository are required")
 	}
 	graph, err := publisher.Compiler.Compile(ctx, definition)
 	if err != nil {
@@ -48,12 +47,6 @@ func (publisher *AgentPublisher) Publish(ctx context.Context, tenantID int64, de
 }
 
 func (publisher *AgentPublisher) freeze(ctx context.Context, tenantID int64, definition domain.AgentDefinition) error {
-	if publisher.Effective == nil && publisher.Releases == nil {
-		return nil
-	}
-	if publisher.Effective == nil || publisher.Releases == nil {
-		return fmt.Errorf("agent publisher: effective compilation needs both a compiler and a release repository")
-	}
 	release, err := publisher.Effective.Compile(ctx, domain.CompileRequest{
 		TenantID: tenantID, AgentID: definition.AgentID, AgentVersion: definition.Version,
 		ScopeID: publisher.ScopeID, CompiledBy: definition.PublishedBy,

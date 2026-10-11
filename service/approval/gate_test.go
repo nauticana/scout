@@ -42,6 +42,10 @@ func (s *stubStore) Resolve(_ context.Context, verdict domain.ApprovalVerdict) (
 	return s.stored, nil
 }
 
+func (s *stubStore) Revision(context.Context, domain.ApprovalKey) (domain.ProposalRevision, error) {
+	return domain.ProposalRevision{}, domain.ErrNotFound
+}
+
 func toolCall(arguments string) domain.ToolCall {
 	return domain.ToolCall{
 		TenantContext: domain.TenantContext{TenantID: 7},
@@ -80,7 +84,6 @@ func TestGateReturnsTheRecordedVerdict(t *testing.T) {
 	for status, want := range map[domain.ApprovalStatus]domain.ApprovalDecision{
 		domain.ApprovalStatusApproved: domain.ApprovalApproved,
 		domain.ApprovalStatusRejected: domain.ApprovalDenied,
-		domain.ApprovalStatusEdited:   domain.ApprovalDenied,
 		domain.ApprovalStatusExpired:  domain.ApprovalDenied,
 	} {
 		store.stored.Status = status
@@ -88,6 +91,11 @@ func TestGateReturnsTheRecordedVerdict(t *testing.T) {
 		if err != nil || decision != want {
 			t.Fatalf("%s: decision = %q, error = %v, want %q", status, decision, err, want)
 		}
+	}
+	// An edited proposal never runs as proposed; asking to run it ends the turn.
+	store.stored.Status = domain.ApprovalStatusEdited
+	if decision, err := g.Decide(context.Background(), call, "release.approve"); decision != domain.ApprovalDenied || !errors.Is(err, domain.ErrProposalRevised) {
+		t.Fatalf("edited: decision = %q, error = %v, want denied with ErrProposalRevised", decision, err)
 	}
 }
 

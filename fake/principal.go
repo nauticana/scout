@@ -191,10 +191,19 @@ func (e *EffectiveConfigExplainer) Diff(ctx context.Context, tenantID int64, age
 	return nil, nil
 }
 
-// PrincipalLimits contains configurable budget and autonomy reads.
+// PrincipalLimits contains configurable budget, autonomy, and execution-limit reads.
 type PrincipalLimits struct {
-	BudgetFunc       func(context.Context, domain.Principal) (domain.BudgetLimits, error)
-	AutonomyModeFunc func(context.Context, domain.Principal, time.Time) (domain.AutonomyMode, error)
+	BudgetFunc          func(context.Context, domain.Principal) (domain.BudgetLimits, error)
+	AutonomyModeFunc    func(context.Context, domain.Principal, time.Time) (domain.AutonomyMode, error)
+	ExecutionLimitsFunc func(context.Context, domain.Principal) (domain.ExecutionLimits, error)
+}
+
+// ExecutionLimits invokes ExecutionLimitsFunc when configured; the default limits nothing.
+func (l *PrincipalLimits) ExecutionLimits(ctx context.Context, principal domain.Principal) (domain.ExecutionLimits, error) {
+	if l.ExecutionLimitsFunc != nil {
+		return l.ExecutionLimitsFunc(ctx, principal)
+	}
+	return domain.ExecutionLimits{}, nil
 }
 
 // Budget invokes BudgetFunc when configured.

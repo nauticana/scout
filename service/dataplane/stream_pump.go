@@ -166,11 +166,12 @@ func (pump *StreamPump) publish(ctx context.Context, turn domain.TurnRequest, ro
 func addChunkUsage(total *domain.Usage, usage domain.Usage) error {
 	const maxInt64 = int64(^uint64(0) >> 1)
 	const maxInt = int(^uint(0) >> 1)
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.CostMinorUnits < 0 {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: stream usage cannot be negative", domain.ErrValidation)
 	}
 	if total.InputTokens > maxInt64-usage.InputTokens || total.OutputTokens > maxInt64-usage.OutputTokens ||
-		total.ToolCalls > maxInt-usage.ToolCalls || total.CostMinorUnits > maxInt64-usage.CostMinorUnits {
+		total.ToolCalls > maxInt-usage.ToolCalls || total.SearchQueries > maxInt64-usage.SearchQueries ||
+		total.CostMinorUnits > maxInt64-usage.CostMinorUnits {
 		return fmt.Errorf("%w: stream usage overflow", domain.ErrValidation)
 	}
 	if usage.CostMinorUnits > 0 && len(usage.Currency) != 3 {
@@ -179,10 +180,16 @@ func addChunkUsage(total *domain.Usage, usage domain.Usage) error {
 	if total.Currency != "" && usage.Currency != "" && total.Currency != usage.Currency {
 		return fmt.Errorf("%w: stream usage currencies differ", domain.ErrValidation)
 	}
+	models, err := mergeModelSpend(total.Models, usage.Models)
+	if err != nil {
+		return err
+	}
 	total.InputTokens += usage.InputTokens
 	total.OutputTokens += usage.OutputTokens
 	total.ToolCalls += usage.ToolCalls
+	total.SearchQueries += usage.SearchQueries
 	total.CostMinorUnits += usage.CostMinorUnits
+	total.Models = models
 	if total.Currency == "" {
 		total.Currency = usage.Currency
 	}

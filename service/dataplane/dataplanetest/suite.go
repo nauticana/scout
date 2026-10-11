@@ -6,6 +6,7 @@ package dataplanetest
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -220,12 +221,13 @@ func RunIdempotencySuite(t *testing.T, newHarness func(*testing.T) IdempotencyHa
 		if _, replayed, err := harness.Store.Begin(ctx, 1, "request-1", step); err != nil || replayed {
 			t.Fatalf("first begin replayed = %v, error = %v", replayed, err)
 		}
-		want := domain.StepResult{State: []byte("state"), NextStepID: "", Fingerprint: "f", Usage: domain.Usage{OutputTokens: 3, Currency: "USD"}}
+		usage := domain.Usage{OutputTokens: 3, ToolCalls: 1, Currency: "USD"}.AttributedTo(domain.ModelReference{ProviderID: "openai", ModelID: "gpt"})
+		want := domain.StepResult{State: []byte("state"), NextStepID: "", Fingerprint: "f", Usage: usage}
 		if err := harness.Store.Commit(ctx, 1, "request-1", step, want); err != nil {
 			t.Fatal(err)
 		}
 		got, replayed, err := harness.Store.Begin(ctx, 1, "request-1", step)
-		if err != nil || !replayed || string(got.State) != string(want.State) || got.Usage != want.Usage {
+		if err != nil || !replayed || string(got.State) != string(want.State) || !reflect.DeepEqual(got.Usage, want.Usage) {
 			t.Fatalf("replay = %+v, replayed = %v, error = %v", got, replayed, err)
 		}
 	})

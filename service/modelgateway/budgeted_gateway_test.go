@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -54,7 +55,7 @@ func TestBudgetedGatewayReservesBeforeTheCallAndSettlesConfirmedUsage(t *testing
 		t.Fatalf("reserved = %+v", reserved)
 	}
 	reservations, settled, released := recorder.snapshot()
-	if len(reservations) != 1 || len(released) != 0 || settled["request"] != usage {
+	if len(reservations) != 1 || len(released) != 0 || !reflect.DeepEqual(settled["request"], usage) {
 		t.Fatalf("reserved %v, settled %v, released %v", reservations, settled, released)
 	}
 	if len(order) != 1 {
@@ -192,7 +193,7 @@ func TestBudgetedGatewayStreamSettlesOnceWhenTheStreamFinishes(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	_, settled, released := recorder.snapshot()
-	if len(released) != 0 || settled["request"] != usage {
+	if len(released) != 0 || !reflect.DeepEqual(settled["request"], usage) {
 		t.Fatalf("the stream settles its own confirmed usage exactly once: settled %v, released %v", settled, released)
 	}
 }

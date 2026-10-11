@@ -21,10 +21,28 @@ type encodedLayer struct {
 	guardrails []byte
 }
 
-// encodeLayer validates that a layer only restricts — deny statements, and
+// encodeLayer is canonicalLayer with its guardrail rules compiled, which needs rules
+// when the layer has any.
+func encodeLayer(ctx context.Context, rules contract.GuardrailRuleCompiler, layer domain.RestrictionLayer) (encodedLayer, error) {
+	encoded, err := canonicalLayer(layer)
+	if err != nil || len(encoded.layer.Guardrails) == 0 {
+		return encoded, err
+	}
+	if rules == nil {
+		return encodedLayer{}, fmt.Errorf("%w: a guardrail rule compiler is required to write restriction guardrails", domain.ErrNotReady)
+	}
+	ruleDigest := sha256.Sum256(encoded.guardrails)
+	config := domain.GuardrailConfig{Version: "restriction", RulesDigest: hex.EncodeToString(ruleDigest[:]), Rules: encoded.guardrails}
+	if _, err = rules.Validate(ctx, config); err != nil {
+		return encodedLayer{}, err
+	}
+	return encoded, nil
+}
+
+// canonicalLayer validates that a layer only restricts — deny statements, and
 // guardrail rules that block or redact — and canonicalizes it, so equal layers
 // share a digest however they were ordered.
-func encodeLayer(ctx context.Context, rules contract.GuardrailRuleCompiler, layer domain.RestrictionLayer) (encodedLayer, error) {
+func canonicalLayer(layer domain.RestrictionLayer) (encodedLayer, error) {
 	denials := slices.Clone(layer.Denials)
 	for i := range denials {
 		denials[i].ID = strings.TrimSpace(denials[i].ID)
@@ -51,16 +69,6 @@ func encodeLayer(ctx context.Context, rules contract.GuardrailRuleCompiler, laye
 	ruleJSON, err := json.Marshal(domain.GuardrailRuleSet{SchemaVersion: guardrail.RuleSetSchemaVersion, Rules: ruleList})
 	if err != nil {
 		return encodedLayer{}, fmt.Errorf("%w: restriction guardrails: %v", domain.ErrValidation, err)
-	}
-	if len(ruleList) > 0 {
-		if rules == nil {
-			return encodedLayer{}, fmt.Errorf("%w: a guardrail rule compiler is required to write restriction guardrails", domain.ErrNotReady)
-		}
-		ruleDigest := sha256.Sum256(ruleJSON)
-		config := domain.GuardrailConfig{Version: "restriction", RulesDigest: hex.EncodeToString(ruleDigest[:]), Rules: ruleJSON}
-		if _, err = rules.Validate(ctx, config); err != nil {
-			return encodedLayer{}, err
-		}
 	}
 	return encodedLayer{
 		layer:   domain.RestrictionLayer{Digest: layerDigest(denialJSON, ruleJSON), Denials: denials, Guardrails: ruleList},

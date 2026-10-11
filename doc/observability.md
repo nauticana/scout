@@ -50,6 +50,27 @@ folds a replica's sketch in and refuses an incompatible width, depth, or seed, s
 is only ever done on compatible sketches. The sketch never underestimates; its additive error is
 `e/Width × window total`, exceeded with probability at most `e^-Depth`.
 
+## Exact records per agent and model
+
+Fleet series carry no tenant, agent, or person, so per-agent views read exact records instead:
+
+- **Usage per model.** `Usage.Models` (`domain.ModelSpend`) is the share each model performed, costed in the
+  usage currency; the model gateway attributes usage to the route that served the call. Settlement writes one
+  `usage_event` row per provider and model, plus one row with no model for the remainder (tool calls, and spend
+  nothing attributed). A turn and category settle once, under an advisory lock in the caller's transaction, and
+  a breakdown that exceeds the totals, repeats or blanks a model, or is negative is refused before any write. The
+  ledger stages the breakdown in `conversation_turn_detail.staged_model_usage`, so crash recovery writes the same
+  rows. Studio's `usage` report groups by release, model, person, work item, and currency; a turn that used two
+  models counts on both model lines.
+- **Safety events.** `safety_event` keeps each guardrail intervention's attribution — inspected agent, request id,
+  stage, layer, action, severity, rule ids, release, policy version — never the inspected content.
+  `TableSafetyEventSink.SafetyEvents` pages one agent's events newest first, at most `MaxSafetyEventPage` per page,
+  behind Studio's `safety-events` route.
+- **Limits and spend.** Studio's `limits` report (`dataplane.StudioLimits`) shows the stable release's frozen
+  limits and budget, the agent's turns opened in the last minute, and, when composition sets a budget window, its
+  settled spend over `[now − window, now)` with the currency's catalog exponent. Cost counts only usage in the
+  budget's currency; in-flight reservations are not included.
+
 ## Audit trail
 
 `AuditingObservationRecorder` wraps any recorder and writes a `domain.DecisionRecord` for every `rejected` or

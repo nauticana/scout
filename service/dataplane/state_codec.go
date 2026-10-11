@@ -25,10 +25,7 @@ var ErrDigestMismatch = errors.New("object digest mismatch")
 // ObjectStateCodec moves large state between memory and object storage; rows
 // keep only the returned reference.
 type ObjectStateCodec interface {
-	// Dehydrate stores payload under a deterministic, content-addressed key.
-	Dehydrate(ctx context.Context, name string, payload []byte) (domain.ObjectRef, error)
-	// Hydrate loads the referenced payload and verifies its digest.
-	Hydrate(ctx context.Context, ref domain.ObjectRef) ([]byte, error)
+	contract.EvidenceArchive
 	// Delete removes the referenced object.
 	Delete(ctx context.Context, ref domain.ObjectRef) error
 }
@@ -204,5 +201,6 @@ func (store *ObjectStateStore) VerifyObject(ctx context.Context, tenantID int64,
 
 var (
 	_ ObjectStateCodec                = (*ObjectStateStore)(nil)
+	_ contract.EvidenceArchive        = (*ObjectStateStore)(nil)
 	_ contract.EvidenceObjectVerifier = (*ObjectStateStore)(nil)
 )

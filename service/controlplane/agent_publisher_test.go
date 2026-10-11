@@ -18,11 +18,20 @@ func validGraph() domain.ExecutionGraph {
 	return domain.ExecutionGraph{AgentID: "agent", Version: "v1", Digest: strings.Repeat("b", 64), EntryStepID: "start"}
 }
 
+// frozen adds the effective-release collaborators every publisher needs.
+func frozen(publisher *AgentPublisher) *AgentPublisher {
+	publisher.Effective = fake.EffectiveConfigCompilerFunc(func(_ context.Context, request domain.CompileRequest) (domain.EffectiveRelease, error) {
+		return domain.EffectiveRelease{TenantID: request.TenantID, AgentID: request.AgentID, AgentVersion: request.AgentVersion}, nil
+	})
+	publisher.Releases = effectiveReleaseSink(func(domain.EffectiveRelease) error { return nil })
+	return publisher
+}
+
 func TestAgentPublisherCompilesAndStores(t *testing.T) {
 	definition := validDefinition()
 	graph := validGraph()
 	stored := false
-	publisher := &AgentPublisher{
+	publisher := frozen(&AgentPublisher{
 		Compiler: fake.AgentCompilerFunc(func(_ context.Context, got domain.AgentDefinition) (domain.ExecutionGraph, error) {
 			if got.AgentID != definition.AgentID {
 				t.Fatalf("definition = %+v", got)
@@ -36,7 +45,7 @@ func TestAgentPublisherCompilesAndStores(t *testing.T) {
 			}
 			return nil
 		}),
-	}
+	})
 	if err := publisher.Publish(context.Background(), 7, definition); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -48,7 +57,7 @@ func TestAgentPublisherCompilesAndStores(t *testing.T) {
 func TestAgentPublisherStopsAfterCompilerFailure(t *testing.T) {
 	want := errors.New("compile failed")
 	stored := false
-	publisher := &AgentPublisher{
+	publisher := frozen(&AgentPublisher{
 		Compiler: fake.AgentCompilerFunc(func(context.Context, domain.AgentDefinition) (domain.ExecutionGraph, error) {
 			return domain.ExecutionGraph{}, want
 		}),
@@ -56,7 +65,7 @@ func TestAgentPublisherStopsAfterCompilerFailure(t *testing.T) {
 			stored = true
 			return nil
 		}),
-	}
+	})
 	err := publisher.Publish(context.Background(), 7, validDefinition())
 	if !errors.Is(err, want) || stored {
 		t.Fatalf("error = %v, stored = %v", err, stored)
@@ -66,7 +75,7 @@ func TestAgentPublisherStopsAfterCompilerFailure(t *testing.T) {
 func TestAgentPublisherRejectsInconsistentGraph(t *testing.T) {
 	graph := validGraph()
 	graph.Version = "other"
-	publisher := &AgentPublisher{
+	publisher := frozen(&AgentPublisher{
 		Compiler: fake.AgentCompilerFunc(func(context.Context, domain.AgentDefinition) (domain.ExecutionGraph, error) {
 			return graph, nil
 		}),
@@ -74,7 +83,7 @@ func TestAgentPublisherRejectsInconsistentGraph(t *testing.T) {
 			t.Fatal("store must not be called")
 			return nil
 		}),
-	}
+	})
 	if err := publisher.Publish(context.Background(), 7, validDefinition()); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v", err)
 	}
@@ -91,14 +100,14 @@ func TestAgentPublisherRejectsNonHexDigest(t *testing.T) {
 
 func TestAgentPublisherSurfacesStoreFailure(t *testing.T) {
 	want := errors.New("store failed")
-	publisher := &AgentPublisher{
+	publisher := frozen(&AgentPublisher{
 		Compiler: fake.AgentCompilerFunc(func(context.Context, domain.AgentDefinition) (domain.ExecutionGraph, error) {
 			return validGraph(), nil
 		}),
 		Store: fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error {
 			return want
 		}),
-	}
+	})
 	if err := publisher.Publish(context.Background(), 7, validDefinition()); !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
 	}
@@ -150,4 +159,23 @@ func (sink effectiveReleaseSink) Put(_ context.Context, release domain.Effective
 
 func (effectiveReleaseSink) Get(context.Context, int64, string, string) (domain.EffectiveRelease, error) {
 	return domain.EffectiveRelease{}, domain.ErrNotFound
+}
+
+func TestAgentPublisherRefusesToPublishWithoutFreezing(t *testing.T) {
+	noCompiler, noRepository := frozen(&AgentPublisher{}), frozen(&AgentPublisher{})
+	noCompiler.Effective, noRepository.Releases = nil, nil
+	for name, publisher := range map[string]*AgentPublisher{
+		"no effective compiler": noCompiler, "no release repository": noRepository, "neither": {},
+	} {
+		publisher.Compiler = fake.AgentCompilerFunc(func(context.Context, domain.AgentDefinition) (domain.ExecutionGraph, error) {
+			return validGraph(), nil
+		})
+		publisher.Store = fake.AgentPublicationStoreFunc(func(context.Context, int64, domain.AgentDefinition, domain.ExecutionGraph) error {
+			t.Fatalf("%s: stored a release without its frozen settings", name)
+			return nil
+		})
+		if err := publisher.Publish(context.Background(), 7, validDefinition()); err == nil {
+			t.Fatalf("%s: publication succeeded without a frozen release", name)
+		}
+	}
 }

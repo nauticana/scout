@@ -79,13 +79,66 @@ type ReleaseWriter interface {
 }
 
 func (s *StudioService) writeRelease(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
-	if (len(definition.Tools) > 0 || definition.ToolLoop != nil || len(definition.Skills) > 0) && len(s.ReleaseWriters) == 0 {
-		return fmt.Errorf("%w: definition %q declares tools, a tool loop, or skills but no release writer is composed", domain.ErrNotReady, definition.AgentID)
-	}
 	for _, writer := range s.ReleaseWriters {
 		if err := writer.WriteRelease(ctx, tx, tenantID, definition); err != nil {
 			return err
 		}
+	}
+	if err := requireReleaseBindings(ctx, tx, tenantID, definition); err != nil {
+		return err
+	}
+	return requirePinnedGuardrails(ctx, tx, tenantID, definition)
+}
+
+// requireReleaseBindings refuses a release whose tools, skills, or tool loop no composed writer
+// bound, so it never publishes an agent whose every tool call would be denied.
+func requireReleaseBindings(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
+	tools := map[string]struct{}{}
+	for _, tool := range definition.Tools {
+		tools[tool.ToolID] = struct{}{}
+	}
+	skills := map[string]struct{}{}
+	for _, skill := range definition.Skills {
+		skills[skill.SkillID] = struct{}{}
+	}
+	graphs := 0
+	if definition.ToolLoop != nil {
+		graphs = 1
+	}
+	for _, binding := range []struct {
+		query, what string
+		declared    int
+	}{{qStudioReleaseTools, "tools", len(tools)}, {qStudioReleaseSkills, "skills", len(skills)}, {qStudioReleaseGraph, "a tool loop", graphs}} {
+		if binding.declared == 0 {
+			continue
+		}
+		bound, err := tx.Query(ctx, binding.query, tenantID, definition.AgentID, definition.Version)
+		if err != nil {
+			return fmt.Errorf("read release %s: %w", binding.what, err)
+		}
+		if len(bound.Rows) == 0 || common.AsInt64(bound.Rows[0][0]) < int64(binding.declared) {
+			return fmt.Errorf("%w: release %s of %q declares %s that no release writer bound", domain.ErrNotReady, definition.Version, definition.AgentID, binding.what)
+		}
+	}
+	return nil
+}
+
+// requirePinnedGuardrails refuses a release whose definition froze guardrails that no composed
+// writer named on agent_version, so it never runs without the rule set it carries.
+func requirePinnedGuardrails(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
+	if _, frozen := definition.Sections[GuardrailSectionName]; !frozen {
+		return nil
+	}
+	config, _, _, err := releaseGuardrails(definition)
+	if err != nil {
+		return err
+	}
+	pinned, err := tx.Query(ctx, qStudioReleaseGuardrail, tenantID, definition.AgentID, definition.Version)
+	if err != nil {
+		return fmt.Errorf("read release guardrail version: %w", err)
+	}
+	if len(pinned.Rows) == 0 || strings.TrimSpace(common.AsString(pinned.Rows[0][0])) != config.Version {
+		return fmt.Errorf("%w: release %s of %q freezes guardrails but no release writer named their version", domain.ErrNotReady, definition.Version, definition.AgentID)
 	}
 	return nil
 }
@@ -416,16 +469,8 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	if err != nil {
 		return domain.AgentTestResult{}, err
 	}
-	testDraft := draft
-	testDraft.Enabled = true
-	if err = s.validateDraft(ctx, actor.TenantID, testDraft, true); err != nil {
-		return domain.AgentTestResult{}, err
-	}
-	definition, err := s.definition(ctx, actor.TenantID, draft)
+	definition, _, err := s.frozenDraft(ctx, actor.TenantID, draft, nil)
 	if err != nil {
-		return domain.AgentTestResult{}, err
-	}
-	if _, err = s.freeze(ctx, actor.TenantID, draft, &definition, nil); err != nil {
 		return domain.AgentTestResult{}, err
 	}
 	result, err := s.Tester.Execute(ctx, actor, request, definition)
@@ -449,16 +494,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	fullDraft := draft
-	fullDraft.Enabled = true
-	if err = s.validateDraft(ctx, actor.TenantID, fullDraft, true); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	definition, err := s.definition(ctx, actor.TenantID, draft)
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	settings, err := s.freeze(ctx, actor.TenantID, draft, &definition, actorUserID(actor))
+	definition, settings, err := s.frozenDraft(ctx, actor.TenantID, draft, actorUserID(actor))
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
@@ -527,7 +563,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 			return domain.AgentRelease{}, fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
 		}
 	}
-	active, detail, err := deploy(ctx, tx, actor.TenantID, request.AgentID, version, request.CanaryPercentage)
+	active, detail, activation, err := s.deployOrSchedule(ctx, tx, actor, definition, request)
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
@@ -538,7 +574,9 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 		return domain.AgentRelease{}, fmt.Errorf("commit publish: %w", err)
 	}
 	committed = true
-	return releaseFromDefinition(definition, active), nil
+	release := releaseFromDefinition(definition, active)
+	release.Activation = activation
+	return release, nil
 }
 
 // Restore copies an immutable release into a new version.
@@ -900,7 +938,7 @@ func (s *StudioService) validateDraft(ctx context.Context, tenantID int64, draft
 		fields = append(fields, domain.AgentFieldError{Field: "display_name", Message: "must contain 1 to 200 characters"})
 	}
 	if draft.ExpectedDraftRevision <= 0 {
-		fields = append(fields, domain.AgentFieldError{Field: "expected_draft_revision", Message: "must be positive"})
+		fields = append(fields, domain.AgentFieldError{Field: "expected_agent_revision", Message: "must be positive"})
 	}
 	if draft.ExpectedPromptProfileRevision < 0 {
 		fields = append(fields, domain.AgentFieldError{Field: "expected_prompt_profile_revision", Message: "must not be negative"})

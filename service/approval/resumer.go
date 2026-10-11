@@ -30,7 +30,11 @@ type Resumer struct {
 	// LinkMaxRisk is the riskiest tier a link may decide; riskier requests are decided only
 	// in an authenticated view. Empty allows no link.
 	LinkMaxRisk domain.RiskTier
-	Now         func() time.Time
+	// Archive keeps an edited verdict's revised arguments where evidence lives; nil refuses edits.
+	Archive contract.EvidenceArchive
+	// MaxRevisedArgumentBytes bounds revised arguments; zero is DefaultMaxRevisedArgumentBytes.
+	MaxRevisedArgumentBytes int
+	Now                     func() time.Time
 }
 
 var _ contract.ApprovalDesk = (*Resumer)(nil)
@@ -62,15 +66,20 @@ func (r *Resumer) Pending(ctx context.Context, tenantID int64, decider domain.Pr
 	return decidable, nil
 }
 
-// Resolve records an approval, rejection, or edit once and moves the parked turn: an
-// approved turn is requeued, any other verdict fails it, since the work must not
-// continue unapproved. An edit refuses the proposal; a changed action is proposed anew.
+// Resolve records an approval, rejection, or edit once and moves the parked turn. An
+// approved turn is requeued and a rejected one fails, since the work must not continue
+// unapproved. An edit closes the proposal with revised arguments and requeues the turn,
+// which proposes the revision anew under the same governance and runs it in its place.
 func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (domain.ApprovalRequest, error) {
 	if r.Store == nil || r.Authorizer == nil || r.Records == nil || r.Queue == nil {
 		return domain.ApprovalRequest{}, fmt.Errorf("approval resumer: store, authorizer, turn records, and queue are required")
 	}
 	switch verdict.Status {
-	case domain.ApprovalStatusApproved, domain.ApprovalStatusRejected, domain.ApprovalStatusEdited:
+	case domain.ApprovalStatusApproved, domain.ApprovalStatusRejected:
+		if len(verdict.RevisedArguments) > 0 || verdict.Revision.URI != "" {
+			return domain.ApprovalRequest{}, fmt.Errorf("%w: only an edited verdict carries revised arguments", domain.ErrValidation)
+		}
+	case domain.ApprovalStatusEdited:
 	default:
 		return domain.ApprovalRequest{}, fmt.Errorf("%w: a decider approves, rejects, or edits; %q is not a verdict", domain.ErrValidation, verdict.Status)
 	}
@@ -84,15 +93,20 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 	if verdict.Authority.Subject.ID == "" {
 		verdict.Authority.Subject = verdict.Decider
 	}
+	if verdict.Status == domain.ApprovalStatusEdited {
+		if verdict, err = r.archiveRevision(ctx, request, verdict); err != nil {
+			return domain.ApprovalRequest{}, err
+		}
+	}
 	request, err = r.Store.Resolve(ctx, verdict)
 	if err != nil {
 		return domain.ApprovalRequest{}, err
 	}
-	if err := r.record(ctx, request, verdict); err != nil {
+	if err := recordVerdict(ctx, r.Audit, request, verdict, r.now()); err != nil {
 		return request, err
 	}
 	key := verdict.RequestKey
-	if verdict.Status != domain.ApprovalStatusApproved {
+	if verdict.Status == domain.ApprovalStatusRejected {
 		return request, r.failRefused(ctx, key, verdict.Status)
 	}
 	if err := r.Records.Resume(ctx, key.TenantID, key.RequestID); err != nil {
@@ -201,8 +215,10 @@ func (r *Resumer) linkBinding(ctx context.Context, key domain.ApprovalKey, statu
 	}, nil
 }
 
-func (r *Resumer) record(ctx context.Context, request domain.ApprovalRequest, verdict domain.ApprovalVerdict) error {
-	if r.Audit == nil {
+// recordVerdict makes a verdict evidence when an audit sink is composed; revised arguments
+// stay in the archive and never enter the record.
+func recordVerdict(ctx context.Context, audit contract.AuditSink, request domain.ApprovalRequest, verdict domain.ApprovalVerdict, at time.Time) error {
+	if audit == nil {
 		return nil
 	}
 	outcome := domain.DecisionDeny
@@ -210,11 +226,11 @@ func (r *Resumer) record(ctx context.Context, request domain.ApprovalRequest, ve
 		outcome = domain.DecisionAllow
 	}
 	ctx = domain.WithDecisionScope(ctx, "approval/", request.RequestID, "/", request.ExecutionStepID)
-	return r.Audit.Record(ctx, domain.DecisionRecord{
+	return audit.Record(ctx, domain.DecisionRecord{
 		TenantID: request.TenantID, Principal: verdict.Decider, Authority: verdict.Authority,
 		ScopeID: request.ScopeID, Category: domain.DecisionCategoryApproval, Action: string(verdict.Status),
 		Resource: request.Resource, Outcome: outcome, Reason: verdict.Reason,
-		RequestID: request.RequestID, ConversationID: request.ConversationID, OccurredAt: r.now(),
+		RequestID: request.RequestID, ConversationID: request.ConversationID, OccurredAt: at,
 	})
 }
 

@@ -187,6 +187,7 @@ type VersionSource string
 const (
 	VersionFromCompliancePin VersionSource = "compliance_pin"
 	VersionFromTenantPin     VersionSource = "tenant_pin"
+	VersionFromPilot         VersionSource = "pilot"
 	VersionFromCohort        VersionSource = "experiment_cohort"
 	VersionFromCanary        VersionSource = "canary"
 	VersionFromStable        VersionSource = "stable"
@@ -194,11 +195,22 @@ const (
 	VersionFromRequest VersionSource = "request_pin"
 )
 
-// AgentVersionResolution is a selected agent version with the rule that chose it.
+// VersionRequest asks which release a new conversation starts on. Subject is the person the
+// conversation acts for, taken from the trusted session; zero when it acts for no one.
+type VersionRequest struct {
+	TenantID       int64
+	AgentID        string
+	ConversationID string
+	Subject        PrincipalRef
+}
+
+// AgentVersionResolution is a selected agent version with the rule that chose it; Pilot is
+// the membership that won when Source is VersionFromPilot.
 type AgentVersionResolution struct {
 	Version string
 	Source  VersionSource
 	PinID   int64
+	Pilot   PilotSubject
 }
 
 // AgentDeployment is a tenant agent's stable and canary traffic policy.

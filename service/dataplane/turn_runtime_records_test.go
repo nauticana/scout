@@ -13,6 +13,9 @@ func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 	if _, set := query.rows[qRecordAdmits]; !set {
 		query.rows[qRecordAdmits] = [][]any{{true}}
 	}
+	if _, set := query.rows[qReleaseGet]; !set {
+		query.rows[qReleaseGet] = [][]any{frozenRelease("v1")}
+	}
 	return &TableTurnRecordStore{
 		DB:            queueDBFake{query: query},
 		Objects:       &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20},
@@ -31,9 +34,11 @@ func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
 	if err != nil || turnNo != 4 {
 		t.Fatalf("turn = %d, error = %v", turnNo, err)
 	}
-	// The conversation is pinned under the same lock, before its first turn row exists.
-	if len(query.calls) < 6 || query.calls[0] != qRecordLock || query.calls[1] != qRecordAdmits || query.calls[2] != qRecordPinnedAgent ||
-		query.calls[3] != qRecordConversation || query.calls[4] != qRecordPinnedAgent || query.calls[5] != qRecordOpen {
+	// The conversation is pinned under the same lock, before its first turn row exists, and
+	// its release's limits are read in the same transaction.
+	if len(query.calls) < 8 || query.calls[0] != qRecordLock || query.calls[1] != qRecordAdmits || query.calls[2] != qRecordPinnedAgent ||
+		query.calls[3] != qRecordConversation || query.calls[4] != qRecordPinnedAgent || query.calls[5] != qTurnRateReplay ||
+		query.calls[6] != qReleaseGet || query.calls[7] != qRecordOpen {
 		t.Fatalf("calls = %v", query.calls)
 	}
 	if pin := query.firstArgs(qRecordConversation); pin[0] != "conversation-1" || pin[2] != "stable" || pin[6] != int64(7) || pin[7] != ingressRequest().AgentID {
@@ -108,7 +113,7 @@ func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 	}
 	usageArgs := query.firstArgs(qLedgerInsertUsageEvent)
 	want := []any{int64(7), "conversation-1", int64(4), "model_output", "agent@v1", "agent", "agent", "unit", "human", "42", "task-9",
-		int64(3), int64(5), 1, int64(6), int64(2), "USD"}
+		int64(3), int64(5), 1, int64(6), int64(2), "USD", nil, nil}
 	if len(usageArgs) != len(want) {
 		t.Fatalf("usage args = %v", usageArgs)
 	}
@@ -190,6 +195,7 @@ func TestTableTurnRecordStorePinsOnlyAKnownRelease(t *testing.T) {
 	query = &queueQueryFake{rows: map[string][][]any{
 		qRecordRelease:     {{int64(1)}},
 		qRecordPinnedAgent: {{request.AgentID, "2"}},
+		qReleaseGet:        {frozenRelease("2")},
 		qRecordOpen:        {{int64(1)}},
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
 	if _, err := newTestRecordStore(query).Open(context.Background(), request, input); err != nil {
@@ -203,10 +209,11 @@ func TestTableTurnRecordStorePinsOnlyAKnownRelease(t *testing.T) {
 func TestTableTurnRecordStoreTakesTheTrafficPolicysRelease(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
 		qRecordPinnedAgent: {{ingressRequest().AgentID, "5"}},
+		qReleaseGet:        {frozenRelease("5")},
 		qRecordOpen:        {{int64(1)}},
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
 	store := newTestRecordStore(query)
-	store.Versions = explainerFunc(func(context.Context, int64, string, string) (domain.AgentVersionResolution, error) {
+	store.Versions = explainerFunc(func(context.Context, domain.VersionRequest) (domain.AgentVersionResolution, error) {
 		return domain.AgentVersionResolution{Version: "5", Source: domain.VersionFromCanary}, nil
 	})
 	if _, err := store.Open(context.Background(), ingressRequest(), domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}); err != nil {
@@ -214,6 +221,47 @@ func TestTableTurnRecordStoreTakesTheTrafficPolicysRelease(t *testing.T) {
 	}
 	if pin := query.firstArgs(qRecordConversation); pin[1] != "5" || pin[2] != "canary" {
 		t.Fatalf("pin args = %v", pin)
+	}
+}
+
+func TestTableTurnRecordStoreResolvesForTheTrustedSubject(t *testing.T) {
+	query := &queueQueryFake{rows: map[string][][]any{
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "6"}},
+		qReleaseGet:        {frozenRelease("6")},
+		qRecordOpen:        {{int64(1)}},
+	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
+	request := ingressRequest()
+	request.OnBehalfOf = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}
+	var asked domain.VersionRequest
+	store := newTestRecordStore(query)
+	store.Versions = explainerFunc(func(_ context.Context, versionRequest domain.VersionRequest) (domain.AgentVersionResolution, error) {
+		asked = versionRequest
+		return domain.AgentVersionResolution{Version: "6", Source: domain.VersionFromPilot,
+			Pilot: domain.PilotSubject{Kind: domain.PilotPrincipal, ID: "42"}}, nil
+	})
+	if _, err := store.Open(context.Background(), request, domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	want := domain.VersionRequest{TenantID: 7, AgentID: "agent", ConversationID: "conversation-1", Subject: request.OnBehalfOf}
+	if asked != want {
+		t.Fatalf("version request = %+v, want %+v", asked, want)
+	}
+	if pin := query.firstArgs(qRecordConversation); pin[1] != "6" || pin[2] != "pilot" || pin[3] != "42" {
+		t.Fatalf("pin args = %v", pin)
+	}
+}
+
+func TestTableTurnRecordStoreFailsWhenTheReleaseCannotBeChosen(t *testing.T) {
+	query := &queueQueryFake{rows: map[string][][]any{}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
+	store := newTestRecordStore(query)
+	store.Versions = explainerFunc(func(context.Context, domain.VersionRequest) (domain.AgentVersionResolution, error) {
+		return domain.AgentVersionResolution{}, domain.ErrCircuitOpen
+	})
+	if _, err := store.Open(context.Background(), ingressRequest(), domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}); !errors.Is(err, domain.ErrCircuitOpen) {
+		t.Fatalf("error = %v, want the resolver's failure", err)
+	}
+	if query.firstArgs(qRecordConversation) != nil {
+		t.Fatal("a conversation must not be pinned when its release cannot be chosen")
 	}
 }
 
@@ -232,10 +280,10 @@ func TestTableTurnRecordStoreAddressesAnAgentOfTheAliasType(t *testing.T) {
 	}
 }
 
-type explainerFunc func(context.Context, int64, string, string) (domain.AgentVersionResolution, error)
+type explainerFunc func(context.Context, domain.VersionRequest) (domain.AgentVersionResolution, error)
 
-func (function explainerFunc) ExplainVersion(ctx context.Context, tenantID int64, agentID, conversationID string) (domain.AgentVersionResolution, error) {
-	return function(ctx, tenantID, agentID, conversationID)
+func (function explainerFunc) ExplainVersion(ctx context.Context, request domain.VersionRequest) (domain.AgentVersionResolution, error) {
+	return function(ctx, request)
 }
 
 func TestTableTurnRecordStoreLateFailKeepsTheTerminalPayload(t *testing.T) {

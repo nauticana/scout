@@ -51,6 +51,37 @@ func TestApprovalResolveDecidesAsTheSessionUser(t *testing.T) {
 	}
 }
 
+func TestApprovalResolvePassesAnEditsRevisedArguments(t *testing.T) {
+	desk := &approvalDeskFake{}
+	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
+	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"edited","proposed_digest":"d","revised_arguments":{"qty":5}}`)
+	recorder := httptest.NewRecorder()
+	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if desk.verdict.Status != domain.ApprovalStatusEdited || string(desk.verdict.RevisedArguments) != `{"qty":5}` || desk.verdict.Revision.URI != "" {
+		t.Fatalf("verdict = %+v", desk.verdict)
+	}
+	desk.err = domain.ErrValidation
+	recorder = httptest.NewRecorder()
+	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("an invalid revision: status = %d", recorder.Code)
+	}
+}
+
+func TestApprovalResolveTreatsNullRevisedArgumentsAsAbsent(t *testing.T) {
+	desk := &approvalDeskFake{}
+	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
+	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"approved","proposed_digest":"d","revised_arguments":null}`)
+	recorder := httptest.NewRecorder()
+	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
+	if recorder.Code != http.StatusOK || desk.verdict.RevisedArguments != nil {
+		t.Fatalf("status = %d, revised arguments = %q", recorder.Code, desk.verdict.RevisedArguments)
+	}
+}
+
 func TestApprovalLinkMapsASpentLinkToNotFound(t *testing.T) {
 	handler := &ApprovalHandler{Desk: &approvalDeskFake{err: domain.ErrNotFound}}
 	recorder := httptest.NewRecorder()

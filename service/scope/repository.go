@@ -199,7 +199,17 @@ func (s *TableEffectiveReleaseStore) Get(ctx context.Context, tenantID int64, ag
 	if err := s.init(ctx); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
-	result, err := s.qs.Query(ctx, qEffectiveGet, tenantID, agentID, agentVersion)
+	return GetRelease(ctx, s.qs, tenantID, agentID, agentVersion)
+}
+
+// ReleaseReadQueries holds the statement GetRelease runs; a caller reading a release
+// inside its own transaction includes it in the transaction's query map.
+var ReleaseReadQueries = map[string]string{qEffectiveGet: scopeQueries[qEffectiveGet]}
+
+// GetRelease reads the release compiled for one agent version through qs, which may be a
+// transaction, so a caller holding one needs no second connection.
+func GetRelease(ctx context.Context, qs keelport.QueryService, tenantID int64, agentID, agentVersion string) (domain.EffectiveRelease, error) {
+	result, err := qs.Query(ctx, qEffectiveGet, tenantID, agentID, agentVersion)
 	if err != nil {
 		return domain.EffectiveRelease{}, fmt.Errorf("get effective release: %w", err)
 	}

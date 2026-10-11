@@ -9,9 +9,10 @@ import (
 
 // ApprovalStore contains configurable approval reads and writes.
 type ApprovalStore struct {
-	OpenFunc    func(context.Context, domain.ApprovalRequest) (domain.ApprovalRequest, error)
-	GetFunc     func(context.Context, domain.ApprovalKey) (domain.ApprovalRequest, error)
-	ResolveFunc func(context.Context, domain.ApprovalVerdict) (domain.ApprovalRequest, error)
+	OpenFunc     func(context.Context, domain.ApprovalRequest) (domain.ApprovalRequest, error)
+	GetFunc      func(context.Context, domain.ApprovalKey) (domain.ApprovalRequest, error)
+	ResolveFunc  func(context.Context, domain.ApprovalVerdict) (domain.ApprovalRequest, error)
+	RevisionFunc func(context.Context, domain.ApprovalKey) (domain.ProposalRevision, error)
 }
 
 // Open invokes OpenFunc when configured; the default returns the request pending.
@@ -37,6 +38,14 @@ func (s *ApprovalStore) Resolve(ctx context.Context, verdict domain.ApprovalVerd
 		return s.ResolveFunc(ctx, verdict)
 	}
 	return domain.ApprovalRequest{Status: verdict.Status}, nil
+}
+
+// Revision invokes RevisionFunc when configured; the default finds no edit.
+func (s *ApprovalStore) Revision(ctx context.Context, key domain.ApprovalKey) (domain.ProposalRevision, error) {
+	if s.RevisionFunc != nil {
+		return s.RevisionFunc(ctx, key)
+	}
+	return domain.ProposalRevision{}, domain.ErrNotFound
 }
 
 // ApprovalInbox contains configurable reviewer-facing reads.

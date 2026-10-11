@@ -61,6 +61,10 @@ columns:
     type: BIGINT
     nullable: true
     comment: The keel outbox event that notifies the first approver; null when notifications go another way
+  - name: revises_step_id
+    type: BIGINT
+    nullable: true
+    comment: The edited proposal of the same turn that this request revises; null for an original proposal
 primary_key: [id]
 sequence:
   name: turn_approval_request_seq
@@ -71,6 +75,11 @@ foreign_keys:
     references:
       table: outbox_event
       columns: [id]
+  - name: revised_turn_approval_requests
+    columns: [partner_id, request_id, revises_step_id]
+    references:
+      table: turn_approval_request
+      columns: [partner_id, request_id, execution_step_id]
   - name: turn_approval_requests
     columns: [partner_id]
     references:
@@ -114,5 +123,7 @@ checks:
     expression: (evidence_uri IS NULL AND evidence_digest IS NULL) OR (evidence_uri IS NOT NULL AND CHAR_LENGTH(evidence_digest) = 64)
   - name: turn_approval_request_approver_ck
     expression: (approver_kind IS NULL AND approver_id IS NULL) OR (approver_kind IS NOT NULL AND approver_id IS NOT NULL)
+  - name: turn_approval_request_revises_ck
+    expression: revises_step_id IS NULL OR revises_step_id <> execution_step_id
   - name: turn_approval_request_resolved_ck
     expression: (status_code IN ('pending', 'escalated') AND resolved_at IS NULL) OR (status_code NOT IN ('pending', 'escalated') AND resolved_at IS NOT NULL)

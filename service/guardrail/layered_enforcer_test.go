@@ -126,6 +126,21 @@ func TestAFlaggedInputSizeIsRecordedOnce(t *testing.T) {
 	}
 }
 
+func TestAnUnpinnedReleaseRunsUnderTheBaselineOnly(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	if _, err := h.enforcer.BeforeModel(context.Background(), domain.GuardrailConfig{}, request("hello")); err != nil {
+		t.Fatalf("an unpinned release: %v", err)
+	}
+	if _, err := h.enforcer.BeforeModel(context.Background(), domain.GuardrailConfig{}, request("this is TOPSECRET")); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("the baseline must still block: %v", err)
+	}
+	unversioned := rules(t)
+	unversioned.Version = ""
+	if _, err := h.enforcer.BeforeModel(context.Background(), unversioned, request("hello")); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("rules without a version = %v", err)
+	}
+}
+
 func TestDigestMismatchFailsClosed(t *testing.T) {
 	h := newHarness(t, EnforcerConfig{})
 	config := rules(t)

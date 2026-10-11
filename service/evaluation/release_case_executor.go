@@ -299,6 +299,10 @@ func (replay *caseReplay) record(ctx context.Context, step domain.ExecutionStep)
 			}
 		case domain.LoopEntryApprovalPending:
 			replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryPolicy, Name: entry.Tool.ToolID, Offset: entry.Offset})
+		case domain.LoopEntryRevision:
+			if entry.Revision != nil {
+				replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryPolicy, Name: entry.Tool.ToolID, Payload: entry.Revision.Arguments, Offset: entry.Offset})
+			}
 		case domain.LoopEntryObservation:
 			if entry.Observation == nil {
 				continue

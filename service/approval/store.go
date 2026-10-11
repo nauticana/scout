@@ -33,6 +33,7 @@ const (
 	qApprovalDue          = "scout_approval_due"
 	qApprovalEscalate     = "scout_approval_escalate"
 	qApprovalNotified     = "scout_approval_notified"
+	qApprovalRevision     = "scout_approval_revision"
 
 	// ApprovalAggregate and ApprovalRequestedEvent route the outbox event that notifies an approver.
 	ApprovalAggregate      = "turn_approval_request"
@@ -41,7 +42,7 @@ const (
 	approvalColumns = `id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
        approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code,
-       deadline_at, created_at, resolved_at, notification_event_id`
+       deadline_at, created_at, resolved_at, notification_event_id, revises_step_id`
 )
 
 var approvalQueries = map[string]string{
@@ -49,8 +50,8 @@ var approvalQueries = map[string]string{
 INSERT INTO turn_approval_request
        (id, partner_id, request_id, conversation_id, execution_step_id, principal_kind, principal_id,
         approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
-        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at)
-VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at, revises_step_id)
+VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
 ON CONFLICT (partner_id, request_id, execution_step_id) DO NOTHING
 RETURNING id`,
 	qApprovalGet: `
@@ -68,14 +69,21 @@ RETURNING id`,
 	qApprovalDecision: `
 INSERT INTO turn_approval_decision
        (turn_approval_request_id, partner_id, status_code, decider_kind, decider_user_id, decider_agent_id,
-        decider_service_id, grant_id, proposed_digest, reason, decided_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        decider_service_id, grant_id, proposed_digest, reason, decided_at, revised_arguments_uri, revised_arguments_digest)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qApprovalDecisionGet: `
 SELECT d.status_code, d.decider_kind, d.decider_user_id, d.decider_agent_id, d.decider_service_id,
-       d.grant_id, d.proposed_digest, d.reason
+       d.grant_id, d.proposed_digest, d.reason, d.revised_arguments_digest
   FROM turn_approval_decision d
   JOIN turn_approval_request r ON r.id = d.turn_approval_request_id
  WHERE r.partner_id = ? AND r.request_id = ? AND r.execution_step_id = ?`,
+	qApprovalRevision: `
+SELECT d.decider_kind, d.decider_user_id, d.decider_agent_id, d.decider_service_id, d.grant_id, d.reason,
+       d.revised_arguments_uri, d.revised_arguments_digest
+  FROM turn_approval_decision d
+  JOIN turn_approval_request r ON r.id = d.turn_approval_request_id
+ WHERE r.partner_id = ? AND r.request_id = ? AND r.execution_step_id = ?
+   AND d.status_code = 'edited' AND d.revised_arguments_uri IS NOT NULL`,
 	qApprovalPending: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request r
@@ -241,7 +249,7 @@ func insertRequest(ctx context.Context, qs keelport.QueryService, request domain
 		nullable(request.ScopeID), nullable(request.RuleID), request.Action, request.Resource,
 		string(request.Class), string(request.RiskTier), request.Summary,
 		nullable(request.Evidence.URI), nullable(request.Evidence.Digest), request.ProposedDigest,
-		nullableTime(request.DeadlineAt))
+		nullableTime(request.DeadlineAt), nullableID(request.RevisesStepID))
 	if err != nil {
 		return 0, fmt.Errorf("open approval: %w", err)
 	}
@@ -328,7 +336,8 @@ func (s *TableStore) Resolve(ctx context.Context, verdict domain.ApprovalVerdict
 	}
 	if _, err = tx.Query(ctx, qApprovalDecision, id, key.TenantID, string(verdict.Status),
 		string(verdict.Decider.Kind), deciderUser, deciderAgent, deciderService, nullable(verdict.Authority.GrantID),
-		verdict.ProposedDigest, nullable(verdict.Reason), decidedAt); err != nil {
+		verdict.ProposedDigest, nullable(verdict.Reason), decidedAt,
+		nullable(verdict.Revision.URI), nullable(verdict.Revision.Digest)); err != nil {
 		return domain.ApprovalRequest{}, fmt.Errorf("record approval decision: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -336,6 +345,37 @@ func (s *TableStore) Resolve(ctx context.Context, verdict domain.ApprovalVerdict
 	}
 	committed = true
 	return s.Get(ctx, key)
+}
+
+// Revision returns the edit recorded on an edited request.
+func (s *TableStore) Revision(ctx context.Context, key domain.ApprovalKey) (domain.ProposalRevision, error) {
+	if err := s.init(ctx); err != nil {
+		return domain.ProposalRevision{}, err
+	}
+	result, err := s.qs.Query(ctx, qApprovalRevision, key.TenantID, key.RequestID, key.ExecutionStepID)
+	if err != nil {
+		return domain.ProposalRevision{}, fmt.Errorf("read approval revision: %w", err)
+	}
+	if len(result.Rows) == 0 {
+		return domain.ProposalRevision{}, fmt.Errorf("%w: no edit of request %q step %d",
+			domain.ErrNotFound, key.RequestID, key.ExecutionStepID)
+	}
+	row := result.Rows[0]
+	editor := domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[0]))}
+	switch editor.Kind {
+	case domain.PrincipalHuman:
+		editor.ID = strconv.FormatInt(common.AsInt64(row[1]), 10)
+	case domain.PrincipalAgent:
+		editor.ID = common.AsString(row[2])
+	default:
+		editor.ID = common.AsString(row[3])
+	}
+	return domain.ProposalRevision{
+		Original: key, Editor: editor,
+		Authority: domain.AuthorityRef{Subject: editor, GrantID: common.AsString(row[4])},
+		Reason:    common.AsString(row[5]),
+		Arguments: domain.ObjectRef{URI: common.AsString(row[6]), Digest: common.AsString(row[7])},
+	}, nil
 }
 
 // Pending returns the work one reviewer owes, soonest deadline first.
@@ -438,6 +478,8 @@ func validateOpen(request domain.ApprovalRequest) error {
 		return fmt.Errorf("%w: approval needs the digest of the proposed action", domain.ErrValidation)
 	case request.Class == "" || request.RiskTier == "":
 		return fmt.Errorf("%w: approval needs an output class and a risk tier", domain.ErrValidation)
+	case request.RevisesStepID < 0 || request.RevisesStepID == request.ExecutionStepID:
+		return fmt.Errorf("%w: a revision revises another step of its turn", domain.ErrValidation)
 	}
 	return nil
 }
@@ -464,6 +506,13 @@ func validateVerdict(verdict domain.ApprovalVerdict) error {
 	if len(verdict.ProposedDigest) != 64 {
 		return fmt.Errorf("%w: a verdict must name the proposal it decides", domain.ErrValidation)
 	}
+	revised := strings.TrimSpace(verdict.Revision.URI) != ""
+	switch {
+	case verdict.Status == domain.ApprovalStatusEdited && (!revised || len(verdict.Revision.Digest) != 64):
+		return fmt.Errorf("%w: an edited verdict needs its archived revised arguments", domain.ErrValidation)
+	case verdict.Status != domain.ApprovalStatusEdited && (revised || verdict.Revision.Digest != ""):
+		return fmt.Errorf("%w: only an edited verdict carries revised arguments", domain.ErrValidation)
+	}
 	return nil
 }
 
@@ -478,7 +527,7 @@ func sameVerdict(row []any, verdict domain.ApprovalVerdict) bool {
 	return common.AsString(row[0]) == string(verdict.Status) &&
 		common.AsString(row[1]) == string(verdict.Decider.Kind) && deciderID == verdict.Decider.ID &&
 		common.AsString(row[5]) == verdict.Authority.GrantID && common.AsString(row[6]) == verdict.ProposedDigest &&
-		common.AsString(row[7]) == verdict.Reason
+		common.AsString(row[7]) == verdict.Reason && common.AsString(row[8]) == verdict.Revision.Digest
 }
 
 func scanRequests(tenantID int64, rows [][]any) []domain.ApprovalRequest {
@@ -493,6 +542,7 @@ func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 	deadline, _ := common.AsTimeOK(row[19])
 	resolved, _ := common.AsTimeOK(row[21])
 	notified, _ := common.AsInt64OK(row[22])
+	revises, _ := common.AsInt64OK(row[23])
 	return domain.ApprovalRequest{
 		ID: common.AsInt64(row[0]), TenantID: tenantID, RequestID: common.AsString(row[1]),
 		ConversationID: common.AsString(row[2]), ExecutionStepID: common.AsInt64(row[3]),
@@ -505,7 +555,7 @@ func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 		Evidence:       domain.ObjectRef{URI: common.AsString(row[15]), Digest: common.AsString(row[16])},
 		ProposedDigest: common.AsString(row[17]), Status: domain.ApprovalStatus(common.AsString(row[18])),
 		DeadlineAt: deadline, CreatedAt: common.AsTime(row[20]), ResolvedAt: resolved,
-		NotificationEventID: notified,
+		NotificationEventID: notified, RevisesStepID: revises,
 	}
 }
 
@@ -527,6 +577,13 @@ func validRisk(risk domain.RiskTier) bool {
 
 func nullable(value string) any {
 	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableID(value int64) any {
+	if value == 0 {
 		return nil
 	}
 	return value

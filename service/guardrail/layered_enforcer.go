@@ -197,14 +197,19 @@ func (enforcer *LayeredEnforcer) OpenOutputSession(ctx context.Context, config d
 	return &outputSession{enforcer: enforcer, config: config, subject: subject, lookback: lookback}, nil
 }
 
-// layers returns every rule set that applies, baseline first and the release last.
+// layers returns every rule set that applies, baseline first and the release last. A release
+// that pins no guardrail version (the zero config) has no release layer.
 func (enforcer *LayeredEnforcer) layers(ctx context.Context, config domain.GuardrailConfig, tenantID int64) ([]*CompiledRuleSet, error) {
-	release, err := enforcer.compiler.Compile(ctx, config)
-	if err != nil {
-		return nil, err
+	var release []*CompiledRuleSet
+	if config.Version != "" || len(config.Rules) > 0 || config.RulesDigest != "" {
+		compiled, err := enforcer.compiler.Compile(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		release = []*CompiledRuleSet{compiled}
 	}
 	if enforcer.restrictions == nil {
-		return []*CompiledRuleSet{enforcer.baseline, release}, nil
+		return append([]*CompiledRuleSet{enforcer.baseline}, release...), nil
 	}
 	if tenantID <= 0 {
 		return nil, fmt.Errorf("%w: restriction layers need the tenant", domain.ErrValidation)
@@ -227,7 +232,7 @@ func (enforcer *LayeredEnforcer) layers(ctx context.Context, config domain.Guard
 		}
 		sets = append(sets, compiled)
 	}
-	return append(sets, release), nil
+	return append(sets, release...), nil
 }
 
 // TerminalFrame is the payload-free, policy-safe final reply for a blocked stream.
@@ -446,8 +451,13 @@ func (enforcer *LayeredEnforcer) record(ctx context.Context, config domain.Guard
 	if len(result.hits) == 0 {
 		return nil
 	}
+	agentID := ""
+	if in.subject.Principal.Kind == domain.PrincipalAgent {
+		agentID = in.subject.Principal.ID
+	}
 	event := domain.SafetyEvent{
-		TenantID: in.subject.TenantID, Stage: in.stage, Layer: result.layer, Action: result.action,
+		TenantID: in.subject.TenantID, Principal: in.subject.Principal, AgentID: agentID, RequestID: in.subject.RequestID,
+		Stage: in.stage, Layer: result.layer, Action: result.action,
 		RuleIDs: append([]string(nil), result.hits...), Severity: result.severity,
 		ReleaseVersion: in.subject.ReleaseVersion, PolicyVersion: config.Version,
 		Duration: duration, OccurredAt: enforcer.now(),

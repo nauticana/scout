@@ -12,7 +12,7 @@ flowchart TB
 
     PRODUCT --> SURFACES --> SCOUT
 
-    SCOUT --> CONTROL["Author & Publish<br/><small>agent types · drafts · prompts · graphs · skills<br/>immutable versions · compatibility · rollout</small>"]
+    SCOUT --> CONTROL["Author & Publish<br/><small>agent types · drafts · prompts · graphs · skills<br/>immutable versions · compatibility · rollout<br/>two-person review · pilots · scheduled activation</small>"]
     SCOUT --> RUNTIME["Admit & Execute<br/><small>turns · budgets · fair scheduling · checkpoints<br/>model routing · tool loops · streaming</small>"]
     SCOUT --> GOVERN["Govern & Prove<br/><small>principals · policy · guardrails · approvals<br/>delegation · evidence · evaluation · audit</small>"]
     SCOUT --> KNOWLEDGE["Ground & Remember<br/><small>ingestion · versioned knowledge · retrieval<br/>citations · entitlements · garbage collection</small>"]
@@ -71,7 +71,7 @@ The detailed [repository contract](doc/engineering-reference.md#repository-contr
 
 | Topic | Contents |
 |---|---|
-| [HTTP API](doc/api_surface.md) | Agent Studio, conversation, and approval routes, payload mappings, mutation contracts, and errors |
+| [HTTP API](doc/api_surface.md) | Agent Studio core and optional feature routes, conversation, and approval routes, payload mappings, mutation contracts, and errors |
 | [Engineering reference](doc/engineering-reference.md) | Package map, services, Studio, runtime, MCP, schema, providers, reliability, composition, and testing |
 | [Database reference](doc/database.md) | Module dependencies, ER diagrams, tables, relationships, and storage boundaries |
 | [Configuration](doc/configuration.md) | Flags, limits, admission, budgets, latency, and data-plane settings |

@@ -214,7 +214,7 @@ func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall
 		return nil
 	}
 	subject := domain.DecisionSubject{
-		Principal: call.Principal, Action: "tool:invoke", Resource: definition.ToolID,
+		Principal: call.Principal, Action: domain.PolicyActionToolInvoke, Resource: definition.ToolID,
 		ResourceKind: domain.ResourceTool, RequestID: call.RequestID, ConversationID: call.ConversationID,
 	}
 	decision, err := gateway.Policy.Decide(ctx, subject)

@@ -9,8 +9,9 @@ destination, or the graph before policy approval.
 policy compiled once at construction. The **platform** and **tenant** layers are the standing
 restrictions `EnforcerConfig.Restrictions` reads at each inspection and compiles once per layer
 digest; see [restriction layers](governance.md#restriction-layers). The **release** layer is the
-tenant's pinned `domain.GuardrailConfig`, compiled per `RulesDigest`. Every layer runs at every
-stage, so a later layer can only add hits — it can never disable, weaken, or shadow an earlier
+tenant's pinned `domain.GuardrailConfig`, compiled per `RulesDigest`; for a Studio release it holds
+its type's rules and the agent's own (see [agent rules](#agent-rules-in-studio)). Every layer runs
+at every stage, so a later layer can only add hits — it can never disable, weaken, or shadow an earlier
 rule of the same id.
 
 Rules are a typed envelope (`domain.GuardrailRuleSet{SchemaVersion, Rules}`). `RuleSetCompiler`
@@ -28,8 +29,32 @@ ranges, maxItems, maxProperties), `tool_allowlist`, `destination_allowlist`, `ex
 fails closed with `domain.ErrDegraded` — never silently skipped.
 
 Every rule hit produces a `domain.SafetyEvent` through `contract.SafetyEventSink` and, optionally,
-`contract.AuditSink`: rule ids, layer, action, severity, policy and release version, acting principal, duration. No
-inspected content, no matched substring, ever leaves the enforcer.
+`contract.AuditSink`: rule ids, layer, action, severity, policy and release version, acting principal,
+the agent whose release was inspected, request id, and duration. No inspected content, no matched
+substring, ever leaves the enforcer. `observability.TableSafetyEventSink.SafetyEvents` pages one
+agent's events newest first, at most `MaxSafetyEventPage` (500) at a time.
+
+## Agent rules in Studio
+
+`controlplane.StudioGuardrails` edits an agent's own enforced rules behind its draft revision. The
+agent inherits the baseline (as `StudioGuardrails.Baseline` gives it), the platform and tenant
+restriction layers, and its type's rules (`AgentTypeDescriptor.Guardrails`). A rule with a new id only
+adds hits; one that reuses an inherited id must tighten it, which `guardrail.CheckTightening` proves:
+the same kind, every inherited stage, an action (`flag` < `redact` < `block`) and severity (`soft` <
+`hard`) at least as strict, and parameters that fire on at least the same content — a lower size cap
+or classifier threshold, a subset of allowed tools or hosts, every inherited phrase. Anything it
+cannot prove stricter is `domain.ErrAuthorityExceeded`. A loosening save is refused unwritten; own
+rules that a later layer change no longer fits are reported as `problem` and refused at publish.
+
+Composed as a definition section and a release writer, it freezes the release's rule set — the type's
+rules, each replaced in place by the agent's rule of the same id, then the agent's others — under
+section `guardrails`, covered by the definition digest. In the publish transaction it re-checks every
+current layer, stores the set as a `guardrail_config` version keyed by its rules digest, and names it
+on `agent_version`; a frozen section no writer pinned refuses the publish. A Studio release with no
+rules pins the empty set. A release that pins no version, such as one `AgentPublisher` writes, has no
+release layer: the baseline and restriction layers alone apply. A restore keeps its source's rules but must still carry every current type
+rule. Type rules are not a runtime layer, so their hits are attributed to `release`. Build Studio's
+rule compiler with the enforcer's `CompilerConfig`, or Studio may accept rules the runtime refuses.
 
 ## Stages
 

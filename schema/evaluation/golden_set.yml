@@ -10,6 +10,14 @@ columns:
   - name: description
     type: VARCHAR(400)
     nullable: true
+  - name: working_revision
+    type: BIGINT
+    default: "0"
+    comment: Advances on every change to the golden_case working copy and on every freeze
+  - name: owner_agent_id
+    type: VARCHAR(80)
+    nullable: true
+    comment: The agent whose Studio editors may share the set with other agents; NULL for a set a product owns
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -20,3 +28,11 @@ foreign_keys:
     references:
       table: agent_tenant
       columns: [partner_id]
+  - name: agent_owned_golden_sets
+    columns: [partner_id, owner_agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+checks:
+  - name: golden_set_revision_ck
+    expression: working_revision >= 0

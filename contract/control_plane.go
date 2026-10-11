@@ -124,7 +124,7 @@ type ModelAccessWriter interface {
 // AgentVersionTrafficManager controls tenant agent canaries and rollback.
 type AgentVersionTrafficManager interface {
 	// ResolveVersion selects an agent version using the tenant's traffic policy.
-	ResolveVersion(ctx context.Context, tenantID int64, agentID, conversationID string) (string, error)
+	ResolveVersion(ctx context.Context, request domain.VersionRequest) (string, error)
 	// SetCanary assigns a percentage of tenant traffic to a canary version.
 	SetCanary(ctx context.Context, tenantID int64, agentID, version string, percentage int) error
 	// Promote makes a tested version the tenant's default.
@@ -138,7 +138,7 @@ type AgentVersionTrafficManager interface {
 // and usage records can carry it.
 type AgentVersionResolutionExplainer interface {
 	// ExplainVersion resolves like ResolveVersion and names the winning rule.
-	ExplainVersion(ctx context.Context, tenantID int64, agentID, conversationID string) (domain.AgentVersionResolution, error)
+	ExplainVersion(ctx context.Context, request domain.VersionRequest) (domain.AgentVersionResolution, error)
 }
 
 // AgentDeploymentStore persists a tenant agent's stable and canary traffic policy.

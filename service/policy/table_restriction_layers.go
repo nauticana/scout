@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -183,12 +184,12 @@ func (store *TableRestrictionLayers) read(ctx context.Context, key int64, query 
 	return layer, nil
 }
 
-// ReplacePlatform swaps the platform layer.
+// ReplacePlatform swaps the platform layer; only a service principal writes it.
 func (store *TableRestrictionLayers) ReplacePlatform(ctx context.Context, actor domain.Principal, layer domain.RestrictionLayer, expectedDigest string) (string, error) {
 	return store.replace(ctx, actor, 0, layer, expectedDigest)
 }
 
-// ReplaceTenant swaps one tenant's layer.
+// ReplaceTenant swaps one tenant's layer for a service principal or a person of that tenant.
 func (store *TableRestrictionLayers) ReplaceTenant(ctx context.Context, actor domain.Principal, tenantID int64, layer domain.RestrictionLayer, expectedDigest string) (string, error) {
 	if tenantID <= 0 {
 		return "", fmt.Errorf("%w: tenant is required", domain.ErrValidation)
@@ -196,15 +197,36 @@ func (store *TableRestrictionLayers) ReplaceTenant(ctx context.Context, actor do
 	return store.replace(ctx, actor, tenantID, layer, expectedDigest)
 }
 
-func (store *TableRestrictionLayers) replace(ctx context.Context, actor domain.Principal, tenantID int64, layer domain.RestrictionLayer, expectedDigest string) (string, error) {
+// restrictionWriter admits a service principal to either layer and a person, by user account
+// id, only to the layer of their own tenant; tenant 0 is the platform.
+func restrictionWriter(actor domain.Principal, tenantID int64) (domain.Principal, error) {
 	actor.ID = strings.TrimSpace(actor.ID)
-	if actor.Kind != domain.PrincipalService || actor.ID == "" {
-		return "", fmt.Errorf("%w: only a service principal may replace a restriction layer", domain.ErrForbidden)
+	switch {
+	case actor.Kind == domain.PrincipalService && actor.ID != "":
+		return actor, nil
+	case tenantID == 0:
+		return actor, fmt.Errorf("%w: only a service principal may replace the platform restriction layer", domain.ErrForbidden)
+	case actor.Kind == domain.PrincipalHuman && userAccountID(actor.ID) && actor.TenantID == tenantID:
+		return actor, nil
+	}
+	return actor, fmt.Errorf("%w: only a service principal or a person of tenant %d may replace its restriction layer", domain.ErrForbidden, tenantID)
+}
+
+// userAccountID reports whether id is a person's decimal user account id.
+func userAccountID(id string) bool {
+	value, err := strconv.ParseInt(id, 10, 64)
+	return err == nil && value > 0
+}
+
+func (store *TableRestrictionLayers) replace(ctx context.Context, actor domain.Principal, tenantID int64, layer domain.RestrictionLayer, expectedDigest string) (string, error) {
+	actor, err := restrictionWriter(actor, tenantID)
+	if err != nil {
+		return "", err
 	}
 	if store.Audit == nil {
 		return "", fmt.Errorf("%w: restriction layer changes need an audit sink", domain.ErrNotReady)
 	}
-	if err := store.init(ctx); err != nil {
+	if err = store.init(ctx); err != nil {
 		return "", err
 	}
 	encoded, err := encodeLayer(ctx, store.Rules, layer)
@@ -216,13 +238,13 @@ func (store *TableRestrictionLayers) replace(ctx context.Context, actor domain.P
 	if err != nil {
 		return "", fmt.Errorf("encode restriction audit: %w", err)
 	}
-	resource := "platform"
+	resource := domain.RestrictionPlatform
 	if tenantID > 0 {
-		resource = "tenant"
+		resource = domain.RestrictionTenant
 	}
 	audit := domain.DecisionRecord{
 		TenantID: tenantID, Principal: domain.PrincipalRef{Kind: actor.Kind, ID: actor.ID},
-		Category: domain.DecisionCategoryRestriction, Action: "replace", Resource: resource,
+		Category: domain.DecisionCategoryRestriction, Action: "replace", Resource: string(resource),
 		PolicyVersion: encoded.layer.Digest, Outcome: domain.DecisionAllow, Payload: payload,
 	}
 	current, changed, err := store.swap(ctx, tenantID, encoded, expectedDigest, audit)

@@ -23,6 +23,7 @@ func TestErrorClassUsesSentinelIdentity(t *testing.T) {
 		{"deadline", context.DeadlineExceeded, "deadline"},
 		{"text is not a class", errors.New("rate limited"), ErrorClassInternal},
 		{"joined", errors.Join(errors.New("publish down"), domain.ErrBudgetExceeded), "budget_exceeded"},
+		{"revised proposal", At(domain.StageTool, fmt.Errorf("gate: %w", domain.ErrProposalRevised)), "proposal_revised"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

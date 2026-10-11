@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 // approvalTable keeps turn_approval_request rows by key and the outbox events queued with them.
 type approvalTable struct {
 	rows      map[string][]any
+	decisions map[int64][]any
 	events    map[int64]string
 	nextID    int64
 	commits   int
@@ -29,7 +31,8 @@ type approvalTx struct {
 	linked  map[int64]int64
 }
 
-func requestKey(args []any) string { return args[1].(string) }
+// requestKey keys a row by request id and execution step, the store's natural key within a tenant.
+func requestKey(requestID, step any) string { return fmt.Sprintf("%v/%v", requestID, step) }
 
 func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*keelmodel.QueryResult, error) {
 	if name == table.failQuery {
@@ -37,17 +40,41 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 	}
 	switch name {
 	case qApprovalOpen:
-		if _, exists := table.rows[requestKey(args)]; exists {
+		if _, exists := table.rows[requestKey(args[1], args[3])]; exists {
 			return &keelmodel.QueryResult{}, nil
 		}
 		table.nextID++
-		row := make([]any, 23)
-		row[0], row[1], row[3], row[7], row[17], row[18] = table.nextID, args[1], args[3], args[7], args[17], "pending"
-		table.rows[requestKey(args)] = row
+		row := make([]any, 24)
+		copy(row[1:18], args[1:18])
+		row[0], row[18], row[19], row[23] = table.nextID, "pending", args[18], args[19]
+		table.rows[requestKey(args[1], args[3])] = row
 		return &keelmodel.QueryResult{Rows: [][]any{{table.nextID}}}, nil
 	case qApprovalGet:
-		if row, ok := table.rows[args[1].(string)]; ok {
+		if row, ok := table.rows[requestKey(args[1], args[2])]; ok {
 			return &keelmodel.QueryResult{Rows: [][]any{row}}, nil
+		}
+	case qApprovalResolve:
+		row, ok := table.rows[requestKey(args[3], args[4])]
+		if ok && row[18] == "pending" && row[17] == args[5] {
+			row[18], row[21] = args[0], args[1]
+			return &keelmodel.QueryResult{Rows: [][]any{{row[0]}}}, nil
+		}
+	case qApprovalDecision:
+		table.decisions[args[0].(int64)] = args
+	case qApprovalDecisionGet, qApprovalRevision:
+		row, ok := table.rows[requestKey(args[1], args[2])]
+		if !ok {
+			break
+		}
+		d, ok := table.decisions[row[0].(int64)]
+		if !ok {
+			break
+		}
+		if name == qApprovalDecisionGet {
+			return &keelmodel.QueryResult{Rows: [][]any{{d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[12]}}}, nil
+		}
+		if d[2] == "edited" && d[11] != nil {
+			return &keelmodel.QueryResult{Rows: [][]any{{d[3], d[4], d[5], d[6], d[7], d[9], d[11], d[12]}}}, nil
 		}
 	case qApprovalNotified:
 		tx.linked[args[2].(int64)] = args[0].(int64)
@@ -107,7 +134,7 @@ func owed(requestID string, approver string) domain.ApprovalRequest {
 }
 
 func newApprovalStore(notify bool) (*approvalTable, *TableStore) {
-	table := &approvalTable{rows: map[string][]any{}, events: map[int64]string{}}
+	table := &approvalTable{rows: map[string][]any{}, decisions: map[int64][]any{}, events: map[int64]string{}}
 	return table, &TableStore{DB: approvalDB{table: table}, NotifyThroughOutbox: notify}
 }
 

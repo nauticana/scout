@@ -34,7 +34,7 @@ groups:
   - name: agent
     path: agent
     seed: seed/agent/agent.yml
-    depends_on: [tenancy, model]
+    depends_on: [catalog, tenancy, prompt, model]
     seed_depends_on: [core]
 
   - name: tool
@@ -58,7 +58,7 @@ groups:
   - name: runtime
     path: runtime
     seed: seed/runtime/runtime.yml
-    depends_on: [catalog, tenancy, agent, execution_graph, agent_authorization, configuration]
+    depends_on: [catalog, tenancy, model, agent, execution_graph, agent_authorization, configuration]
     seed_depends_on: [core]
 
   - name: release

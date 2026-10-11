@@ -218,7 +218,8 @@ type TurnRecordStore interface {
 	// Selectable lists the deployed agents of aliasID's type that admit work, the alias target first.
 	Selectable(ctx context.Context, tenantID int64, aliasID string) ([]domain.SelectableAgent, error)
 	// Open assigns the conversation's next turn number on first use and returns it; a reused id with different
-	// input is ErrConflict, and an agent that does not admit work refuses the turn.
+	// input is ErrConflict, an agent that does not admit work refuses the turn, and a new turn beyond the
+	// turns per minute of the conversation's release is ErrRateLimited with retry advice.
 	Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error)
 	// Find returns the turn number, its status code, and once terminal the stored payload: the response of a completed turn or the error code of a failed one; unknown ids are ErrNotFound.
 	Find(ctx context.Context, tenantID int64, requestID string) (turnNo int64, status string, payload []byte, err error)

@@ -7,6 +7,7 @@
 //	prompt_section                                           {"instruction":"…","output":"…"}
 //	budget                                                   {"tokens":0,"cost_minor_units":0,"currency":"EUR"}
 //	autonomy                                                 {"mode":"draft"}
+//	limits                                                   {"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}
 package scope
 
 import (
@@ -244,6 +245,13 @@ func CanonicalValue(kind domain.ResourceKind, raw []byte) ([]byte, error) {
 		}
 		return json.Marshal(value)
 	case NarrowAtMost:
+		if kind == domain.ResourceLimits {
+			value, err := decodeLimits(raw)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(value)
+		}
 		value, err := decodeBudget(raw)
 		if err != nil {
 			return nil, err

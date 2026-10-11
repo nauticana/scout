@@ -50,6 +50,8 @@ type StepInput struct {
 	RequestID     string
 	// Input is the turn's input, so a step can build its prompt from what was asked.
 	Input []byte
+	// Limits are the release's execution limits the turn runs under; a step only narrows its own ceilings by them.
+	Limits ExecutionLimits
 }
 
 // StepResult contains state, routing, and usage produced by a step.

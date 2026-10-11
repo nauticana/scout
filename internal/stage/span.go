@@ -30,6 +30,7 @@ var errorClasses = []struct {
 	{domain.ErrCapabilityUnsupported, "capability_unsupported"},
 	{domain.ErrEffectViolated, "effect_violated"},
 	{domain.ErrEffectUnknown, "effect_unknown"},
+	{domain.ErrProposalRevised, "proposal_revised"},
 	{domain.ErrValidation, "validation"},
 	{domain.ErrNotFound, "not_found"},
 	{domain.ErrConflict, "conflict"},

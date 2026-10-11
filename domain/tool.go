@@ -43,6 +43,8 @@ type ToolCall struct {
 	// IdempotencyKey is stable across redelivery of the same proposed call, so a
 	// transport can refuse to repeat a committed effect.
 	IdempotencyKey string
+	// RevisesProposal is the approval step a decider edited into this call; zero for a call the model proposed.
+	RevisesProposal int64
 }
 
 // ToolResult contains validated output and usage from a tool.

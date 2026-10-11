@@ -1,0 +1,43 @@
+table: agent_pilot_member
+comment: One release of a tenant agent served to a listed person or position, apart from hash cohorts; the open row is in force
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: subject_kind
+    type: VARCHAR(20)
+  - name: subject_id
+    type: VARCHAR(200)
+    comment: The person's user_account id or the product's opaque position reference; a mixed subject prevents a foreign key
+  - name: begda
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: endda
+    type: TIMESTAMP
+    nullable: true
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: reason
+    type: VARCHAR(400)
+  - name: added_by_kind
+    type: VARCHAR(20)
+  - name: added_by_id
+    type: VARCHAR(120)
+primary_key: [partner_id, agent_id, subject_kind, subject_id, begda]
+foreign_keys:
+  - name: agent_version_pilot_members
+    columns: [partner_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+indexes:
+  - name: agent_pilot_member_open_uq
+    columns: [partner_id, agent_id, subject_kind, subject_id]
+    unique: true
+    where: endda IS NULL
+checks:
+  - name: agent_pilot_member_subject_ck
+    expression: subject_kind IN ('principal', 'position')
+  - name: agent_pilot_member_window_ck
+    expression: endda IS NULL OR endda > begda

@@ -10,6 +10,9 @@ const (
 	PolicyDeny  PolicyEffect = "deny"
 )
 
+// PolicyActionToolInvoke is the action a tool call is decided under; the resource is the tool id.
+const PolicyActionToolInvoke = "tool:invoke"
+
 // PolicyStatement is one rule in a compiled policy set. Actions and Resources
 // match exactly or by a single trailing "*"; an empty list matches nothing.
 type PolicyStatement struct {

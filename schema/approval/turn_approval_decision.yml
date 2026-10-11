@@ -29,6 +29,13 @@ columns:
   - name: decided_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
+  - name: revised_arguments_uri
+    type: TEXT
+    nullable: true
+    comment: Where an edited verdict's revised tool-call arguments are archived; the arguments never sit in this row
+  - name: revised_arguments_digest
+    type: CHAR(64)
+    nullable: true
 primary_key: [turn_approval_request_id]
 foreign_keys:
   - name: turn_approval_decisions
@@ -61,3 +68,5 @@ checks:
     expression: (CASE WHEN decider_user_id IS NULL THEN 0 ELSE 1 END + CASE WHEN decider_agent_id IS NULL THEN 0 ELSE 1 END + CASE WHEN decider_service_id IS NULL THEN 0 ELSE 1 END) = 1
   - name: turn_approval_decision_digest_ck
     expression: CHAR_LENGTH(proposed_digest) = 64
+  - name: turn_approval_decision_revision_ck
+    expression: (revised_arguments_uri IS NULL AND revised_arguments_digest IS NULL) OR (status_code = 'edited' AND revised_arguments_uri IS NOT NULL AND CHAR_LENGTH(revised_arguments_digest) = 64)

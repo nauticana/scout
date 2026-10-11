@@ -41,7 +41,8 @@ SELECT definition
 
 // PublishedAgentResolver resolves one active alias to an immutable definition.
 // Versions, when set, owns the version choice (pins, cohorts, canary); without
-// it the resolver applies the reference stable/canary hash directly.
+// it the resolver applies the reference stable/canary hash directly. An alias
+// resolution carries no session, so it names no subject and no pilot applies.
 type PublishedAgentResolver struct {
 	DB       keelport.DatabaseRepository
 	Versions contract.AgentVersionTrafficManager
@@ -104,7 +105,7 @@ func (resolver *PublishedAgentResolver) selectVersion(ctx context.Context, tenan
 		}
 		return stableVersion, row[4], nil
 	}
-	version, err := resolver.Versions.ResolveVersion(ctx, tenantID, common.AsString(row[6]), conversationID)
+	version, err := resolver.Versions.ResolveVersion(ctx, domain.VersionRequest{TenantID: tenantID, AgentID: common.AsString(row[6]), ConversationID: conversationID})
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve agent version: %w", err)
 	}

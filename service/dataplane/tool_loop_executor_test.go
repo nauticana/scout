@@ -40,6 +40,7 @@ type loopHarness struct {
 	journal     contract.LoopJournal
 	limits      domain.ToolLoopLimits
 	lastRequest domain.ModelRequest
+	revisions   contract.ProposalRevisions
 }
 
 func newLoopHarness(t *testing.T, script ...domain.ModelResult) *loopHarness {
@@ -82,7 +83,7 @@ func (harness *loopHarness) executor() *ToolLoopExecutor {
 			harness.effects[call.IdempotencyKey]++
 			return domain.ToolResult{Output: []byte(`{"ok":true}`), Usage: domain.Usage{ToolCalls: 1}}, nil
 		}),
-		Journal: harness.journal, Limits: harness.limits,
+		Journal: harness.journal, Limits: harness.limits, Revisions: harness.revisions,
 		Pricer: fake.ModelPricerFunc(func(context.Context, domain.ModelReference, domain.ModelUsage) (int64, string, error) {
 			return 0, "USD", nil
 		}),

@@ -35,8 +35,10 @@ decision time on top of the pinned release:
   under its canonical digest and moves the current pointer by compare-and-swap; the expected digest
   is empty before the first write. Writing the value already in force succeeds unchanged; a stale
   expectation is `ErrConflict` with the current digest. The store clock stamps every change.
-- **Only a service principal writes,** and every change is an audit record (`restriction` category)
-  written in the swap's transaction: a change that cannot be audited does not commit.
+- **A service principal writes the platform layer.** A tenant's layer also takes a person of that
+  tenant, whom the calling service has authorized; no agent writes either. Every change is an audit
+  record (`restriction` category) naming the writer, written in the swap's transaction: a change that
+  cannot be audited does not commit.
 - **An unreadable layer denies.** A layer that cannot be read, or whose content no longer matches
   its digest, fails the guardrail inspection and the policy decision. A layer never written is empty.
 
@@ -45,6 +47,14 @@ decision's policy version digests the release and both layers. `guardrail.Enforc
 runs the layers' rules between the baseline and the release, attributed to the `platform` or `tenant`
 layer in safety events. Reads are cached in each process for `DefaultRestrictionTTL`, which bounds how
 long a new prohibition takes to arrive.
+
+`policy.StudioRestrictions` is Studio's view. `AGENT_RESTRICTION` `VIEW` shows both layers;
+`REPLACE_TENANT` replaces the tenant's layer whole behind its digest, bounded to `MaxEntries` denials
+and guardrail rules; nothing in Studio writes the platform layer. For one agent it also lists which
+effective `tool` and `policy` settings each restriction overrides: a denial matching `tool:invoke` and
+a tool, a denial that can meet a policy allow, or a blocking `tool_allowlist` that leaves a tool out.
+Overrides are computed from the settings the next publish would freeze, and a denial with conditions
+is marked `conditional`.
 
 ## Obligations
 
@@ -92,20 +102,58 @@ The turn lifecycle includes `suspended`:
 | Pending approval | `guardrail.ErrApprovalPending` wraps `domain.ErrApprovalPending`, not `ErrForbidden` |
 | `TurnRuntime.suspend` | Records the suspension, publishes a final frame, acks the delivery |
 | Budget | The reservation stays **held** — settling would resume with no budget, releasing would let a tenant park work to dodge its ceiling |
-| Verdict | `approval.Resumer` records it, returns the turn to `queued`, and requeues its delivery |
+| Verdict | `approval.Resumer` records it; `approved` and `edited` return the turn to `queued` and requeue its delivery, `rejected` fails it |
 | Replay | The worker resumes from the last checkpoint through `StepIdempotencyStore`; committed steps do not re-execute |
 
 Resolving without requeueing would leave the turn parked forever, so `Resumer` owns all three
 steps rather than leaving the last one to a caller. It is the decider's whole desk: `Pending` lists
-only what the decider may decide now, `Resolve` takes `approved`, `rejected`, or `edited` (an edit
-refuses the proposal, and the agent proposes the changed action anew), and a single-use decision
-link from keel's `actiontoken` lets a person decide from email or chat. A link is bound to one
-person, request, verdict, and proposal digest, is refused above `LinkMaxRisk`, and authorizes its
-person again when redeemed.
+only what the decider may decide now, `Resolve` takes `approved`, `rejected`, or `edited`, and a
+single-use decision link from keel's `actiontoken` lets a person approve or reject from email or
+chat. A link is bound to one person, request, verdict, and proposal digest, is refused above
+`LinkMaxRisk`, and authorizes its person again when redeemed.
+
+An edit substitutes the tool call. It carries revised arguments — one JSON object within
+`MaxRevisedArgumentBytes` (64 KiB by default) — and is accepted only for a pending or escalated tool
+proposal at its current digest. `Resumer.Archive` keeps the arguments in the evidence archive; the
+verdict row holds only their reference and digest, and the decision record holds neither. The original
+never runs: `Gate` denies it with `domain.ErrProposalRevised`. On resume the tool loop journals the
+substitution before running it, so replay is deterministic, and the revised call opens its own request
+linked by `revises_step_id` and passes the whole governed gateway again — schema, policy and
+obligations, autonomy, guardrails, egress, and credentials. The editor's verdict also approves the
+revision only when `Gate.Authorizer` lets the editor decide it; otherwise it waits for its own
+approver. One call may be revised at most eight times.
 
 `approval.Sweeper` moves overdue requests on: `BackupEscalation` routes to a configured backup and,
 with none, expires the request. A backup needs its own grant — escalation moves *who decides*, never
 *what may be decided*.
+
+## Two-person publish
+
+`contract.PublishSeparation` decides, per tenant and agent, whether publishing is separated from
+authoring: `service/charter.PublishSeparation` while a Charter `SodConstraint` in force constrains
+both the author and publish capabilities at `agent:<id>`, or `controlplane.BasePublishSeparation`
+for every or the listed tenants without Charter.
+
+`controlplane.StudioPublishReviews` is the maker-checker. A person holding `EDIT` requests a review of
+the exact release the draft would freeze: its definition digest, a diff against the active release,
+and optional results from a `contract.PublishReviewEvaluator`. A new request supersedes an open one.
+The review's authors are the requester, the last editor (`bound_by`) of every resource the release
+adds or changes, and every person who changed the agent's draft since its last publish; a person holding `APPROVE_PUBLISH` who is none of them approves or rejects it, and
+only while the draft still has the reviewed digest.
+
+Composed as a publish guard and a release writer, it admits a publish under separation only when the
+agent's latest review is approved, unconsumed, and of the candidate's digest, its approver and
+publisher are not authors, and no draft comment is open. The one relief is the requester publishing
+under the `sod_exception_id` named on the request — a Charter `SodException`, checked through
+`Excuse` at request and again at publish, so revoking it takes effect; `BasePublishSeparation` admits
+none. The writer re-reads the review under a row lock in the publish transaction and consumes it, so
+a review publishes one version, and a newer request or a rejection withdraws an earlier approval.
+Restores and scheduled activations, already admitted at publish, are not reviewed again. Each step is an `agent_studio_event`; `PUBLISH_REVIEWED` names the
+exception only when the publish relied on it.
+
+`controlplane.StudioDraftComments` holds the discussion: a comment sits on a draft revision, anchored
+to the draft, a prompt section (optionally one language), or a setting. Commenting and resolving need
+`EDIT` or `APPROVE_PUBLISH`.
 
 ## Confirmed MCP tool calls
 
@@ -202,8 +250,9 @@ all of this over one request's records.
 `usage_event` records `principal_kind`, `principal_id`, and `scope_id`, and `RecordUsage` takes a
 `domain.UsageAttribution`. Cost is reportable per agent and organizational scope.
 
-`isolation.ReleaseLimits` reads the budget and autonomy frozen into the release. Compilation already
-narrowed both against every parent scope, so nothing here re-derives inheritance: it reads one row.
+`isolation.ReleaseLimits` reads the budget, autonomy, and execution limits frozen into the release;
+the budget applies over the rolling `Window` composition sets. Compilation already narrowed all three
+against every parent scope, so nothing here re-derives inheritance: it reads one row.
 Outside its operating window a `bounded_autonomous` agent degrades to `execute_with_approval` rather
 than stopping, so out-of-hours work is queued for a human instead of lost.
 

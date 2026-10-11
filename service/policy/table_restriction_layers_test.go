@@ -28,9 +28,10 @@ type restrictionTables struct {
 }
 
 type restrictionAudit struct {
-	tenant   any
-	category string
-	version  string
+	tenant    any
+	category  string
+	version   string
+	principal string
 }
 
 func (tables *restrictionTables) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
@@ -53,7 +54,8 @@ func (tables *restrictionTables) Query(_ context.Context, name string, args ...a
 		if tables.auditErr != nil {
 			return nil, tables.auditErr
 		}
-		tables.audits = append(tables.audits, restrictionAudit{tenant: args[0], category: args[1].(string), version: args[13].(string)})
+		tables.audits = append(tables.audits, restrictionAudit{tenant: args[0], category: args[1].(string), version: args[13].(string),
+			principal: args[2].(string) + ":" + args[3].(string)})
 	case qPlatformLayerInsert:
 		tables.layers[fmt.Sprint(0, args[0])] = [2]string{args[1].(string), args[2].(string)}
 	case qTenantLayerInsert:
@@ -161,7 +163,7 @@ func TestReplaceTenantSwapsByDigestAndAuditsOnlyChanges(t *testing.T) {
 	if again, err := store.ReplaceTenant(ctx, platformService, 7, reordered, "stale"); err != nil || again != first {
 		t.Fatalf("the value in force again must succeed unchanged: %q, %v", again, err)
 	}
-	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{tenant: int64(7), category: domain.DecisionCategoryRestriction, version: first}) {
+	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{tenant: int64(7), category: domain.DecisionCategoryRestriction, version: first, principal: "service:usage-policy"}) {
 		t.Fatalf("audits = %+v", tables.audits)
 	}
 	narrower := domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}}
@@ -178,7 +180,41 @@ func TestReplaceTenantSwapsByDigestAndAuditsOnlyChanges(t *testing.T) {
 	}
 }
 
-func TestReplaceRefusesAnythingButAServiceAddingRestrictions(t *testing.T) {
+func TestReplaceTenantAdmitsOnlyAPersonOfThatTenant(t *testing.T) {
+	tables, store := newRestrictions(t)
+	ctx := context.Background()
+	person := domain.Principal{Kind: domain.PrincipalHuman, ID: "42", TenantID: 7}
+	layer := domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}}
+	digest, err := store.ReplaceTenant(ctx, person, 7, layer, "")
+	if err != nil || tables.current[7] != digest {
+		t.Fatalf("a person of the tenant: %q, %v", digest, err)
+	}
+	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{tenant: int64(7), category: domain.DecisionCategoryRestriction, version: digest, principal: "human:42"}) {
+		t.Fatalf("the audit must name the person: %+v", tables.audits)
+	}
+	for name, write := range map[string]struct {
+		actor  domain.Principal
+		tenant int64
+	}{
+		"another tenant's layer":  {actor: person, tenant: 8},
+		"another tenant's person": {actor: domain.Principal{Kind: domain.PrincipalHuman, ID: "42", TenantID: 8}, tenant: 7},
+		"not a user account":      {actor: domain.Principal{Kind: domain.PrincipalHuman, ID: "ops", TenantID: 7}, tenant: 7},
+		"an agent":                {actor: domain.Principal{Kind: domain.PrincipalAgent, ID: "writer", TenantID: 7}, tenant: 7},
+		"nobody":                  {tenant: 7},
+	} {
+		if _, err := store.ReplaceTenant(ctx, write.actor, write.tenant, domain.RestrictionLayer{}, digest); !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("%s: want ErrForbidden, got %v", name, err)
+		}
+	}
+	if _, err := store.ReplacePlatform(ctx, person, layer, ""); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("a person must not write the platform layer: %v", err)
+	}
+	if len(tables.audits) != 1 || len(tables.current) != 1 || tables.current[7] != digest {
+		t.Fatalf("a refused writer must change nothing: %+v, %+v", tables.audits, tables.current)
+	}
+}
+
+func TestReplacePlatformRefusesAnythingButAServiceAddingRestrictions(t *testing.T) {
 	_, store := newRestrictions(t)
 	ctx := context.Background()
 	if _, err := store.ReplacePlatform(ctx, domain.Principal{Kind: domain.PrincipalHuman, ID: "ops"}, domain.RestrictionLayer{}, ""); !errors.Is(err, domain.ErrForbidden) {
@@ -251,7 +287,7 @@ func TestReplaceCommitsTheLayerOnlyWithItsAudit(t *testing.T) {
 	if err != nil || tables.current[0] != digest {
 		t.Fatalf("retry = %q, %v", digest, err)
 	}
-	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{category: domain.DecisionCategoryRestriction, version: digest}) {
+	if len(tables.audits) != 1 || tables.audits[0] != (restrictionAudit{category: domain.DecisionCategoryRestriction, version: digest, principal: "service:usage-policy"}) {
 		t.Fatalf("the retry must record the change: %+v", tables.audits)
 	}
 }

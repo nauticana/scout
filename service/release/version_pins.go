@@ -85,11 +85,12 @@ UPDATE agent_deployment
    SET stable_version = ?, canary_version = NULL, canary_percentage = 0, updated_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND agent_id = ? AND stable_version = ?
 RETURNING stable_version`,
-	// A version is retained while it is deployed, pinned, in a cohort, or held by an open conversation.
+	// A version is retained while it is deployed, pinned, in a cohort, piloted, or held by an open conversation.
 	qVersionRetained: `
 SELECT EXISTS (SELECT 1 FROM agent_deployment WHERE partner_id = ? AND agent_id = ? AND (stable_version = ? OR canary_version = ?))
     OR EXISTS (SELECT 1 FROM agent_version_pin WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND (expires_at IS NULL OR expires_at > ?))
     OR EXISTS (SELECT 1 FROM experiment_cohort WHERE partner_id = ? AND agent_id = ? AND agent_version = ?)
+    OR EXISTS (SELECT 1 FROM agent_pilot_member WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND (endda IS NULL OR endda > ?))
     OR EXISTS (SELECT 1 FROM agent_conversation WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND closed_at IS NULL)`,
 }
 
@@ -345,10 +346,13 @@ func (store *TableAgentDeploymentStore) RestorePrevious(ctx context.Context, ten
 }
 
 // PinnedTrafficManager resolves agent versions by precedence: compliance pin,
-// approved tenant pin, experiment cohort, then the deployment's canary/stable
-// split. Every resolution is audited with the winning rule.
+// approved tenant pin, the subject's pilot, experiment cohort, then the deployment's
+// canary/stable split. Every resolution is audited with the winning rule.
 type PinnedTrafficManager struct {
-	Pins        contract.VersionPinStore
+	Pins contract.VersionPinStore
+	// Pilots serves a listed person their pilot release; it is asked only when the request
+	// names a subject, and its error fails the resolution.
+	Pilots      contract.PilotResolver
 	Cohorts     contract.ExperimentCohortResolver
 	Deployments contract.AgentDeploymentStore
 	Audit       contract.AuditSink
@@ -380,33 +384,35 @@ func (manager *PinnedTrafficManager) validate() error {
 	return nil
 }
 
-func (manager *PinnedTrafficManager) ResolveVersion(ctx context.Context, tenantID int64, agentID, conversationID string) (string, error) {
-	resolution, err := manager.ExplainVersion(ctx, tenantID, agentID, conversationID)
+func (manager *PinnedTrafficManager) ResolveVersion(ctx context.Context, request domain.VersionRequest) (string, error) {
+	resolution, err := manager.ExplainVersion(ctx, request)
 	return resolution.Version, err
 }
 
-func (manager *PinnedTrafficManager) ExplainVersion(ctx context.Context, tenantID int64, agentID, conversationID string) (domain.AgentVersionResolution, error) {
+func (manager *PinnedTrafficManager) ExplainVersion(ctx context.Context, request domain.VersionRequest) (domain.AgentVersionResolution, error) {
 	if err := manager.validate(); err != nil {
 		return domain.AgentVersionResolution{}, err
 	}
-	if tenantID <= 0 || strings.TrimSpace(agentID) == "" {
+	if request.TenantID <= 0 || strings.TrimSpace(request.AgentID) == "" {
 		return domain.AgentVersionResolution{}, fmt.Errorf("%w: tenant and agent are required", domain.ErrValidation)
 	}
-	resolution, err := manager.resolve(ctx, tenantID, agentID, conversationID)
+	resolution, err := manager.resolve(ctx, request)
 	if err != nil {
 		return domain.AgentVersionResolution{}, err
 	}
 	if manager.Audit != nil {
-		if err := manager.auditResolution(ctx, tenantID, agentID, conversationID, resolution); err != nil {
+		if err := manager.auditResolution(ctx, request, resolution); err != nil {
 			return domain.AgentVersionResolution{}, err
 		}
 	}
 	return resolution, nil
 }
 
-func (manager *PinnedTrafficManager) resolve(ctx context.Context, tenantID int64, agentID, conversationID string) (domain.AgentVersionResolution, error) {
+func (manager *PinnedTrafficManager) resolve(ctx context.Context, request domain.VersionRequest) (domain.AgentVersionResolution, error) {
+	tenantID, agentID, conversationID := request.TenantID, request.AgentID, request.ConversationID
+	at := manager.now()
 	if manager.Pins != nil {
-		pins, err := manager.Pins.Active(ctx, tenantID, agentID, manager.now())
+		pins, err := manager.Pins.Active(ctx, tenantID, agentID, at)
 		if err != nil {
 			return domain.AgentVersionResolution{}, err
 		}
@@ -425,6 +431,15 @@ func (manager *PinnedTrafficManager) resolve(ctx context.Context, tenantID int64
 				source = domain.VersionFromCompliancePin
 			}
 			return domain.AgentVersionResolution{Version: pin.Version, Source: source, PinID: pin.ID}, nil
+		}
+	}
+	if manager.Pilots != nil && request.Subject.ID != "" {
+		member, selected, err := manager.Pilots.Resolve(ctx, tenantID, agentID, request.Subject, at)
+		if err != nil {
+			return domain.AgentVersionResolution{}, fmt.Errorf("resolve pilot: %w", err)
+		}
+		if selected {
+			return domain.AgentVersionResolution{Version: member.Version, Source: domain.VersionFromPilot, Pilot: member.Subject}, nil
 		}
 	}
 	if manager.Cohorts != nil {
@@ -456,14 +471,20 @@ func (manager *PinnedTrafficManager) compatible(pin domain.VersionPin) error {
 	return nil
 }
 
-func (manager *PinnedTrafficManager) auditResolution(ctx context.Context, tenantID int64, agentID, conversationID string, resolution domain.AgentVersionResolution) error {
+func (manager *PinnedTrafficManager) auditResolution(ctx context.Context, request domain.VersionRequest, resolution domain.AgentVersionResolution) error {
+	tenantID, agentID, conversationID := request.TenantID, request.AgentID, request.ConversationID
+	var pilot *domain.PilotSubject
+	if resolution.Source == domain.VersionFromPilot {
+		pilot = &resolution.Pilot
+	}
 	payload, err := json.Marshal(struct {
 		AgentID        string               `json:"agent_id"`
 		ConversationID string               `json:"conversation_id,omitempty"`
 		Version        string               `json:"version"`
 		Source         domain.VersionSource `json:"source"`
 		PinID          int64                `json:"pin_id,omitempty"`
-	}{agentID, conversationID, resolution.Version, resolution.Source, resolution.PinID})
+		Pilot          *domain.PilotSubject `json:"pilot,omitempty"`
+	}{agentID, conversationID, resolution.Version, resolution.Source, resolution.PinID, pilot})
 	if err != nil {
 		return fmt.Errorf("encode version audit: %w", err)
 	}
@@ -534,7 +555,7 @@ func (manager *PinnedTrafficManager) auditChange(ctx context.Context, tenantID i
 }
 
 // PinAwareGarbageCollector answers whether an agent version may be dropped:
-// never while deployed, pinned, in a cohort, or held by an open conversation.
+// never while deployed, pinned, in a cohort, piloted, or held by an open conversation.
 type PinAwareGarbageCollector struct {
 	DB  keelport.DatabaseRepository
 	Now func() time.Time
@@ -567,6 +588,7 @@ func (collector *PinAwareGarbageCollector) Collectable(ctx context.Context, tena
 		tenantID, agentID, version, version,
 		tenantID, agentID, version, now,
 		tenantID, agentID, version,
+		tenantID, agentID, version, now,
 		tenantID, agentID, version)
 	if err != nil {
 		return false, fmt.Errorf("check version retention: %w", err)

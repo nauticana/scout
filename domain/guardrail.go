@@ -105,9 +105,13 @@ type GuardrailSubject struct {
 }
 
 // SafetyEvent is the redacted record of a rule hit; it never carries inspected content.
+// AgentID is the agent principal whose release was inspected, empty for any other principal.
 type SafetyEvent struct {
+	ID             int64
 	TenantID       int64
 	Principal      PrincipalRef
+	AgentID        string
+	RequestID      string
 	Stage          GuardrailStage
 	Layer          GuardrailLayer
 	Action         GuardrailAction

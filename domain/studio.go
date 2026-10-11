@@ -269,6 +269,8 @@ type AgentPublishRequest struct {
 	// CanaryPercentage between 1 and 99 gives the release that share of new conversations
 	// beside the current stable release; 0 or 100 makes it stable.
 	CanaryPercentage int
+	// EffectiveAt in the future schedules the release to activate then; zero or past activates it now.
+	EffectiveAt time.Time
 }
 
 // PublishCandidate is a release about to be written: its frozen definition, the settings
@@ -279,6 +281,8 @@ type PublishCandidate struct {
 	Settings   EffectiveRelease
 	// RestoredFrom is the version a restore copies; empty for a publish.
 	RestoredFrom string
+	// Activation marks a scheduled release going live, already admitted when it was published.
+	Activation bool
 }
 
 // AgentSetting is one binding in force at a scope on an agent's chain. Editable marks the
@@ -398,6 +402,8 @@ type AgentRelease struct {
 	RestoredFromVersion   string
 	Active                bool
 	Languages             []string
+	// Activation is the pending activation of a scheduled publish.
+	Activation *ReleaseActivation
 }
 
 // AgentReleaseSection is one compiled section from an immutable release.
@@ -473,6 +479,9 @@ type AgentTypeDescriptor struct {
 	Tools    []ToolReference
 	ToolLoop *ToolLoopConfig
 	Skills   []SkillReference
+	// Guardrails are enforced rules every release of the type carries; an agent may add rules
+	// or tighten one by id, never drop or loosen one.
+	Guardrails []GuardrailRule
 }
 
 // ModelRate is one currency-denominated price for a model usage category.

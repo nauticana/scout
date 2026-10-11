@@ -22,7 +22,7 @@ const (
 )
 
 const goldenExampleColumns = `partner_id, golden_set_id, set_version, example_id, scope_code, provenance, consent_class, retention_class,
-       risk_tier, domain_code, language_code, rubric_ref, expected_behavior, payload_uri, payload_digest, reviews`
+       approval_risk_tier, domain_code, language_code, rubric_ref, expected_behavior, payload_uri, payload_digest, reviews`
 
 // The list queries take the caller scope twice: dev callers see only dev rows,
 // gate callers see every row. Authorization is in the predicate, never post-filtered.

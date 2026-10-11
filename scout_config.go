@@ -2,6 +2,10 @@ package scout
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -60,7 +64,22 @@ const (
 	agent_guardrail_max_input_bytes  = "agent_guardrail_max_input_bytes"
 	agent_guardrail_max_output_bytes = "agent_guardrail_max_output_bytes"
 	agent_model_region               = "agent_model_region"
+	agent_pilot_max_members          = "agent_pilot_max_members"
+	agent_pilot_position_timeout     = "agent_pilot_position_timeout"
 	agent_studio_max_agents_per_type = "agent_studio_max_agents_per_type"
+	agent_governance_required_fields = "agent_governance_required_fields"
+	agent_evaluation_max_open_runs   = "agent_evaluation_max_open_runs"
+	agent_evaluation_concurrency     = "agent_evaluation_concurrency"
+	agent_evaluation_max_run_cost    = "agent_evaluation_max_run_cost"
+	agent_evaluation_currency        = "agent_evaluation_currency"
+	agent_evaluation_lease           = "agent_evaluation_lease"
+	agent_evaluation_batch           = "agent_evaluation_batch"
+	agent_evaluation_max_attempts    = "agent_evaluation_max_attempts"
+	agent_evaluation_case_max_bytes  = "agent_evaluation_case_max_bytes"
+	agent_evaluation_max_cases       = "agent_evaluation_max_cases"
+	agent_activation_batch           = "agent_activation_batch"
+	agent_activation_poll            = "agent_activation_poll"
+	agent_activation_max_attempts    = "agent_activation_max_attempts"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -145,7 +164,25 @@ type ScoutConfig struct {
 	AgentGuardrailMaxInputBytes  int      // agent_guardrail_max_input_bytes 262144 Baseline byte ceiling on turn input, tool arguments, and retrieved content
 	AgentGuardrailMaxOutputBytes int      // agent_guardrail_max_output_bytes 1048576 Baseline byte ceiling on model and tool output
 	AgentModelRegion             string   // agent_model_region (none) Residency region stamped on a candidate model with no route row; empty leaves it unknown
+	AgentPilotMaxMembers         int      // agent_pilot_max_members 200 Open pilot memberships one agent may hold, which bounds what starting a conversation reads; 0 refuses every pilot add
+	AgentPilotPositionTimeout    int      // agent_pilot_position_timeout 2 Seconds one product position lookup may take while a new conversation chooses its release; 0 uses Scout's default
 	AgentStudioMaxAgentsPerType  int      // agent_studio_max_agents_per_type 20 Agents of one type a tenant may keep, archived ones included; 0 refuses every Studio create
+
+	// agent_governance_required_fields (none) Charter governance fields a release must carry, comma-separated;
+	// empty (nil) requires every field Charter's AgentDefinition requires, none (an empty list) requires none.
+	AgentGovernanceRequiredFields []domain.GovernanceField
+	AgentEvaluationMaxOpenRuns    int    // agent_evaluation_max_open_runs 4 Queued and running evaluations one agent may hold; 0 refuses every evaluation
+	AgentEvaluationConcurrency    int    // agent_evaluation_concurrency 4 Examples of one evaluation run in flight; below 2 runs them one at a time
+	AgentEvaluationMaxRunCost     int    // agent_evaluation_max_run_cost 10000 Minor units of agent_evaluation_currency one evaluation run may spend before it stops early
+	AgentEvaluationCurrency       string // agent_evaluation_currency (none) ISO currency every evaluation cost is priced in; empty refuses to compose the evaluation worker
+	AgentEvaluationLease          int    // agent_evaluation_lease 900 Seconds each recorded result extends an evaluation run's lease; keep it above agent_loop_deadline
+	AgentEvaluationBatch          int    // agent_evaluation_batch 4 Evaluation runs one worker tick claims
+	AgentEvaluationMaxAttempts    int    // agent_evaluation_max_attempts 3 Claims of one evaluation run before an expired lease fails it
+	AgentEvaluationCaseMaxBytes   int    // agent_evaluation_case_max_bytes 32768 Largest saved test case input or expected behavior in bytes
+	AgentEvaluationMaxCases       int    // agent_evaluation_max_cases 500 Saved test cases one golden set may hold
+	AgentActivationBatch          int    // agent_activation_batch 20 Due scheduled release activations one worker poll handles
+	AgentActivationPoll           int    // agent_activation_poll 30 Seconds between polls of the release activation worker
+	AgentActivationMaxAttempts    int    // agent_activation_max_attempts 5 Attempts of a scheduled activation that fails transiently before it is refused
 }
 
 // ToolLoopLimits is the executor-level ceiling the agent_loop_* flags configure.
@@ -170,6 +207,14 @@ func (c *ScoutConfig) DataPlaneSettings() domain.DataPlaneSettings {
 		ToolTimeout: seconds(c.AgentToolTimeout), ToolMaxAttempts: c.AgentToolMaxAttempts,
 		GuardrailMaxInputBytes: c.AgentGuardrailMaxInputBytes, GuardrailMaxOutputBytes: c.AgentGuardrailMaxOutputBytes,
 		ModelRegion: c.AgentModelRegion,
+	}
+}
+
+// ReleaseActivationSettings is what the agent_activation_* flags configure.
+func (c *ScoutConfig) ReleaseActivationSettings() domain.ReleaseActivationSettings {
+	return domain.ReleaseActivationSettings{
+		Batch: c.AgentActivationBatch, PollPeriod: time.Duration(c.AgentActivationPoll) * time.Second,
+		MaxAttempts: c.AgentActivationMaxAttempts,
 	}
 }
 
@@ -227,6 +272,42 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentGuardrailMaxInputBytes = c.Int(rows, agent_guardrail_max_input_bytes)
 	c.AgentGuardrailMaxOutputBytes = c.Int(rows, agent_guardrail_max_output_bytes)
 	c.AgentModelRegion = c.String(rows, agent_model_region)
+	c.AgentPilotMaxMembers = c.Int(rows, agent_pilot_max_members)
+	c.AgentPilotPositionTimeout = c.Int(rows, agent_pilot_position_timeout)
 	c.AgentStudioMaxAgentsPerType = c.Int(rows, agent_studio_max_agents_per_type)
-	return c.ParseErr()
+	c.AgentActivationBatch = c.Int(rows, agent_activation_batch)
+	c.AgentActivationPoll = c.Int(rows, agent_activation_poll)
+	c.AgentActivationMaxAttempts = c.Int(rows, agent_activation_max_attempts)
+	c.AgentEvaluationMaxOpenRuns = c.Int(rows, agent_evaluation_max_open_runs)
+	c.AgentEvaluationConcurrency = c.Int(rows, agent_evaluation_concurrency)
+	c.AgentEvaluationMaxRunCost = c.Int(rows, agent_evaluation_max_run_cost)
+	c.AgentEvaluationCurrency = c.String(rows, agent_evaluation_currency)
+	c.AgentEvaluationLease = c.Int(rows, agent_evaluation_lease)
+	c.AgentEvaluationBatch = c.Int(rows, agent_evaluation_batch)
+	c.AgentEvaluationMaxAttempts = c.Int(rows, agent_evaluation_max_attempts)
+	c.AgentEvaluationCaseMaxBytes = c.Int(rows, agent_evaluation_case_max_bytes)
+	c.AgentEvaluationMaxCases = c.Int(rows, agent_evaluation_max_cases)
+	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
+	c.AgentGovernanceRequiredFields = required
+	return errors.Join(c.ParseErr(), err)
+}
+
+// governanceFields parses agent_governance_required_fields: empty is nil, every Charter field;
+// "none" is an empty list.
+func governanceFields(text string) ([]domain.GovernanceField, error) {
+	switch text {
+	case "":
+		return nil, nil
+	case "none":
+		return []domain.GovernanceField{}, nil
+	}
+	fields := []domain.GovernanceField{}
+	for _, name := range strings.Split(text, ",") {
+		field := domain.GovernanceField(strings.TrimSpace(name))
+		if !slices.Contains(domain.CharterGovernanceFields(), field) || slices.Contains(fields, field) {
+			return nil, fmt.Errorf("%s: %q is not a distinct Charter governance field", agent_governance_required_fields, field)
+		}
+		fields = append(fields, field)
+	}
+	return fields, nil
 }

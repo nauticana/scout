@@ -43,12 +43,22 @@ columns:
   - name: staged_output_tokens
     type: BIGINT
     nullable: true
+  - name: staged_tool_calls
+    type: INTEGER
+    nullable: true
+  - name: staged_search_queries
+    type: BIGINT
+    nullable: true
   - name: staged_cost_minor_units
     type: BIGINT
     nullable: true
   - name: staged_currency_code
     type: CHAR(3)
     nullable: true
+  - name: staged_model_usage
+    type: JSONB
+    nullable: true
+    comment: Each model's share of the staged usage (deliberate JSON denormalization of a transient breakdown that settlement normalizes into usage_event rows)
 primary_key: [partner_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turn_details
@@ -81,7 +91,11 @@ checks:
   - name: conversation_turn_detail_usage_ck
     expression: >-
       (staged_input_tokens IS NULL AND staged_output_tokens IS NULL
+       AND staged_tool_calls IS NULL AND staged_search_queries IS NULL
        AND staged_cost_minor_units IS NULL AND staged_currency_code IS NULL)
       OR
       (staged_input_tokens >= 0 AND staged_output_tokens >= 0
+       AND staged_tool_calls >= 0 AND staged_search_queries >= 0
        AND staged_cost_minor_units >= 0 AND staged_currency_code IS NOT NULL)
+  - name: conversation_turn_detail_model_usage_ck
+    expression: staged_model_usage IS NULL OR staged_currency_code IS NOT NULL

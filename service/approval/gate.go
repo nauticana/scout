@@ -24,13 +24,21 @@ type Gate struct {
 	// Router is optional; when set it names each request's approver, and a request it cannot
 	// route is refused. Without it a request is routed by scope to whoever holds DECIDE there.
 	Router contract.ApproverRouter
+	// Archive holds edited proposals' revised arguments; without it an edited call cannot run.
+	Archive contract.EvidenceArchive
+	// Authorizer is optional; when set, an editor's verdict approves the revision it proposed
+	// if the editor may decide that revision too. Without it every revision awaits its own verdict.
+	Authorizer contract.ApprovalAuthorizer
+	// Audit is optional; when set an editor's approval of its revision becomes evidence.
+	Audit contract.AuditSink
 	// RiskTier and Class label requests this gate opens.
 	RiskTier domain.RiskTier
 	Class    domain.OutputClass
 	Now      func() time.Time
 }
 
-// Decide opens or reads the approval owed for one irreversible tool call.
+// Decide opens or reads the approval owed for one irreversible tool call. A call that
+// revises an edited proposal opens its own request, linked to the original.
 func (g *Gate) Decide(ctx context.Context, call domain.ToolCall, ruleID string) (domain.ApprovalDecision, error) {
 	if g.Store == nil {
 		return domain.ApprovalDenied, fmt.Errorf("approval gate: store is required")
@@ -42,6 +50,16 @@ func (g *Gate) Decide(ctx context.Context, call domain.ToolCall, ruleID string) 
 		Action:    "tool:" + call.ToolID, Resource: call.ToolID,
 		Class: g.class(), RiskTier: g.riskTier(), Summary: "tool call " + call.ToolID + " under rule " + ruleID,
 		ProposedDigest: ProposalDigest(call),
+	}
+	var edit *domain.ProposalRevision
+	if call.RevisesProposal != 0 {
+		revision, err := g.edit(ctx, call)
+		if err != nil {
+			return domain.ApprovalDenied, err
+		}
+		edit = &revision
+		request.RevisesStepID, request.Evidence = call.RevisesProposal, revision.Arguments
+		request.Summary = "revised " + request.Summary
 	}
 	if g.Deadline > 0 {
 		request.DeadlineAt = g.now().Add(g.Deadline)
@@ -60,14 +78,33 @@ func (g *Gate) Decide(ctx context.Context, call domain.ToolCall, ruleID string) 
 	if err != nil {
 		return domain.ApprovalDenied, err
 	}
-	switch stored.Status {
+	if decision, decided, err := recorded(call, stored); decided {
+		return decision, err
+	}
+	if edit != nil {
+		if stored, err = g.approveAsEditor(ctx, stored, *edit); err != nil {
+			return domain.ApprovalDenied, err
+		}
+		if decision, decided, err := recorded(call, stored); decided {
+			return decision, err
+		}
+	}
+	g.notify(ctx, stored)
+	return domain.ApprovalPending, nil
+}
+
+// recorded maps a terminal verdict to the gate's decision. An edited proposal never runs
+// as proposed, only its revision does, so asking to run the original fails the turn.
+func recorded(call domain.ToolCall, request domain.ApprovalRequest) (domain.ApprovalDecision, bool, error) {
+	switch request.Status {
 	case domain.ApprovalStatusApproved:
-		return domain.ApprovalApproved, nil
-	case domain.ApprovalStatusRejected, domain.ApprovalStatusEdited, domain.ApprovalStatusExpired, domain.ApprovalStatusWithdrawn:
-		return domain.ApprovalDenied, nil
+		return domain.ApprovalApproved, true, nil
+	case domain.ApprovalStatusEdited:
+		return domain.ApprovalDenied, true, fmt.Errorf("%w: a decider edited tool call %q", domain.ErrProposalRevised, call.ToolID)
+	case domain.ApprovalStatusRejected, domain.ApprovalStatusExpired, domain.ApprovalStatusWithdrawn:
+		return domain.ApprovalDenied, true, nil
 	default:
-		g.notify(ctx, stored)
-		return domain.ApprovalPending, nil
+		return domain.ApprovalPending, false, nil
 	}
 }
 

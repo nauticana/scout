@@ -363,7 +363,7 @@ func settingBinding(actor domain.StudioActor, scopes domain.PromptScopes, change
 func singletonSetting(kind domain.ResourceKind) bool {
 	switch kind {
 	case domain.ResourceTool, domain.ResourceKnowledge, domain.ResourceModel, domain.ResourceEntitlement,
-		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill:
+		domain.ResourceBudget, domain.ResourceAutonomy, domain.ResourceSkill, domain.ResourceLimits:
 		return true
 	default:
 		return false
@@ -393,23 +393,31 @@ func (s *StudioService) compileSettingsOf(ctx context.Context, tenantID int64, d
 	return s.compileSettings(ctx, tenantID, draft.PromptScopes.AgentScopeID, draft.AgentID, nil, nil)
 }
 
-// restoreSettings freezes the restored version's settings again for the new version; a
-// version published before settings were frozen has none to restore.
+// restoreSettings freezes the restored version's settings again for the new version. A
+// version published before settings were frozen cannot serve a turn, so it is not restored.
 func restoreSettings(ctx context.Context, tx keelport.TxQueryService, tenantID int64, agentID, from, to string) error {
 	source, err := tx.Query(ctx, qStudioGetSettings, tenantID, agentID, from)
 	if err != nil {
 		return fmt.Errorf("load restored settings: %w", err)
 	}
 	if len(source.Rows) == 0 {
-		return nil
+		return fmt.Errorf("%w: version %s has no frozen settings; publish the agent instead", domain.ErrConflict, from)
 	}
-	row := source.Rows[0]
+	release, err := decodeSettings(source.Rows[0], tenantID, agentID)
+	if err != nil {
+		return fmt.Errorf("decode restored settings: %w", err)
+	}
+	return storeSettings(ctx, tx, release, to)
+}
+
+// decodeSettings decodes one qStudioGetSettings row; the caller sets the version.
+func decodeSettings(row []any, tenantID int64, agentID string) (domain.EffectiveRelease, error) {
 	release := domain.EffectiveRelease{TenantID: tenantID, AgentID: agentID, ScopeID: common.AsString(row[0]), CompiledAt: common.AsTime(row[2])}
 	if by := common.AsInt64(row[3]); by > 0 {
 		release.CompiledBy = &by
 	}
-	if err = json.Unmarshal([]byte(common.AsString(row[1])), &release.Resources); err != nil {
-		return fmt.Errorf("decode restored settings: %w", err)
+	if err := json.Unmarshal([]byte(common.AsString(row[1])), &release.Resources); err != nil {
+		return domain.EffectiveRelease{}, err
 	}
-	return storeSettings(ctx, tx, release, to)
+	return release, nil
 }

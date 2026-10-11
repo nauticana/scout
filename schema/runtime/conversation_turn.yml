@@ -57,6 +57,8 @@ indexes:
     unique: true
   - name: conversation_turn_status_ix
     columns: [status_code, queued_at]
+  - name: conversation_turn_tenant_queued_ix
+    columns: [partner_id, queued_at]
 checks:
   - name: conversation_turn_number_ck
     expression: turn_no > 0

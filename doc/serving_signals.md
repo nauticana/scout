@@ -32,6 +32,11 @@ last `MaxSamples` observations per route; `MaxRoutes` bounds cardinality and ref
 Feed the collector by setting it as `Gateway.Signals` (`contract.ServingSignalObserver`); schedulers and limiters
 may call `ObserveServing` directly with the same route identity.
 
+Usage is attributed to the same route: `Gateway.Generate` and its leased streams stamp `Usage.Models` with the
+`Provider` and `Model` that actually served the call, after capacity binding, hedging, or fallback, overwriting any
+provider-supplied breakdown. Settled usage therefore names the model that did the work, at provider and model
+granularity rather than the full route.
+
 ## What Scout consumes
 
 The serving control plane publishes `domain.CapacitySnapshot` per route through

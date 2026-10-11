@@ -169,7 +169,7 @@ func (store *TableTurnRecordStore) validate() error {
 }
 
 func (store *TableTurnRecordStore) queryMap() map[string]string {
-	return common.MergeMaps(TurnLedgerQueries(), turnRecordQueries)
+	return common.MergeMaps(TurnLedgerQueries(), turnRecordQueries, turnRateQueries)
 }
 
 func (store *TableTurnRecordStore) queries(ctx context.Context) port.QueryService {
@@ -254,7 +254,9 @@ func (store *TableTurnRecordStore) pin(ctx context.Context, tx port.TxQueryServi
 	if request.Release == "" {
 		resolution = domain.AgentVersionResolution{Source: domain.VersionFromStable}
 		if store.Versions != nil {
-			chosen, err := store.Versions.ExplainVersion(ctx, tenantID, request.AgentID, request.ConversationID)
+			chosen, err := store.Versions.ExplainVersion(ctx, domain.VersionRequest{
+				TenantID: tenantID, AgentID: request.AgentID, ConversationID: request.ConversationID, Subject: request.OnBehalfOf,
+			})
 			if err != nil {
 				return nil, fmt.Errorf("open turn: choose release: %w", err)
 			}
@@ -300,7 +302,9 @@ func admits(ctx context.Context, tx port.TxQueryService, request domain.TurnRequ
 }
 
 // Open inserts the turn under a per-conversation advisory lock so turn numbers
-// stay dense; a replay of the same request id returns the existing turn.
+// stay dense; a replay of the same request id returns the existing turn. An agent's
+// turn reads its conversation's frozen release in the same transaction and is refused
+// when the release is missing or its turns per minute are spent.
 func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error) {
 	tenantID := request.TenantContext.TenantID
 	if tenantID <= 0 || strings.TrimSpace(request.RequestID) == "" || len([]rune(request.RequestID)) > 120 ||
@@ -349,6 +353,12 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 		}
 		if request.Release != "" && pinnedVersion != request.Release {
 			return 0, fmt.Errorf("%w: conversation %q is pinned to release %q, not %q", domain.ErrConflict, request.ConversationID, pinnedVersion, request.Release)
+		}
+		if err = admitRate(ctx, tx, turnRateRequest{
+			TenantID: tenantID, ScopeID: request.TenantContext.ScopeID, AgentID: request.AgentID,
+			Release: pinnedVersion, RequestID: request.RequestID,
+		}); err != nil {
+			return 0, err
 		}
 	}
 	inserted, err := tx.Query(ctx, qRecordOpen,
@@ -490,19 +500,40 @@ func (store *TableTurnRecordStore) Resume(ctx context.Context, tenantID int64, r
 	return nil
 }
 
-// RecordUsage writes the settled usage event through the ledger's insert, which
-// is unique per (turn, category).
+// RecordUsage writes the turn's settled usage events, one per model and one for the
+// part no model performed, in one transaction; a replay writes nothing.
 func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
 	if tenantID <= 0 || strings.TrimSpace(conversationID) == "" || turnNo <= 0 || len(usage.Currency) != 3 ||
-		usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CostMinorUnits < 0 {
+		usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: turn identity and non-negative priced usage are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
 		return err
 	}
+	lines, err := usageLines(usage)
+	if err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
 	ledger := TurnLedger{UsageCategory: store.UsageCategory}
-	_, err := ledger.InsertUsageEvent(context.WithoutCancel(ctx), store.queries(ctx), tenantID, conversationID, turnNo, subjectRef, attribution, usage)
-	return err
+	tx, err := store.DB.BeginTx(ctx, store.queryMap())
+	if err != nil {
+		return fmt.Errorf("record usage: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	if _, err = ledger.insertUsageLines(ctx, tx, tenantID, conversationID, turnNo, subjectRef, attribution, lines); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("record usage: commit: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func turnInputName(tenantID int64, requestID string) string {

@@ -144,6 +144,9 @@ func (s *StudioService) createAgent(ctx context.Context, tx keelport.TxQueryServ
 		if _, err = tx.Query(ctx, qStudioCopyBindings, scopes.AgentScopeID, actorUser(actor), actor.TenantID, sourceScopes.AgentScopeID); err != nil {
 			return "", fmt.Errorf("copy agent bindings: %w", err)
 		}
+		if _, err = tx.Query(ctx, qStudioCopyGuardrails, agentID, actorUser(actor), actor.TenantID, request.CopyFrom); err != nil {
+			return "", fmt.Errorf("copy agent guardrails: %w", err)
+		}
 		detail = "copy of " + request.CopyFrom
 	}
 	recorded, err := tx.Query(ctx, qStudioCreateRecord, actor.TenantID, string(actor.Principal.Kind), actor.Principal.ID,

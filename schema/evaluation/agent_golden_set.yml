@@ -1,0 +1,37 @@
+table: agent_golden_set
+comment: The tenant golden set an agent's saved test cases live in
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: principal_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: principal_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The associating person's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: associated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, agent_id]
+foreign_keys:
+  - name: agent_golden_sets
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+  - name: golden_set_agents
+    columns: [partner_id, golden_set_id]
+    references:
+      table: golden_set
+      columns: [partner_id, golden_set_id]
+indexes:
+  - name: agent_golden_set_set_ix
+    columns: [partner_id, golden_set_id]
+checks:
+  - name: agent_golden_set_principal_ck
+    expression: (principal_kind IS NULL) = (principal_id IS NULL)

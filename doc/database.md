@@ -13,7 +13,7 @@ Scout's schema is seventeen selectable modules declared in `schema/dependency.ym
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
 - Only direct dependencies are drawn. An edge already implied by a longer path is omitted — `release` also holds foreign keys into `agent`, `catalog`, and `tenancy`, but reaches all three through `runtime`, so drawing them again would say nothing new. `schema/dependency.yml` keeps the complete list.
-- `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it.
+- `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it. Its only direct key into `prompt` is a draft comment anchored to a prompt section.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
 - `skill` holds versioned procedures an agent loads on demand, and the platform catalog tenants copy them from. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
 - `approval` holds the durable human-in-the-loop record of a turn; `mcp_confirmation` holds an MCP tool call a person confirms, linked to keel's maker-checker `approval_request` when one decides it. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
@@ -23,9 +23,10 @@ Scout's schema is seventeen selectable modules declared in `schema/dependency.ym
 flowchart BT
 
     tenant_management --> core
-    tenancy --> tenant_management
     tenancy --> catalog
+    tenancy --> tenant_management
     model --> tenancy
+    agent --> prompt
     agent --> model
     tool --> agent
     tool --> agent_authorization_module
@@ -34,14 +35,14 @@ flowchart BT
     execution_graph_module --> agent
     agent_authorization_module --> agent
     knowledge_vector --> knowledge
-    runtime --> execution_graph_module
     runtime --> agent_authorization_module
     runtime --> configuration_module
+    runtime --> execution_graph_module
     release --> runtime
     evaluation --> knowledge
     evaluation --> release
-    approval --> configuration_module
     approval --> agent_authorization_module
+    approval --> configuration_module
     skill --> tool
     mcp_confirmation --> tenancy
     mcp_confirmation --> keel_approval
@@ -50,18 +51,18 @@ flowchart BT
     core["keel core"]
     tenant_management["keel tenant_management"]
     keel_approval["keel approval"]
-    catalog["Catalog<br/>17 tables"]
+    catalog["Catalog<br/>19 tables"]
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
     model["Model<br/>6 tables"]
-    agent["Agent<br/>13 tables"]
+    agent["Agent<br/>19 tables"]
     tool["Tool<br/>5 tables"]
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>9 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
-    runtime["Runtime<br/>14 tables"]
-    release["Release<br/>15 tables"]
-    evaluation["Evaluation<br/>10 tables"]
+    runtime["Runtime<br/>15 tables"]
+    release["Release<br/>16 tables"]
+    evaluation["Evaluation<br/>13 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
@@ -71,7 +72,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 50 Scout tables — while the full platform is 123. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 58 Scout tables — while the full platform is 136. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -99,6 +100,10 @@ flowchart RL
         approval_risk_tier["approval_risk_tier"]
         agent_output_class["agent_output_class"]
         agent_state["agent_state"]
+        mcp_confirmation_status["mcp_confirmation_status"]
+        mcp_confirmation_channel["mcp_confirmation_channel"]
+        release_activation_state["release_activation_state"]
+        release_activation_reason["release_activation_reason"]
     end
 
     subgraph tenancy["Tenancy"]
@@ -149,6 +154,12 @@ flowchart RL
         agent_create_request["agent_create_request"]
         agent_version["agent_version"]
         agent_deployment["agent_deployment"]
+        safety_event["safety_event"]
+        agent_governance["agent_governance"]
+        agent_draft_guardrail["agent_draft_guardrail"]
+        agent_draft_comment["agent_draft_comment"]
+        agent_publish_review["agent_publish_review"]
+        agent_release_activation["agent_release_activation"]
     end
     agent_type_version --> agent_type
     agent_type_capability --> agent_type_version
@@ -162,6 +173,13 @@ flowchart RL
     agent_draft --> agent_profile
     agent_deployment --> agent_version
     guardrail_config --> agent_profile
+    safety_event --> agent_profile
+    agent_governance --> agent_draft
+    agent_draft_guardrail --> agent_draft
+    agent_draft_comment --> agent_draft
+    agent_draft_comment --> prompt_section
+    agent_publish_review --> agent_version
+    agent_release_activation --> agent_version
 
     subgraph agent_authorization_module["Agent Authorization"]
         direction BT
@@ -262,6 +280,7 @@ flowchart RL
         turn_dead_letter["turn_dead_letter"]
         budget_reservation["budget_reservation"]
         usage_event["usage_event"]
+        turn_feedback["turn_feedback"]
         agent_run["agent_run"]
         agent_ops_event["agent_ops_event"]
         agent_work_item["agent_work_item"]
@@ -274,6 +293,8 @@ flowchart RL
     step_checkpoint --> conversation_turn
     usage_event --> conversation_turn
     usage_event --> scope
+    usage_event --> model_definition
+    turn_feedback --> conversation_turn
     agent_work_item --> delegation_grant
     agent_work_item --> agent_work_item
     step_idempotency --> conversation_turn
@@ -296,6 +317,7 @@ flowchart RL
         platform_rollout_bypass["platform_rollout_bypass"]
         agent_version_pin["agent_version_pin"]
         experiment_cohort["experiment_cohort"]
+        agent_pilot_member["agent_pilot_member"]
         conversation_release["conversation_release"]
     end
     contract_test_run --> platform_release
@@ -316,10 +338,13 @@ flowchart RL
         direction BT
         golden_set["golden_set"]
         golden_set_version["golden_set_version"]
+        golden_case["golden_case"]
+        agent_golden_set["agent_golden_set"]
         golden_example["golden_example"]
         golden_query["golden_query"]
         evaluation_manifest["evaluation_manifest"]
         evaluation_run["evaluation_run"]
+        evaluation_run_subject["evaluation_run_subject"]
         evaluation_result["evaluation_result"]
         gate_decision["gate_decision"]
         human_review_item["human_review_item"]
@@ -335,6 +360,9 @@ flowchart RL
     golden_example --> golden_set_version
     gate_decision --> evaluation_manifest
     evaluation_run --> evaluation_manifest
+    evaluation_run_subject --> evaluation_run
+    golden_case --> golden_set
+    agent_golden_set --> golden_set
 
     subgraph skill["Skill"]
         direction BT
@@ -390,8 +418,11 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `agent_tenant` | `agent_profiles` | `agent_profile[]` |
 | `agent_profile` | `agent_versions` | `agent_version[]` |
 | `agent_profile` | `agent_studio_events` | `agent_studio_event[]` |
+| `agent_profile` | `agent_publish_reviews` | `agent_publish_review[]` |
+| `agent_draft` | `agent_draft_comments` | `agent_draft_comment[]` |
 | `agent_version` | `stable_agent_deployments` | `agent_deployment[]` |
 | `agent_version` | `canary_agent_deployments` | `agent_deployment[]` |
+| `agent_version` | `agent_release_activations` | `agent_release_activation[]` |
 | `execution_step` | `outgoing_execution_transitions` | `execution_transition[]` |
 | `execution_step` | `incoming_execution_transitions` | `execution_transition[]` |
 | `configuration` | `child_scopes` | `scope[]` |
@@ -513,6 +544,7 @@ erDiagram
     agent_tenant ||--o{ agent_profile : agent_profiles
     agent_tenant ||--o{ tool_profile : tool_profiles
     agent_profile ||--o{ guardrail_config : guardrail_configs
+    agent_profile ||--o{ safety_event : agent_safety_events
     agent_profile ||--o{ agent_version : agent_versions
     guardrail_config ||--o{ agent_version : agent_versions_guardrail
     agent_profile ||--o| agent_deployment : agent_deployments
@@ -544,6 +576,18 @@ erDiagram
         varchar agent_id PK,FK
         varchar guardrail_version PK
         text rules
+        char rules_digest
+    }
+    safety_event {
+        bigint id PK
+        bigint partner_id FK
+        varchar agent_id FK
+        varchar request_id
+        varchar stage_code
+        varchar layer_code
+        varchar action_code
+        text rule_ids
+        varchar release_version
     }
     agent_version {
         bigint partner_id PK,FK
@@ -618,7 +662,7 @@ erDiagram
     }
 ```
 
-Agent, guardrail, and tool versions are immutable. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
+Agent, guardrail, and tool versions are immutable. A release's `guardrail_config` version is the digest of the rule set it froze, so releases with identical rules share one row. `safety_event` records one guardrail intervention — stage, layer, action, rule ids, and the release and policy versions — never the inspected content; `agent_id` is set when the inspected principal is an agent, which is how events are paged per agent. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
 
 ### Skills
 
@@ -719,6 +763,10 @@ erDiagram
     prompt_baseline }o--|| prompt_section : prompt_baselines
     agent_profile ||--o{ agent_studio_event : agent_studio_events
     agent_profile ||--o{ agent_create_request : agent_create_requests
+    agent_draft ||--o| agent_governance : agent_governances
+    agent_draft ||--o| agent_draft_guardrail : agent_draft_guardrails
+    agent_draft ||--o{ agent_draft_comment : agent_draft_comments
+    prompt_section ||--o{ agent_draft_comment : prompt_section_draft_comments
 
     agent_studio_event {
         bigint id PK
@@ -769,11 +817,111 @@ erDiagram
         bigint prompt_section_id PK,FK
         varchar language_code PK
     }
+    agent_governance {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        text governance
+        bigint modified_by FK
+    }
+    agent_draft_guardrail {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        text rules
+        char rules_digest
+        bigint modified_by FK
+    }
+    agent_draft_comment {
+        bigint id PK
+        bigint partner_id FK
+        varchar agent_id FK
+        bigint draft_revision
+        varchar anchor_code
+        bigint prompt_section_id FK
+        varchar language_code
+        varchar resource_kind_code FK
+        varchar resource_id
+        varchar body
+        varchar status_code
+        varchar author_id
+        varchar resolved_by_id
+    }
 ```
 
 `agent_alias.revision` guards both alias changes and tenant defaults for that logical kind, preserving one shared optimistic token. Agent overrides are guarded by `agent_draft.draft_revision`. Platform baseline selection is supplied by `PromptBaselineSelector`; baseline data remains product-owned.
 
+`agent_governance` and `agent_draft_guardrail` are optional draft sections behind the same `draft_revision`, and publication freezes both into the release. `agent_governance.governance` is one canonical Charter `AgentDefinition` fragment with the declared trigger channels, validated and frozen whole; fields an enterprise source owns are never stored. `agent_draft_guardrail.rules` are the agent's own guardrail rules; the release also pins them, merged with its type's, as its `guardrail_config` version. `agent_draft_comment` is a remark on one draft revision, anchored by `anchor_code` to the whole draft, a prompt section (optionally one language), or a setting (`resource_kind_code` and `resource_id`); it stays `open` until someone resolves it. Its author and resolver, like the governance and guardrail editors in `modified_by`, are recorded for audit.
+
 Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions with the acting principal — a person's `user_account.id` or a service's id, so it has no foreign key — and their time. `agent_create_request` is a Studio create's idempotency record: the request digest and the agent it created, keyed by tenant, principal, and key. An archived agent has `agent_profile.state_code` `archived`: it admits no work, keeps its releases, and can return to `suspended`.
+
+```mermaid
+erDiagram
+    agent_profile ||--o{ agent_publish_review : agent_publish_reviews
+    agent_version ||--o{ agent_publish_review : base_version_publish_reviews
+    agent_version ||--o{ agent_publish_review : published_version_publish_reviews
+    user_account ||--o{ agent_publish_review : requested_publish_reviews
+    user_account ||--o{ agent_publish_review : decided_publish_reviews
+    agent_version ||--o{ agent_release_activation : agent_release_activations
+    agent_version ||--o{ agent_release_activation : base_stable_release_activations
+    agent_version ||--o{ agent_release_activation : base_canary_release_activations
+    release_activation_state ||--o{ agent_release_activation : state_release_activations
+    release_activation_reason ||--o{ agent_release_activation : reason_release_activations
+
+    agent_profile {
+        bigint partner_id PK,FK
+        varchar agent_id PK
+    }
+    agent_version {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        varchar agent_version PK
+    }
+    user_account {
+        bigint id PK
+    }
+    agent_publish_review {
+        bigint id PK
+        bigint partner_id FK
+        varchar agent_id FK
+        char definition_digest
+        bigint draft_revision
+        bigint prompt_profile_revision
+        varchar base_version FK
+        text diff
+        text evaluations
+        varchar status_code
+        bigint requested_by FK
+        bigint decided_by FK
+        varchar sod_exception_id
+        varchar published_version FK
+    }
+    agent_release_activation {
+        bigint id PK
+        bigint partner_id FK
+        varchar agent_id FK
+        varchar agent_version FK
+        char definition_digest
+        smallint canary_percentage
+        varchar base_stable_version FK
+        varchar base_canary_version FK
+        timestamp effective_at
+        varchar state_code FK
+        varchar scheduled_by_id
+        int attempts
+        timestamp next_attempt_at
+        varchar reason_code FK
+    }
+    release_activation_state {
+        varchar code PK
+        boolean is_terminal
+    }
+    release_activation_reason {
+        varchar code PK
+    }
+```
+
+`agent_publish_review` asks a second person to approve publishing one exact draft, identified by `definition_digest`. It keeps the draft and prompt-profile revisions, the stable release the diff is taken against (`base_version`), the diff, and optional evaluation results. A new request supersedes one still `requested`, and the approver must not be the requester. When the agent's separation policy requires a review, publication needs the latest review approved for the same digest, refuses while any `agent_draft_comment` is open, and consumes the review by setting `published_version`; `sod_exception_id` is the separation-of-duties exception under which a requester may publish their own approved review.
+
+`agent_release_activation` is a published release scheduled to take the agent's traffic at `effective_at`. Publication writes the immutable release as usual and records the activation instead of moving `agent_deployment`; a partial unique index allows one `pending` activation per agent. `ReleaseActivationWorker` claims due rows by the database clock and, in one transaction, rechecks the scheduler's publish authority, the definition digest, and the publish guards, then compare-and-swaps the deployment against `base_stable_version` and `base_canary_version`. `release_activation_state` (`pending`, `activated`, `refused`, `cancelled`) and `release_activation_reason` classify the outcome; a transient failure retries at `next_attempt_at` until its attempts run out.
 
 ## Principals, scopes, and effective configuration
 
@@ -897,6 +1045,7 @@ erDiagram
     scope ||--o{ turn_approval_request : scope_turn_approval_requests
     agent_tenant ||--o{ turn_approval_request : turn_approval_requests
     turn_approval_request ||--o| turn_approval_decision : turn_approval_decisions
+    turn_approval_request |o--o{ turn_approval_request : revised_turn_approval_requests
     outbox_event |o--o{ turn_approval_request : notified_turn_approval_requests
     tool_profile ||--o{ tool_credential_binding : tool_credential_bindings
     turn_approval_decision }o--|| user_account : decided_turn_approval_decisions
@@ -920,6 +1069,7 @@ erDiagram
         varchar status_code FK
         timestamp deadline_at
         bigint notification_event_id FK
+        bigint revises_step_id FK
     }
     turn_approval_decision {
         bigint turn_approval_request_id PK,FK
@@ -930,6 +1080,8 @@ erDiagram
         varchar decider_service_id
         varchar grant_id
         char proposed_digest
+        text revised_arguments_uri
+        char revised_arguments_digest
     }
     tool_credential_binding {
         bigint partner_id PK,FK
@@ -968,7 +1120,10 @@ erDiagram
 `turn_approval_request` is unique on `(partner_id, request_id, execution_step_id)`, so opening a request is
 idempotent and a replayed turn re-attaches instead of asking a person the same question twice.
 `proposed_digest` binds a verdict to the exact action: resolving matches on it, so approving a
-changed action updates nothing. `turn_approval_decision` records the decider through three nullable
+changed action updates nothing. An `edited` verdict stores only the archive reference and digest
+of the revised tool-call arguments (`revised_arguments_uri`, `revised_arguments_digest`), never the
+arguments; the turn resumes with the revised call, which is governed as a new proposal of the same
+turn whose `revises_step_id` names the edited one. `turn_approval_decision` records the decider through three nullable
 identity columns with an exactly-one check; human and agent identities keep real declared foreign
 keys, while platform service decisions retain their stable service id.
 
@@ -1273,6 +1428,7 @@ erDiagram
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
     conversation_turn ||--o{ usage_event : usage_events
     usage_event }o--|| usage_category : category_usage_events
+    model_definition |o--o{ usage_event : model_usage_events
     agent_conversation ||--|{ conversation_turn : conversation_turns
     turn_status ||--o{ conversation_turn : status_conversation_turns
     conversation_turn ||--o| conversation_turn_detail : conversation_turn_details
@@ -1329,6 +1485,9 @@ erDiagram
         bigint artifact_ref
         varchar active_reservation_id FK
         bigint staged_cost_minor_units
+        int staged_tool_calls
+        bigint staged_search_queries
+        jsonb staged_model_usage
     }
     step_checkpoint {
         bigint partner_id PK,FK
@@ -1388,10 +1547,16 @@ erDiagram
         varchar principal_id
         varchar on_behalf_id
         varchar work_ref
+        varchar provider_id FK
+        varchar model_id FK
         char currency_code FK
     }
     usage_category {
         varchar code PK
+    }
+    model_definition {
+        varchar provider_id PK
+        varchar model_id PK
     }
     agent_run {
         bigint id PK
@@ -1436,7 +1601,9 @@ erDiagram
     }
 ```
 
-`agent_conversation` pins the release a conversation runs on and records why: `version_source` names the rule (`stable`, `canary`, `experiment_cohort`, a pin, or `request_pin` with its `pin_reason`), null when the product supplied the version, and `alias_id` is the agent type it was requested through. `usage_event` attributes settled usage to the spending principal, the person it acted for (`on_behalf_kind`, `on_behalf_id`), and the product's opaque `work_ref`; `audit_event.work_ref` carries the same reference.
+`agent_conversation` pins the release a conversation runs on and records why: `version_source` names the rule (`stable`, `canary`, `experiment_cohort`, `pilot`, a pin, or `request_pin` with its `pin_reason`), null when the product supplied the version, and `alias_id` is the agent type it was requested through. `usage_event` attributes settled usage to the spending principal, the person it acted for (`on_behalf_kind`, `on_behalf_id`), and the product's opaque `work_ref`; `audit_event.work_ref` carries the same reference.
+
+Settlement writes one `usage_event` per model that performed part of the turn, plus one unattributed row for usage no model performed. Partial unique indexes keep those rows distinct. Until settlement, `conversation_turn_detail` stages the total tool calls and search queries and keeps the per-model breakdown as transient JSON. The `(partner_id, queued_at)` index on `conversation_turn` serves the trailing-minute turn count of the `limits` setting.
 
 `turn_feedback` holds one person's rating, 1 to 5, of one completed turn; the person is kept for audit, and reports count ratings per release, never per person.
 
@@ -1584,6 +1751,7 @@ Agent canaries in `agent_deployment` remain independent from platform rings in `
 erDiagram
     agent_version ||--o{ agent_version_pin : agent_version_pins
     agent_version ||--o{ experiment_cohort : experiment_cohorts
+    agent_version ||--o{ agent_pilot_member : agent_version_pilot_members
     agent_conversation ||--o| conversation_release : conversation_releases
     platform_release ||--o{ conversation_release : platform_conversation_releases
 
@@ -1624,6 +1792,17 @@ erDiagram
         smallint percentage
         varchar salt
     }
+    agent_pilot_member {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        varchar subject_kind PK
+        varchar subject_id PK
+        timestamp begda PK
+        timestamp endda
+        varchar agent_version FK
+        varchar reason
+        varchar added_by_id
+    }
     conversation_release {
         bigint partner_id PK,FK
         varchar conversation_id PK,FK
@@ -1640,7 +1819,7 @@ A conversation carries two independent identities: `agent_conversation.agent_ver
 
 `release_bundle` records what a platform release certifies — model and provider version, tokenizer, runtime, decoding defaults, prompt, embedding and reranker with index generation, tools, safety policy, migration set, residency policy, provenance, compatibility constraints, and rollback target — under a digest and signature. Nothing routes on the bundle; it exists so "roll back to the previous release" names exactly what it restores.
 
-Agent-version and platform-release identity stay separate. `agent_version_pin` holds compliance and tenant pins with effective and expiry dates, owner, approval, and the policy and index versions each pin is compatible with; `experiment_cohort` holds the stable-hash cohort assignment. A conversation persists both identities: `agent_conversation.agent_version` for the agent and `conversation_release.platform_version` for the release it was created on, so a rollback changes new assignments only and live conversations drain on what they started with.
+Agent-version and platform-release identity stay separate. `agent_version_pin` holds compliance and tenant pins with effective and expiry dates, owner, approval, and the policy and index versions each pin is compatible with; `experiment_cohort` holds the stable-hash cohort assignment. `agent_pilot_member` serves one release to a listed person (`principal`, a `user_account` id) or a product position (an opaque reference), apart from hash cohorts; it is effective-dated with who added it and why, and a partial unique index keeps one open membership per subject and agent. Resolution precedence is compliance pin, tenant pin, pilot, experiment cohort, then the canary/stable split; a person's own membership wins over a position's, and a release still named by a membership in force is retained by garbage collection. A conversation persists both identities: `agent_conversation.agent_version` for the agent and `conversation_release.platform_version` for the release it was created on, so a rollback changes new assignments only and live conversations drain on what they started with.
 
 ### Quality evaluation
 
@@ -1651,12 +1830,19 @@ erDiagram
     knowledge_base ||--o{ golden_query : knowledge_base_golden_queries
     agent_tenant ||--o{ golden_set : golden_sets
     golden_set ||--o{ golden_set_version : golden_set_versions
+    golden_set ||--o{ golden_case : golden_cases
+    golden_set ||--o{ agent_golden_set : golden_set_agents
+    agent_profile ||--o| agent_golden_set : agent_golden_sets
+    agent_profile |o--o{ golden_set : agent_owned_golden_sets
+    golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
+    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
+    agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
     golden_set_version ||--o{ golden_query : golden_queries
     golden_set_version ||--o{ golden_example : golden_examples
     golden_set_version ||--o{ evaluation_manifest : evaluation_manifests
     agent_version ||--o{ evaluation_manifest : candidate_evaluation_manifests
     agent_version ||--o{ evaluation_manifest : baseline_evaluation_manifests
-    evaluation_manifest ||--o{ evaluation_run : evaluation_runs
+    evaluation_manifest |o--o{ evaluation_run : evaluation_runs
     evaluation_run ||--o{ evaluation_result : evaluation_results
     golden_example ||--o{ evaluation_result : example_evaluation_results
     evaluation_run ||--o{ human_review_item : human_review_items
@@ -1668,6 +1854,10 @@ erDiagram
 
     agent_tenant {
         bigint partner_id PK,FK
+    }
+    agent_profile {
+        bigint partner_id PK
+        varchar agent_id PK
     }
     agent_version {
         bigint partner_id PK
@@ -1685,11 +1875,28 @@ erDiagram
         bigint partner_id PK,FK
         varchar golden_set_id PK
         varchar name
+        bigint working_revision
+        varchar owner_agent_id FK
+    }
+    golden_case {
+        bigint partner_id PK,FK
+        varchar golden_set_id PK,FK
+        varchar case_id PK
+        varchar scope_code
+        text input_text
+        text expected_behavior
+        varchar rubric_ref
+        varchar risk_tier_code FK
+    }
+    agent_golden_set {
+        bigint partner_id PK,FK
+        varchar agent_id PK,FK
+        varchar golden_set_id FK
     }
     golden_set_version {
         bigint partner_id PK,FK
         varchar golden_set_id PK,FK
-        varchar set_version PK
+        bigint set_version PK
         char dataset_revision
         int example_count
         timestamp frozen_at
@@ -1697,7 +1904,7 @@ erDiagram
     golden_example {
         bigint partner_id PK,FK
         varchar golden_set_id PK,FK
-        varchar set_version PK,FK
+        bigint set_version PK,FK
         varchar example_id PK
         varchar scope_code
         varchar provenance
@@ -1712,7 +1919,7 @@ erDiagram
     golden_query {
         bigint partner_id PK,FK
         varchar golden_set_id PK,FK
-        varchar set_version PK,FK
+        bigint set_version PK,FK
         varchar query_id PK
         varchar scope_code
         varchar knowledge_base_id FK
@@ -1729,7 +1936,7 @@ erDiagram
         varchar candidate_agent_version FK
         varchar baseline_agent_version FK
         varchar golden_set_id FK
-        varchar golden_set_version FK
+        bigint golden_set_version FK
         char dataset_revision
         varchar safety_policy_version
         text manifest_json
@@ -1738,11 +1945,27 @@ erDiagram
         bigint id PK
         bigint partner_id FK
         char manifest_id FK
+        varchar agent_id FK
+        varchar golden_set_id FK
+        bigint set_version FK
         varchar scope_code
         varchar status_code
+        bigint lease_token
+        timestamp lease_until
+        int attempt
         bigint sample_count
         bigint cost_minor_units
         char currency_code FK
+    }
+    evaluation_run_subject {
+        bigint run_id PK,FK
+        varchar role_code PK
+        bigint partner_id FK
+        varchar subject_code
+        varchar agent_id FK
+        varchar agent_version FK
+        char definition_digest
+        text definition_json
     }
     evaluation_result {
         bigint run_id PK,FK
@@ -1793,24 +2016,26 @@ erDiagram
 ```
  `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring verdict, `human_review_item` the adjudication queue, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
 
+Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`) or a release (`agent_version`), both by `definition_digest`.
+
 ## Scout table inventory
 
 Tables are grouped by the schema module that owns them. A downstream generates only the modules its product uses; see the profile table in the [engineering reference](engineering-reference.md#generate-dialect-specific-ddl).
 
 | Module | Tables |
 |---|---|
-| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state`, `mcp_confirmation_status`, `mcp_confirmation_channel` |
+| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `config_merge_mode`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_output_class`, `agent_state`, `mcp_confirmation_status`, `mcp_confirmation_channel`, `release_activation_state`, `release_activation_reason` |
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
-| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_version`, `agent_deployment`, `agent_version_quarantine` |
+| `agent` | `agent_type`, `agent_type_version`, `agent_capability_package`, `agent_type_capability`, `agent_profile`, `guardrail_config`, `safety_event`, `agent_draft`, `agent_governance`, `agent_draft_guardrail`, `agent_alias`, `agent_studio_event`, `agent_create_request`, `agent_version`, `agent_deployment`, `agent_release_activation`, `agent_version_quarantine`, `agent_publish_review`, `agent_draft_comment` |
 | `tool` | `tool_profile`, `tool_version`, `tool_egress_rule`, `agent_tool_binding`, `tool_credential_binding` |
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
 | `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
-| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `conversation_release` |
-| `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
+| `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
+| `evaluation` | `evaluation_manifest`, `golden_set`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `human_review_item`, `evaluation_sample` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |

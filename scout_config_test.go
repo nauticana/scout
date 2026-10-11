@@ -2,6 +2,7 @@ package scout
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -9,6 +10,8 @@ import (
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 	keelschema "github.com/nauticana/keel/schema"
+
+	"github.com/nauticana/scout/domain"
 )
 
 type scoutConfigQueryFake struct {
@@ -57,6 +60,37 @@ func TestScoutConfigApply(t *testing.T) {
 	}
 	if cfg.AgentModelMaxWaiters != 4096 {
 		t.Fatalf("AgentModelMaxWaiters = %d, want 4096", cfg.AgentModelMaxWaiters)
+	}
+	if cfg.AgentPilotMaxMembers != 200 || cfg.AgentPilotPositionTimeout != 2 {
+		t.Fatalf("AgentPilotMaxMembers = %d, AgentPilotPositionTimeout = %d, want 200 and 2", cfg.AgentPilotMaxMembers, cfg.AgentPilotPositionTimeout)
+	}
+	if cfg.AgentEvaluationMaxOpenRuns != 4 || cfg.AgentEvaluationLease != 900 || cfg.AgentEvaluationCurrency != "" {
+		t.Fatalf("evaluation settings = %d, %d, %q", cfg.AgentEvaluationMaxOpenRuns, cfg.AgentEvaluationLease, cfg.AgentEvaluationCurrency)
+	}
+}
+
+func TestScoutConfigGovernanceRequiredFields(t *testing.T) {
+	for value, want := range map[string][]domain.GovernanceField{
+		"":     nil,
+		"none": {},
+		" purpose, accountable ,escalationConditions": {domain.GovernancePurpose, domain.GovernanceAccountable, domain.GovernanceEscalationConditions},
+	} {
+		rows := scoutConfigRows()
+		rows[agent_governance_required_fields] = keelconfig.ConfigRow{Value: value}
+		cfg := &ScoutConfig{}
+		if err := cfg.Apply(rows); err != nil {
+			t.Fatalf("%q: %v", value, err)
+		}
+		if !slices.Equal(cfg.AgentGovernanceRequiredFields, want) || (want == nil) != (cfg.AgentGovernanceRequiredFields == nil) {
+			t.Fatalf("%q: fields = %#v, want %#v", value, cfg.AgentGovernanceRequiredFields, want)
+		}
+	}
+	for _, value := range []string{"purpose,owner", "purpose,purpose", "purpose,"} {
+		rows := scoutConfigRows()
+		rows[agent_governance_required_fields] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), agent_governance_required_fields) {
+			t.Fatalf("%q: error = %v, want a refusal naming the flag", value, err)
+		}
 	}
 }
 
@@ -195,7 +229,22 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_guardrail_max_input_bytes:  "262144",
 		agent_guardrail_max_output_bytes: "1048576",
 		agent_model_region:               "",
+		agent_pilot_max_members:          "200",
+		agent_pilot_position_timeout:     "2",
 		agent_studio_max_agents_per_type: "20",
+		agent_governance_required_fields: "",
+		agent_evaluation_max_open_runs:   "4",
+		agent_evaluation_concurrency:     "4",
+		agent_evaluation_max_run_cost:    "10000",
+		agent_evaluation_currency:        "",
+		agent_evaluation_lease:           "900",
+		agent_evaluation_batch:           "4",
+		agent_evaluation_max_attempts:    "3",
+		agent_evaluation_case_max_bytes:  "32768",
+		agent_evaluation_max_cases:       "500",
+		agent_activation_batch:           "20",
+		agent_activation_poll:            "30",
+		agent_activation_max_attempts:    "5",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

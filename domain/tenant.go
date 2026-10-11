@@ -50,6 +50,8 @@ type Usage struct {
 	SearchQueries  int64
 	CostMinorUnits int64
 	Currency       string
+	// Models is the share of the totals each model performed; the rest no model performed.
+	Models []ModelSpend
 }
 
 // UsageAttribution names who spent the usage and where, so cost is reportable
@@ -62,10 +64,14 @@ type UsageAttribution struct {
 	WorkRef    string
 }
 
-// UsageLine is settled usage of one agent release for one person and work item in one
-// currency. Cost is in minor units of Currency, which has Exponent decimal places.
+// UsageLine is settled usage of one agent release for one person, work item, and model
+// in one currency; a zero Model is usage no model performed. Cost is in minor units of
+// Currency, which has Exponent decimal places. Turns counts the turns whose model work
+// the line holds, or on a zero-Model line the turns without model work, so a turn that
+// used two models counts on both lines.
 type UsageLine struct {
 	Release        string
+	Model          ModelReference
 	OnBehalfOf     PrincipalRef
 	WorkRef        string
 	Currency       string

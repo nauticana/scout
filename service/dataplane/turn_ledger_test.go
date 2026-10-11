@@ -16,6 +16,8 @@ import (
 type ledgerQueryFake struct {
 	queries []string
 	args    map[string][]any
+	calls   map[string][][]any
+	rows    map[string][][]any
 	commits int
 }
 
@@ -32,6 +34,16 @@ func (query *ledgerQueryFake) Query(_ context.Context, name string, args ...any)
 		query.args = map[string][]any{}
 	}
 	query.args[name] = args
+	if query.calls == nil {
+		query.calls = map[string][][]any{}
+	}
+	query.calls[name] = append(query.calls[name], args)
+	if rows, ok := query.rows[name]; ok {
+		return &keelmodel.QueryResult{Rows: rows}, nil
+	}
+	if name == qLedgerUsageSettled {
+		return &keelmodel.QueryResult{}, nil
+	}
 	return &keelmodel.QueryResult{Rows: [][]any{{int64(1)}}}, nil
 }
 func (*ledgerQueryFake) GenID() int64                       { return 0 }
@@ -68,11 +80,11 @@ func TestTurnLedgerFailWithUsageSettlesInsteadOfReleasing(t *testing.T) {
 	if err := ledger.FailWithUsage(context.Background(), execution, cause, usage); !errors.Is(err, domain.ErrInvalidModelOutput) {
 		t.Fatalf("FailWithUsage must return the cause, got %v", err)
 	}
-	want := []string{qLedgerStageBilledFailure, qLedgerFinishBilledFailure, qLedgerInsertUsageEvent}
+	want := []string{qLedgerStageBilledFailure, qLedgerFinishBilledFailure, qLedgerLock, qLedgerUsageSettled, qLedgerInsertUsageEvent}
 	if !reflect.DeepEqual(query.queries, want) {
 		t.Fatalf("queries = %v, want %v", query.queries, want)
 	}
-	if committed != usage || released != 0 || settledHook != 1 || query.commits != 1 {
+	if !reflect.DeepEqual(committed, usage) || released != 0 || settledHook != 1 || query.commits != 1 {
 		t.Fatalf("committed %+v released %d hook %d commits %d", committed, released, settledHook, query.commits)
 	}
 	if event := query.args[qLedgerInsertUsageEvent]; event[11] != int64(40) || event[15] != int64(3) {

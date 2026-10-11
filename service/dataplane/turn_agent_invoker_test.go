@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -76,7 +77,7 @@ func TestDelegationChainSettlesPerHopAndStopsWhereItsBudgetEnds(t *testing.T) {
 	}
 
 	result, err := hop(lead, "specialist", 40)
-	if err != nil || string(result.State) != "answer" || result.Usage != (domain.Usage{}) {
+	if err != nil || string(result.State) != "answer" || !reflect.DeepEqual(result.Usage, domain.Usage{}) {
 		t.Fatalf("hop one = %+v, %v; the delegate settles its own spend, so the step reports none", result, err)
 	}
 	specialist := admitted[0].Principal

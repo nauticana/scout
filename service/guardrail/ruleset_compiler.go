@@ -219,25 +219,9 @@ func (compiler *RuleSetCompiler) compileRule(rule domain.GuardrailRule, layer do
 
 func (compiler *RuleSetCompiler) compileParams(item *compiledRule) error {
 	rule := item.rule
-	var params struct {
-		Max             *int               `json:"max"`
-		Schema          *jsonschema.Schema `json:"schema"`
-		Tools           []string           `json:"tools"`
-		Hosts           []string           `json:"hosts"`
-		Phrases         []string           `json:"phrases"`
-		CaseInsensitive bool               `json:"case_insensitive"`
-		Pattern         string             `json:"pattern"`
-		MaxMatchBytes   int                `json:"max_match_bytes"`
-		Open            string             `json:"open"`
-		Close           string             `json:"close"`
-		Threshold       *float64           `json:"threshold"`
-	}
-	if len(rule.Params) > 0 {
-		decoder := json.NewDecoder(bytes.NewReader(rule.Params))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&params); err != nil {
-			return fmt.Errorf("invalid params: %v", err)
-		}
+	params, err := decodeRuleParams(rule.Params)
+	if err != nil {
+		return err
 	}
 	bounded := func(list []string, name string) error {
 		if len(list) > compiler.config.MaxListEntries {
@@ -338,6 +322,37 @@ func (compiler *RuleSetCompiler) compileParams(item *compiledRule) error {
 		item.threshold = threshold
 	}
 	return nil
+}
+
+// ruleParams is the union of every kind's parameters; each kind reads its own fields.
+type ruleParams struct {
+	Max             *int               `json:"max"`
+	Schema          *jsonschema.Schema `json:"schema"`
+	Tools           []string           `json:"tools"`
+	Hosts           []string           `json:"hosts"`
+	Phrases         []string           `json:"phrases"`
+	CaseInsensitive bool               `json:"case_insensitive"`
+	Pattern         string             `json:"pattern"`
+	MaxMatchBytes   int                `json:"max_match_bytes"`
+	Open            string             `json:"open"`
+	Close           string             `json:"close"`
+	Threshold       *float64           `json:"threshold"`
+}
+
+func decodeRuleParams(raw json.RawMessage) (ruleParams, error) {
+	var params ruleParams
+	if len(raw) == 0 {
+		return params, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&params); err != nil {
+		return ruleParams{}, fmt.Errorf("invalid params: %v", err)
+	}
+	if decoder.More() {
+		return ruleParams{}, fmt.Errorf("invalid params: trailing data")
+	}
+	return params, nil
 }
 
 func verifyDigest(config domain.GuardrailConfig) (string, error) {

@@ -69,7 +69,8 @@ type BaseDataPlane struct {
 	Knowledge    contract.PinnedKnowledgeResolver
 	Entitlements contract.EntitlementResolver
 	Weights      contract.TenantWeightPolicy
-	// PrincipalLimits reads each agent's frozen budget and operating mode; nil uses isolation.ReleaseLimits over DB.
+	// PrincipalLimits reads each agent's frozen budget, operating mode, and execution limits; nil uses
+	// isolation.ReleaseLimits over DB.
 	PrincipalLimits contract.PrincipalLimits
 	// Roles authorizes a turn's person and Principals resolves its serving agent; nil uses
 	// principal.RoleAuthorizer and principal.TableResolver over DB.
@@ -77,7 +78,7 @@ type BaseDataPlane struct {
 	Principals contract.PrincipalResolver
 	// Versions chooses a new conversation's release, which agent_conversation records with the
 	// rule that chose it; nil uses release.PinnedTrafficManager over the agent's canary and
-	// stable deployment. A product with the release module adds its pins and cohorts.
+	// stable deployment. A product with the release module adds its pins, pilots, and cohorts.
 	Versions contract.AgentVersionResolutionExplainer
 
 	Objects          ObjectStateCodec
@@ -416,8 +417,11 @@ func (plane *BaseDataPlane) composeLoop() error {
 		plane.Evidence = &guardrail.EvidenceValidator{Objects: verifier}
 	}
 	if plane.Executors == nil {
+		// The gate that parks a call is the one that knows how a decider revised it.
+		revisions, _ := plane.Approvals.(contract.ProposalRevisions)
 		loop, err := NewToolLoopExecutor(ToolLoopExecutor{
-			Requests: plane.Requests, Router: plane.Router, Models: plane.Models, Registry: plane.Tools, Tools: plane.ToolGateway,
+			Revisions: revisions,
+			Requests:  plane.Requests, Router: plane.Router, Models: plane.Models, Registry: plane.Tools, Tools: plane.ToolGateway,
 			Journal: plane.Journal, Pricer: plane.Pricer, Evidence: plane.Evidence, Limits: plane.Limits,
 		})
 		if err != nil {
@@ -440,7 +444,7 @@ func (plane *BaseDataPlane) composeRuntime() error {
 		runtime := &TurnRuntime{
 			Records: plane.Records, Sessions: plane.Sessions, Definitions: plane.Definitions, Policies: plane.Policies,
 			Governor: plane.Governor, Executors: plane.Executors, Idempotency: plane.Idempotency, Guardrails: plane.Guardrails,
-			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Cancels: plane.Cancels,
+			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Limits: plane.PrincipalLimits, Cancels: plane.Cancels,
 			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, Runs: plane.Runs, OnSettled: plane.OnSettled,
 			MaxSteps: plane.Settings.TurnMaxSteps,
 		}

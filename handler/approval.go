@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -25,8 +26,8 @@ type ApprovalHandler struct {
 func (h *ApprovalHandler) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		api.ApprovalPendingPath: h.JSON(http.MethodGet, h.pending),
-		api.ApprovalResolvePath: h.JSON(http.MethodPost, h.resolve),
-		api.ApprovalLinkPath:    h.JSONPublic(http.MethodPost, h.redeem),
+		api.ApprovalResolvePath: bounded(h.JSON(http.MethodPost, h.resolve)),
+		api.ApprovalLinkPath:    bounded(h.JSONPublic(http.MethodPost, h.redeem)),
 	}
 }
 
@@ -59,11 +60,20 @@ func (h *ApprovalHandler) resolve(ctx context.Context, session *keelmodel.UserSe
 		RequestKey: domain.ApprovalKey{TenantID: actor.TenantID, RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID},
 		Status:     domain.ApprovalStatus(request.Verdict), Decider: actor.Principal,
 		ProposedDigest: request.ProposedDigest, Reason: request.Reason, DecidedAt: time.Now().UTC(),
+		RevisedArguments: revisedArguments(request.RevisedArguments),
 	})
 	if err != nil {
 		return mapServiceError(nil, err)
 	}
 	return apiApproval(result), nil
+}
+
+// revisedArguments treats an explicit JSON null as absent, as for every other optional field.
+func revisedArguments(raw json.RawMessage) json.RawMessage {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	return raw
 }
 
 func (h *ApprovalHandler) redeem(ctx context.Context, body json.RawMessage) (any, error) {
@@ -85,6 +95,7 @@ func apiApproval(request domain.ApprovalRequest) api.ApprovalRequest {
 		ScopeID: request.ScopeID, RuleID: request.RuleID, Action: request.Action, Resource: request.Resource,
 		OutputClass: string(request.Class), RiskTier: string(request.RiskTier), Summary: request.Summary,
 		ProposedDigest: request.ProposedDigest, Status: string(request.Status), CreatedAt: request.CreatedAt,
+		RevisesStepID: request.RevisesStepID,
 	}
 	if !request.DeadlineAt.IsZero() {
 		deadline := request.DeadlineAt

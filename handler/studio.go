@@ -262,11 +262,15 @@ func (h *StudioHandler) testDraft(ctx context.Context, actor domain.StudioActor,
 }
 
 func (h *StudioHandler) publish(ctx context.Context, actor domain.StudioActor, request api.AgentPublishRequest) (any, error) {
-	result, err := h.Backend.Publish(ctx, actor, domain.AgentPublishRequest{
+	publish := domain.AgentPublishRequest{
 		AgentID: request.AgentName, ChangeSummary: request.ChangeSummary, CanaryPercentage: request.CanaryPercentage,
 		ExpectedDraftRevision:         request.ExpectedAgentRevision,
 		ExpectedPromptProfileRevision: request.ExpectedTypeDefaultsRevision,
-	})
+	}
+	if request.EffectiveAt != nil {
+		publish.EffectiveAt = *request.EffectiveAt
+	}
+	result, err := h.Backend.Publish(ctx, actor, publish)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +306,7 @@ func (h *StudioHandler) setDefault(ctx context.Context, actor domain.StudioActor
 
 // command serves one authenticated JSON POST: the body decodes into R and the backend decides.
 func command[R any](h *keelhandler.AbstractHandler, call func(context.Context, domain.StudioActor, R) (any, error)) http.HandlerFunc {
-	return h.JSON(http.MethodPost, func(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+	return bounded(h.JSON(http.MethodPost, func(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
 		actor, err := sessionActor(session)
 		if err != nil {
 			return nil, err
@@ -312,7 +316,7 @@ func command[R any](h *keelhandler.AbstractHandler, call func(context.Context, d
 			return nil, err
 		}
 		return mapServiceError(call(ctx, actor, request))
-	})
+	}))
 }
 
 // query serves one authenticated GET with its URL parameters.
@@ -458,6 +462,7 @@ func apiDraft(value domain.AgentDraft) api.AgentDraft {
 				mapped.Layers = append(mapped.Layers, api.AgentPromptLayer{
 					ScopeID: layer.ScopeID, ScopeKind: layer.ScopeKind, MergeMode: string(layer.MergeMode),
 					Sealed: layer.Sealed, Editable: layer.Editable, Instruction: layer.Instruction, Output: layer.Output,
+					BoundBy: layer.BoundBy,
 				})
 			}
 			item.PromptSections = append(item.PromptSections, mapped)
@@ -495,13 +500,21 @@ func apiRelease(value domain.AgentRelease) (api.AgentRelease, error) {
 	if value.PublishedBy != nil {
 		publishedBy = *value.PublishedBy
 	}
-	return api.AgentRelease{
+	release := api.AgentRelease{
 		AgentName: value.AgentID, AgentType: value.AgentTypeID, Version: version, Enabled: value.Enabled,
 		Models:           api.AgentModelSelection{TextModel: referenceID(value.Models.Text), ImageModel: referenceID(value.Models.Image), VideoModel: referenceID(value.Models.Video)},
 		DefinitionDigest: value.DefinitionDigest,
 		ChangeSummary:    value.ChangeSummary, PublishedBy: publishedBy, PublishedAt: value.PublishedAt,
 		Active: value.Active, Languages: value.Languages,
-	}, nil
+	}
+	if value.Activation != nil {
+		activation, err := apiActivation(*value.Activation)
+		if err != nil {
+			return api.AgentRelease{}, err
+		}
+		release.Activation = &activation
+	}
+	return release, nil
 }
 
 func sessionActor(session *keelmodel.UserSession) (domain.StudioActor, error) {

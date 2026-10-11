@@ -33,6 +33,9 @@ func (stream *leasedModelStream) Receive(ctx context.Context) (domain.ModelChunk
 	}
 	stream.mu.Unlock()
 	chunk, receiveErr := stream.stream.Receive(ctx)
+	if stream.call != nil {
+		chunk.Usage = chunk.Usage.AttributedTo(selectionReference(stream.call.selection))
+	}
 	usageErr := stream.addUsage(chunk.Usage)
 	if receiveErr == nil && stream.call != nil {
 		stream.call.frame(chunk)

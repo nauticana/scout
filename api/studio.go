@@ -71,10 +71,15 @@ type AgentPauseResult struct {
 	Cancelled             int   `json:"cancelled"`
 }
 
-// AgentUsageLine is settled usage of one release for one person and work item; cost is
-// in minor units of currency, which has exponent decimal places.
+// AgentUsageLine is settled usage of one release, model, person, and work item; cost is
+// in minor units of currency, which has exponent decimal places. Usage no model
+// performed, such as tool calls, has no provider or model. Turns counts the turns whose
+// model work the line holds, or on a no-model line the turns without model work, so it
+// is not additive across the models of one release.
 type AgentUsageLine struct {
 	Version        string `json:"version"`
+	Provider       string `json:"provider,omitempty"`
+	Model          string `json:"model,omitempty"`
 	ActorKind      string `json:"actor_kind,omitempty"`
 	ActorID        string `json:"actor_id,omitempty"`
 	WorkRef        string `json:"work_ref,omitempty"`
@@ -125,7 +130,7 @@ type AgentDeployment struct {
 }
 
 // ConversationVersion names the release a conversation runs on and the rule that chose
-// it: stable, canary, experiment_cohort, compliance_pin, tenant_pin, or request_pin.
+// it: stable, canary, experiment_cohort, pilot, compliance_pin, tenant_pin, or request_pin.
 type ConversationVersion struct {
 	ConversationID   string    `json:"conversation_id"`
 	AgentName        string    `json:"agent_name"`
@@ -202,6 +207,8 @@ type StudioFeature struct {
 	ID      string   `json:"id"`
 	Version int      `json:"version"`
 	Actions []string `json:"actions"`
+	// Object is the authorization object the actions are granted on; empty is AGENT_STUDIO.
+	Object string `json:"object,omitempty"`
 }
 
 // AgentSummary is the studio-v2 agent list item.
@@ -253,6 +260,8 @@ type AgentPromptLayer struct {
 	Editable    bool   `json:"editable"`
 	Instruction string `json:"instruction"`
 	Output      string `json:"output"`
+	// BoundBy is the user who last edited the layer; it is read-only and absent on the baseline.
+	BoundBy *int64 `json:"bound_by,omitempty"`
 }
 
 // AgentPromptSection is the studio-v2 prompt inheritance view.
@@ -347,6 +356,8 @@ type AgentPublishRequest struct {
 	CanaryPercentage             int    `json:"canary_percentage,omitempty"`
 	ExpectedAgentRevision        int64  `json:"expected_agent_revision"`
 	ExpectedTypeDefaultsRevision int64  `json:"expected_type_defaults_revision"`
+	// EffectiveAt (RFC 3339) in the future schedules the release instead of deploying it now.
+	EffectiveAt *time.Time `json:"effective_at,omitempty"`
 }
 
 // AgentRestoreRequest is the studio-v2 restore request.
@@ -398,6 +409,8 @@ type AgentRelease struct {
 	PublishedAt      time.Time           `json:"published_at"`
 	Active           bool                `json:"active"`
 	Languages        []string            `json:"languages"`
+	// Activation is set when the publish was scheduled.
+	Activation *ReleaseActivation `json:"activation,omitempty"`
 }
 
 // AgentAuditEvent is one studio-v2 lifecycle event. UserID is set only when a person acted.

@@ -25,9 +25,17 @@ type releaseAutonomy struct {
 	WindowTo   int                 `json:"window_to_minute,omitempty"`
 }
 
-// ReleaseLimits reads the budget and autonomy a principal was published with.
-// Compilation already narrowed them against every parent scope, so nothing here
-// re-derives inheritance: it reads one frozen row.
+// releaseExecutionLimits is the limits resource; zero is not limited.
+type releaseExecutionLimits struct {
+	TurnsPerMinute     int64 `json:"turns_per_minute"`
+	MaxSteps           int64 `json:"max_steps"`
+	MaxToolCalls       int64 `json:"max_tool_calls"`
+	MaxDurationSeconds int64 `json:"max_duration_seconds"`
+}
+
+// ReleaseLimits reads the budget, autonomy, and execution limits a principal was
+// published with. Compilation already narrowed them against every parent scope, so
+// nothing here re-derives inheritance: it reads one frozen row.
 type ReleaseLimits struct {
 	Releases contract.EffectiveReleaseRepository
 	// Window is the rolling window the returned budget applies to.
@@ -78,6 +86,27 @@ func (l *ReleaseLimits) AutonomyMode(ctx context.Context, principal domain.Princ
 		return domain.AutonomyExecuteWithApproval, nil
 	}
 	return autonomy.Mode, nil
+}
+
+// ExecutionLimits returns the frozen limits binding; a release that binds none limits nothing.
+func (l *ReleaseLimits) ExecutionLimits(ctx context.Context, principal domain.Principal) (domain.ExecutionLimits, error) {
+	value, found, err := l.resource(ctx, principal, domain.ResourceLimits)
+	if err != nil || !found {
+		return domain.ExecutionLimits{}, err
+	}
+	var frozen releaseExecutionLimits
+	if err := json.Unmarshal(value, &frozen); err != nil {
+		return domain.ExecutionLimits{}, fmt.Errorf("%w: release limits are malformed: %v", domain.ErrValidation, err)
+	}
+	for _, limit := range []int64{frozen.TurnsPerMinute, frozen.MaxSteps, frozen.MaxToolCalls, frozen.MaxDurationSeconds} {
+		if limit < 0 || limit > domain.MaxExecutionLimit {
+			return domain.ExecutionLimits{}, fmt.Errorf("%w: release limits are outside 0 to %d", domain.ErrValidation, domain.MaxExecutionLimit)
+		}
+	}
+	return domain.ExecutionLimits{
+		TurnsPerMinute: int(frozen.TurnsPerMinute), MaxSteps: int(frozen.MaxSteps), MaxToolCalls: int(frozen.MaxToolCalls),
+		MaxDuration: time.Duration(frozen.MaxDurationSeconds) * time.Second,
+	}, nil
 }
 
 func (l *ReleaseLimits) resource(ctx context.Context, principal domain.Principal, kind domain.ResourceKind) ([]byte, bool, error) {

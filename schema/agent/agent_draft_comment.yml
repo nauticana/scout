@@ -1,0 +1,76 @@
+table: agent_draft_comment
+comment: A remark on one agent draft revision, anchored to the draft, a prompt section, or a setting
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: draft_revision
+    type: BIGINT
+  - name: anchor_code
+    type: VARCHAR(20)
+  - name: prompt_section_id
+    type: BIGINT
+    nullable: true
+  - name: language_code
+    type: VARCHAR(16)
+    nullable: true
+  - name: resource_kind_code
+    type: VARCHAR(30)
+    nullable: true
+  - name: resource_id
+    type: VARCHAR(80)
+    nullable: true
+  - name: body
+    type: VARCHAR(2000)
+  - name: status_code
+    type: VARCHAR(20)
+  - name: author_kind
+    type: VARCHAR(20)
+  - name: author_id
+    type: VARCHAR(120)
+    comment: The author's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: resolved_by_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: resolved_by_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: resolved_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: agent_draft_comment_seq
+  column: id
+foreign_keys:
+  - name: agent_draft_comments
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_draft
+      columns: [partner_id, agent_id]
+  - name: prompt_section_draft_comments
+    columns: [prompt_section_id]
+    references:
+      table: prompt_section
+      columns: [id]
+  - name: resource_kind_draft_comments
+    columns: [resource_kind_code]
+    references:
+      table: config_resource_kind
+      columns: [code]
+indexes:
+  - name: agent_draft_comment_agent_ix
+    columns: [partner_id, agent_id, status_code]
+checks:
+  - name: agent_draft_comment_anchor_ck
+    expression: (anchor_code = 'draft' AND prompt_section_id IS NULL AND language_code IS NULL AND resource_kind_code IS NULL AND resource_id IS NULL) OR (anchor_code = 'prompt_section' AND prompt_section_id IS NOT NULL AND resource_kind_code IS NULL AND resource_id IS NULL) OR (anchor_code = 'setting' AND prompt_section_id IS NULL AND language_code IS NULL AND resource_kind_code IS NOT NULL AND resource_id IS NOT NULL)
+  - name: agent_draft_comment_status_ck
+    expression: status_code IN ('open', 'resolved') AND (status_code = 'resolved') = (resolved_at IS NOT NULL) AND (resolved_by_kind IS NULL) = (resolved_at IS NULL) AND (resolved_by_kind IS NULL) = (resolved_by_id IS NULL)
+  - name: agent_draft_comment_revision_ck
+    expression: draft_revision > 0

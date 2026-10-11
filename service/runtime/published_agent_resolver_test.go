@@ -79,7 +79,7 @@ func TestCanarySelectionIsSticky(t *testing.T) {
 
 type versionManagerFake string
 
-func (version versionManagerFake) ResolveVersion(context.Context, int64, string, string) (string, error) {
+func (version versionManagerFake) ResolveVersion(context.Context, domain.VersionRequest) (string, error) {
 	return string(version), nil
 }
 func (versionManagerFake) SetCanary(context.Context, int64, string, string, int) error { return nil }

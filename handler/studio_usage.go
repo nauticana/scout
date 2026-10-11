@@ -45,7 +45,7 @@ func (h *StudioUsageHandler) usage(ctx context.Context, actor domain.StudioActor
 	items := make([]api.AgentUsageLine, 0, len(lines))
 	for _, line := range lines {
 		items = append(items, api.AgentUsageLine{
-			Version: line.Release, ActorKind: string(line.OnBehalfOf.Kind), ActorID: line.OnBehalfOf.ID, WorkRef: line.WorkRef,
+			Version: line.Release, Provider: line.Model.ProviderID, Model: line.Model.ModelID, ActorKind: string(line.OnBehalfOf.Kind), ActorID: line.OnBehalfOf.ID, WorkRef: line.WorkRef,
 			Currency: line.Currency, Exponent: line.Exponent, Turns: line.Turns, InputTokens: line.InputTokens,
 			OutputTokens: line.OutputTokens, ToolCalls: line.ToolCalls, CostMinorUnits: line.CostMinorUnits,
 		})

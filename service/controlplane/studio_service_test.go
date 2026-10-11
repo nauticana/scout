@@ -254,6 +254,8 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 
 	recorder := &releaseWriterRecorder{}
 	service, query := newService(recorder)
+	query.rows[qStudioReleaseTools] = [][]any{{int64(1)}}
+	query.rows[qStudioReleaseGraph] = [][]any{{int64(1)}}
 	service.Kinds = typeTools
 	service.Scopes = studioScopes([]domain.ScopedBinding{{ScopeID: "a:writer-a", ResourceKind: domain.ResourceTool,
 		ResourceID: "tool", ResourceVersion: "v1", MergeMode: domain.MergeReplace, Value: []byte(`["search"]`)}})
@@ -286,6 +288,12 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 	unwired.Kinds = typeTools
 	if _, err := unwired.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("want ErrNotReady without a release writer, got %v", err)
+	}
+	// A composed writer that binds no tools, such as the guardrail writer alone, is not enough.
+	unbound, unboundQuery := newService(&releaseWriterRecorder{})
+	unbound.Kinds = typeTools
+	if _, err := unbound.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotReady) || unboundQuery.commits != 0 {
+		t.Fatalf("want ErrNotReady when no writer bound the tools, got %v", err)
 	}
 	failing, failed := newService(&releaseWriterRecorder{err: domain.ErrNotFound})
 	failing.Kinds = typeTools

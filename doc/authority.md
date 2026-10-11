@@ -40,7 +40,10 @@ one lattice rather than a translation between two models.
 Scout's own objects are scoped by value. `AGENT_STUDIO` actions are checked at `agent:<id>` —
 `CREATE` at `agent_type:<id>` — and `AGENT_CONVERSATION` `USE` and `PIN_RELEASE` at `agent:<id>`, so
 a role holds every agent of its tenant with `*` or named agents only; Studio lists only the agents
-its actor may view. `AGENT_APPROVAL` `DECIDE` is checked at the request's scope.
+its actor may view. `AGENT_STUDIO` `APPROVE_PUBLISH`, deciding another person's publish review, is
+checked at `agent:<id>` too. `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
+layers and are checked at the tenant-wide value `tenant`. `AGENT_APPROVAL` `DECIDE` is checked at the
+request's scope.
 
 Agents are deliberately **not** rows in `user_account`. That table is a credential store —
 `passtext`, `passdate`, `login_attempts`, `lock_time`, `twofa_*`, `single_device_session`, unique
@@ -64,17 +67,27 @@ Binding values are canonical JSON, fixed per kind:
 | `policy` | `[{"id":"…","effect":"allow","actions":[…],"resources":[…]}]` | `PolicyMerger` | `policy` |
 | `budget` | `{"tokens":0,"cost_minor_units":0,"currency":"EUR"}` | `BudgetMerger` | `at_most` |
 | `autonomy` | `{"mode":"draft","window_from_minute":0,"window_to_minute":0}` | `AutonomyMerger` | `ordered` |
+| `limits` | `{"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}` | `LimitsMerger` | `at_most` |
 
 A set cannot express deny-wins, so `policy` has its own merger and rule: a child may drop an allow or
 add a deny, never add an allow, and an allow it keeps may not widen the parent's actions, resources,
 or conditions, nor drop an obligation the parent attached. `autonomy` narrows on two axes — the mode
 rank and the bounded operating window, which may only shrink; a child window that misses the parent's
 entirely degrades the mode to `execute_with_approval` rather than granting an empty one.
+`limits` narrows per field, with 0 meaning unlimited at that scope: a child may lower a ceiling its
+parent sets, never raise or unset it, and may set one its parent leaves at 0.
 
 `config_resource_kind.narrowing_rule` is the seeded source of that last column; `PlatformNarrowingRules`
 mirrors it in code. An unregistered kind fails compilation and an unmapped rule fails the check —
-set, budget, and autonomy bindings use their kind as `resource_id`, while policy may use several ids.
-both closed, never permissive.
+both closed, never permissive. Set, budget, and autonomy bindings use their kind as
+`resource_id`, while policy may use several ids.
+
+A release's `limits` only lower the tenant runtime policy and the executor's flag ceilings.
+`turns_per_minute` caps the agent's turns opened in any trailing minute, by the database clock, when
+a turn opens (`domain.ErrRateLimited`, HTTP 429 with `Retry-After`); a replayed request is never
+refused. `max_steps` and `max_duration_seconds` lower the tenant runtime policy's step count and turn
+timeout, and `max_tool_calls` and `max_duration_seconds` the tool loop's call ceiling and step
+deadline; exceeding one is `domain.ErrExecutionLimit`. A value above a ceiling leaves it unchanged.
 
 ## Compilation
 
@@ -92,8 +105,9 @@ For each resource, per binding in chain order:
 4. Record provenance; the previous winner moves onto `Superseded`.
 
 `sealed` is set by the binding's own scope, so a company safety clause genuinely cannot be
-overridden — unlike a child-controlled override flag. `BudgetMerger` and `AutonomyMerger` clamp to
-the tighter inherited value, so a raised ceiling is silently impossible as well as explicitly checked.
+overridden — unlike a child-controlled override flag. `BudgetMerger`, `AutonomyMerger`, and
+`LimitsMerger` clamp to the tighter inherited value, so a raised ceiling is silently impossible as
+well as explicitly checked.
 
 Compilation is deterministic: resources sort by `(kind, id)`, bindings by scope depth, and `Digest`
 covers every effective value with its winning scope and version. The same inputs in any order produce

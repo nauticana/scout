@@ -1,0 +1,108 @@
+table: agent_release_activation
+comment: A published release scheduled to take an agent's traffic at a set time
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: definition_digest
+    type: CHAR(64)
+    comment: The release digest when scheduled; activation recomputes and compares it
+  - name: canary_percentage
+    type: SMALLINT
+    default: "0"
+  - name: base_stable_version
+    type: VARCHAR(80)
+    nullable: true
+    comment: The stable release when scheduled; activation compares and swaps against it
+  - name: base_canary_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: effective_at
+    type: TIMESTAMP
+  - name: state_code
+    type: VARCHAR(20)
+    default: pending
+  - name: scheduled_by_kind
+    type: VARCHAR(20)
+  - name: scheduled_by_id
+    type: VARCHAR(120)
+    comment: The scheduling person's user_account id or the service's id; activation rechecks its PUBLISH authority
+  - name: scheduled_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: attempts
+    type: INTEGER
+    default: "0"
+  - name: next_attempt_at
+    type: TIMESTAMP
+    nullable: true
+  - name: reason_code
+    type: VARCHAR(30)
+    nullable: true
+  - name: detail
+    type: VARCHAR(400)
+    nullable: true
+  - name: decided_by_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: decided_by_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: decided_at
+    type: TIMESTAMP
+    nullable: true
+primary_key: [id]
+sequence:
+  name: agent_release_activation_seq
+  column: id
+foreign_keys:
+  - name: agent_release_activations
+    columns: [partner_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: base_stable_release_activations
+    columns: [partner_id, agent_id, base_stable_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: base_canary_release_activations
+    columns: [partner_id, agent_id, base_canary_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: state_release_activations
+    columns: [state_code]
+    references:
+      table: release_activation_state
+      columns: [code]
+  - name: reason_release_activations
+    columns: [reason_code]
+    references:
+      table: release_activation_reason
+      columns: [code]
+indexes:
+  - name: agent_release_activation_pending_uq
+    columns: [partner_id, agent_id]
+    unique: true
+    where: state_code = 'pending'
+  - name: agent_release_activation_due_ix
+    columns: [state_code, effective_at]
+  - name: agent_release_activation_agent_ix
+    columns: [partner_id, agent_id, effective_at]
+checks:
+  - name: agent_release_activation_digest_ck
+    expression: CHAR_LENGTH(definition_digest) = 64
+  - name: agent_release_activation_canary_ck
+    expression: canary_percentage BETWEEN 0 AND 99 AND (canary_percentage = 0 OR base_stable_version IS NOT NULL)
+  - name: agent_release_activation_attempts_ck
+    expression: attempts >= 0
+  - name: agent_release_activation_reason_ck
+    expression: (state_code = 'refused') = (reason_code IS NOT NULL)
+  - name: agent_release_activation_decider_ck
+    expression: (decided_by_kind IS NULL) = (decided_by_id IS NULL)

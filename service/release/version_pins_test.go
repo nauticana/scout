@@ -10,6 +10,8 @@ import (
 	"github.com/nauticana/scout/fake"
 )
 
+var writerRequest = domain.VersionRequest{TenantID: 8, AgentID: "writer-a", ConversationID: "conversation-a"}
+
 func pinnedManager(pins []domain.VersionPin, cohort *domain.ExperimentCohort) (*PinnedTrafficManager, *fake.RecordingAuditSink) {
 	audit := &fake.RecordingAuditSink{}
 	manager := &PinnedTrafficManager{
@@ -58,7 +60,7 @@ func TestPinnedTrafficManagerPrecedence(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			manager, audit := pinnedManager(testCase.pins, testCase.cohort)
-			resolution, err := manager.ExplainVersion(context.Background(), 8, "writer-a", "conversation-a")
+			resolution, err := manager.ExplainVersion(context.Background(), writerRequest)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,7 +79,7 @@ func TestPinnedTrafficManagerRejectsIncompatiblePin(t *testing.T) {
 	pin.CompatiblePolicyVersions = []string{"safety-2026.05"}
 	manager, _ := pinnedManager([]domain.VersionPin{pin}, nil)
 	manager.PolicyVersion = "safety-2026.08"
-	if _, err := manager.ResolveVersion(context.Background(), 8, "writer-a", "conversation-a"); !errors.Is(err, domain.ErrConflict) {
+	if _, err := manager.ResolveVersion(context.Background(), writerRequest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -87,12 +89,12 @@ func TestPinnedTrafficManagerRegionScopedPin(t *testing.T) {
 	pin.Region = "eu-central"
 	manager, _ := pinnedManager([]domain.VersionPin{pin}, nil)
 	manager.Region = "us-east"
-	resolution, err := manager.ExplainVersion(context.Background(), 8, "writer-a", "conversation-a")
+	resolution, err := manager.ExplainVersion(context.Background(), writerRequest)
 	if err != nil || resolution.Source != domain.VersionFromCanary {
 		t.Fatalf("resolution = %+v, err = %v", resolution, err)
 	}
 	manager.Region = "eu-central"
-	if resolution, err = manager.ExplainVersion(context.Background(), 8, "writer-a", "conversation-a"); err != nil || resolution.Version != "2" {
+	if resolution, err = manager.ExplainVersion(context.Background(), writerRequest); err != nil || resolution.Version != "2" {
 		t.Fatalf("regional resolution = %+v, err = %v", resolution, err)
 	}
 }
@@ -102,7 +104,7 @@ func TestPinnedTrafficManagerRollbackChangesOnlyNewAssignments(t *testing.T) {
 	if err := manager.Rollback(context.Background(), 8, "writer-a"); err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := manager.ExplainVersion(context.Background(), 8, "writer-a", "conversation-a")
+	resolution, err := manager.ExplainVersion(context.Background(), writerRequest)
 	if err != nil || resolution.Version != "3" || resolution.Source != domain.VersionFromStable {
 		t.Fatalf("resolution = %+v, err = %v", resolution, err)
 	}
@@ -150,6 +152,7 @@ func TestPinAwareGarbageCollectorKeepsReferencedVersions(t *testing.T) {
 			int64(8), "writer-a", "3", "3",
 			int64(8), "writer-a", "3", testStart,
 			int64(8), "writer-a", "3",
+			int64(8), "writer-a", "3", testStart,
 			int64(8), "writer-a", "3")
 	}
 }

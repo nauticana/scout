@@ -269,3 +269,17 @@ func TestCheckNarrowingFailsClosedForAnUnmappedKind(t *testing.T) {
 		t.Fatalf("error = %v, want an unmapped kind to fail closed", err)
 	}
 }
+
+func TestCompiledReleaseDigestSurvivesATimestampColumn(t *testing.T) {
+	compiler := newTestCompiler(t, []domain.ScopedBinding{binding("agent", domain.ResourceTool, `["search"]`)})
+	compiler.Now = func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 123456789, time.FixedZone("PDT", -7*60*60)) }
+	release, err := compiler.Compile(context.Background(), domain.CompileRequest{TenantID: 7, AgentID: "a", AgentVersion: "3", ScopeID: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := release
+	stored.CompiledAt = time.Date(2026, 10, 10, 19, 0, 0, 123456000, time.UTC)
+	if Digest(stored) != release.Digest {
+		t.Fatalf("compiled at %s does not digest as its microsecond UTC column value", release.CompiledAt)
+	}
+}

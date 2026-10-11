@@ -1,0 +1,49 @@
+table: evaluation_run_subject
+comment: What one arm of an agent evaluation run executes, a frozen draft or a release, pinned by definition digest
+columns:
+  - name: run_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: role_code
+    type: VARCHAR(10)
+  - name: subject_code
+    type: VARCHAR(10)
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+    nullable: true
+  - name: definition_digest
+    type: CHAR(64)
+  - name: definition_json
+    type: TEXT
+    nullable: true
+    comment: The draft frozen as publish would freeze it; a release subject reads its own agent_version row
+primary_key: [run_id, role_code]
+foreign_keys:
+  - name: evaluation_run_subjects
+    columns: [partner_id, run_id]
+    references:
+      table: evaluation_run
+      columns: [partner_id, id]
+  - name: agent_evaluation_run_subjects
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+  - name: release_evaluation_run_subjects
+    columns: [partner_id, agent_id, agent_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+indexes:
+  - name: evaluation_run_subject_digest_ix
+    columns: [partner_id, agent_id, definition_digest]
+checks:
+  - name: evaluation_run_subject_role_ck
+    expression: role_code IN ('baseline', 'candidate')
+  - name: evaluation_run_subject_kind_ck
+    expression: (subject_code = 'draft' AND agent_version IS NULL AND definition_json IS NOT NULL) OR (subject_code = 'release' AND agent_version IS NOT NULL AND definition_json IS NULL)
+  - name: evaluation_run_subject_digest_ck
+    expression: CHAR_LENGTH(definition_digest) = 64

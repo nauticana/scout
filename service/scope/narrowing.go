@@ -40,6 +40,7 @@ var PlatformNarrowingRules = map[domain.ResourceKind]NarrowingRule{
 	domain.ResourceBudget:        NarrowAtMost,
 	domain.ResourceAutonomy:      NarrowOrdered,
 	domain.ResourceSkill:         NarrowSubset,
+	domain.ResourceLimits:        NarrowAtMost,
 }
 
 // LatticeChecker rejects any effective value that broadens what it inherits. An
@@ -66,6 +67,9 @@ func (c *LatticeChecker) CheckNarrowing(_ context.Context, kind domain.ResourceK
 	case NarrowPolicy:
 		return checkPolicy(kind, inherited, candidate)
 	case NarrowAtMost:
+		if kind == domain.ResourceLimits {
+			return checkLimits(kind, inherited, candidate)
+		}
 		return checkAtMost(kind, inherited, candidate)
 	case NarrowOrdered:
 		return checkOrdered(kind, inherited, candidate)

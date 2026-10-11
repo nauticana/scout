@@ -1,0 +1,33 @@
+table: agent_draft_guardrail
+comment: An agent's own enforced guardrail rules behind its draft revision; publication freezes them with its type's into guardrail_config
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: rules
+    type: TEXT
+    comment: Canonical JSON guardrail rule envelope
+  - name: rules_digest
+    type: CHAR(64)
+  - name: modified_by
+    type: BIGINT
+    nullable: true
+  - name: modified_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, agent_id]
+foreign_keys:
+  - name: agent_draft_guardrails
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_draft
+      columns: [partner_id, agent_id]
+  - name: modified_agent_draft_guardrails
+    columns: [modified_by]
+    references:
+      table: user_account
+      columns: [id]
+checks:
+  - name: agent_draft_guardrail_digest_ck
+    expression: CHAR_LENGTH(rules_digest) = 64

@@ -1,0 +1,97 @@
+table: agent_publish_review
+comment: A request that a second person approve publishing one exact agent draft, identified by its definition digest
+columns:
+  - name: id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: definition_digest
+    type: CHAR(64)
+  - name: draft_revision
+    type: BIGINT
+  - name: prompt_profile_revision
+    type: BIGINT
+  - name: base_version
+    type: VARCHAR(80)
+    nullable: true
+    comment: The release active when the review was requested; the diff is against it
+  - name: diff
+    type: TEXT
+  - name: evaluations
+    type: TEXT
+    nullable: true
+  - name: status_code
+    type: VARCHAR(20)
+  - name: requested_by
+    type: BIGINT
+  - name: request_note
+    type: VARCHAR(400)
+    nullable: true
+  - name: requested_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: decided_by
+    type: BIGINT
+    nullable: true
+  - name: decision_note
+    type: VARCHAR(400)
+    nullable: true
+  - name: decided_at
+    type: TIMESTAMP
+    nullable: true
+  - name: sod_exception_id
+    type: VARCHAR(200)
+    nullable: true
+    comment: The separation-of-duties exception the requester named to publish the approved review themselves
+  - name: published_version
+    type: VARCHAR(80)
+    nullable: true
+    comment: The release that consumed this approval
+primary_key: [id]
+sequence:
+  name: agent_publish_review_seq
+  column: id
+foreign_keys:
+  - name: agent_publish_reviews
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_profile
+      columns: [partner_id, agent_id]
+  - name: base_version_publish_reviews
+    columns: [partner_id, agent_id, base_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: published_version_publish_reviews
+    columns: [partner_id, agent_id, published_version]
+    references:
+      table: agent_version
+      columns: [partner_id, agent_id, agent_version]
+  - name: requested_publish_reviews
+    columns: [requested_by]
+    references:
+      table: user_account
+      columns: [id]
+  - name: decided_publish_reviews
+    columns: [decided_by]
+    references:
+      table: user_account
+      columns: [id]
+indexes:
+  - name: agent_publish_review_agent_ix
+    columns: [partner_id, agent_id, status_code]
+  - name: agent_publish_review_digest_ix
+    columns: [partner_id, agent_id, definition_digest]
+checks:
+  - name: agent_publish_review_status_ck
+    expression: status_code IN ('requested', 'approved', 'rejected', 'superseded')
+  - name: agent_publish_review_digest_ck
+    expression: CHAR_LENGTH(definition_digest) = 64
+  - name: agent_publish_review_decision_ck
+    expression: (decided_by IS NULL) = (decided_at IS NULL) AND (status_code IN ('approved', 'rejected')) = (decided_by IS NOT NULL)
+  - name: agent_publish_review_approver_ck
+    expression: status_code <> 'approved' OR decided_by <> requested_by
+  - name: agent_publish_review_published_ck
+    expression: published_version IS NULL OR status_code = 'approved'

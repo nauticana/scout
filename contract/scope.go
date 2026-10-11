@@ -49,6 +49,9 @@ type PrincipalLimits interface {
 	// AutonomyMode returns the mode the principal may act under at a point in
 	// time; outside its operating window a bounded mode degrades rather than fails.
 	AutonomyMode(ctx context.Context, principal domain.Principal, at time.Time) (domain.AutonomyMode, error)
+	// ExecutionLimits returns the turn-rate, step, tool-call, and duration limits; a
+	// release that binds none returns the zero value, which narrows nothing.
+	ExecutionLimits(ctx context.Context, principal domain.Principal) (domain.ExecutionLimits, error)
 }
 
 // EffectiveConfigExplainer answers "why is this the value?" from the provenance

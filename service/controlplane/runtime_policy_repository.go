@@ -170,8 +170,8 @@ func validateRuntimePolicy(tenantID int64, version domain.RuntimePolicyVersion) 
 }
 
 // TableGuardrailConfigRepository stores immutable guardrail versions and reads
-// the one an agent version pins. An agent version that pins none gets the empty
-// policy, which leaves only the release-independent baseline in force.
+// the one an agent version pins. An agent version that pins none gets the zero
+// config: no release layer, so the baseline and restriction layers alone apply.
 type TableGuardrailConfigRepository struct {
 	DB keelport.DatabaseRepository
 
@@ -192,6 +192,12 @@ func (repository *TableGuardrailConfigRepository) Publish(ctx context.Context, t
 	if err != nil {
 		return err
 	}
+	return publishGuardrailConfig(context.WithoutCancel(ctx), qs, tenantID, agentID, config)
+}
+
+// publishGuardrailConfig stores one immutable guardrail version through qs, a pooled query
+// service or the caller's transaction, and refuses a version that already holds other rules.
+func publishGuardrailConfig(ctx context.Context, qs keelport.QueryService, tenantID int64, agentID string, config domain.GuardrailConfig) error {
 	if tenantID <= 0 || strings.TrimSpace(agentID) == "" || strings.TrimSpace(config.Version) == "" || len(config.Rules) == 0 {
 		return fmt.Errorf("%w: tenant, agent, guardrail version, and rules are required", domain.ErrValidation)
 	}
@@ -200,15 +206,14 @@ func (repository *TableGuardrailConfigRepository) Publish(ctx context.Context, t
 	if config.RulesDigest != "" && config.RulesDigest != digest {
 		return fmt.Errorf("%w: guardrail rules do not match their digest", domain.ErrValidation)
 	}
-	ctx = context.WithoutCancel(ctx)
-	if _, err = qs.Query(ctx, qGuardrailPublish, tenantID, agentID, config.Version, string(config.Rules), digest); err != nil {
+	if _, err := qs.Query(ctx, qGuardrailPublish, tenantID, agentID, config.Version, string(config.Rules), digest); err != nil {
 		return fmt.Errorf("publish guardrail config: %w", err)
 	}
 	stored, err := qs.Query(ctx, qGuardrailGet, tenantID, agentID, config.Version)
 	if err != nil {
 		return fmt.Errorf("read guardrail config: %w", err)
 	}
-	if len(stored.Rows) == 0 || common.AsString(stored.Rows[0][2]) != digest {
+	if len(stored.Rows) == 0 || strings.TrimSpace(common.AsString(stored.Rows[0][2])) != digest {
 		return fmt.Errorf("%w: guardrail version %s of %q already holds different rules", domain.ErrConflict, config.Version, agentID)
 	}
 	return nil

@@ -81,6 +81,8 @@ const (
 	LoopEntryModel           LoopEntryKind = "model"
 	LoopEntryObservation     LoopEntryKind = "observation"
 	LoopEntryApprovalPending LoopEntryKind = "approval_pending"
+	// LoopEntryRevision substitutes a decider's edited arguments for the pending call before it runs.
+	LoopEntryRevision LoopEntryKind = "revision"
 )
 
 // LoopEntry is one durable boundary of a loop. Entries are append-only and
@@ -99,6 +101,8 @@ type LoopEntry struct {
 	// Effect is the observed postcondition of a verified mutating call, journaled with its
 	// observation so replay neither repeats the mutation nor loses the evidence.
 	Effect *EffectObservation `json:"effect,omitempty"`
-	Usage  Usage              `json:"usage,omitzero"`
-	Offset time.Duration      `json:"offset,omitempty"`
+	// Revision is set on a revision entry.
+	Revision *CallRevision `json:"revision,omitempty"`
+	Usage    Usage         `json:"usage,omitzero"`
+	Offset   time.Duration `json:"offset,omitempty"`
 }

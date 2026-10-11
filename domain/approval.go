@@ -9,8 +9,8 @@ const (
 	ApprovalStatusPending  ApprovalStatus = "pending"
 	ApprovalStatusApproved ApprovalStatus = "approved"
 	ApprovalStatusRejected ApprovalStatus = "rejected"
-	// ApprovalStatusEdited rejects the original proposal; a changed action must
-	// enter as a new request with its own digest before it can execute.
+	// ApprovalStatusEdited closes the original proposal with revised arguments; the
+	// revision enters as a new request with its own digest and runs in its place.
 	ApprovalStatusEdited    ApprovalStatus = "edited"
 	ApprovalStatusExpired   ApprovalStatus = "expired"
 	ApprovalStatusEscalated ApprovalStatus = "escalated"
@@ -64,6 +64,8 @@ type ApprovalRequest struct {
 	ResolvedAt     time.Time
 	// NotificationEventID is the keel outbox event that notifies the first approver; zero when none was queued.
 	NotificationEventID int64
+	// RevisesStepID is the step of the edited proposal this request revises, in the same turn; zero for an original.
+	RevisesStepID int64
 }
 
 // ApprovalVerdict resolves one request. Decider is the principal that acted and
@@ -76,6 +78,10 @@ type ApprovalVerdict struct {
 	ProposedDigest string
 	Reason         string
 	DecidedAt      time.Time
+	// RevisedArguments are an edited verdict's replacement tool-call arguments, a JSON object.
+	RevisedArguments []byte
+	// Revision is where the revised arguments are archived; the store keeps only this reference.
+	Revision ObjectRef
 }
 
 // ApprovalKey identifies one request without its payload.

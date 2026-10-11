@@ -13,4 +13,5 @@ tables:
   - platform_rollout_bypass
   - agent_version_pin
   - experiment_cohort
+  - agent_pilot_member
   - conversation_release

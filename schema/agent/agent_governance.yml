@@ -1,0 +1,28 @@
+table: agent_governance
+comment: The governance Studio keeps for one agent behind its draft revision, as one canonical Charter AgentDefinition fragment; fields an enterprise source owns are never stored here
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: governance
+    type: TEXT
+    comment: Canonical JSON in Charter field names, with triggerChannels in place of triggers; validated and frozen whole, never queried inside
+  - name: modified_by
+    type: BIGINT
+    nullable: true
+  - name: modified_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, agent_id]
+foreign_keys:
+  - name: agent_governances
+    columns: [partner_id, agent_id]
+    references:
+      table: agent_draft
+      columns: [partner_id, agent_id]
+  - name: modified_agent_governances
+    columns: [modified_by]
+    references:
+      table: user_account
+      columns: [id]

@@ -60,6 +60,8 @@ var (
 	// ErrApprovalPending indicates work is parked awaiting a human decision. It is
 	// control flow, not a denial: the turn suspends and resumes on the verdict.
 	ErrApprovalPending = errors.New("approval pending")
+	// ErrProposalRevised indicates a decider edited the proposal; only its revision may run.
+	ErrProposalRevised = errors.New("proposal revised")
 	// ErrCapabilityUnsupported indicates a route or adapter cannot honor a required
 	// capability; the request is refused instead of degraded.
 	ErrCapabilityUnsupported = errors.New("capability unsupported")

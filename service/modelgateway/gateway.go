@@ -69,6 +69,7 @@ func (gateway *Gateway) Generate(ctx context.Context, selection domain.ModelSele
 		return domain.ModelResult{}, err
 	}
 	result, callErr := provider.Generate(ctx, selected, request)
+	result.Usage = result.Usage.AttributedTo(selectionReference(selected))
 	if callErr == nil {
 		callErr = call.contract.checkResult(result)
 	}

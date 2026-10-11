@@ -131,11 +131,13 @@ func (c *Compiler) fold(ctx context.Context, bindings []domain.ScopedBinding, ki
 	return resource, nil
 }
 
+// now is truncated to the microseconds a TIMESTAMP stores, so a release read back digests the same.
 func (c *Compiler) now() time.Time {
+	now := time.Now
 	if c.Now != nil {
-		return c.Now()
+		now = c.Now
 	}
-	return time.Now()
+	return now().UTC().Truncate(time.Microsecond)
 }
 
 type resourceKey struct {

@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,8 +39,11 @@ type ToolLoopExecutor struct {
 	Pricer contract.ModelPricer
 	// Evidence is optional; it is required by a step whose configuration sets require_evidence.
 	Evidence contract.EvidenceValidator
-	Limits   domain.ToolLoopLimits
-	Now      func() time.Time
+	// Revisions is optional; it reads a decider's edit of a parked call so the loop runs the
+	// revision instead. Without it an edited call fails the turn rather than run as proposed.
+	Revisions contract.ProposalRevisions
+	Limits    domain.ToolLoopLimits
+	Now       func() time.Time
 }
 
 // NewToolLoopExecutor rejects a composition that could run unbounded.
@@ -148,6 +153,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 	if requested := time.Duration(run.config.DeadlineSeconds) * time.Second; requested > 0 && requested < run.limits.Deadline {
 		run.limits.Deadline = requested
 	}
+	run.limits = narrowLoopLimits(run.limits, input.Limits)
 	if input.Bounds.BudgetMinorUnits > 0 && strings.TrimSpace(input.Bounds.Currency) == "" {
 		return nil, fmt.Errorf("%w: a delegated cost budget requires a currency", domain.ErrValidation)
 	}
@@ -245,15 +251,19 @@ func (executor *ToolLoopExecutor) iterate(ctx context.Context, run *loopRun) (do
 		if len(decision.ToolCalls) == 0 {
 			return executor.finish(ctx, run, decision)
 		}
+		// The model is shown the arguments each call ran with, which a decider may have revised;
+		// the journaled decision itself is never changed.
+		calls := append([]domain.ModelToolCall(nil), decision.ToolCalls...)
 		run.request.Messages = append(run.request.Messages, domain.ModelMessage{
-			Role: domain.ModelRoleAssistant, Text: decision.Output, ToolCalls: decision.ToolCalls,
+			Role: domain.ModelRoleAssistant, Text: decision.Output, ToolCalls: calls,
 		})
 		observations := make([]domain.ModelToolObservation, 0, len(decision.ToolCalls))
-		for _, call := range decision.ToolCalls {
-			observation, err := executor.observe(ctx, run, iteration, call)
+		for index, call := range decision.ToolCalls {
+			observation, ran, err := executor.observe(ctx, run, iteration, call)
 			if err != nil {
 				return domain.StepResult{}, err
 			}
+			calls[index].Arguments = ran.Arguments
 			observations = append(observations, observation)
 		}
 		run.request.Messages = append(run.request.Messages, domain.ModelMessage{Role: domain.ModelRoleTool, Observations: observations})
@@ -296,51 +306,94 @@ func (executor *ToolLoopExecutor) decide(ctx context.Context, run *loopRun, iter
 	return *entry.Model, run.account(entry.Usage)
 }
 
+// priced attributes the call's usage to the selected model unless the gateway named
+// the models that performed it, then prices each model's share when no cost was reported.
 func (executor *ToolLoopExecutor) priced(ctx context.Context, selection domain.ModelSelection, usage domain.Usage) (domain.Usage, error) {
+	if len(usage.Models) == 0 {
+		usage = usage.AttributedTo(domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model})
+	}
 	if executor.Pricer == nil || usage.CostMinorUnits > 0 {
 		return usage, nil
 	}
-	reference := domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model}
-	cost, currency, err := executor.Pricer.Cost(ctx, reference,
-		domain.ModelUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries})
-	if err != nil {
-		return usage, fmt.Errorf("price model %s/%s: %w", selection.Provider, selection.Model, err)
+	spends := slices.Clone(usage.Models)
+	if len(spends) == 0 {
+		spends = []domain.ModelSpend{{Model: domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model}}}
 	}
-	if cost < 0 || cost > 0 && strings.TrimSpace(currency) == "" {
-		return usage, fmt.Errorf("%w: model pricer returned invalid cost", domain.ErrValidation)
+	var total int64
+	currency := ""
+	for i, spend := range spends {
+		cost, spendCurrency, err := executor.Pricer.Cost(ctx, spend.Model,
+			domain.ModelUsage{InputTokens: spend.InputTokens, OutputTokens: spend.OutputTokens, SearchQueries: spend.SearchQueries})
+		if err != nil {
+			return usage, fmt.Errorf("price model %s/%s: %w", spend.Model.ProviderID, spend.Model.ModelID, err)
+		}
+		if cost < 0 || cost > 0 && strings.TrimSpace(spendCurrency) == "" || cost > math.MaxInt64-total ||
+			spendCurrency != "" && currency != "" && spendCurrency != currency {
+			return usage, fmt.Errorf("%w: model pricer returned invalid cost", domain.ErrValidation)
+		}
+		if currency == "" {
+			currency = spendCurrency
+		}
+		total += cost
+		spends[i].CostMinorUnits = cost
 	}
-	usage.CostMinorUnits, usage.Currency = cost, currency
+	usage.CostMinorUnits = total
+	if currency != "" {
+		usage.Currency = currency
+	}
+	if len(usage.Models) > 0 {
+		usage.Models = spends
+	}
 	return usage, nil
 }
 
 // observe returns the journaled observation of one proposed call, or invokes
-// the tool through the governed gateway and journals what came back.
-func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, iteration int, call domain.ModelToolCall) (domain.ModelToolObservation, error) {
+// the tool through the governed gateway and journals what came back. It also
+// returns the call as it ran: a decider may have revised a parked call's arguments.
+func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, iteration int, call domain.ModelToolCall) (domain.ModelToolObservation, domain.ModelToolCall, error) {
 	tool := run.tools[call.Name]
 	reference := domain.ToolReference{ToolID: tool.ToolID, Version: tool.ToolVersion}
-	wasPending := false
-	if entry, replayed := run.next(domain.LoopEntryApprovalPending); replayed {
-		if entry.Observation == nil || entry.Observation.CallID != call.CallID {
-			return domain.ModelToolObservation{}, fmt.Errorf("%w: loop journal entry %d does not match call %q", domain.ErrConflict, entry.EntryNo, call.CallID)
-		}
-		wasPending = true
-	}
-	if entry, replayed := run.next(domain.LoopEntryObservation); replayed {
-		if entry.Observation == nil || entry.Observation.CallID != call.CallID {
-			return domain.ModelToolObservation{}, fmt.Errorf("%w: loop journal entry %d does not match call %q", domain.ErrConflict, entry.EntryNo, call.CallID)
-		}
-		run.recordCall(call, reference, entry, wasPending)
-		return *entry.Observation, run.account(entry.Usage)
-	}
-	if err := run.admitCall(call); err != nil {
-		return domain.ModelToolObservation{}, err
-	}
-	result, err := executor.Tools.Invoke(domain.WithDecisionScope(ctx, "iteration/", iteration, "/call/", call.CallID), domain.ToolCall{
+	proposal := domain.ToolCall{
 		TenantContext: run.request.TenantContext, Principal: run.input.Principal, OnBehalfOf: run.input.OnBehalfOf,
 		RequestID: run.input.RequestID, ConversationID: run.request.ConversationID,
 		ToolID: tool.ToolID, ToolVersion: tool.ToolVersion, Arguments: call.Arguments,
 		IdempotencyKey: callIdempotencyKey(run.key, call),
-	})
+	}
+	wasPending := false
+	for revisions := 0; ; {
+		entry, replayed := run.next(domain.LoopEntryApprovalPending)
+		if !replayed {
+			break
+		}
+		if entry.Observation == nil || entry.Observation.CallID != call.CallID {
+			return domain.ModelToolObservation{}, call, fmt.Errorf("%w: loop journal entry %d does not match call %q", domain.ErrConflict, entry.EntryNo, call.CallID)
+		}
+		wasPending = true
+		revision, revised, err := executor.revision(ctx, run, iteration, reference, call, proposal)
+		if err != nil {
+			return domain.ModelToolObservation{}, call, err
+		}
+		if !revised {
+			break
+		}
+		if revisions++; revisions > maxCallRevisions {
+			return domain.ModelToolObservation{}, call, fmt.Errorf("%w: call %q was revised more than %d times", domain.ErrExecutionLimit, call.CallID, maxCallRevisions)
+		}
+		run.recordRevision(call, reference)
+		call.Arguments, proposal = revision.Arguments, revisedCall(proposal, revision)
+		wasPending = false
+	}
+	if entry, replayed := run.next(domain.LoopEntryObservation); replayed {
+		if entry.Observation == nil || entry.Observation.CallID != call.CallID {
+			return domain.ModelToolObservation{}, call, fmt.Errorf("%w: loop journal entry %d does not match call %q", domain.ErrConflict, entry.EntryNo, call.CallID)
+		}
+		run.recordCall(call, reference, entry, wasPending)
+		return *entry.Observation, call, run.account(entry.Usage)
+	}
+	if err := run.admitCall(call); err != nil {
+		return domain.ModelToolObservation{}, call, err
+	}
+	result, err := executor.Tools.Invoke(domain.WithDecisionScope(ctx, "iteration/", iteration, "/call/", call.CallID), proposal)
 	observation := domain.ModelToolObservation{CallID: call.CallID, Name: call.Name, Output: result.Output}
 	switch {
 	case err == nil:
@@ -349,12 +402,12 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 			pending := domain.LoopEntry{Kind: domain.LoopEntryApprovalPending, Iteration: iteration, Tool: reference,
 				Observation: &domain.ModelToolObservation{CallID: call.CallID, Name: call.Name}}
 			if _, appendErr := executor.append(ctx, run, pending); appendErr != nil {
-				return domain.ModelToolObservation{}, errors.Join(err, appendErr)
+				return domain.ModelToolObservation{}, call, errors.Join(err, appendErr)
 			}
 		}
-		return domain.ModelToolObservation{}, err
+		return domain.ModelToolObservation{}, call, err
 	case endsLoop(ctx, err):
-		return domain.ModelToolObservation{}, stage.At(domain.StageTool, err)
+		return domain.ModelToolObservation{}, call, stage.At(domain.StageTool, err)
 	default:
 		// The model sees the failure class, never the internal error text.
 		observation.IsError = true
@@ -367,10 +420,10 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		ResourceURIs: resourceURIs(result.Evidence), Effect: result.Effect,
 	})
 	if err != nil {
-		return domain.ModelToolObservation{}, errors.Join(err, run.account(usage))
+		return domain.ModelToolObservation{}, call, errors.Join(err, run.account(usage))
 	}
 	run.recordCall(call, reference, entry, wasPending)
-	return *entry.Observation, run.account(entry.Usage)
+	return *entry.Observation, call, run.account(entry.Usage)
 }
 
 // endsLoop reports failures the model must not be asked to work around: the
@@ -382,6 +435,7 @@ func endsLoop(ctx context.Context, err error) bool {
 	for _, fatal := range []error{
 		context.Canceled, context.DeadlineExceeded, domain.ErrTurnCanceled, domain.ErrBudgetExceeded, domain.ErrExecutionLimit,
 		domain.ErrLoopDetected, domain.ErrPrincipalUnknown, domain.ErrAuthorityExceeded, domain.ErrDelegationDepth, domain.ErrGrantExpired,
+		domain.ErrProposalRevised,
 	} {
 		if errors.Is(err, fatal) {
 			return true
@@ -493,7 +547,7 @@ func (run *loopRun) admitCall(call domain.ModelToolCall) error {
 
 // account adds settled usage and fails closed on the token, cost, and delegated budget limits.
 func (run *loopRun) account(usage domain.Usage) error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.CostMinorUnits < 0 ||
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 ||
 		usage.CostMinorUnits > 0 && strings.TrimSpace(usage.Currency) == "" {
 		return fmt.Errorf("%w: loop usage is invalid", domain.ErrValidation)
 	}
@@ -503,10 +557,16 @@ func (run *loopRun) account(usage domain.Usage) error {
 	if usage.Currency != "" && run.usage.Currency != "" && usage.Currency != run.usage.Currency {
 		return fmt.Errorf("%w: tool loop usage currencies differ", domain.ErrValidation)
 	}
+	models, err := mergeModelSpend(run.usage.Models, usage.Models)
+	if err != nil {
+		return err
+	}
 	run.usage.InputTokens += usage.InputTokens
 	run.usage.OutputTokens += usage.OutputTokens
 	run.usage.ToolCalls += usage.ToolCalls
+	run.usage.SearchQueries += usage.SearchQueries
 	run.usage.CostMinorUnits += usage.CostMinorUnits
+	run.usage.Models = models
 	if run.usage.Currency == "" {
 		run.usage.Currency = usage.Currency
 	}
@@ -622,6 +682,9 @@ func LoopTrajectory(journal []domain.LoopEntry) []domain.TrajectoryEvent {
 			add(entry, domain.TrajectoryObservation, entry.Tool.ToolID, entry.Observation.Output, entry.Observation.IsError)
 		case entry.Kind == domain.LoopEntryApprovalPending:
 			add(entry, domain.TrajectoryPolicy, entry.Tool.ToolID, nil, false)
+		case entry.Kind == domain.LoopEntryRevision && entry.Revision != nil:
+			// A decider's edit, not the model's call: the observation that follows ran these arguments.
+			add(entry, domain.TrajectoryPolicy, entry.Tool.ToolID, entry.Revision.Arguments, false)
 		}
 	}
 	return events

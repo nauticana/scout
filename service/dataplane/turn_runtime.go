@@ -34,6 +34,8 @@ type TurnRuntime struct {
 	Publisher   contract.TurnReplyPublisher
 	Estimator   contract.TurnBudgetEstimator
 	Budget      contract.TenantBudgetManager
+	// Limits reads the execution limits frozen into the turn's release, which narrow the tenant runtime policy.
+	Limits contract.PrincipalLimits
 	// Cancels is optional; when set a requested cancellation stops the running turn.
 	Cancels contract.TurnCancelWatcher
 	// GuardrailConfigs pins the policy version of the running agent; nil uses an empty policy.
@@ -60,7 +62,7 @@ var _ contract.ConversationRuntime = (*TurnRuntime)(nil)
 func (runtime *TurnRuntime) validate() error {
 	if runtime.Records == nil || runtime.Sessions == nil || runtime.Definitions == nil || runtime.Policies == nil ||
 		runtime.Governor == nil || runtime.Executors == nil || runtime.Idempotency == nil ||
-		runtime.Guardrails == nil || runtime.Publisher == nil || runtime.Estimator == nil || runtime.Budget == nil {
+		runtime.Guardrails == nil || runtime.Publisher == nil || runtime.Estimator == nil || runtime.Budget == nil || runtime.Limits == nil {
 		return fmt.Errorf("%w: turn runtime is missing a required collaborator", domain.ErrValidation)
 	}
 	if runtime.MaxSteps <= 0 {
@@ -88,6 +90,7 @@ type turnExecution struct {
 	config      domain.GuardrailConfig
 	reservation domain.BudgetReservation
 	settled     bool
+	limits      domain.ExecutionLimits
 	// bounds are the delegation limits this turn may pass on; the zero value
 	// means the turn acts on its own authority and delegates nothing.
 	bounds domain.DelegationBounds
@@ -220,6 +223,10 @@ func (runtime *TurnRuntime) execute(ctx context.Context, execution *turnExecutio
 	if err = runtime.reserve(ctx, execution); err != nil {
 		return domain.TurnResult{}, err
 	}
+	if execution.limits, err = runtime.Limits.ExecutionLimits(ctx, pinnedPrincipal(turn, snapshot.AgentVersion)); err != nil {
+		return domain.TurnResult{}, fmt.Errorf("load release limits: %w", err)
+	}
+	policy = narrowRuntimePolicy(policy, execution.limits)
 	permit, err := runtime.Governor.Start(ctx, turn, policy)
 	if err != nil {
 		return domain.TurnResult{}, err
@@ -318,7 +325,7 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 			Step: step, Snapshot: execution.snapshot, RequestID: execution.dispatch.Turn.RequestID,
 			Input:      execution.dispatch.Turn.Input,
 			Principal:  pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion),
-			OnBehalfOf: actingFor(execution.dispatch.Turn, execution.snapshot), Bounds: execution.bounds,
+			OnBehalfOf: actingFor(execution.dispatch.Turn, execution.snapshot), Bounds: execution.bounds, Limits: execution.limits,
 			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth,
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {

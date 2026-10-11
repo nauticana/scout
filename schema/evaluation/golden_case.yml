@@ -1,0 +1,53 @@
+table: golden_case
+comment: Editable working copy of one golden-set example; freezing snapshots the working copy into golden_example
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: golden_set_id
+    type: VARCHAR(80)
+  - name: case_id
+    type: VARCHAR(120)
+  - name: scope_code
+    type: VARCHAR(10)
+  - name: name
+    type: VARCHAR(200)
+  - name: input_text
+    type: TEXT
+  - name: language_code
+    type: VARCHAR(20)
+    nullable: true
+  - name: expected_behavior
+    type: TEXT
+    nullable: true
+  - name: rubric_ref
+    type: VARCHAR(200)
+    nullable: true
+  - name: risk_tier_code
+    type: VARCHAR(20)
+  - name: principal_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: principal_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The editing person's user_account id or the service's id; a mixed subject prevents a foreign key
+  - name: modified_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, golden_set_id, case_id]
+foreign_keys:
+  - name: golden_cases
+    columns: [partner_id, golden_set_id]
+    references:
+      table: golden_set
+      columns: [partner_id, golden_set_id]
+  - name: risk_tier_golden_cases
+    columns: [risk_tier_code]
+    references:
+      table: approval_risk_tier
+      columns: [code]
+checks:
+  - name: golden_case_scope_ck
+    expression: scope_code IN ('dev', 'gate')
+  - name: golden_case_principal_ck
+    expression: (principal_kind IS NULL) = (principal_id IS NULL)

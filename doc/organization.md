@@ -25,8 +25,8 @@ would change what already-approved work is allowed to do.
 
 ## Lifecycle
 
-`agent_profile.is_active` — a boolean with no reason, actor, or timestamp — is now `state_code` over
-the `agent_state` catalog, with `state_reason`, `state_changed_by`, and `state_changed_at`.
+`agent_profile.state_code` over the `agent_state` catalog holds an agent's state, with
+`state_reason`, `state_changed_by`, and `state_changed_at` recording why, by whom, and when.
 
 ```text
 draft ──→ active ──→ draining ──→ retired
@@ -46,6 +46,32 @@ transitions, not authoring ones.
 `agent_version_quarantine` withdraws **one version** from all traffic. It overrides every pin and
 deployment pointer instead of editing them, so quarantining does not disturb the rollout state a team
 will want back after the incident.
+
+## Governance and triggers
+
+An agent carries the governance fields of a Charter `AgentDefinition`, in Charter's names and shapes:
+`purpose`, `accountable` (a `Position` or `OrganizationUnit`), `responsibilityIds`, `capabilityIds`,
+`triggers`, `requiredInputs`, `expectedOutcomes`, `policies`, `confidenceBoundaries`, and
+`escalationConditions`. `controlplane.StudioGovernance` keeps Studio's draft of them in
+`agent_governance` behind the draft revision and, as a definition section, freezes the effective
+governance into every release under `governance`, covered by the definition digest.
+
+Studio declares triggers as `triggerChannels`: a trigger text and the channel it arrives on —
+`conversation`, `mcp`, `api`, `schedule`, or `event`. Charter's `triggers` list is derived from them,
+never edited. A `schedule` or `event` trigger names the product-owned schedule or topic it binds,
+which the product's `contract.TriggerBindingVerifier` must prove on save and again on every publish
+and restore; with no verifier composed, such a trigger is refused. Channels are declarations: the
+transports that deliver work are product wiring.
+
+An enterprise may own the fields instead. Every field a `contract.GovernanceSource` snapshot sets is
+read-only in Studio and never stored by Scout, and the release freezes the snapshot's document,
+version, and digest. An unusable snapshot or a source error fails the call.
+
+As a publish guard the same service refuses a release whose governance is malformed, binds a schedule
+or topic the verifier does not prove, lacks a field the active Charter profile requires
+(`agent_governance_required_fields`: empty requires all ten, `none` none), or does not carry the
+source's current snapshot, so a restore cannot reactivate superseded enterprise governance. Restoring
+a release frozen before the agent had governance skips the required fields.
 
 ## Entitlements
 

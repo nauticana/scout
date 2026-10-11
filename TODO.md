@@ -17,26 +17,18 @@ Severity: **MED** = needed before a first customer, **LOW** = adopt on demand.
 | C4 | Semantic response cache, default off and shadow-measured. Its namespace is the tenant, the immutable release identity, model and provider version, prompt, guardrail, knowledge and tool-contract versions, entitlement fingerprint, language, and decoding parameters; the tenant filter runs inside the similarity index, never after it; the precision floor cannot be lowered by a caller; non-deterministic, time-sensitive, tool-using, and conversation-state responses are never stored; hit quality is measured, not only hit rate. Stateless deterministic tasks first. | LOW | a leak-safety proof in shadow mode |
 | AS-4 | Add reset boundaries and currency exponents to release budgets; the shipped ledger supports only explicit rolling windows. | MED | calendar-window enforcement design |
 | AS-9 | Route autonomy approvals by tool or risk to roles or positions, with deadlines and escalation. | MED | routing contract |
-| AS-2 | Export and import an agent as a Charter `AgentDefinition` (`charter.Embed`) with its agent-scope bindings; map `knowledge` and `entitlement` references to the target tenant or refuse. | LOW | AS-4 |
+| AS-2 | Export and import an agent as a Charter `AgentDefinition` (`charter.Embed`) with its agent-scope bindings; map `knowledge` and `entitlement` references to the target tenant or refuse. | LOW | in progress |
 | AS-3 | Starter templates for `Create`'s `template_id`, reconciled with agent types and capability packages, recording Charter `derivedFrom` provenance. | LOW | AS-2 |
-| AS-12 | Saved cases and a golden set per agent; evaluate a draft, not only a published version. | MED | a draft evaluation subject |
-| AS-13 | Compare any two subjects: draft, release, a draft on another model, a recorded human baseline. | MED | AS-12 |
-| AS-14 | Evaluation gate on publish keyed by tenant, agent, and definition digest. | LOW | AS-12 |
+| AS-12 | Model-based rubric grading of a single subject; Studio draft runs score with heuristic evaluators only. | LOW | build |
+| AS-13 | Compare any two subjects: draft, release, a draft on another model, a recorded human baseline. | MED | build |
+| AS-14 | Evaluation gate on publish keyed by tenant, agent, and definition digest. | LOW | build |
 | AS-15 | Multi-turn and sandboxed tool tests with the trajectory. | LOW | build |
-| AS-16 | Durable review queue (`HumanReviewQueue` is memory-only) and promotion of a graded turn into the golden set; feedback recording and per-release counts are shipped. | LOW | AS-12 |
-| AS-17 | Supervised pilot cohorts by named principals beside hash cohorts; positions stay a product resolver. | LOW | build |
+| AS-16 | Durable review queue (`HumanReviewQueue` is memory-only) and promotion of a graded turn into the golden set; feedback recording and per-release counts are shipped. | LOW | build |
 | AS-22 | Run trace: model steps, tool calls, guardrail hits, approvals, and each governed action's Charter disposition; the run list is shipped. | MED | trace contract |
-| AS-23 | Usage per model; usage is attributed per release, person, and work reference. | LOW | a model on settled usage |
-| AS-7 | Declared triggers and channels on the draft, frozen into the Charter definition. | LOW | AS-21 |
-| AS-8 | Enforced guardrails edited in Studio and published atomically with the release; safety events per agent. | MED | build |
-| AS-10 | A `limits` binding kind narrowing the governor's ceilings, with current use against each limit. | LOW | AS-4 |
-| AS-11 | Restriction layers in Studio: read both layers; a tenant write conflicts with the service-principal-only writer and needs a decision. | LOW | that decision |
-| AS-19 | Two-person publish governed by a Charter separation-of-duties constraint and `SodException`. | LOW | build |
-| AS-20 | Scheduled publish activated by a worker with an idempotent compare-and-swap. | LOW | build |
-| AS-21 | Governance fields of the Charter definition from a governance source port, or edited in Studio. | LOW | build |
+| AS-10 | Evaluation replays apply the release's `limits`; `evaluation.ReleaseCaseExecutor` runs with its own `ToolLoopLimits`. | LOW | build |
+| AS-19 | Two-person review of a restore; a restore re-activates a published release without a publish review. | LOW | a tenant requiring maker-checker on rollback |
+| AS-21 | A `contract.GovernanceSource` adapter over a Charter corpus, choosing the governing definition version by the rule `IdentityBinding` uses. | LOW | build |
 | AS-24 | Health detail and alerts per agent, with missing telemetry alerting on its own. | LOW | build |
-| AS-26 | Draft comments anchored to sections and settings. | LOW | build |
-| SCOUT-1 | Revise: an edited verdict builds the changed action as a new linked proposal and the turn continues with it; today an edit refuses the proposal. | MED | runtime support for a substituted tool call |
 | SCOUT-2 | Takeover and handback of a turn under a new fence, with unknown tool outcomes reconciled first. | MED | design |
 | SCOUT-3 | Pause policy `suspend` at the next durable checkpoint; `finish` and `cancel` are shipped. | LOW | a runtime suspend signal |
 | F1 | Amend the agent-organization source analysis (idea-12): §12's authorization change is only the subject side (`agent_permission`), not the engine; §7 splits the agent principal into keel authorization and Scout runtime threading, and adds durable human-in-the-loop; §7's match with the prompt chain is conceptual, generalised by the scope compiler; §14's per-agent price is measured from scope-attributed usage. | LOW | the idea-12 owner |

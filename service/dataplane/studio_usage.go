@@ -26,19 +26,25 @@ var studioUsageQueries = map[string]string{
 	qStudioUsage: `
 SELECT split_part(u.subject_ref, '@', 2), COALESCE(u.on_behalf_kind, ''), COALESCE(u.on_behalf_id, ''),
        COALESCE(u.work_ref, ''), u.currency_code, c.exponent,
-       COUNT(DISTINCT u.turn_no || '/' || u.conversation_id), CAST(SUM(u.input_tokens) AS BIGINT),
-       CAST(SUM(u.output_tokens) AS BIGINT), CAST(SUM(u.tool_calls) AS BIGINT), CAST(SUM(u.cost_minor_units) AS BIGINT)
+       COUNT(DISTINCT CASE WHEN u.model_id IS NOT NULL OR NOT EXISTS (
+                SELECT 1 FROM usage_event m
+                 WHERE m.partner_id = u.partner_id AND m.conversation_id = u.conversation_id
+                   AND m.turn_no = u.turn_no AND m.category_code = u.category_code AND m.model_id IS NOT NULL)
+            THEN u.turn_no || '/' || u.conversation_id END),
+       CAST(SUM(u.input_tokens) AS BIGINT),
+       CAST(SUM(u.output_tokens) AS BIGINT), CAST(SUM(u.tool_calls) AS BIGINT), CAST(SUM(u.cost_minor_units) AS BIGINT),
+       COALESCE(u.provider_id, ''), COALESCE(u.model_id, '')
   FROM usage_event u
   JOIN agent_conversation conv ON conv.partner_id = u.partner_id AND conv.conversation_id = u.conversation_id
   JOIN currency c ON c.code = u.currency_code
  WHERE u.partner_id = ? AND conv.agent_id = ? AND u.occurred_at >= ? AND u.occurred_at < ?
- GROUP BY 1, 2, 3, 4, 5, 6
- ORDER BY 1, 2, 3, 4, 5
+ GROUP BY 1, 2, 3, 4, 5, 6, 12, 13
+ ORDER BY 1, 12, 13, 2, 3, 4, 5
  LIMIT ?`,
 }
 
-// StudioUsage reports an agent's settled usage by release, person, work item, and
-// currency, so cost per workflow comes from the same ledger that billed it.
+// StudioUsage reports an agent's settled usage by release, model, person, work item,
+// and currency, so cost per workflow comes from the same ledger that billed it.
 type StudioUsage struct {
 	DB         port.DatabaseRepository
 	Authorizer contract.StudioAuthorizer
@@ -71,11 +77,15 @@ func (s *StudioUsage) Usage(ctx context.Context, actor domain.StudioActor, agent
 	}
 	lines := make([]domain.UsageLine, 0, len(result.Rows))
 	for _, row := range result.Rows {
+		if len(row) < 13 {
+			return nil, fmt.Errorf("decode agent usage: expected 13 columns, got %d", len(row))
+		}
 		line := domain.UsageLine{
 			Release: common.AsString(row[0]), WorkRef: common.AsString(row[3]),
 			Currency: strings.TrimSpace(common.AsString(row[4])), Exponent: int(common.AsInt64(row[5])),
 			Turns: common.AsInt64(row[6]), InputTokens: common.AsInt64(row[7]), OutputTokens: common.AsInt64(row[8]),
 			ToolCalls: common.AsInt64(row[9]), CostMinorUnits: common.AsInt64(row[10]),
+			Model: domain.ModelReference{ProviderID: common.AsString(row[11]), ModelID: common.AsString(row[12])},
 		}
 		if kind := common.AsString(row[1]); kind != "" {
 			line.OnBehalfOf = domain.PrincipalRef{Kind: domain.PrincipalKind(kind), ID: common.AsString(row[2])}

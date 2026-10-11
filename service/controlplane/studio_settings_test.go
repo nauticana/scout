@@ -62,6 +62,8 @@ func TestSaveSettingRefusesABroadeningOrForeignWrite(t *testing.T) {
 		"malformed": toolChange("a:writer-a", `{"tool":true}`),
 		"ambiguous id": {AgentID: "writer-a", ScopeID: "a:writer-a", ResourceKind: domain.ResourceTool,
 			ResourceID: "another-tool-set", Value: json.RawMessage(`["search"]`)},
+		"second limits id": {AgentID: "writer-a", ScopeID: "a:writer-a", ResourceKind: domain.ResourceLimits,
+			ResourceID: "a", Value: json.RawMessage(`{"max_tool_calls":0}`)},
 	} {
 		if _, err := service.SaveSetting(context.Background(), humanActor(8, 9), change); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("%s: error = %v, want validation", name, err)
@@ -124,6 +126,13 @@ func TestSingletonSettingsRejectAmbiguousCompiledResources(t *testing.T) {
 	}
 	if err := validateSingletonSettings(resources); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
+	}
+	limits := []domain.EffectiveResource{
+		{ResourceKind: domain.ResourceLimits, ResourceID: "a"},
+		{ResourceKind: domain.ResourceLimits, ResourceID: "limits"},
+	}
+	if err := validateSingletonSettings(limits); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a second limits resource escapes the inherited ceilings: %v", err)
 	}
 	resources[1].ResourceKind = domain.ResourcePolicy
 	resources = append(resources, domain.EffectiveResource{ResourceKind: domain.ResourcePolicy, ResourceID: "second"})
@@ -209,5 +218,14 @@ func TestSaveSettingWorksForATypeWithoutAnAlias(t *testing.T) {
 	change.ScopeID = "t:writer"
 	if _, err := service.SaveSetting(context.Background(), humanActor(8, 9), change); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("type scope without an alias = %v, want conflict", err)
+	}
+}
+
+func TestRestoreRefusesAVersionWithoutFrozenSettings(t *testing.T) {
+	service, query := publishService()
+	query.rows[qStudioGetVersion] = [][]any{{`{"agent_id":"writer-a","version":"1","definition_digest":"d"}`}}
+	_, err := service.Restore(context.Background(), humanActor(8, 9), domain.AgentRestoreRequest{AgentID: "writer-a", Version: "1"})
+	if !errors.Is(err, domain.ErrConflict) || !slices.Contains(query.queries, qStudioGetSettings) || query.commits != 0 {
+		t.Fatalf("error = %v, commits = %d; a release that cannot serve a turn must not be restored", err, query.commits)
 	}
 }

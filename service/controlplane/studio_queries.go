@@ -41,6 +41,11 @@ const (
 	qStudioCreateRecord      = "scout_studio_create_record"
 	qStudioCreateDraft       = "scout_studio_create_draft"
 	qStudioCopyBindings      = "scout_studio_copy_bindings"
+	qStudioCopyGuardrails    = "scout_studio_copy_guardrails"
+	qStudioReleaseGuardrail  = "scout_studio_release_guardrail"
+	qStudioReleaseTools      = "scout_studio_release_tools"
+	qStudioReleaseSkills     = "scout_studio_release_skills"
+	qStudioReleaseGraph      = "scout_studio_release_graph"
 	qStudioRename            = "scout_studio_rename"
 	qStudioDisableDraft      = "scout_studio_disable_draft"
 	qStudioCanaryVersion     = "scout_studio_canary_version"
@@ -50,7 +55,7 @@ const (
 	qStudioGetSettings       = "scout_studio_get_settings"
 )
 
-var studioQueries = common.MergeMaps(scope.ReleaseWriteQueries, map[string]string{
+var studioQueries = common.MergeMaps(scope.ReleaseWriteQueries, scheduleQueries, map[string]string{
 	// Prompt bindings are temporal: an edit ends the open row and binds a new one. A row bound
 	// in this same instant was never in force, so it is dropped rather than ended at its own begda.
 	qStudioListBindings: `
@@ -218,10 +223,21 @@ SELECT partner_id, ?, resource_kind_code, resource_id, resource_version,
        merge_mode_code, sealed, resource_value, resource_value_digest, ?
   FROM config_scope_binding
  WHERE partner_id = ? AND scope_id = ? AND endda IS NULL`,
-	qStudioRename:       `UPDATE agent_profile SET display_name = ? WHERE partner_id = ? AND agent_id = ?`,
-	qStudioDisableDraft: `UPDATE agent_draft SET enabled = FALSE WHERE partner_id = ? AND agent_id = ?`,
-	qProvisionScope:     provisionQueries[qProvisionScope],
-	qProvisionProfile:   provisionQueries[qProvisionProfile],
+	qStudioCopyGuardrails: `
+INSERT INTO agent_draft_guardrail (partner_id, agent_id, rules, rules_digest, modified_by)
+SELECT partner_id, ?, rules, rules_digest, ?
+  FROM agent_draft_guardrail
+ WHERE partner_id = ? AND agent_id = ?`,
+	qStudioReleaseGuardrail: `
+SELECT guardrail_version FROM agent_version
+ WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND guardrail_version IS NOT NULL`,
+	qStudioReleaseTools:  `SELECT COUNT(*) FROM agent_tool_binding WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
+	qStudioReleaseSkills: `SELECT COUNT(*) FROM agent_skill_binding WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
+	qStudioReleaseGraph:  `SELECT COUNT(*) FROM execution_graph WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
+	qStudioRename:        `UPDATE agent_profile SET display_name = ? WHERE partner_id = ? AND agent_id = ?`,
+	qStudioDisableDraft:  `UPDATE agent_draft SET enabled = FALSE WHERE partner_id = ? AND agent_id = ?`,
+	qProvisionScope:      provisionQueries[qProvisionScope],
+	qProvisionProfile:    provisionQueries[qProvisionProfile],
 	qStudioActiveDefinition: `
 SELECT v.agent_version, v.definition
   FROM agent_deployment dep

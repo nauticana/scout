@@ -89,6 +89,7 @@ seeds:
       - [budget, at_most, Token and cost ceilings]
       - [autonomy, ordered, Operating mode an agent may act under]
       - [skill, subset, Skills an agent may use]
+      - [limits, at_most, "Turn rate, step, tool-call, and duration ceilings"]
   - table: config_merge_mode
     columns: [code, description]
     rows:
@@ -153,3 +154,20 @@ seeds:
       - [draft, Prepared artifact a human edits and submits]
       - [approval_request, Action awaiting an explicit decision]
       - [completed_action, Action already performed]
+  - table: release_activation_state
+    columns: [code, is_terminal, description]
+    rows:
+      - [pending, false, Waiting for its effective time]
+      - [activated, true, Took the agent's traffic as scheduled]
+      - [refused, true, "Did not activate; the reason says why"]
+      - [cancelled, true, Withdrawn before it activated]
+  - table: release_activation_reason
+    columns: [code, description]
+    rows:
+      - [version_missing, The scheduled release no longer exists]
+      - [digest_mismatch, The release definition no longer matches the digest it was scheduled with]
+      - [not_authorized, The person or service that scheduled it no longer holds PUBLISH on the agent]
+      - [agent_archived, The agent was archived]
+      - [guard_refused, A publish guard refused the release]
+      - [deployment_changed, "The agent's deployment changed after it was scheduled"]
+      - [attempts_exhausted, Transient failures used every allowed attempt]

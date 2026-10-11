@@ -106,6 +106,7 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 			recorder.audits = append(recorder.audits, event.Category)
 			return nil
 		}},
+		Limits:   &fake.PrincipalLimits{},
 		MaxSteps: 8,
 		Now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 	}

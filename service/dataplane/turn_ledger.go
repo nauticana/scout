@@ -45,6 +45,7 @@ const (
 	qLedgerFinishBilledFailure = "scout_ledger_finish_billed_failure"
 	qLedgerFailUnreserved      = "scout_ledger_fail_unreserved"
 	qLedgerInsertUsageEvent    = "scout_ledger_insert_usage_event"
+	qLedgerUsageSettled        = "scout_ledger_usage_settled"
 	qLedgerSetJobStatus        = "scout_ledger_set_job_status"
 	qLedgerActivateJob         = "scout_ledger_activate_job"
 	qLedgerStageJobUsage       = "scout_ledger_stage_job_usage"
@@ -60,10 +61,12 @@ SELECT runtime.partner_id, runtime.conversation_id, runtime.turn_no, runtime.req
        detail.error_text, detail.job_ref, detail.artifact_ref, detail.release_digest,
        detail.active_reservation_id,
        detail.staged_input_tokens, detail.staged_output_tokens,
+	       detail.staged_tool_calls, detail.staged_search_queries,
        detail.staged_cost_minor_units, detail.staged_currency_code,
        reservation.status_code, reservation.attempt_no,
        COALESCE(reservation.expires_at <= CURRENT_TIMESTAMP, FALSE),
-       conversation.agent_id, conversation.agent_version, runtime.queued_at
+       conversation.agent_id, conversation.agent_version, runtime.queued_at,
+       CAST(detail.staged_model_usage AS TEXT)
   FROM conversation_turn runtime
   JOIN agent_conversation conversation
     ON conversation.partner_id = runtime.partner_id
@@ -148,7 +151,8 @@ RETURNING detail.turn_no`,
 UPDATE conversation_turn_detail detail
    SET result_kind = ?, result_payload = ?, error_text = NULL,
        staged_input_tokens = ?, staged_output_tokens = ?,
-       staged_cost_minor_units = ?, staged_currency_code = ?
+	       staged_tool_calls = ?, staged_search_queries = ?,
+       staged_cost_minor_units = ?, staged_currency_code = ?, staged_model_usage = ?
   FROM conversation_turn runtime
  WHERE detail.partner_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
    AND runtime.partner_id = detail.partner_id
@@ -185,7 +189,8 @@ RETURNING detail.turn_no`,
 UPDATE conversation_turn_detail detail
    SET error_text = ?,
        staged_input_tokens = ?, staged_output_tokens = ?,
-       staged_cost_minor_units = ?, staged_currency_code = ?
+	       staged_tool_calls = ?, staged_search_queries = ?,
+       staged_cost_minor_units = ?, staged_currency_code = ?, staged_model_usage = ?
   FROM conversation_turn runtime
  WHERE detail.partner_id = ? AND detail.conversation_id = ? AND detail.turn_no = ?
    AND runtime.partner_id = detail.partner_id
@@ -276,10 +281,17 @@ RETURNING detail.turn_no`,
 INSERT INTO usage_event
        (id, partner_id, conversation_id, turn_no, category_code, subject_ref,
         principal_kind, principal_id, scope_id, on_behalf_kind, on_behalf_id, work_ref,
-        input_tokens, output_tokens, tool_calls, search_queries, cost_minor_units, currency_code)
-VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (partner_id, conversation_id, turn_no, category_code) DO NOTHING
+        input_tokens, output_tokens, tool_calls, search_queries, cost_minor_units, currency_code,
+        provider_id, model_id)
+VALUES (nextval('usage_event_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
 RETURNING id`,
+
+	qLedgerUsageSettled: `
+SELECT 1
+  FROM usage_event
+ WHERE partner_id = ? AND conversation_id = ? AND turn_no = ? AND category_code = ?
+ LIMIT 1`,
 
 	qLedgerSetJobStatus: `
 UPDATE conversation_turn runtime
@@ -321,7 +333,8 @@ RETURNING detail.conversation_id, detail.turn_no`,
 	qLedgerStageJobUsage: `
 UPDATE conversation_turn_detail detail
    SET staged_input_tokens = ?, staged_output_tokens = ?,
-       staged_cost_minor_units = ?, staged_currency_code = ?
+	       staged_tool_calls = ?, staged_search_queries = ?,
+       staged_cost_minor_units = ?, staged_currency_code = ?, staged_model_usage = ?
   FROM conversation_turn runtime
  WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
    AND runtime.partner_id = detail.partner_id
@@ -367,7 +380,7 @@ RETURNING runtime.turn_no`,
 // TurnLedgerQueries returns the ledger's named-SQL map, for workers that
 // compose job-keyed transitions inside their own transactions.
 func TurnLedgerQueries() map[string]string {
-	return common.MergeMaps(turnLedgerQueries)
+	return common.MergeMaps(turnLedgerQueries, turnRateQueries)
 }
 
 // TurnState is one governed turn joined with its reservation lease.
@@ -390,6 +403,8 @@ type TurnState struct {
 	ActiveReservation  string
 	InputTokens        int64
 	OutputTokens       int64
+	ToolCalls          int
+	SearchQueries      int64
 	CostMinorUnits     int64
 	Currency           string
 	ReservationStatus  string
@@ -398,6 +413,8 @@ type TurnState struct {
 	AgentID            string
 	AgentVersion       string
 	QueuedAt           time.Time
+	// Models is each model's share of the staged usage.
+	Models []domain.ModelSpend
 }
 
 // TurnExecution is a live claim: the turn, its held reservation, the model.
@@ -410,8 +427,8 @@ type TurnExecution struct {
 // TurnLedger drives the durable request/response turn lifecycle for a
 // conversation agent over the runtime schema: one workspace conversation per
 // (tenant, end user, release), idempotent turns by request id, budget
-// reservation fencing, staged results, and exactly-once settlement with one
-// usage event per settled turn.
+// reservation fencing, staged results, and exactly-once settlement with the
+// usage events of each settled turn, one per model.
 type TurnLedger struct {
 	DB     port.DatabaseRepository
 	Budget contract.TenantBudgetManager
@@ -444,7 +461,7 @@ func (l *TurnLedger) queries(ctx context.Context) port.QueryService {
 }
 
 func (l *TurnLedger) queryMap() map[string]string {
-	return common.MergeMaps(l.ExtraQueries, turnLedgerQueries)
+	return common.MergeMaps(l.ExtraQueries, turnLedgerQueries, turnRateQueries)
 }
 
 func (l *TurnLedger) inputURI(requestID string) string {
@@ -535,8 +552,8 @@ func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID str
 		return TurnState{}, false, nil
 	}
 	row := result.Rows[0]
-	if len(row) < 26 {
-		return TurnState{}, false, fmt.Errorf("decode turn: expected 26 columns, got %d", len(row))
+	if len(row) < 29 {
+		return TurnState{}, false, fmt.Errorf("decode turn: expected 29 columns, got %d", len(row))
 	}
 	state := TurnState{
 		TenantID: common.AsInt64(row[0]), ConversationID: common.AsString(row[1]),
@@ -548,13 +565,17 @@ func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID str
 		JobRef: optionalInt64(row[12]), ArtifactRef: optionalInt64(row[13]),
 		ReleaseDigest: common.AsString(row[14]), ActiveReservation: common.AsString(row[15]),
 		InputTokens: optionalInt64(row[16]), OutputTokens: optionalInt64(row[17]),
-		CostMinorUnits: optionalInt64(row[18]), Currency: common.AsString(row[19]),
-		ReservationStatus: common.AsString(row[20]), ReservationAttempt: optionalInt64(row[21]),
-		ReservationExpired: common.AsBool(row[22]),
-		AgentID:            common.AsString(row[23]), AgentVersion: common.AsString(row[24]),
+		ToolCalls: int(optionalInt64(row[18])), SearchQueries: optionalInt64(row[19]),
+		CostMinorUnits: optionalInt64(row[20]), Currency: common.AsString(row[21]),
+		ReservationStatus: common.AsString(row[22]), ReservationAttempt: optionalInt64(row[23]),
+		ReservationExpired: common.AsBool(row[24]),
+		AgentID:            common.AsString(row[25]), AgentVersion: common.AsString(row[26]),
 	}
-	if queuedAt, ok := row[25].(time.Time); ok {
+	if queuedAt, ok := row[27].(time.Time); ok {
 		state.QueuedAt = queuedAt
+	}
+	if state.Models, err = decodeStagedModels(row[28]); err != nil {
+		return TurnState{}, false, err
 	}
 	return state, true, nil
 }
@@ -614,7 +635,7 @@ func storedTurnError(state TurnState) error {
 }
 
 // Begin creates the workspace conversation and turn for a new request id,
-// serialized per (tenant, end user, release).
+// serialized per (tenant, end user, release), within the release's turns per minute.
 func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requestID, taskKind, inputSummary, inputDigest, status string, release domain.AgentReleaseReference) (TurnState, bool, error) {
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(taskKind) == "" ||
 		len([]rune(requestID)) > 120 || len([]rune(taskKind)) > 30 || len(inputDigest) != 64 ||
@@ -658,6 +679,11 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 	conversationID := common.AsString(conversation.Rows[0][0])
 	if _, err = tx.Query(ctx, qLedgerLock, fmt.Sprintf("%d:%s", tenantID, conversationID)); err != nil {
 		return TurnState{}, false, fmt.Errorf("lock conversation: %w", err)
+	}
+	if err = admitRate(ctx, tx, turnRateRequest{
+		TenantID: tenantID, AgentID: release.AgentID, Release: release.Version, RequestID: requestID,
+	}); err != nil {
+		return TurnState{}, false, err
 	}
 	inserted, err := tx.Query(ctx, qLedgerInsertTurn,
 		tenantID, conversationID, requestID, status, l.inputURI(requestID), inputDigest, status,
@@ -746,9 +772,9 @@ func (l *TurnLedger) PrepareBudgeted(ctx context.Context, tenantID int64, endUse
 	state.ReservationAttempt = reservation.Attempt
 	execution := TurnExecution{Turn: state, Reservation: reservation, Model: agent.ModelReference()}
 	if state.ResultPayload != "" {
-		usage := domain.Usage{
-			InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
-			CostMinorUnits: state.CostMinorUnits, Currency: state.Currency,
+		usage, err := stagedUsage(state)
+		if err != nil {
+			return TurnExecution{}, nil, false, err
 		}
 		if err = l.Budget.Commit(context.WithoutCancel(ctx), reservation, usage); err != nil {
 			if errors.Is(err, domain.ErrConflict) {
@@ -799,6 +825,10 @@ func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecutio
 	if err != nil {
 		return TurnState{}, fmt.Errorf("marshal turn result: %w", err)
 	}
+	models, err := stagedModelUsage(usage)
+	if err != nil {
+		return TurnState{}, err
+	}
 	ctx = context.WithoutCancel(ctx)
 	tx, err := l.DB.BeginTx(ctx, l.queryMap())
 	if err != nil {
@@ -811,7 +841,8 @@ func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecutio
 		}
 	}()
 	staged, err := tx.Query(ctx, qLedgerStageSuccess,
-		resultKind, string(raw), usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
+		resultKind, string(raw), usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries,
+		usage.CostMinorUnits, usage.Currency, models,
 		execution.Turn.TenantID, execution.Turn.ConversationID, execution.Turn.TurnNo,
 		execution.Reservation.ReservationID)
 	if err != nil {
@@ -834,8 +865,11 @@ func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecutio
 	state.ResultPayload = string(raw)
 	state.InputTokens = usage.InputTokens
 	state.OutputTokens = usage.OutputTokens
+	state.ToolCalls = usage.ToolCalls
+	state.SearchQueries = usage.SearchQueries
 	state.CostMinorUnits = usage.CostMinorUnits
 	state.Currency = usage.Currency
+	state.Models = usage.Models
 	state.ActiveReservation = execution.Reservation.ReservationID
 	state.ReservationAttempt = execution.Reservation.Attempt
 	return state, nil
@@ -872,9 +906,9 @@ func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, rese
 		committed = true
 		return nil
 	}
-	usage := domain.Usage{
-		InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
-		CostMinorUnits: state.CostMinorUnits, Currency: state.Currency,
+	usage, err := stagedUsage(state)
+	if err != nil {
+		return err
 	}
 	subject := state.AgentID + "@" + state.AgentVersion
 	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject,
@@ -980,10 +1014,15 @@ func (l *TurnLedger) FailWithUsage(ctx context.Context, execution TurnExecution,
 	if !hasUsage(usage) {
 		return l.Fail(ctx, execution, cause)
 	}
+	models, err := stagedModelUsage(usage)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
 	settleCtx := context.WithoutCancel(ctx)
 	errText := common.TruncateRunes(common.RedactForStorage(cause.Error()), 400)
 	staged, err := l.queries(ctx).Query(settleCtx, qLedgerStageBilledFailure,
-		errText, usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
+		errText, usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries,
+		usage.CostMinorUnits, usage.Currency, models,
 		execution.Turn.TenantID, execution.Turn.ConversationID, execution.Turn.TurnNo, execution.Reservation.ReservationID)
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("stage billed failure: %w", err))
@@ -1000,7 +1039,8 @@ func (l *TurnLedger) FailWithUsage(ctx context.Context, execution TurnExecution,
 	state := execution.Turn
 	state.ErrorText = errText
 	state.InputTokens, state.OutputTokens = usage.InputTokens, usage.OutputTokens
-	state.CostMinorUnits, state.Currency = usage.CostMinorUnits, usage.Currency
+	state.ToolCalls, state.SearchQueries = usage.ToolCalls, usage.SearchQueries
+	state.CostMinorUnits, state.Currency, state.Models = usage.CostMinorUnits, usage.Currency, usage.Models
 	if err = l.finishBilledFailure(ctx, state, execution.Reservation.ReservationID); err != nil {
 		return errors.Join(cause, err)
 	}
@@ -1035,9 +1075,9 @@ func (l *TurnLedger) finishBilledFailure(ctx context.Context, state TurnState, r
 		}
 		return nil
 	}
-	usage := domain.Usage{
-		InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
-		CostMinorUnits: state.CostMinorUnits, Currency: state.Currency,
+	usage, err := stagedUsage(state)
+	if err != nil {
+		return err
 	}
 	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, state.AgentID+"@"+state.AgentVersion,
 		domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
@@ -1089,19 +1129,45 @@ func (l *TurnLedger) recordRun(ctx context.Context, state TurnState, status doma
 	}
 }
 
-// InsertUsageEvent writes the settled usage event, once per (turn, category);
-// inserted=false means a replay already wrote it.
-func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) (bool, error) {
-	result, err := qs.Query(ctx, qLedgerInsertUsageEvent,
-		tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
-		nullableUsageField(string(attribution.Principal.Kind)), nullableUsageField(attribution.Principal.ID),
-		nullableUsageField(attribution.ScopeID), nullableUsageField(string(attribution.OnBehalfOf.Kind)),
-		nullableUsageField(attribution.OnBehalfOf.ID), nullableUsageField(attribution.WorkRef),
-		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries, usage.CostMinorUnits, usage.Currency)
+// InsertUsageEvent writes a turn's settled usage events, one per (turn, category, model)
+// and one for the part no model performed, inside the caller's transaction qs, whose
+// advisory lock makes a turn settle once: inserted=false means an earlier settlement
+// of the turn and category already wrote its events, even one whose models differed.
+func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.TxQueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) (bool, error) {
+	lines, err := usageLines(usage)
 	if err != nil {
-		return false, fmt.Errorf("persist usage event: %w", err)
+		return false, err
 	}
-	return len(result.Rows) > 0, nil
+	return l.insertUsageLines(ctx, qs, tenantID, conversationID, turnNo, subjectRef, attribution, lines)
+}
+
+func (l *TurnLedger) insertUsageLines(ctx context.Context, qs port.TxQueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, lines []usageLine) (bool, error) {
+	if _, err := qs.Query(ctx, qLedgerLock, fmt.Sprintf("usage:%d:%s:%d:%s", tenantID, conversationID, turnNo, l.UsageCategory)); err != nil {
+		return false, fmt.Errorf("lock usage events: %w", err)
+	}
+	settled, err := qs.Query(ctx, qLedgerUsageSettled, tenantID, conversationID, turnNo, l.UsageCategory)
+	if err != nil {
+		return false, fmt.Errorf("read usage events: %w", err)
+	}
+	if len(settled.Rows) > 0 {
+		return false, nil
+	}
+	inserted := false
+	for _, line := range lines {
+		result, err := qs.Query(ctx, qLedgerInsertUsageEvent,
+			tenantID, conversationID, turnNo, l.UsageCategory, subjectRef,
+			nullableUsageField(string(attribution.Principal.Kind)), nullableUsageField(attribution.Principal.ID),
+			nullableUsageField(attribution.ScopeID), nullableUsageField(string(attribution.OnBehalfOf.Kind)),
+			nullableUsageField(attribution.OnBehalfOf.ID), nullableUsageField(attribution.WorkRef),
+			line.usage.InputTokens, line.usage.OutputTokens, line.usage.ToolCalls, line.usage.SearchQueries,
+			line.usage.CostMinorUnits, line.usage.Currency,
+			nullableUsageField(line.model.ProviderID), nullableUsageField(line.model.ModelID))
+		if err != nil {
+			return false, fmt.Errorf("persist usage event: %w", err)
+		}
+		inserted = inserted || len(result.Rows) > 0
+	}
+	return inserted, nil
 }
 
 func nullableUsageField(value string) any {
@@ -1142,13 +1208,18 @@ func ActivateJobReservation(ctx context.Context, qs port.QueryService, tenantID,
 	return common.AsString(result.Rows[0][0]), common.AsInt64(result.Rows[0][1]), true, nil
 }
 
-// StageJobUsage stages actual usage before settlement.
+// StageJobUsage stages actual usage, with each model's share, before settlement.
 func StageJobUsage(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID string, usage domain.Usage) (bool, error) {
 	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || reservationID == "" || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CostMinorUnits < 0 || usage.Currency == "" {
 		return false, fmt.Errorf("%w: invalid staged usage", domain.ErrValidation)
 	}
+	models, err := stagedModelUsage(usage)
+	if err != nil {
+		return false, err
+	}
 	result, err := qs.Query(ctx, qLedgerStageJobUsage,
-		usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, usage.Currency,
+		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries,
+		usage.CostMinorUnits, usage.Currency, models,
 		tenantID, jobRef, taskKind, reservationID)
 	if err != nil {
 		return false, err

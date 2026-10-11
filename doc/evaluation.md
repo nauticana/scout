@@ -19,12 +19,40 @@ live under `scope_code = 'gate'`; `GoldenSetStore` takes an authorization scope 
 every read and write, so prompt authors working in the dev scope can neither list
 nor fetch a gate example, and cannot write one either.
 
+## Agent golden sets
+
+Studio authors an agent's golden set as saved test cases. `GoldenCaseStore` keeps
+the editable working copy in `golden_case`; every add, replace, remove, and freeze
+names the set's `working_revision` and advances it, so a stale edit is
+`ErrRevisionConflict`. `Freeze` uploads each input to object storage under its
+SHA-256 content key, then in one transaction writes the next immutable
+`golden_set_version` with one `golden_example` per case, dev and gate alike. Runs
+read examples back through `GoldenSetStore`, so the scope rule above decides what
+runs. An agent uses one set (`agent_golden_set`). A set created through Studio is
+owned by its agent (`golden_set.owner_agent_id`); sharing an existing set needs
+EDIT on its owning agent, and a set no agent owns belongs to the product and is
+refused.
+
+Studio actors always work in the dev scope: gate cases are never returned,
+written, or run for them, only counted (`hidden_cases`, `hidden_results`). The
+product writes gate cases through `GoldenCaseStore` in the gate scope.
+
+`StudioEvaluation.Evaluate` pins a frozen set version and one subject: the agent's
+draft, frozen exactly as publication would freeze it (`contract.DraftFreezer`,
+nothing persisted) and pinned by definition digest, or one release pinned by
+version and digest. `AgentEvaluationStore.Enqueue` queues the run in
+`evaluation_run` with its subject in `evaluation_run_subject`, and refuses an agent
+already holding `agent_evaluation_max_open_runs` open runs (`ErrRateLimited`) or a
+set version with no examples in the caller's scope. These runs score a single
+subject with `contract.HeuristicEvaluator`s; a run of an agent the caller cannot
+VIEW reads as not found.
+
 ## Ordering
 
 `Runner` replays baseline and candidate on identical examples through an injected
 `CaseExecutor`. `ReleaseCaseExecutor` is the production one: it resolves the arm's
-published graph and runs its tool-loop steps with the release's prompt, tools and
-limits, a fresh `ToolSandbox` per example as the only tool path, the arm's
+published graph and runs its tool-loop steps with the release's prompt and tools
+under the executor's tool-loop limits (not the release's `limits` binding), a fresh `ToolSandbox` per example as the only tool path, the arm's
 `Decoding` (`temperature`, `max_tokens`; any other key refuses the replay), and the
 release's output guardrails when composed. The example payload is the turn input,
 verified against its digest. An agent that exhausts a limit, loops, or answers
@@ -77,6 +105,23 @@ explicit spend budget and track the cost of a run against the regressions it
 detected — a gate that costs more than the incidents it prevents is misconfigured.
 `EvaluationRun` records sample counts and minor-unit cost per run for exactly that
 ratio.
+
+`AgentEvaluationWorker` (`NewAgentEvaluationWorker`) is the keel leased queue worker
+(queue `agent-evaluation`) for queued agent runs. A draft subject runs each example
+input, checked against its digest, through the governed
+`contract.AgentDraftTestExecutor` with the pinned definition; a release subject
+replays through `contract.CaseExecutor`. Examples run with bounded concurrency.
+Each result is recorded under the lease, which it renews on the store clock, and
+added to the run totals in the same transaction, so a reclaimed run skips what an
+earlier attempt recorded. A run stops as `stopped_early` once its settled cost
+reaches `MaxRunCostMinorUnits` in `Currency`; examples in flight finish, so the
+overshoot is at most `Concurrency` examples. A failed execution fails the run. A
+failed evaluator still records the example's usage, without scores, and fails the
+run; usage the totals cannot hold (negative, or priced in another currency) fails
+it as unsettled. A lost lease, a store failure, or cancellation leaves the run for
+reclaim, and a lease that expires on the `agent_evaluation_max_attempts`-th claim
+fails it. Reasons carry only the error class and never name a gate example.
+Authorization is checked at enqueue, not again when the worker executes.
 
 ## Sampling, storage, adjudication
 

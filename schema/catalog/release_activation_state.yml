@@ -1,0 +1,10 @@
+table: release_activation_state
+comment: Lifecycle of one scheduled release activation
+columns:
+  - name: code
+    type: VARCHAR(20)
+  - name: is_terminal
+    type: BOOLEAN
+  - name: description
+    type: VARCHAR(200)
+primary_key: [code]

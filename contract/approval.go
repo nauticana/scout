@@ -20,6 +20,8 @@ type ApprovalStore interface {
 	// Resolve records a verdict once. An exact retry returns the stored request;
 	// a different second verdict or ProposedDigest is domain.ErrConflict.
 	Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (domain.ApprovalRequest, error)
+	// Revision returns the edit recorded on an edited request; any other request is domain.ErrNotFound.
+	Revision(ctx context.Context, key domain.ApprovalKey) (domain.ProposalRevision, error)
 }
 
 // ApproverRouter names the principal who decides a request. The product maps the request's
