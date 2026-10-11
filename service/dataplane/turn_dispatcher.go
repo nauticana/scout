@@ -29,7 +29,7 @@ INSERT INTO turn_queue
        (id, partner_id, request_id, conversation_id, agent_id, principal_kind, principal_id, partition_no, priority_rank,
         reply_route, input_uri, input_digest, acting_context, attempt, status_code, available_at, enqueued_at)
 SELECT nextval('turn_queue_seq'), turn.partner_id, turn.request_id, turn.conversation_id, ?, ?, ?, ?, ?,
-       ?, turn.input_uri, turn.input_digest, ?, 0, 'queued', ?, ?
+       ?, turn.input_uri, turn.input_digest, ?, 0, ` + sqlQueueQueued + `, ?, ?
   FROM conversation_turn turn
  WHERE turn.partner_id = ? AND turn.request_id = ? AND turn.conversation_id = ? AND turn.input_digest = ?
 ON CONFLICT DO NOTHING
@@ -44,12 +44,12 @@ SELECT id, input_digest, status_code
 	// suspended turn that was resumed. A settled turn's delivery stays acknowledged.
 	qQueueRequeue: `
 UPDATE turn_queue queued
-   SET status_code = 'queued', attempt = 0, available_at = ?, lease_token = NULL, lease_until = NULL,
+   SET status_code = ` + sqlQueueQueued + `, attempt = 0, available_at = ?, lease_token = NULL, lease_until = NULL,
        worker_id = NULL, last_error = NULL
- WHERE queued.partner_id = ? AND queued.request_id = ? AND queued.status_code = 'acked'
+ WHERE queued.partner_id = ? AND queued.request_id = ? AND queued.status_code = ` + sqlQueueAcked + `
    AND EXISTS (SELECT 1 FROM conversation_turn turn
                 WHERE turn.partner_id = queued.partner_id AND turn.request_id = queued.request_id
-                  AND turn.status_code IN ('queued', 'running', 'streaming'))
+                  AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `))
 RETURNING queued.id`,
 
 	qQueueTurnDigest: `

@@ -33,7 +33,7 @@ func newTestIngress(t *testing.T, recorder *ingressRecorder, enqueueErr error) *
 			return nil
 		}},
 		Records: &fake.TurnRecordStore{
-			FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
+			FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
 				recorder.calls = append(recorder.calls, "find")
 				return 0, "", nil, domain.ErrNotFound
 			},
@@ -41,9 +41,9 @@ func newTestIngress(t *testing.T, recorder *ingressRecorder, enqueueErr error) *
 				recorder.calls = append(recorder.calls, "open")
 				return 1, nil
 			},
-			FailFunc: func(_ context.Context, _ int64, _ string, status, errorCode string) error {
+			FailFunc: func(_ context.Context, _ int64, _ string, status domain.TurnStatus, errorCode string) error {
 				recorder.calls = append(recorder.calls, "fail")
-				recorder.failed = append(recorder.failed, status+":"+errorCode)
+				recorder.failed = append(recorder.failed, string(status)+":"+errorCode)
 				return nil
 			},
 		},
@@ -111,7 +111,7 @@ func TestTurnIngressRefundsAndClosesOnDispatchFailure(t *testing.T) {
 	if _, err := ingress.OpenTurn(context.Background(), ingressRequest()); !errors.Is(err, dispatchErr) {
 		t.Fatalf("error = %v", err)
 	}
-	if recorder.released != 1 || len(recorder.failed) != 1 || recorder.failed[0] != "failed:dispatch_failed" {
+	if recorder.released != 1 || len(recorder.failed) != 1 || recorder.failed[0] != string(domain.TurnFailed)+":dispatch_failed" {
 		t.Fatalf("released = %d, failed = %v", recorder.released, recorder.failed)
 	}
 	if !recorder.subscription.Closed {
@@ -122,9 +122,9 @@ func TestTurnIngressRefundsAndClosesOnDispatchFailure(t *testing.T) {
 func TestTurnIngressResubscribesTerminalRequest(t *testing.T) {
 	recorder := &ingressRecorder{}
 	ingress := newTestIngress(t, recorder, nil)
-	ingress.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
+	ingress.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
 		recorder.calls = append(recorder.calls, "find")
-		return 1, "completed", []byte("response"), nil
+		return 1, domain.TurnCompleted, []byte("response"), nil
 	}}
 	if _, err := ingress.OpenTurn(context.Background(), ingressRequest()); err != nil {
 		t.Fatal(err)

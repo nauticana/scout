@@ -6,9 +6,9 @@ columns:
   - name: partner_id
     type: BIGINT
   - name: role_code
-    type: VARCHAR(10)
+    type: CHAR(1)
   - name: subject_code
-    type: VARCHAR(10)
+    type: CHAR(1)
   - name: agent_id
     type: VARCHAR(80)
   - name: agent_version
@@ -70,9 +70,11 @@ indexes:
     columns: [partner_id, baseline_id]
 checks:
   - name: evaluation_run_subject_role_ck
-    expression: role_code IN ('baseline', 'candidate')
+    expression: role_code IN ('B', 'C')
+  - name: evaluation_run_subject_code_ck
+    expression: subject_code IN ('B', 'D', 'R')
   - name: evaluation_run_subject_kind_ck
-    expression: (subject_code = 'draft' AND agent_version IS NULL AND baseline_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code = 'release' AND agent_version IS NOT NULL AND baseline_id IS NULL AND provider_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL) OR (subject_code = 'baseline' AND role_code = 'baseline' AND baseline_id IS NOT NULL AND agent_version IS NULL AND provider_id IS NULL AND definition_digest IS NULL AND definition_json IS NULL AND settings_json IS NULL)
+    expression: (subject_code = 'D' AND agent_version IS NULL AND baseline_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code = 'R' AND agent_version IS NOT NULL AND baseline_id IS NULL AND provider_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL) OR (subject_code = 'B' AND role_code = 'B' AND baseline_id IS NOT NULL AND agent_version IS NULL AND provider_id IS NULL AND definition_digest IS NULL AND definition_json IS NULL AND settings_json IS NULL)
   - name: evaluation_run_subject_digest_ck
     expression: definition_digest IS NULL OR CHAR_LENGTH(definition_digest) = 64
   - name: evaluation_run_subject_model_ck

@@ -8,8 +8,8 @@ const (
 )
 
 // ReleaseActivation is a scheduled publish: the release that takes the agent's traffic
-// at effective_at. State is pending, activated, refused, or cancelled; reason and detail
-// say why a refused one did not activate.
+// at effective_at. State is the release_activation_state code: P pending, A activated,
+// R refused, or X cancelled; reason and detail say why a refused one did not activate.
 type ReleaseActivation struct {
 	ID               int64      `json:"id"`
 	AgentName        string     `json:"agent_name"`

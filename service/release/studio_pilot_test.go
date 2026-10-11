@@ -92,10 +92,10 @@ func TestStudioPilotAddRecordsTheMembershipAndItsAuthor(t *testing.T) {
 	}
 	requireArgs(t, tx.queryFake, qPilotLock, "agent_pilot:7:writer-a")
 	requireArgs(t, tx.queryFake, qPilotVersion, int64(7), "writer-a", "4")
-	requireArgs(t, tx.queryFake, qPilotOpen, int64(7), "writer-a", "principal", "1001")
-	requireArgs(t, tx.queryFake, qPilotInsert, int64(7), "writer-a", "principal", "1001", "4", pilotChange.Reason, "human", "42")
+	requireArgs(t, tx.queryFake, qPilotOpen, int64(7), "writer-a", string(domain.PilotPrincipal), "1001")
+	requireArgs(t, tx.queryFake, qPilotInsert, int64(7), "writer-a", string(domain.PilotPrincipal), "1001", "4", pilotChange.Reason, "human", "42")
 	requireArgs(t, tx.queryFake, qPilotEvent, int64(7), "writer-a", "PILOT_ADD",
-		"principal 1001 on version 4: supervised pilot for the finance team", "human", "42")
+		string(domain.PilotPrincipal)+" 1001 on version 4: supervised pilot for the finance team", "human", "42")
 }
 
 func TestStudioPilotChangesNeedPublish(t *testing.T) {
@@ -158,7 +158,7 @@ func TestStudioPilotAddTrimsAPositionReference(t *testing.T) {
 	if err != nil || member.Subject.ID != "emea/sales-lead" || member.Reason != "pilot" {
 		t.Fatalf("member = %+v, err = %v", member, err)
 	}
-	requireArgs(t, tx.queryFake, qPilotInsert, int64(7), "writer-a", "position", "emea/sales-lead", "4", "pilot", "human", "42")
+	requireArgs(t, tx.queryFake, qPilotInsert, int64(7), "writer-a", string(domain.PilotPosition), "emea/sales-lead", "4", "pilot", "human", "42")
 }
 
 func TestStudioPilotEventDetailFitsItsColumn(t *testing.T) {
@@ -170,7 +170,7 @@ func TestStudioPilotEventDetailFitsItsColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail, _ := tx.args[qPilotEvent][3].(string)
-	if runes := len([]rune(detail)); runes != 400 || !strings.HasPrefix(detail, "position ppp") {
+	if runes := len([]rune(detail)); runes != 400 || !strings.HasPrefix(detail, string(domain.PilotPosition)+" ppp") {
 		t.Fatalf("detail has %d characters: %q", runes, detail)
 	}
 }
@@ -193,7 +193,7 @@ func TestStudioPilotAddRefusesAnUnknownOrQuarantinedRelease(t *testing.T) {
 }
 
 func TestStudioPilotAddIsIdempotentForTheSameRelease(t *testing.T) {
-	open := [][]any{{"principal", "1001", "4", "first reason", "human", "9", pilotBegda, nil}}
+	open := [][]any{{string(domain.PilotPrincipal), "1001", "4", "first reason", "human", "9", pilotBegda, nil}}
 	pilots, tx := studioPilots(map[string][][]any{qPilotOpen: open}, domain.StudioPublish)
 	member, err := pilots.Add(context.Background(), pilotActor, pilotChange)
 	if err != nil || member.Reason != "first reason" || member.AddedBy.ID != "9" || !member.ValidFrom.Equal(pilotBegda) {
@@ -247,7 +247,7 @@ func TestStudioPilotAddRollsBackWhenTheEventFails(t *testing.T) {
 func TestStudioPilotRemoveEndsTheOpenMembership(t *testing.T) {
 	ended := pilotBegda.Add(time.Hour)
 	pilots, tx := studioPilots(map[string][][]any{
-		qPilotEnd: {{"principal", "1001", "4", "supervised pilot", "human", "9", pilotBegda, ended}},
+		qPilotEnd: {{string(domain.PilotPrincipal), "1001", "4", "supervised pilot", "human", "9", pilotBegda, ended}},
 	}, domain.StudioPublish)
 	change := pilotChange
 	change.Reason = "pilot finished"
@@ -259,13 +259,13 @@ func TestStudioPilotRemoveEndsTheOpenMembership(t *testing.T) {
 	if !slices.Equal(tx.calls, want) || tx.commits != 1 {
 		t.Fatalf("calls = %v, commits = %d", tx.calls, tx.commits)
 	}
-	requireArgs(t, tx.queryFake, qPilotEnd, int64(7), "writer-a", "principal", "1001", "4")
-	requireArgs(t, tx.queryFake, qPilotEvent, int64(7), "writer-a", "PILOT_REMOVE", "principal 1001 on version 4: pilot finished", "human", "42")
+	requireArgs(t, tx.queryFake, qPilotEnd, int64(7), "writer-a", string(domain.PilotPrincipal), "1001", "4")
+	requireArgs(t, tx.queryFake, qPilotEvent, int64(7), "writer-a", "PILOT_REMOVE", string(domain.PilotPrincipal)+" 1001 on version 4: pilot finished", "human", "42")
 }
 
 func TestStudioPilotRemoveDropsAMembershipThatNeverTookEffect(t *testing.T) {
 	pilots, tx := studioPilots(map[string][][]any{
-		qPilotDrop: {{"principal", "1001", "4", "supervised pilot", "human", "9", pilotBegda, pilotBegda}},
+		qPilotDrop: {{string(domain.PilotPrincipal), "1001", "4", "supervised pilot", "human", "9", pilotBegda, pilotBegda}},
 	}, domain.StudioPublish)
 	member, err := pilots.Remove(context.Background(), pilotActor, pilotChange)
 	if err != nil || !member.ValidTo.Equal(member.ValidFrom) {
@@ -288,8 +288,8 @@ func TestStudioPilotRemoveOfNoOpenMembershipIsNotFound(t *testing.T) {
 
 func TestStudioPilotListNeedsViewAndReadsTheActorsTenant(t *testing.T) {
 	pilots, tx := studioPilots(map[string][][]any{qPilotList: {
-		{"position", "emea/sales-lead", "5", "regional pilot", "service", "installer", pilotBegda, nil},
-		{"principal", "1001", "4", "supervised pilot", "human", "42", pilotBegda, nil},
+		{string(domain.PilotPosition), "emea/sales-lead", "5", "regional pilot", "service", "installer", pilotBegda, nil},
+		{string(domain.PilotPrincipal), "1001", "4", "supervised pilot", "human", "42", pilotBegda, nil},
 	}}, domain.StudioView)
 	members, err := pilots.List(context.Background(), pilotActor, "writer-a")
 	if err != nil || len(members) != 2 || members[0].Subject.Kind != domain.PilotPosition || members[0].AddedBy.Kind != domain.PrincipalService ||

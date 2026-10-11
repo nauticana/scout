@@ -207,7 +207,7 @@ func (metrics *BoundedRuntimeMetrics) labels(observation domain.Observation) map
 	}
 	return map[string]string{
 		LabelTenantTier:    observation.TenantTier,
-		LabelPriorityClass: observation.PriorityClass,
+		LabelPriorityClass: string(observation.PriorityClass),
 		LabelRegion:        observation.Region,
 		LabelRelease:       release,
 		LabelStage:         stageLabel,

@@ -11,7 +11,7 @@ Reference implementations live in `service/dataplane/`: `ObjectStateStore` (`sta
 | `domain.ExecutionStep.ExecutionStepID` | `execution_step.id` | Compiled surrogate id; the only step identity persistence keys on. `StepID` is the logical name and is derived on load via `execution_step.step_id`. |
 | `domain.StepCheckpoint` | `step_checkpoint` | `(partner_id, conversation_id, turn_no, step_no)`; `IdempotencyKey`, `Fingerprint` (64-hex), `Usage` (currency required) map 1:1. `State` is dehydrated to `state_uri`/`state_digest` (`StateRef`). No checkpoint id or request id column exists; neither is stored. |
 | `domain.SessionSnapshot` | `session_snapshot` + `agent_conversation.agent_version` + latest checkpoint's `execution_step.step_id` | `Revision` = `session_snapshot.revision`; `State` is hydrated from `state_uri`/`state_digest`, digest verified before return. A conversation with no checkpoint loads at revision 0 with empty state. |
-| `domain.TurnResult.Response` | `conversation_turn.response_uri`/`response_digest` | Written by `Complete` on the conversation's oldest non-terminal turn (`queued`/`running`/`streaming`). |
+| `domain.TurnResult.Response` | `conversation_turn.response_uri`/`response_digest` | Written by `Complete` on the conversation's oldest non-terminal turn (`Q` queued, `R` running, or `S` streaming). |
 | `domain.StepResult` (JSON) | `step_idempotency.result_uri`/`result_digest` | Keyed by `(partner_id, request_id, execution_step_id)`. |
 | `domain.ObjectRef{URI, Digest}` | any `*_uri`/`*_digest` pair | URI `<scheme>://<bucket>/<key>`, digest lowercase SHA-256 hex. |
 
@@ -49,7 +49,7 @@ is `ErrDigestMismatch`/download error, never empty state.
 ## Order of durability for one step / turn
 
 1. `StepIdempotencyStore.Begin` claims the step (or replays the committed result — no side effect re-runs).
-2. Execute; `Commit` uploads the JSON result, then CAS `claimed → committed`.
+2. Execute; `Commit` uploads the JSON result, then CAS `C` (claimed) → `M` (committed).
 3. `SessionCoordinator.Checkpoint` (durable checkpoint + snapshot CAS, then cache invalidation).
 4. Guardrail-approved *intermediate* frames publish (sequence-deduplicated by the reply hub, so replay republishes the same sequences).
 5. Terminal result + settlement persist (`Complete` / `TurnLedger` terminal tx, one `usage_event`).
@@ -59,13 +59,13 @@ is `ErrDigestMismatch`/download error, never empty state.
 ## Idempotency state machine
 
 ```
-(none) --Begin--> claimed --Commit--> committed   (terminal; Begin replays the stored result)
-claimed --Abandon--> abandoned --Begin--> claimed   (the replay transition; abandoned is reclaimable)
-claimed --lease expired (updated_at + ClaimLease <= now)--Begin--> claimed (CAS re-lease)
-claimed (live) --Begin--> ErrConflict
+(none) --Begin--> C claimed --Commit--> M committed   (terminal; Begin replays the stored result)
+C claimed --Abandon--> A abandoned --Begin--> C claimed   (the replay transition; A is reclaimable)
+C claimed --lease expired (updated_at + ClaimLease <= now)--Begin--> C claimed (CAS re-lease)
+C claimed (live) --Begin--> ErrConflict
 ```
-`Commit` on a lost claim is `ErrConflict` unless the row is already `committed` with the same digest (duplicate
-delivery → no-op). `Abandon` twice is a no-op; `Abandon` after `committed` is `ErrConflict`. The schema has no
+`Commit` on a lost claim is `ErrConflict` unless the row is already `M` (committed) with the same digest (duplicate
+delivery → no-op). `Abandon` twice is a no-op; `Abandon` after `M` is `ErrConflict`. The schema has no
 owner column, so a worker whose lease expired can still commit if it finishes before the reclaimer; both ran the
 side effect (inherent to lease expiry) and the second `Commit` observes `ErrConflict`.
 

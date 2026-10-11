@@ -144,4 +144,6 @@ const (
 	ApprovalApproved ApprovalDecision = "approved"
 	ApprovalPending  ApprovalDecision = "pending"
 	ApprovalDenied   ApprovalDecision = "denied"
+	// ApprovalEdited reports a call a decider replaced with a revision; the gate never returns it.
+	ApprovalEdited ApprovalDecision = "edited"
 )

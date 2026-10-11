@@ -9,15 +9,15 @@ import (
 type MCPConfirmationStatus string
 
 const (
-	MCPConfirmationPending   MCPConfirmationStatus = "pending"
-	MCPConfirmationApproved  MCPConfirmationStatus = "approved"
-	MCPConfirmationExecuting MCPConfirmationStatus = "executing"
-	MCPConfirmationExecuted  MCPConfirmationStatus = "executed"
-	MCPConfirmationFailed    MCPConfirmationStatus = "failed"
-	MCPConfirmationUnknown   MCPConfirmationStatus = "unknown"
-	MCPConfirmationDeclined  MCPConfirmationStatus = "declined"
-	MCPConfirmationWithdrawn MCPConfirmationStatus = "withdrawn"
-	MCPConfirmationExpired   MCPConfirmationStatus = "expired"
+	MCPConfirmationPending   MCPConfirmationStatus = "P"
+	MCPConfirmationApproved  MCPConfirmationStatus = "A"
+	MCPConfirmationExecuting MCPConfirmationStatus = "R"
+	MCPConfirmationExecuted  MCPConfirmationStatus = "D"
+	MCPConfirmationFailed    MCPConfirmationStatus = "F"
+	MCPConfirmationUnknown   MCPConfirmationStatus = "U"
+	MCPConfirmationDeclined  MCPConfirmationStatus = "X"
+	MCPConfirmationWithdrawn MCPConfirmationStatus = "W"
+	MCPConfirmationExpired   MCPConfirmationStatus = "T"
 )
 
 // MCPConfirmationChannel is how a person is asked to confirm.

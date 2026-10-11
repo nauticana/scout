@@ -52,7 +52,7 @@ type memoryQueueEntry struct {
 	partition   int
 	rank        int
 	attempt     int
-	status      string
+	status      domain.TurnQueueStatus
 	leaseToken  int64
 	leaseUntil  time.Time
 	workerID    string
@@ -136,7 +136,7 @@ func (queue *MemoryTurnQueue) Enqueue(ctx context.Context, dispatch domain.TurnD
 	queue.nextID++
 	queue.messages[queue.nextID] = &memoryQueueEntry{
 		id: queue.nextID, dispatch: dispatch, digest: digest, partition: partition, rank: rank,
-		status: "queued", availableAt: dispatch.EnqueuedAt, enqueuedAt: dispatch.EnqueuedAt,
+		status: domain.QueueQueued, availableAt: dispatch.EnqueuedAt, enqueuedAt: dispatch.EnqueuedAt,
 	}
 	queue.byKey[key] = queue.nextID
 	return nil
@@ -174,7 +174,7 @@ func (queue *MemoryTurnQueue) Claim(ctx context.Context, workerID string, leaseD
 			continue
 		}
 		queue.nextTok++
-		entry.status, entry.leaseToken, entry.leaseUntil, entry.workerID = "leased", queue.nextTok, now.Add(leaseDuration), workerID
+		entry.status, entry.leaseToken, entry.leaseUntil, entry.workerID = domain.QueueLeased, queue.nextTok, now.Add(leaseDuration), workerID
 		entry.attempt++
 		return domain.QueueLease{Message: entry.message(), Deadline: entry.leaseUntil}, nil
 	}
@@ -184,14 +184,14 @@ func (queue *MemoryTurnQueue) Claim(ctx context.Context, workerID string, leaseD
 // reclaimLocked returns expired leases to the queue and parks exhausted ones.
 func (queue *MemoryTurnQueue) reclaimLocked(now time.Time) {
 	for _, entry := range queue.messages {
-		if entry.status != "leased" || entry.leaseUntil.After(now) {
+		if entry.status != domain.QueueLeased || entry.leaseUntil.After(now) {
 			continue
 		}
 		if entry.attempt >= queue.config.MaxAttempts {
 			queue.parkLocked(entry, "lease expired after last attempt")
 			continue
 		}
-		entry.status, entry.leaseToken, entry.workerID = "queued", 0, ""
+		entry.status, entry.leaseToken, entry.workerID = domain.QueueQueued, 0, ""
 		entry.leaseUntil = time.Time{}
 		entry.availableAt = now
 	}
@@ -206,11 +206,11 @@ func (queue *MemoryTurnQueue) candidatesLocked(now time.Time) []tenantCandidate 
 			candidate = &tenantCandidate{tenantID: tenantID, bestRank: int(^uint(0) >> 1)}
 			byTenant[tenantID] = candidate
 		}
-		if entry.status == "leased" {
+		if entry.status == domain.QueueLeased {
 			candidate.leased++
 			continue
 		}
-		if entry.status != "queued" || entry.availableAt.After(now) {
+		if entry.status != domain.QueueQueued || entry.availableAt.After(now) {
 			continue
 		}
 		candidate.oldest = minNonZero(candidate.oldest, entry.enqueuedAt.UnixNano())
@@ -233,7 +233,7 @@ func (queue *MemoryTurnQueue) candidatesLocked(now time.Time) []tenantCandidate 
 func (queue *MemoryTurnQueue) headLocked(tenantID int64, now time.Time, passedOver []domain.PrincipalRef) *memoryQueueEntry {
 	var head *memoryQueueEntry
 	for _, entry := range queue.messages {
-		if entry.dispatch.Turn.TenantContext.TenantID != tenantID || entry.status != "queued" ||
+		if entry.dispatch.Turn.TenantContext.TenantID != tenantID || entry.status != domain.QueueQueued ||
 			entry.availableAt.After(now) || entry.attempt >= queue.config.MaxAttempts ||
 			slices.Contains(passedOver, turnPrincipal(entry.dispatch.Turn)) {
 			continue
@@ -259,9 +259,9 @@ func (queue *MemoryTurnQueue) principalLoadLocked(tenantID int64, now time.Time)
 		}
 		principal := turnPrincipal(entry.dispatch.Turn)
 		switch {
-		case entry.status == "leased":
+		case entry.status == domain.QueueLeased:
 			leased[principal]++
-		case entry.status == "queued" && !entry.availableAt.After(now):
+		case entry.status == domain.QueueQueued && !entry.availableAt.After(now):
 			ready[principal] = true
 		}
 	}
@@ -279,10 +279,10 @@ func (queue *MemoryTurnQueue) blockedLocked(entry *memoryQueueEntry) bool {
 			other.dispatch.Turn.ConversationID != entry.dispatch.Turn.ConversationID {
 			continue
 		}
-		if other.status == "leased" {
+		if other.status == domain.QueueLeased {
 			return true
 		}
-		if other.status == "queued" && (other.enqueuedAt.Before(entry.enqueuedAt) ||
+		if other.status == domain.QueueQueued && (other.enqueuedAt.Before(entry.enqueuedAt) ||
 			(other.enqueuedAt.Equal(entry.enqueuedAt) && other.id < entry.id)) {
 			return true
 		}
@@ -313,7 +313,7 @@ func (queue *MemoryTurnQueue) Ack(ctx context.Context, messageID, workerID strin
 	if err != nil {
 		return err
 	}
-	entry.status, entry.leaseToken, entry.workerID = "acked", 0, ""
+	entry.status, entry.leaseToken, entry.workerID = domain.QueueAcked, 0, ""
 	entry.leaseUntil = time.Time{}
 	delete(queue.messages, entry.id)
 	delete(queue.byKey, streamKey{entry.dispatch.Turn.TenantContext.TenantID, entry.dispatch.Turn.RequestID})
@@ -335,7 +335,7 @@ func (queue *MemoryTurnQueue) Nack(ctx context.Context, messageID, workerID, rea
 		queue.parkLocked(entry, reason)
 		return nil
 	}
-	entry.status, entry.leaseToken, entry.workerID = "queued", 0, ""
+	entry.status, entry.leaseToken, entry.workerID = domain.QueueQueued, 0, ""
 	entry.leaseUntil = time.Time{}
 	entry.availableAt = queue.now().Add(queue.backoff(entry.attempt))
 	return nil
@@ -389,7 +389,7 @@ func (queue *MemoryTurnQueue) leasedLocked(messageID, workerID string) (*memoryQ
 		return nil, fmt.Errorf("%w: worker id is required", domain.ErrValidation)
 	}
 	entry := queue.messages[id]
-	if entry == nil || entry.status != "leased" || entry.leaseToken != token || entry.workerID != workerID {
+	if entry == nil || entry.status != domain.QueueLeased || entry.leaseToken != token || entry.workerID != workerID {
 		return nil, fmt.Errorf("%w: lease on message %s is not held by this worker", domain.ErrConflict, messageID)
 	}
 	return entry, nil
@@ -397,7 +397,7 @@ func (queue *MemoryTurnQueue) leasedLocked(messageID, workerID string) (*memoryQ
 
 // parkLocked marks the entry dead and hands it to the dead-letter list.
 func (queue *MemoryTurnQueue) parkLocked(entry *memoryQueueEntry, reason string) {
-	entry.status, entry.leaseToken, entry.workerID = "dead", 0, ""
+	entry.status, entry.leaseToken, entry.workerID = domain.QueueDead, 0, ""
 	entry.leaseUntil = time.Time{}
 	queue.dead = append(queue.dead, entry.message())
 	queue.reasons = append(queue.reasons, reason)

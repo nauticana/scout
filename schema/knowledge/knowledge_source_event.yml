@@ -12,7 +12,7 @@ columns:
   - name: source_version
     type: VARCHAR(120)
   - name: op_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: entitlements
     type: TEXT
     nullable: true
@@ -37,4 +37,4 @@ indexes:
     columns: [partner_id, knowledge_base_id, acked_at, occurred_at]
 checks:
   - name: knowledge_source_event_op_ck
-    expression: op_code IN ('upsert', 'delete')
+    expression: op_code IN ('U', 'D')

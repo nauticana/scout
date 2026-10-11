@@ -206,7 +206,7 @@ func TestRunnerStopsEarlyWhenTheEffectIsDecided(t *testing.T) {
 func TestRunnerRecordsRunLifecycleAndFailure(t *testing.T) {
 	examples := []domain.GoldenExample{testExample("a")}
 	manifest := testManifest(t, examples...)
-	var statuses []string
+	var statuses []domain.EvaluationRunStatus
 	store := &fake.EvaluationResultStore{
 		StartRunFunc: func(_ context.Context, run domain.EvaluationRun) (int64, error) {
 			statuses = append(statuses, run.Status)
@@ -228,7 +228,7 @@ func TestRunnerRecordsRunLifecycleAndFailure(t *testing.T) {
 	if _, err := runner.Run(context.Background(), manifest, examples); err != nil {
 		t.Fatal(err)
 	}
-	if len(statuses) != 2 || statuses[0] != runStatusRunning || statuses[1] != runStatusCompleted {
+	if len(statuses) != 2 || statuses[0] != domain.EvaluationRunning || statuses[1] != domain.EvaluationCompleted {
 		t.Fatalf("statuses = %v", statuses)
 	}
 
@@ -240,7 +240,7 @@ func TestRunnerRecordsRunLifecycleAndFailure(t *testing.T) {
 	if _, err := failing.Run(context.Background(), manifest, examples); err == nil {
 		t.Fatal("executor failure did not surface")
 	}
-	if len(statuses) != 2 || statuses[1] != runStatusFailed {
+	if len(statuses) != 2 || statuses[1] != domain.EvaluationFailed {
 		t.Fatalf("failure statuses = %v", statuses)
 	}
 }

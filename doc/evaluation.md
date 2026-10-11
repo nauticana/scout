@@ -145,7 +145,7 @@ settled no usage fails the run. Studio's draft test applies the same frozen limi
 and answers such a stop with 422.
 Each result is recorded under the lease, which it renews on the store clock, and
 added to the run totals in the same transaction, so a reclaimed run skips what an
-earlier attempt recorded. A run stops as `stopped_early` once its settled cost
+earlier attempt recorded. A run stops early (`S`) once its settled cost
 reaches `MaxRunCostMinorUnits` in `Currency`; examples in flight finish, so the
 overshoot is at most `Concurrency` examples. A failed execution fails the run. A
 failed evaluator still records the example's usage, without scores, and fails the
@@ -208,7 +208,7 @@ one release, and arm `a` the draft, one release, or a recorded human baseline. A
 name a `model`, which replaces the draft's text model before it is frozen exactly as a publish
 would (`DraftFreezer.FreezeDraft`) and is validated as a draft's own model is. Two arms of the
 same definition are refused. The comparison is an `evaluation_run` with two
-`evaluation_run_subject` rows, `baseline` for `a` and `candidate` for `b`, queued under the same
+`evaluation_run_subject` rows, role `B` (baseline) for `a` and `C` (candidate) for `b`, queued under the same
 open-run cap as any evaluation and recorded as a `COMPARE` Studio event.
 
 `AgentEvaluationWorker` answers each example with `a`, then `b`: a draft through the draft tester,

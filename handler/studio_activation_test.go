@@ -58,7 +58,7 @@ func TestStudioActivationListAndCancelMapTheWireShape(t *testing.T) {
 		t.Fatalf("list error = %v, agent = %q", err, backend.agentID)
 	}
 	encoded, _ := json.Marshal(result)
-	for _, want := range []string{`"id":41`, `"version":4`, `"state":"refused"`, `"reason":"` + string(domain.ActivationGuardRefused) + `"`, `"scheduled_by":"human:9"`,
+	for _, want := range []string{`"id":41`, `"version":4`, `"state":"` + string(domain.ActivationRefused) + `"`, `"reason":"` + string(domain.ActivationGuardRefused) + `"`, `"scheduled_by":"human:9"`,
 		`"decided_by":"service:ops"`, `"effective_at":"2026-11-01T08:00:00Z"`} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("list JSON %s lacks %s", encoded, want)

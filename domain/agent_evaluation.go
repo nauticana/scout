@@ -79,10 +79,10 @@ type EvaluationSubjectKind string
 
 const (
 	// SubjectDraft is the agent's current draft frozen exactly as Publish would freeze it, never persisted as a release.
-	SubjectDraft   EvaluationSubjectKind = "draft"
-	SubjectRelease EvaluationSubjectKind = "release"
+	SubjectDraft   EvaluationSubjectKind = "D"
+	SubjectRelease EvaluationSubjectKind = "R"
 	// SubjectBaseline is a recorded human baseline: stored reference outputs, never executed.
-	SubjectBaseline EvaluationSubjectKind = "baseline"
+	SubjectBaseline EvaluationSubjectKind = "B"
 )
 
 // AgentEvaluationSubject pins one arm of an agent evaluation: a frozen draft
@@ -113,14 +113,30 @@ func (draft FrozenDraft) Subject() AgentEvaluationSubject {
 	return AgentEvaluationSubject{Kind: SubjectDraft, AgentID: draft.Definition.AgentID, DefinitionDigest: draft.Definition.DefinitionDigest}
 }
 
-// Evaluation run statuses shared by manifest runs and queued agent runs.
+// EvaluationRunStatus is the state of a manifest run or a queued agent evaluation.
+type EvaluationRunStatus string
+
 const (
-	EvaluationQueued       = "queued"
-	EvaluationRunning      = "running"
-	EvaluationCompleted    = "completed"
-	EvaluationStoppedEarly = "stopped_early"
-	EvaluationFailed       = "failed"
+	EvaluationQueued       EvaluationRunStatus = "Q"
+	EvaluationRunning      EvaluationRunStatus = "R"
+	EvaluationCompleted    EvaluationRunStatus = "C"
+	EvaluationStoppedEarly EvaluationRunStatus = "S"
+	EvaluationFailed       EvaluationRunStatus = "F"
 )
+
+// Valid reports whether the status is a known one.
+func (status EvaluationRunStatus) Valid() bool {
+	switch status {
+	case EvaluationQueued, EvaluationRunning, EvaluationCompleted, EvaluationStoppedEarly, EvaluationFailed:
+		return true
+	}
+	return false
+}
+
+// Terminal reports whether the status ends a run.
+func (status EvaluationRunStatus) Terminal() bool {
+	return status == EvaluationCompleted || status == EvaluationStoppedEarly || status == EvaluationFailed
+}
 
 // AgentEvaluationRequest asks for one golden set version to run against the
 // agent's current draft or one of its releases.
@@ -158,7 +174,7 @@ type AgentEvaluationRun struct {
 	SetVersion  int64
 	Scope       GoldenScope
 	Subject     AgentEvaluationSubject
-	Status      string
+	Status      EvaluationRunStatus
 	RequestedBy PrincipalRef
 	QueuedAt    time.Time
 	StartedAt   *time.Time

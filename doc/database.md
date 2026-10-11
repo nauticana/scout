@@ -498,7 +498,7 @@ erDiagram
     tenant_runtime_policy {
         bigint partner_id PK,FK
         varchar policy_version PK
-        varchar priority_class_code FK
+        char priority_class_code FK
         char capacity_class_code
         char cost_currency_code FK
     }
@@ -512,7 +512,7 @@ erDiagram
         char currency_code FK
     }
     priority_class {
-        varchar code PK
+        char code PK
         smallint dispatch_rank UK
     }
     currency {
@@ -562,7 +562,7 @@ erDiagram
         bigint partner_id PK,FK
         varchar provider_id PK,FK
         varchar model_id PK,FK
-        varchar priority_class_code FK
+        char priority_class_code FK
     }
 ```
 
@@ -882,7 +882,7 @@ erDiagram
 
 `agent_governance` and `agent_draft_guardrail` are optional draft sections behind the same `draft_revision`, and publication freezes both into the release. `agent_governance.governance` is one canonical Charter `AgentDefinition` fragment with the declared trigger channels, validated and frozen whole; fields an enterprise source owns are never stored. `agent_draft_guardrail.rules` are the agent's own guardrail rules; the release also pins them, merged with its type's, as its `guardrail_config` version. `agent_draft_comment` is a remark on one draft revision, anchored by `anchor_code` to the whole draft, a prompt section (optionally one language), or a setting (`resource_kind_code` and `resource_id`); it stays `O` (open) until someone resolves it. Its author and resolver, like the governance and guardrail editors in `modified_by`, are recorded for audit.
 
-Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions with the acting principal — a person's `user_account.id` or a service's id, so it has no foreign key — and their time. `agent_create_request` is a Studio create's idempotency record: the request digest and the agent it created, keyed by tenant, principal, and key. An archived agent has `agent_profile.state_code` `archived`: it admits no work, keeps its releases, and can return to `suspended`.
+Publication freezes compiled languages and source provenance into `agent_version.definition`. Release metadata records the source revisions, change summary, publisher, publication time, and optional restored version without duplicating live draft rows. `agent_studio_event` keeps queryable lifecycle actions with the acting principal — a person's `user_account.id` or a service's id, so it has no foreign key — and their time. `agent_create_request` is a Studio create's idempotency record: the request digest and the agent it created, keyed by tenant, principal, and key. An archived agent has `agent_profile.state_code` `X` (archived): it admits no work, keeps its releases, and can return to `S` (suspended).
 
 ```mermaid
 erDiagram
@@ -936,14 +936,14 @@ erDiagram
         varchar base_stable_version FK
         varchar base_canary_version FK
         timestamp effective_at
-        varchar state_code FK
+        char state_code FK
         varchar scheduled_by_id
         int attempts
         timestamp next_attempt_at
         char reason_code
     }
     release_activation_state {
-        varchar code PK
+        char code PK
         boolean is_terminal
     }
 ```
@@ -952,7 +952,7 @@ erDiagram
 
 A restore review is the same row with `restore_version` set: it approves restoring that published version over the release active when it was requested (`base_version`), recording the version's digest, its frozen revisions, and the diff from the active release. Publish and restore reviews are separate tracks, so a new request supersedes only an open review of its own kind. When the separation policy requires restore review, a restore needs the agent's latest restore review approved for exactly that version, digest, and base; open draft comments do not block it, and the restore consumes the review by setting `published_version`.
 
-`agent_release_activation` is a published release scheduled to take the agent's traffic at `effective_at`. Publication writes the immutable release as usual and records the activation instead of moving `agent_deployment`; a partial unique index allows one `pending` activation per agent. `ReleaseActivationWorker` claims due rows by the database clock and, in one transaction, rechecks the scheduler's publish authority, the definition digest, and the publish guards, then compare-and-swaps the deployment against `base_stable_version` and `base_canary_version`. `release_activation_state` (`pending`, `activated`, `refused`, `cancelled`) classifies the outcome and the keel constant `release_activation_reason` names why a refusal happened; a transient failure retries at `next_attempt_at` until its attempts run out.
+`agent_release_activation` is a published release scheduled to take the agent's traffic at `effective_at`. Publication writes the immutable release as usual and records the activation instead of moving `agent_deployment`; a partial unique index allows one `P` (pending) activation per agent. `ReleaseActivationWorker` claims due rows by the database clock and, in one transaction, rechecks the scheduler's publish authority, the definition digest, and the publish guards, then compare-and-swaps the deployment against `base_stable_version` and `base_canary_version`. `release_activation_state` (`P` pending, `A` activated, `R` refused, `X` cancelled) classifies the outcome and the keel constant `release_activation_reason` names why a refusal happened; a transient failure retries at `next_attempt_at` until its attempts run out.
 
 ### Templates and provenance
 
@@ -1183,7 +1183,7 @@ erDiagram
         char output_class_code
         varchar risk_tier_code FK
         char proposed_digest
-        varchar status_code FK
+        char status_code FK
         timestamp deadline_at
         bigint notification_event_id FK
         bigint revises_step_id FK
@@ -1201,7 +1201,7 @@ erDiagram
     turn_approval_decision {
         bigint turn_approval_request_id PK,FK
         bigint partner_id FK
-        varchar status_code FK
+        char status_code FK
         bigint decider_user_id FK
         varchar decider_agent_id FK
         varchar decider_service_id
@@ -1238,7 +1238,7 @@ erDiagram
         varchar performed_action
         varchar resource_ref
         varchar policy_id
-        varchar outcome_code FK
+        char outcome_code FK
         varchar obligations
         text payload_uri
     }
@@ -1247,7 +1247,7 @@ erDiagram
 `turn_approval_request` is unique on `(partner_id, request_id, execution_step_id)`, so opening a request is
 idempotent and a replayed turn re-attaches instead of asking a person the same question twice.
 `proposed_digest` binds a verdict to the exact action: resolving matches on it, so approving a
-changed action updates nothing. An `edited` verdict stores only the archive reference and digest
+changed action updates nothing. An `E` (edited) verdict stores only the archive reference and digest
 of the revised tool-call arguments (`revised_arguments_uri`, `revised_arguments_digest`), never the
 arguments; the turn resumes with the revised call, which is governed as a new proposal of the same
 turn whose `revises_step_id` names the edited one. `turn_approval_decision` records the decider through three nullable
@@ -1292,7 +1292,7 @@ erDiagram
         varchar tool
         char payload_digest
         char channel_code
-        varchar status_code FK
+        char status_code FK
         boolean approval_required
         bigint approval_id FK
         bigint notification_event_id FK
@@ -1301,7 +1301,7 @@ erDiagram
         timestamp expires_at
     }
     mcp_confirmation_status {
-        varchar code PK
+        char code PK
         boolean is_open
     }
 ```
@@ -1310,7 +1310,7 @@ erDiagram
 `(partner_id, tool, payload_digest)` over the open statuses (`mcp_confirmation_status.is_open`) keeps
 one open confirmation per action. Every transition is a conditional update on `status_code`, and a
 run also on `fence`, so a stale executor changes nothing; `lease_until` is set exactly while
-`executing`, from the store clock. `approval_id` names the keel `approval_request` that alone may
+`R` (executing), from the store clock. `approval_id` names the keel `approval_request` that alone may
 decide it; `approval_required` closes the setup window before that link exists. `notification_event_id`
 names the keel outbox notice of an inbox confirmation. `client_ref`
 has no foreign key because the authorization server that issued it may be external. Purging after
@@ -1358,7 +1358,7 @@ erDiagram
         varchar agent_id PK
         varchar agent_type_id FK
         varchar agent_type_version FK
-        varchar state_code FK
+        char state_code FK
         varchar state_reason
         varchar state_changed_by
         timestamp state_changed_at
@@ -1394,7 +1394,7 @@ erDiagram
         bigint parent_work_item_id FK
         smallint depth
         varchar request_id UK
-        varchar status_code FK
+        char status_code FK
     }
 ```
 
@@ -1480,7 +1480,7 @@ erDiagram
         varchar agent_version PK,FK
         varchar knowledge_base_id PK,FK
         varchar knowledge_version FK
-        varchar mode_code
+        char mode_code
         bigint max_whole_tokens
     }
     agent_knowledge_document {
@@ -1493,7 +1493,7 @@ erDiagram
     }
 ```
 
-Relational rows prove tenant and version ownership. Document and chunk content remain external by URI and digest, while `vector_ref` points to the tenant-partitioned vector index. `agent_knowledge_binding.mode_code` selects how a bound version reaches a run: `retrieval` searches it by similarity, `whole` reads the documents `agent_knowledge_document` names — every document of the version when it names none — in full on every run, bounded by `max_whole_tokens`.
+Relational rows prove tenant and version ownership. Document and chunk content remain external by URI and digest, while `vector_ref` points to the tenant-partitioned vector index. `agent_knowledge_binding.mode_code` selects how a bound version reaches a run: `R` (retrieval) searches it by similarity, `W` (whole) reads the documents `agent_knowledge_document` names — every document of the version when it names none — in full on every run, bounded by `max_whole_tokens`. The `knowledge` seed registers the code lists `knowledge_binding_mode` and `knowledge_source_op` as keel constants.
 
 `knowledge_chunk` carries each chunk's source version, offsets, and entitlement labels, which is all a whole read needs. `knowledge_chunk_vector` is the optional PostgreSQL-resident index behind `knowledge.PgVectorIndex`: one row per chunk carrying its embedding, `tsvector`, and a copy of the chunk's entitlement labels — a deliberate denormalization, so entitlement predicates and nearest-neighbor ranking run inside one index scan instead of post-filtering a candidate set. Search joins `knowledge_document_manifest` and keeps only chunks whose knowledge version is still that document's active, untombstoned version, so a superseded generation stops being retrievable the moment the manifest pointer moves — before its rows are collected. It is the only Scout table using `VECTOR` and `TSVECTOR`; deployments on MySQL leave it out and inject a different `contract.KnowledgeVectorIndex`.
 
@@ -1550,14 +1550,14 @@ erDiagram
         varchar knowledge_base_id FK
         varchar object_id
         varchar source_version
-        varchar op_code
+        char op_code
         text entitlements
         timestamp occurred_at
         timestamp acked_at
     }
 ```
 
-`knowledge_document_manifest` names the active version of each document plus its tombstone and garbage-collection flags. Retrieval reads it on every query, so a deleted document disappears at the tombstone and a rebuilt one stops serving its old generation at the pointer swap, both long before any chunk is reclaimed. `knowledge_base_alias` is the compare-and-set pointer that makes a rebuilt knowledge version visible atomically. `knowledge_source_event` is the CDC/outbox row a producer writes inside its own transaction, carrying tenant, object, source version, operation, and authorization attributes so ingestion can poll upstream changes and reconciliation can measure freshness lag from the oldest unacknowledged row.
+`knowledge_document_manifest` names the active version of each document plus its tombstone and garbage-collection flags. Retrieval reads it on every query, so a deleted document disappears at the tombstone and a rebuilt one stops serving its old generation at the pointer swap, both long before any chunk is reclaimed. `knowledge_base_alias` is the compare-and-set pointer that makes a rebuilt knowledge version visible atomically. `knowledge_source_event` is the CDC/outbox row a producer writes inside its own transaction, carrying tenant, object, source version, operation (`op_code` `U` upsert or `D` delete), and authorization attributes so ingestion can poll upstream changes and reconciliation can measure freshness lag from the oldest unacknowledged row.
 
 ## Conversation runtime and metering
 
@@ -1634,13 +1634,13 @@ erDiagram
         varchar conversation_id PK,FK
         bigint turn_no PK
         varchar request_id UK
-        varchar status_code FK
+        char status_code FK
         text input_uri
         text response_uri
         timestamp cancel_requested_at
     }
     turn_status {
-        varchar code PK
+        char code PK
         boolean is_terminal
     }
     conversation_turn_detail {
@@ -1678,7 +1678,7 @@ erDiagram
         bigint partner_id PK,FK
         varchar request_id PK,FK
         bigint execution_step_id PK,FK
-        varchar status_code FK
+        char status_code FK
         text result_uri
     }
     step_loop_entry {
@@ -1690,7 +1690,7 @@ erDiagram
         char entry_digest
     }
     idempotency_status {
-        varchar code PK
+        char code PK
         boolean is_terminal
     }
     budget_reservation {
@@ -1700,7 +1700,7 @@ erDiagram
         varchar principal_kind
         varchar principal_id
         bigint attempt_no
-        varchar status_code FK
+        char status_code FK
         bigint granted_tokens
         bigint granted_cost_minor_units
         char currency_code FK
@@ -1710,7 +1710,7 @@ erDiagram
         timestamp settled_at
     }
     reservation_status {
-        varchar code PK
+        char code PK
         boolean is_terminal
     }
     usage_event {
@@ -1740,7 +1740,7 @@ erDiagram
         varchar agent_version FK
         varchar task_kind
         varchar request_id UK
-        varchar status_code FK
+        char status_code FK
         timestamp completed_at
     }
     turn_queue {
@@ -1756,7 +1756,7 @@ erDiagram
         char input_digest
         text acting_context
         int attempt
-        varchar status_code
+        char status_code
         varchar lease_token
         timestamp lease_until
         timestamp available_at
@@ -1846,10 +1846,10 @@ erDiagram
         varchar platform_version PK,FK
         varchar ring_code PK,FK
         smallint traffic_percentage
-        varchar status_code FK
+        char status_code FK
     }
     rollout_status {
-        varchar code PK
+        char code PK
         boolean is_terminal
     }
     contract_test_case {
@@ -1876,14 +1876,14 @@ erDiagram
         text payload_uri
     }
     rollout_stage {
-        varchar code PK
+        char code PK
         smallint stage_order UK
         boolean is_live
         boolean is_terminal
     }
     platform_rollout_state {
         varchar platform_version PK,FK
-        varchar stage_code FK
+        char stage_code FK
         varchar ring_code FK
         smallint traffic_percentage
         bigint generation
@@ -1900,8 +1900,8 @@ erDiagram
     platform_rollout_transition {
         bigint id PK
         varchar platform_version FK
-        varchar from_stage_code FK
-        varchar to_stage_code FK
+        char from_stage_code FK
+        char to_stage_code FK
         bigint from_generation
         varchar actor
         text reason
@@ -1910,7 +1910,7 @@ erDiagram
     platform_rollout_bypass {
         bigint id PK
         varchar platform_version FK
-        varchar stage_code FK
+        char stage_code FK
         varchar scope
         text reason
         varchar requested_by
@@ -1957,7 +1957,7 @@ erDiagram
         bigint partner_id FK
         varchar agent_id FK
         varchar agent_version FK
-        varchar scope_code
+        char scope_code
         varchar region
         text reason
         varchar owner
@@ -1979,7 +1979,7 @@ erDiagram
     agent_pilot_member {
         bigint partner_id PK,FK
         varchar agent_id PK,FK
-        varchar subject_kind PK
+        char subject_kind PK
         varchar subject_id PK
         timestamp begda PK
         timestamp endda
@@ -2003,7 +2003,7 @@ A conversation carries two independent identities: `agent_conversation.agent_ver
 
 `release_bundle` records what a platform release certifies — model and provider version, tokenizer, runtime, decoding defaults, prompt, embedding and reranker with index generation, tools, safety policy, migration set, residency policy, provenance, compatibility constraints, and rollback target — under a digest and signature. Nothing routes on the bundle; it exists so "roll back to the previous release" names exactly what it restores.
 
-Agent-version and platform-release identity stay separate. `agent_version_pin` holds compliance and tenant pins with effective and expiry dates, owner, approval, and the policy and index versions each pin is compatible with; `experiment_cohort` holds the stable-hash cohort assignment. `agent_pilot_member` serves one release to a listed person (`principal`, a `user_account` id) or a product position (an opaque reference), apart from hash cohorts; it is effective-dated with who added it and why, and a partial unique index keeps one open membership per subject and agent. Resolution precedence is compliance pin, tenant pin, pilot, experiment cohort, then the canary/stable split; a person's own membership wins over a position's, and a release still named by a membership in force is retained by garbage collection. A conversation persists both identities: `agent_conversation.agent_version` for the agent and `conversation_release.platform_version` for the release it was created on, so a rollback changes new assignments only and live conversations drain on what they started with.
+Agent-version and platform-release identity stay separate. `agent_version_pin` holds compliance (`C`) and tenant (`T`) pins with effective and expiry dates, owner, approval, and the policy and index versions each pin is compatible with; `experiment_cohort` holds the stable-hash cohort assignment. `agent_pilot_member` serves one release to a listed person (`subject_kind` `P`, a `user_account` id) or a product position (`O`, an opaque reference), apart from hash cohorts; it is effective-dated with who added it and why, and a partial unique index keeps one open membership per subject and agent. Resolution precedence is compliance pin, tenant pin, pilot, experiment cohort, then the canary/stable split; a person's own membership wins over a position's, and a release still named by a membership in force is retained by garbage collection. A conversation persists both identities: `agent_conversation.agent_version` for the agent and `conversation_release.platform_version` for the release it was created on, so a rollback changes new assignments only and live conversations drain on what they started with.
 
 ### Quality evaluation
 
@@ -2158,7 +2158,7 @@ erDiagram
         varchar golden_set_id FK
         bigint set_version FK
         varchar scope_code
-        varchar status_code
+        char status_code
         bigint lease_token
         timestamp lease_until
         int attempt
@@ -2168,9 +2168,9 @@ erDiagram
     }
     evaluation_run_subject {
         bigint run_id PK,FK
-        varchar role_code PK
+        char role_code PK
         bigint partner_id FK
-        varchar subject_code
+        char subject_code
         varchar agent_id FK
         varchar agent_version FK
         char definition_digest
@@ -2183,7 +2183,7 @@ erDiagram
     evaluation_result {
         bigint run_id PK,FK
         varchar example_id PK,FK
-        varchar role_code PK
+        char role_code PK
         text scores
         int latency_ms
         bigint cost_minor_units
@@ -2200,10 +2200,10 @@ erDiagram
         bigint partner_id FK
         char manifest_id FK
         varchar platform_version FK
-        varchar verdict_code
+        char verdict_code
         int confidence_bp
         text decision_json
-        char signature_hex
+        text signature_hex
         varchar signer_key_id
         timestamp expires_at
         timestamp telemetry_fresh_at
@@ -2306,11 +2306,11 @@ erDiagram
 
 Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
 
-A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `baseline` is arm a and `candidate` arm b. Either arm may be a draft, which `provider_id` and `model_id` may pin to another text model, or a release; arm a may instead be an `evaluation_baseline`, which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
+A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `B` (baseline) is arm a and `C` (candidate) arm b. Either arm may be a draft (`subject_code` `D`), which `provider_id` and `model_id` may pin to another text model, or a release (`R`); arm a may instead be an `evaluation_baseline` (`B`), which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
 
 `agent_gate_decision` is the Studio evaluation gate's verdict on one definition digest of an agent: `P` (pass), `F` (fail), or `O` (override), the canonical gate applied (`policy_json`, `policy_digest`), the active release regression is measured against (`base_version`), and the golden set version decided on. `inputs_digest` lets an evaluation of unchanged inputs replay the decision, and a later decision for the digest replaces it. `agent_gate_decision_run` lists the completed runs it read, role `C` (candidate) for the decided digest and `B` (baseline) for the active release, with each run's score in basis points, sample count, and critical failures.
 
-`human_review_item` is the production review queue: one row per completed turn (`conversation_id`, `turn_no`), sampled (`S`) or rated low (`F`, feedback), keyed to the release that answered. Rows hold references only; turn content stays in object storage, and who rated a turn stays in `turn_feedback`. A reviewer grades (`score` 1 to 5, `verdict_code` `P` (pass) or `F` (fail), `notes`, `expected_behavior`) or dismisses a pending item; `status_code` moves from `P` (pending) to `G` (graded) or `D` (dismissed), and a graded item may be promoted (`M`) into a dev `golden_case`, which names it through `review_item_id`. The `evaluation` seed registers the code lists `gate_decision_verdict`, `gate_decision_run_role`, `review_source`, `review_status`, `review_verdict`, and `evaluation_comparison_verdict` as keel constants.
+`human_review_item` is the production review queue: one row per completed turn (`conversation_id`, `turn_no`), sampled (`S`) or rated low (`F`, feedback), keyed to the release that answered. Rows hold references only; turn content stays in object storage, and who rated a turn stays in `turn_feedback`. A reviewer grades (`score` 1 to 5, `verdict_code` `P` (pass) or `F` (fail), `notes`, `expected_behavior`) or dismisses a pending item; `status_code` moves from `P` (pending) to `G` (graded) or `D` (dismissed), and a graded item may be promoted (`M`) into a dev `golden_case`, which names it through `review_item_id`. The `evaluation` seed registers the code lists `gate_decision_verdict`, `gate_decision_run_role`, `review_source`, `review_status`, `review_verdict`, `evaluation_comparison_verdict`, `evaluation_run_status`, `evaluation_role`, `evaluation_subject`, `golden_scope`, and `rollout_health_verdict` as keel constants.
 
 ## Scout table inventory
 

@@ -23,10 +23,6 @@ const (
 	qStepReplay         = "scout_step_replay"
 	qStepCommit         = "scout_step_commit"
 	qStepAbandon        = "scout_step_abandon"
-
-	stepClaimed   = "claimed"
-	stepCommitted = "committed"
-	stepAbandoned = "abandoned"
 )
 
 // updated_at is written from the injected clock so lease arithmetic never mixes
@@ -39,7 +35,7 @@ SELECT status_code, result_uri, result_digest, updated_at
 
 	qStepClaim: `
 INSERT INTO step_idempotency (partner_id, request_id, execution_step_id, status_code, updated_at)
-VALUES (?, ?, ?, 'claimed', ?)
+VALUES (?, ?, ?, ` + sqlStepClaimed + `, ?)
 ON CONFLICT DO NOTHING
 RETURNING status_code`,
 
@@ -47,28 +43,28 @@ RETURNING status_code`,
 UPDATE step_idempotency
    SET updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = 'claimed' AND updated_at <= ?
+   AND status_code = ` + sqlStepClaimed + ` AND updated_at <= ?
 RETURNING status_code`,
 
 	qStepReplay: `
 UPDATE step_idempotency
-   SET status_code = 'claimed', updated_at = ?
+   SET status_code = ` + sqlStepClaimed + `, updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = 'abandoned'
+   AND status_code = ` + sqlStepAbandoned + `
 RETURNING status_code`,
 
 	qStepCommit: `
 UPDATE step_idempotency
-   SET status_code = 'committed', result_uri = ?, result_digest = ?, updated_at = ?
+   SET status_code = ` + sqlStepCommitted + `, result_uri = ?, result_digest = ?, updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = 'claimed'
+   AND status_code = ` + sqlStepClaimed + `
 RETURNING status_code`,
 
 	qStepAbandon: `
 UPDATE step_idempotency
-   SET status_code = 'abandoned', updated_at = ?
+   SET status_code = ` + sqlStepAbandoned + `, updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = 'claimed'
+   AND status_code = ` + sqlStepClaimed + `
 RETURNING status_code`,
 }
 
@@ -88,7 +84,7 @@ type StepIdempotencyStore struct {
 }
 
 type stepClaim struct {
-	status    string
+	status    domain.StepIdempotencyStatus
 	result    domain.ObjectRef
 	updatedAt time.Time
 }
@@ -128,7 +124,7 @@ func (store *StepIdempotencyStore) find(ctx context.Context, tenantID int64, req
 		return stepClaim{}, false, fmt.Errorf("decode step claim: expected 4 columns, got %d", len(row))
 	}
 	claim := stepClaim{
-		status: common.AsString(row[0]),
+		status: domain.StepIdempotencyStatus(common.AsString(row[0])),
 		result: domain.ObjectRef{URI: common.AsString(row[1]), Digest: common.AsString(row[2])},
 	}
 	claim.updatedAt, _ = common.AsTimeOK(row[3])
@@ -150,17 +146,17 @@ func (store *StepIdempotencyStore) Begin(ctx context.Context, tenantID int64, re
 	switch {
 	case !found:
 		applied, err = store.transition(ctx, qStepClaim, tenantID, requestID, step.ExecutionStepID, now)
-	case claim.status == stepCommitted:
+	case claim.status == domain.StepCommitted:
 		result, err := store.replay(ctx, claim.result)
 		if err != nil {
 			return domain.StepResult{}, false, fmt.Errorf("replay step %d of %q: %w", step.ExecutionStepID, requestID, err)
 		}
 		return result, true, nil
-	case claim.status == stepClaimed && claim.updatedAt.Add(store.ClaimLease).After(now):
+	case claim.status == domain.StepClaimed && claim.updatedAt.Add(store.ClaimLease).After(now):
 		return domain.StepResult{}, false, fmt.Errorf("%w: step %d of %q is claimed until %s", domain.ErrConflict, step.ExecutionStepID, requestID, claim.updatedAt.Add(store.ClaimLease).Format(time.RFC3339))
-	case claim.status == stepClaimed:
+	case claim.status == domain.StepClaimed:
 		applied, err = store.transition(ctx, qStepReclaimExpired, now, tenantID, requestID, step.ExecutionStepID, now.Add(-store.ClaimLease))
-	case claim.status == stepAbandoned:
+	case claim.status == domain.StepAbandoned:
 		applied, err = store.transition(ctx, qStepReplay, now, tenantID, requestID, step.ExecutionStepID)
 	default:
 		return domain.StepResult{}, false, fmt.Errorf("%w: unknown idempotency status %q", domain.ErrConflict, claim.status)
@@ -216,7 +212,7 @@ func (store *StepIdempotencyStore) Abandon(ctx context.Context, tenantID int64, 
 		return err
 	case !found:
 		return fmt.Errorf("%w: step %d of %q was never claimed", domain.ErrNotFound, step.ExecutionStepID, requestID)
-	case claim.status == stepAbandoned:
+	case claim.status == domain.StepAbandoned:
 		return nil
 	default:
 		return fmt.Errorf("%w: step %d of %q is %s", domain.ErrConflict, step.ExecutionStepID, requestID, claim.status)
@@ -250,7 +246,7 @@ func (store *StepIdempotencyStore) discardUnlessReferenced(ctx context.Context, 
 	if err != nil {
 		return errors.Join(cause, err)
 	}
-	if found && claim.status == stepCommitted && claim.result.Digest == ref.Digest {
+	if found && claim.status == domain.StepCommitted && claim.result.Digest == ref.Digest {
 		if errors.Is(cause, domain.ErrConflict) {
 			return nil
 		}

@@ -10,7 +10,7 @@ columns:
   - name: agent_version
     type: VARCHAR(80)
   - name: scope_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: region
     type: VARCHAR(30)
     nullable: true
@@ -53,6 +53,6 @@ indexes:
     columns: [partner_id, agent_id, scope_code, effective_at]
 checks:
   - name: agent_version_pin_scope_ck
-    expression: scope_code IN ('compliance', 'tenant')
+    expression: scope_code IN ('C', 'T')
   - name: agent_version_pin_dates_ck
     expression: expires_at IS NULL OR expires_at > effective_at

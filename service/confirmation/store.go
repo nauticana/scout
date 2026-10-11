@@ -62,9 +62,21 @@ const confirmationColumns = `id, partner_id, maker_kind, maker_id, COALESCE(clie
        expires_at, created_at, decided_at, COALESCE(decider_kind, ''), COALESCE(decider_id, ''),
        COALESCE(decision_note, ''), fence, attempts, COALESCE(result, ''), COALESCE(error_text, ''), completed_at,
        COALESCE(reconciler_kind, ''), COALESCE(reconciler_id, ''), COALESCE(reconcile_note, ''),
-       (status_code = 'pending' AND expires_at <= CURRENT_TIMESTAMP)`
+       (status_code = ` + sqlConfirmPending + ` AND expires_at <= CURRENT_TIMESTAMP)`
 
-const openStatuses = `('pending', 'approved', 'executing', 'unknown')`
+const (
+	sqlConfirmPending   = "'" + string(domain.MCPConfirmationPending) + "'"
+	sqlConfirmApproved  = "'" + string(domain.MCPConfirmationApproved) + "'"
+	sqlConfirmExecuting = "'" + string(domain.MCPConfirmationExecuting) + "'"
+	sqlConfirmUnknown   = "'" + string(domain.MCPConfirmationUnknown) + "'"
+	sqlConfirmFailed    = "'" + string(domain.MCPConfirmationFailed) + "'"
+	sqlConfirmWithdrawn = "'" + string(domain.MCPConfirmationWithdrawn) + "'"
+	sqlConfirmExpired   = "'" + string(domain.MCPConfirmationExpired) + "'"
+	openStatuses        = "(" + sqlConfirmPending + ", " + sqlConfirmApproved + ", " + sqlConfirmExecuting + ", " + sqlConfirmUnknown + ")"
+	sqlConfirmExecuted  = "'" + string(domain.MCPConfirmationExecuted) + "'"
+	sqlConfirmDeclined  = "'" + string(domain.MCPConfirmationDeclined) + "'"
+	settledStatuses     = "(" + sqlConfirmExecuted + ", " + sqlConfirmFailed + ", " + sqlConfirmDeclined + ", " + sqlConfirmWithdrawn + ", " + sqlConfirmExpired + ")"
+)
 
 // Every transition is a conditional update on the current status and, while
 // running, the fence, so a stale caller changes nothing. Times come from the
@@ -86,17 +98,17 @@ UPDATE mcp_confirmation SET notification_event_id = ?
  WHERE partner_id = ? AND id = ? AND notification_event_id IS NULL`,
 	qConfirmAttach: `
 UPDATE mcp_confirmation SET approval_id = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'pending' AND approval_required AND approval_id IS NULL
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlConfirmPending + ` AND approval_required AND approval_id IS NULL
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING id`,
 	qConfirmAbandon: `
-UPDATE mcp_confirmation SET status_code = 'failed', error_text = ?, completed_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND id = ? AND status_code = 'pending'
+UPDATE mcp_confirmation SET status_code = ` + sqlConfirmFailed + `, error_text = ?, completed_at = CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlConfirmPending + `
 RETURNING id`,
 	qConfirmDecide: `
 UPDATE mcp_confirmation
    SET status_code = ?, decided_at = CURRENT_TIMESTAMP, decider_kind = ?, decider_id = ?, decision_note = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'pending' AND approval_id IS NULL
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlConfirmPending + ` AND approval_id IS NULL
    AND NOT approval_required
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING id`,
@@ -104,60 +116,60 @@ RETURNING id`,
 	qConfirmDecideApproval: `
 UPDATE mcp_confirmation
    SET status_code = ?, decided_at = CURRENT_TIMESTAMP, decider_kind = ?, decider_id = ?, decision_note = ?
- WHERE partner_id = ? AND id = ? AND approval_id = ? AND status_code = 'pending'
+ WHERE partner_id = ? AND id = ? AND approval_id = ? AND status_code = ` + sqlConfirmPending + `
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING id`,
 	qConfirmWithdraw: `
 UPDATE mcp_confirmation
-   SET status_code = 'withdrawn', decided_at = CURRENT_TIMESTAMP, decider_kind = maker_kind, decider_id = maker_id
- WHERE partner_id = ? AND id = ? AND maker_kind = ? AND maker_id = ? AND status_code = 'pending'
+   SET status_code = ` + sqlConfirmWithdrawn + `, decided_at = CURRENT_TIMESTAMP, decider_kind = maker_kind, decider_id = maker_id
+ WHERE partner_id = ? AND id = ? AND maker_kind = ? AND maker_id = ? AND status_code = ` + sqlConfirmPending + `
 RETURNING COALESCE(approval_id, 0)`,
 	qConfirmApproved: `
 SELECT partner_id, id FROM mcp_confirmation
- WHERE status_code = 'approved'
+ WHERE status_code = ` + sqlConfirmApproved + `
  ORDER BY decided_at, id
  LIMIT ?`,
 	qConfirmClaim: `
 UPDATE mcp_confirmation
-   SET status_code = 'executing', fence = fence + 1, attempts = attempts + 1,
+   SET status_code = ` + sqlConfirmExecuting + `, fence = fence + 1, attempts = attempts + 1,
        lease_until = CURRENT_TIMESTAMP + CAST(? AS INTEGER) * INTERVAL '1 second'
- WHERE partner_id = ? AND id = ? AND status_code = 'approved'
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlConfirmApproved + `
 RETURNING fence`,
 	qConfirmRenew: `
 UPDATE mcp_confirmation SET lease_until = CURRENT_TIMESTAMP + CAST(? AS INTEGER) * INTERVAL '1 second'
- WHERE partner_id = ? AND id = ? AND fence = ? AND status_code = 'executing'
+ WHERE partner_id = ? AND id = ? AND fence = ? AND status_code = ` + sqlConfirmExecuting + `
 RETURNING id`,
 	qConfirmComplete: `
 UPDATE mcp_confirmation
    SET status_code = ?, result = ?, error_text = ?, lease_until = NULL,
-       completed_at = CASE WHEN ? = 'unknown' THEN NULL ELSE CURRENT_TIMESTAMP END
- WHERE partner_id = ? AND id = ? AND fence = ? AND status_code = 'executing'
+       completed_at = CASE WHEN ? = ` + sqlConfirmUnknown + ` THEN NULL ELSE CURRENT_TIMESTAMP END
+ WHERE partner_id = ? AND id = ? AND fence = ? AND status_code = ` + sqlConfirmExecuting + `
 RETURNING id`,
 	qConfirmLapse: `
 UPDATE mcp_confirmation
-   SET status_code = 'unknown', lease_until = NULL,
+   SET status_code = ` + sqlConfirmUnknown + `, lease_until = NULL,
        error_text = 'The run lost its claim before reporting an outcome; reconcile it.'
  WHERE id IN (SELECT id FROM mcp_confirmation
-               WHERE status_code = 'executing' AND lease_until <= CURRENT_TIMESTAMP
+               WHERE status_code = ` + sqlConfirmExecuting + ` AND lease_until <= CURRENT_TIMESTAMP
                ORDER BY lease_until, id LIMIT ? FOR UPDATE SKIP LOCKED)
 RETURNING id`,
 	qConfirmExpire: `
-UPDATE mcp_confirmation SET status_code = 'expired', decided_at = CURRENT_TIMESTAMP
+UPDATE mcp_confirmation SET status_code = ` + sqlConfirmExpired + `, decided_at = CURRENT_TIMESTAMP
  WHERE id IN (SELECT id FROM mcp_confirmation
-               WHERE status_code = 'pending' AND expires_at <= CURRENT_TIMESTAMP
+               WHERE status_code = ` + sqlConfirmPending + ` AND expires_at <= CURRENT_TIMESTAMP
                ORDER BY expires_at, id LIMIT ? FOR UPDATE SKIP LOCKED)
 RETURNING id, partner_id, maker_kind, maker_id, tool, COALESCE(approval_id, 0)`,
 	qConfirmReconcile: `
 UPDATE mcp_confirmation
    SET status_code = ?, reconciled_at = CURRENT_TIMESTAMP, reconciler_kind = ?, reconciler_id = ?,
        reconcile_note = ?, completed_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND id = ? AND status_code = 'unknown'
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlConfirmUnknown + `
 RETURNING id`,
 	// The digest and the decision evidence outlive the payload.
 	qConfirmPurge: `
 UPDATE mcp_confirmation SET payload = NULL, preview = NULL, result = NULL, purged_at = CURRENT_TIMESTAMP
  WHERE id IN (SELECT id FROM mcp_confirmation
-               WHERE status_code IN ('executed', 'failed', 'declined', 'withdrawn', 'expired') AND purged_at IS NULL
+               WHERE status_code IN ` + settledStatuses + ` AND purged_at IS NULL
                  AND COALESCE(completed_at, decided_at, created_at) < CURRENT_TIMESTAMP - CAST(? AS INTEGER) * INTERVAL '1 second'
                ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED)
 RETURNING id`,

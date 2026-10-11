@@ -60,7 +60,7 @@ func TestTableTurnRecordStoreDetectsReusedRequestID(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
 		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
 		qRecordOpen:        nil,
-		qRecordFind:        {{int64(4), "conversation-1", "queued", testDigest("other"), nil, nil}},
+		qRecordFind:        {{int64(4), "conversation-1", string(domain.TurnQueued), testDigest("other"), nil, nil}},
 	}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
@@ -77,12 +77,12 @@ func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordFind: {{int64(4), "conversation-1", "completed", testDigest("input"), ref.URI, ref.Digest}},
+		qRecordFind: {{int64(4), "conversation-1", string(domain.TurnCompleted), testDigest("input"), ref.URI, ref.Digest}},
 	}}
 	store := newTestRecordStore(query)
 	store.Objects = codec
 	turnNo, status, payload, err := store.Find(context.Background(), 7, "request-1")
-	if err != nil || turnNo != 4 || status != "completed" || string(payload) != "answer" {
+	if err != nil || turnNo != 4 || status != domain.TurnCompleted || string(payload) != "answer" {
 		t.Fatalf("turn = %d, status = %q, payload = %q, error = %v", turnNo, status, payload, err)
 	}
 	query.rows[qRecordFind] = nil
@@ -94,14 +94,14 @@ func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
 func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{qRecordFail: {{int64(4)}}, qLedgerInsertUsageEvent: {{int64(1)}}}}
 	store := newTestRecordStore(query)
-	if err := store.Fail(context.Background(), 7, "request-1", "failed", "dispatch_failed"); err != nil {
+	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnFailed, "dispatch_failed"); err != nil {
 		t.Fatal(err)
 	}
 	failArgs := query.firstArgs(qRecordFail)
-	if len(failArgs) != 6 || failArgs[0] != "failed" || failArgs[3] != int64(7) || failArgs[4] != "request-1" || failArgs[5] != "dispatch_failed" {
+	if len(failArgs) != 6 || failArgs[0] != string(domain.TurnFailed) || failArgs[3] != int64(7) || failArgs[4] != "request-1" || failArgs[5] != "dispatch_failed" {
 		t.Fatalf("fail args = %v", failArgs)
 	}
-	if err := store.Fail(context.Background(), 7, "request-1", "completed", "x"); !errors.Is(err, domain.ErrValidation) {
+	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnCompleted, "x"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}
 	usage := domain.Usage{InputTokens: 3, OutputTokens: 5, ToolCalls: 1, SearchQueries: 6, CostMinorUnits: 2, Currency: "USD"}
@@ -291,11 +291,11 @@ func TestTableTurnRecordStoreLateFailKeepsTheTerminalPayload(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{}}
 	store := newTestRecordStore(query)
 	store.Objects = &ObjectStateStore{Storage: storage, MaxBytes: 1 << 20}
-	if err := store.Fail(context.Background(), 7, "request-1", "failed", "model_error"); !errors.Is(err, domain.ErrConflict) {
+	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnFailed, "model_error"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("late fail = %v, want conflict", err)
 	}
 	first := query.firstArgs(qRecordFail)
-	if err := store.Fail(context.Background(), 7, "request-1", "failed", "rejected"); !errors.Is(err, domain.ErrConflict) {
+	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnFailed, "rejected"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("second late fail = %v, want conflict", err)
 	}
 	second := query.args[qRecordFail][1]

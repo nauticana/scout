@@ -26,11 +26,11 @@ var pilotResolverQueries = map[string]string{
 SELECT m.subject_kind, m.subject_id, m.agent_version, m.reason, m.added_by_kind, m.added_by_id, m.begda, m.endda
   FROM agent_pilot_member m
  WHERE m.partner_id = ? AND m.agent_id = ? AND m.begda <= ? AND (m.endda IS NULL OR m.endda > ?)
-   AND ((m.subject_kind = 'principal' AND m.subject_id = ?) OR m.subject_kind = 'position')
+   AND ((m.subject_kind = '` + string(domain.PilotPrincipal) + `' AND m.subject_id = ?) OR m.subject_kind = '` + string(domain.PilotPosition) + `')
    AND NOT EXISTS (SELECT 1 FROM agent_version_quarantine q
                     WHERE q.partner_id = m.partner_id AND q.agent_id = m.agent_id
                       AND q.agent_version = m.agent_version AND q.lifted_at IS NULL)
- ORDER BY CASE m.subject_kind WHEN 'principal' THEN 0 ELSE 1 END, m.begda DESC, m.subject_id`,
+ ORDER BY CASE m.subject_kind WHEN '` + string(domain.PilotPrincipal) + `' THEN 0 ELSE 1 END, m.begda DESC, m.subject_id`,
 }
 
 // TablePilotResolver reads agent_pilot_member. A person's own membership wins; otherwise the

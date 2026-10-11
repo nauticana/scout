@@ -36,7 +36,7 @@ func newTemplateHarness(t *testing.T) *templateHarness {
 		qStudioLockType:     {{"writer"}},
 		qStudioTypeCensus:   {{int64(0), int64(0)}},
 		qStudioCreateRecord: {{"writer-00000000000000000000"}},
-		qStudioListAgents:   {{"writer-00000000000000000000", "writer", "From template", "draft", false, int64(1), int64(0), false, nil, nil, nil}},
+		qStudioListAgents:   {{"writer-00000000000000000000", "writer", "From template", string(domain.AgentStateDraft), false, int64(1), int64(0), false, nil, nil, nil}},
 	})
 	h.db.byArgs[qSeedKnowledgeOwned] = func(args []any) ([][]any, bool) {
 		if args[0] == int64(8) {

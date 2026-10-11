@@ -150,8 +150,8 @@ func TestRingPlatformReleaseResolverPrefersRingStage(t *testing.T) {
 	query := newQueryFake(map[string][][]any{
 		qTenantRingOrder: {{int64(2)}},
 		qLiveReleaseCandidates: {
-			{"2026.08.1", "tenant_canary", int64(100), int64(2)},
-			{"2026.07.9", "global_default", int64(100), int64(0)},
+			{"2026.08.1", string(domain.StageTenantCanary), int64(100), int64(2)},
+			{"2026.07.9", string(domain.StageGlobalDefault), int64(100), int64(0)},
 		},
 	})
 	resolver := &RingPlatformReleaseResolver{DB: dbFake{query: query}}

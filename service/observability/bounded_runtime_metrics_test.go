@@ -58,7 +58,7 @@ func TestBoundedRuntimeMetricsNeverLabelsTenantIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := domain.TurnRequest{TenantContext: domain.TenantContext{TenantID: 42, Tier: "gold", PriorityClass: "interactive", Region: "eu"}, RequestID: "req-1", ConversationID: "conv-1"}
+	request := domain.TurnRequest{TenantContext: domain.TenantContext{TenantID: 42, Tier: "gold", PriorityClass: domain.PriorityInteractive, Region: "eu"}, RequestID: "req-1", ConversationID: "conv-1"}
 	result := domain.TurnResult{AgentVersion: "a7", Usage: domain.Usage{InputTokens: 10, OutputTokens: 5, ToolCalls: 1, CostMinorUnits: 30, Currency: "USD"}}
 	metrics.RecordTurn(context.Background(), request, result, nil)
 
@@ -76,7 +76,7 @@ func TestBoundedRuntimeMetricsNeverLabelsTenantIdentity(t *testing.T) {
 		}
 	}
 	outcomes := sink.named(MetricTurnOutcomes)
-	if len(outcomes) != 1 || outcomes[0].labels[LabelTenantTier] != "gold" || outcomes[0].labels[LabelPriorityClass] != "interactive" ||
+	if len(outcomes) != 1 || outcomes[0].labels[LabelTenantTier] != "gold" || outcomes[0].labels[LabelPriorityClass] != string(domain.PriorityInteractive) ||
 		outcomes[0].labels[LabelRegion] != "eu" || outcomes[0].labels[LabelRelease] != "v1.2.3" || outcomes[0].labels[LabelOutcome] != "ok" || outcomes[0].labels[LabelStage] != StageTurn {
 		t.Fatalf("turn outcomes = %+v", outcomes)
 	}

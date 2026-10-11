@@ -28,7 +28,7 @@ func newStepStore(query *persistenceQueryFake, storage *fake.ObjectStorage) *Ste
 }
 
 func TestStepIdempotencyStoreBeginClaimsUnknownStep(t *testing.T) {
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepClaim: {{"claimed"}}}}
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepClaim: {{string(domain.StepClaimed)}}}}
 	result, replayed, err := newStepStore(query, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep)
 	if err != nil || replayed || !reflect.DeepEqual(result, domain.StepResult{}) {
 		t.Fatalf("begin = %+v, %v, %v", result, replayed, err)
@@ -56,7 +56,7 @@ func TestStepIdempotencyStoreBeginReplaysCommittedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"committed", ref.URI, ref.Digest, stepNow.Add(-time.Hour)}}}}
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), ref.URI, ref.Digest, stepNow.Add(-time.Hour)}}}}
 	result, replayed, err := newStepStore(query, storage).Begin(context.Background(), 7, "req", testStep)
 	if err != nil || !replayed || !reflect.DeepEqual(result, want) {
 		t.Fatalf("replay = %+v, %v, %v", result, replayed, err)
@@ -72,7 +72,7 @@ func TestStepIdempotencyStoreBeginReplaysCommittedResult(t *testing.T) {
 }
 
 func TestStepIdempotencyStoreBeginLeaseAndReplayTransitions(t *testing.T) {
-	fresh := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"claimed", nil, nil, stepNow.Add(-stepLease / 2)}}}}
+	fresh := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepClaimed), nil, nil, stepNow.Add(-stepLease / 2)}}}}
 	if _, _, err := newStepStore(fresh, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("live claim = %v", err)
 	}
@@ -81,8 +81,8 @@ func TestStepIdempotencyStoreBeginLeaseAndReplayTransitions(t *testing.T) {
 	}
 
 	expired := &persistenceQueryFake{rows: map[string][][]any{
-		qStepFind:           {{"claimed", nil, nil, stepNow.Add(-stepLease)}},
-		qStepReclaimExpired: {{"claimed"}},
+		qStepFind:           {{string(domain.StepClaimed), nil, nil, stepNow.Add(-stepLease)}},
+		qStepReclaimExpired: {{string(domain.StepClaimed)}},
 	}}
 	if _, replayed, err := newStepStore(expired, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); err != nil || replayed {
 		t.Fatalf("expired = %v, %v", replayed, err)
@@ -90,14 +90,14 @@ func TestStepIdempotencyStoreBeginLeaseAndReplayTransitions(t *testing.T) {
 	if args := expired.lastArgs(qStepReclaimExpired); !reflect.DeepEqual(args, []any{stepNow, int64(7), "req", int64(91), stepNow.Add(-stepLease)}) {
 		t.Fatalf("reclaim args = %v", args)
 	}
-	lostReclaim := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"claimed", nil, nil, stepNow.Add(-stepLease)}}}}
+	lostReclaim := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepClaimed), nil, nil, stepNow.Add(-stepLease)}}}}
 	if _, _, err := newStepStore(lostReclaim, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("lost reclaim = %v", err)
 	}
 
 	abandoned := &persistenceQueryFake{rows: map[string][][]any{
-		qStepFind:   {{"abandoned", nil, nil, stepNow.Add(-time.Second)}},
-		qStepReplay: {{"claimed"}},
+		qStepFind:   {{string(domain.StepAbandoned), nil, nil, stepNow.Add(-time.Second)}},
+		qStepReplay: {{string(domain.StepClaimed)}},
 	}}
 	if _, replayed, err := newStepStore(abandoned, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); err != nil || replayed {
 		t.Fatalf("abandoned = %v, %v", replayed, err)
@@ -109,7 +109,7 @@ func TestStepIdempotencyStoreBeginLeaseAndReplayTransitions(t *testing.T) {
 
 func TestStepIdempotencyStoreCommitBindsResultAndTolerantOfDuplicates(t *testing.T) {
 	storage := &fake.ObjectStorage{}
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepCommit: {{"committed"}}}}
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepCommit: {{string(domain.StepCommitted)}}}}
 	result := domain.StepResult{State: []byte("s"), NextStepID: "n", Fingerprint: testFingerprint}
 	if err := newStepStore(query, storage).Commit(context.Background(), 7, "req", testStep, result); err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestStepIdempotencyStoreCommitBindsResultAndTolerantOfDuplicates(t *testing
 		t.Fatalf("commit args = %v", args)
 	}
 	// Duplicate delivery of the same result is a no-op and keeps the object.
-	duplicate := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"committed", uri, digest, stepNow}}}}
+	duplicate := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), uri, digest, stepNow}}}}
 	if err := newStepStore(duplicate, storage).Commit(context.Background(), 7, "req", testStep, result); err != nil {
 		t.Fatalf("duplicate = %v", err)
 	}
@@ -129,7 +129,7 @@ func TestStepIdempotencyStoreCommitBindsResultAndTolerantOfDuplicates(t *testing
 		t.Fatalf("duplicate deleted the shared object: %v", storage.Deletes)
 	}
 	// A lost claim (another worker committed different content) is a conflict; our orphan goes.
-	lost := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"committed", "scout://sessions/other", testFingerprint, stepNow}}}}
+	lost := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), "scout://sessions/other", testFingerprint, stepNow}}}}
 	other := &fake.ObjectStorage{}
 	if err := newStepStore(lost, other).Commit(context.Background(), 7, "req", testStep, result); !errors.Is(err, domain.ErrConflict) || len(other.Deletes) != 1 {
 		t.Fatalf("lost = %v, deletes = %v", err, other.Deletes)
@@ -137,18 +137,18 @@ func TestStepIdempotencyStoreCommitBindsResultAndTolerantOfDuplicates(t *testing
 }
 
 func TestStepIdempotencyStoreAbandon(t *testing.T) {
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepAbandon: {{"abandoned"}}}}
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepAbandon: {{string(domain.StepAbandoned)}}}}
 	if err := newStepStore(query, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); err != nil {
 		t.Fatal(err)
 	}
 	if args := query.lastArgs(qStepAbandon); !reflect.DeepEqual(args, []any{stepNow, int64(7), "req", int64(91)}) {
 		t.Fatalf("abandon args = %v", args)
 	}
-	twice := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"abandoned", nil, nil, stepNow}}}}
+	twice := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepAbandoned), nil, nil, stepNow}}}}
 	if err := newStepStore(twice, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); err != nil {
 		t.Fatalf("second abandon = %v", err)
 	}
-	committed := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{"committed", "u", testFingerprint, stepNow}}}}
+	committed := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), "u", testFingerprint, stepNow}}}}
 	if err := newStepStore(committed, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("committed abandon = %v", err)
 	}
@@ -196,28 +196,28 @@ func (table *stepTableFake) Query(_ context.Context, name string, args ...any) (
 		}
 	case qStepClaim:
 		if table.rows[key(0)] == nil {
-			table.rows[key(0)] = &stepRow{status: "claimed", updatedAt: args[3].(time.Time)}
-			return &keelmodel.QueryResult{Rows: [][]any{{"claimed"}}}, nil
+			table.rows[key(0)] = &stepRow{status: string(domain.StepClaimed), updatedAt: args[3].(time.Time)}
+			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepClaimed)}}}, nil
 		}
 	case qStepReclaimExpired:
-		if row := table.rows[key(1)]; row != nil && row.status == "claimed" && !row.updatedAt.After(args[4].(time.Time)) {
+		if row := table.rows[key(1)]; row != nil && row.status == string(domain.StepClaimed) && !row.updatedAt.After(args[4].(time.Time)) {
 			row.updatedAt = args[0].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{"claimed"}}}, nil
+			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepClaimed)}}}, nil
 		}
 	case qStepReplay:
-		if row := table.rows[key(1)]; row != nil && row.status == "abandoned" {
-			row.status, row.updatedAt = "claimed", args[0].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{"claimed"}}}, nil
+		if row := table.rows[key(1)]; row != nil && row.status == string(domain.StepAbandoned) {
+			row.status, row.updatedAt = string(domain.StepClaimed), args[0].(time.Time)
+			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepClaimed)}}}, nil
 		}
 	case qStepCommit:
-		if row := table.rows[key(3)]; row != nil && row.status == "claimed" {
-			row.status, row.uri, row.digest, row.updatedAt = "committed", args[0].(string), args[1].(string), args[2].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{"committed"}}}, nil
+		if row := table.rows[key(3)]; row != nil && row.status == string(domain.StepClaimed) {
+			row.status, row.uri, row.digest, row.updatedAt = string(domain.StepCommitted), args[0].(string), args[1].(string), args[2].(time.Time)
+			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepCommitted)}}}, nil
 		}
 	case qStepAbandon:
-		if row := table.rows[key(1)]; row != nil && row.status == "claimed" {
-			row.status, row.updatedAt = "abandoned", args[0].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{"abandoned"}}}, nil
+		if row := table.rows[key(1)]; row != nil && row.status == string(domain.StepClaimed) {
+			row.status, row.updatedAt = string(domain.StepAbandoned), args[0].(time.Time)
+			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepAbandoned)}}}, nil
 		}
 	}
 	return &keelmodel.QueryResult{}, nil

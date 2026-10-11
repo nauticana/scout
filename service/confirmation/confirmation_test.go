@@ -422,12 +422,12 @@ func TestToolResultAsksOnlyTheMakerInTheirClient(t *testing.T) {
 		}
 	}
 	data := asked.Data.(map[string]any)
-	if data["approval_url"] == nil || data["status"] != "pending" || data["result"] != nil {
+	if data["approval_url"] == nil || data["status"] != string(domain.MCPConfirmationPending) || data["result"] != nil {
 		t.Fatalf("pending data: %+v", data)
 	}
 	expired := pending
 	expired.Expired = true
-	if result := ToolResult(expired, maker, "client-a", "Publish home", "u"); result.Elicit != nil || result.Data.(map[string]any)["status"] != "expired" {
+	if result := ToolResult(expired, maker, "client-a", "Publish home", "u"); result.Elicit != nil || result.Data.(map[string]any)["status"] != string(domain.MCPConfirmationExpired) {
 		t.Fatalf("an expired confirmation is reported, not asked: %+v", result)
 	}
 }

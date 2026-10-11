@@ -45,7 +45,7 @@ SELECT status.is_terminal, CURRENT_TIMESTAMP
 SELECT reservation_id, request_id, status_code, granted_tokens,
        granted_cost_minor_units, currency_code, expires_at,
        settled_tokens, settled_cost_minor_units, attempt_no,
-       status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
+       status_code = ` + sqlReservationHeld + ` AND expires_at <= CURRENT_TIMESTAMP
   FROM budget_reservation
  WHERE partner_id = ? AND request_id = ?
  ORDER BY attempt_no DESC
@@ -54,48 +54,48 @@ SELECT reservation_id, request_id, status_code, granted_tokens,
 SELECT reservation_id, request_id, status_code, granted_tokens,
        granted_cost_minor_units, currency_code, expires_at,
        settled_tokens, settled_cost_minor_units, attempt_no,
-       status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
+       status_code = ` + sqlReservationHeld + ` AND expires_at <= CURRENT_TIMESTAMP
   FROM budget_reservation
  WHERE partner_id = ? AND reservation_id = ?`,
 	qReserveBudget: `
 INSERT INTO budget_reservation (partner_id, reservation_id, request_id, principal_kind, principal_id, attempt_no, status_code,
                                 granted_tokens, granted_cost_minor_units, currency_code, expires_at)
-SELECT ?, ?, ?, ?, ?, ?, 'held', ?, ?, ?, CURRENT_TIMESTAMP + make_interval(secs => ?)
- WHERE (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_tokens ELSE settled_tokens END), 0)
+SELECT ?, ?, ?, ?, ?, ?, ` + sqlReservationHeld + `, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(secs => ?)
+ WHERE (SELECT COALESCE(SUM(CASE WHEN status_code = ` + sqlReservationHeld + ` THEN granted_tokens ELSE settled_tokens END), 0)
           FROM budget_reservation
          WHERE partner_id = ?
-           AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
-             OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
-   AND (SELECT COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_cost_minor_units ELSE settled_cost_minor_units END), 0)
+           AND (status_code = ` + sqlReservationHeld + ` AND expires_at > CURRENT_TIMESTAMP
+             OR status_code = ` + sqlReservationSettled + ` AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
+   AND (SELECT COALESCE(SUM(CASE WHEN status_code = ` + sqlReservationHeld + ` THEN granted_cost_minor_units ELSE settled_cost_minor_units END), 0)
           FROM budget_reservation
          WHERE partner_id = ?
            AND currency_code = ?
-           AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
-             OR status_code = 'settled' AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
+           AND (status_code = ` + sqlReservationHeld + ` AND expires_at > CURRENT_TIMESTAMP
+             OR status_code = ` + sqlReservationSettled + ` AND settled_at > CURRENT_TIMESTAMP - make_interval(secs => ?))) + ? <= ?
 RETURNING reservation_id, expires_at`,
 	qSettleBudget: `
 UPDATE budget_reservation
-   SET status_code = 'settled', settled_at = CURRENT_TIMESTAMP, settled_tokens = ?, settled_cost_minor_units = ?
- WHERE partner_id = ? AND reservation_id = ? AND status_code = 'held'
+   SET status_code = ` + sqlReservationSettled + `, settled_at = CURRENT_TIMESTAMP, settled_tokens = ?, settled_cost_minor_units = ?
+ WHERE partner_id = ? AND reservation_id = ? AND status_code = ` + sqlReservationHeld + `
    AND expires_at > CURRENT_TIMESTAMP
 RETURNING reservation_id`,
 	qReleaseBudget: `
 UPDATE budget_reservation
-   SET status_code = 'released', settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
- WHERE partner_id = ? AND reservation_id = ? AND status_code = 'held'
+   SET status_code = ` + sqlReservationReleased + `, settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
+ WHERE partner_id = ? AND reservation_id = ? AND status_code = ` + sqlReservationHeld + `
 RETURNING reservation_id`,
 	qExpireOneBudget: `
 UPDATE budget_reservation
-   SET status_code = 'expired', settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
- WHERE partner_id = ? AND reservation_id = ? AND status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
+   SET status_code = ` + sqlReservationExpired + `, settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
+ WHERE partner_id = ? AND reservation_id = ? AND status_code = ` + sqlReservationHeld + ` AND expires_at <= CURRENT_TIMESTAMP
 RETURNING reservation_id`,
 	qExpireBudget: `
 UPDATE budget_reservation
-   SET status_code = 'expired', settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
- WHERE status_code = 'held'
+   SET status_code = ` + sqlReservationExpired + `, settled_at = CURRENT_TIMESTAMP, settled_tokens = 0, settled_cost_minor_units = 0
+ WHERE status_code = ` + sqlReservationHeld + `
    AND (partner_id, reservation_id) IN (SELECT partner_id, reservation_id
                                          FROM budget_reservation
-                                        WHERE status_code = 'held' AND expires_at <= CURRENT_TIMESTAMP
+                                        WHERE status_code = ` + sqlReservationHeld + ` AND expires_at <= CURRENT_TIMESTAMP
                                         ORDER BY expires_at
                                         LIMIT ?
                                           FOR UPDATE SKIP LOCKED)
@@ -221,20 +221,20 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 		if reservation.GrantedTokens != tokens || reservation.GrantedCostMinorUnits != costMinorUnits || reservation.Currency != currency {
 			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q has a different budget reservation", domain.ErrConflict, requestID)
 		}
-		if row.status == "held" && !row.expired {
+		if row.status == domain.ReservationHeld && !row.expired {
 			if err = tx.Commit(ctx); err != nil {
 				return domain.BudgetReservation{}, fmt.Errorf("reserve budget: commit replay: %w", err)
 			}
 			committed = true
 			return reservation, nil
 		}
-		if row.status == "settled" {
+		if row.status == domain.ReservationSettled {
 			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation", domain.ErrBudgetSettled, requestID)
 		}
-		if row.status != "expired" && !(row.status == "held" && row.expired) {
+		if row.status != domain.ReservationExpired && !(row.status == domain.ReservationHeld && row.expired) {
 			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation is terminal", domain.ErrConflict, requestID)
 		}
-		if row.status == "held" {
+		if row.status == domain.ReservationHeld {
 			expired, err := tx.Query(ctx, qExpireOneBudget, tenantID, reservation.ReservationID)
 			if err != nil {
 				return domain.BudgetReservation{}, fmt.Errorf("reserve budget: expire prior attempt: %w", err)
@@ -251,7 +251,7 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 				if err != nil {
 					return domain.BudgetReservation{}, fmt.Errorf("reserve budget: decode prior attempt: %w", err)
 				}
-				if fenced.status != "expired" {
+				if fenced.status != domain.ReservationExpired {
 					return domain.BudgetReservation{}, fmt.Errorf("%w: reservation %q became %s", domain.ErrConflict, reservation.ReservationID, fenced.status)
 				}
 			}
@@ -366,7 +366,7 @@ func (ledger *BudgetLedger) transition(ctx context.Context, query string, reserv
 		committed = true
 		return nil
 	}
-	if row.status == "held" && row.expired {
+	if row.status == domain.ReservationHeld && row.expired {
 		expired, err := tx.Query(ctx, qExpireOneBudget, reservation.TenantID, reservation.ReservationID)
 		if err != nil {
 			return fmt.Errorf("budget reservation transition: expire lease: %w", err)
@@ -380,7 +380,7 @@ func (ledger *BudgetLedger) transition(ctx context.Context, query string, reserv
 		committed = true
 		return fmt.Errorf("%w: reservation %q is expired", domain.ErrConflict, reservation.ReservationID)
 	}
-	if row.status != "held" {
+	if row.status != domain.ReservationHeld {
 		return fmt.Errorf("%w: reservation %q is %s", domain.ErrConflict, reservation.ReservationID, row.status)
 	}
 	args := append(append([]any(nil), extra...), reservation.TenantID, reservation.ReservationID)
@@ -400,7 +400,7 @@ func (ledger *BudgetLedger) transition(ctx context.Context, query string, reserv
 
 type budgetRow struct {
 	reservation   domain.BudgetReservation
-	status        string
+	status        domain.ReservationStatus
 	settledTokens int64
 	settledCost   int64
 	expired       bool
@@ -424,7 +424,7 @@ func decodeBudgetRow(tenantID int64, row []any) (budgetRow, error) {
 			GrantedTokens: common.AsInt64(row[3]), GrantedCostMinorUnits: common.AsInt64(row[4]),
 			Currency: common.AsString(row[5]), ExpiresAt: expiresAt,
 		},
-		status:        common.AsString(row[2]),
+		status:        domain.ReservationStatus(common.AsString(row[2])),
 		settledTokens: common.AsInt64(row[7]),
 		settledCost:   common.AsInt64(row[8]),
 		expired:       common.AsBool(row[10]),
@@ -433,9 +433,9 @@ func decodeBudgetRow(tenantID int64, row []any) (budgetRow, error) {
 
 func transitionAlreadyApplied(query string, row budgetRow, extra []any) bool {
 	if query == qReleaseBudget {
-		return row.status == "released"
+		return row.status == domain.ReservationReleased
 	}
-	return query == qSettleBudget && row.status == "settled" && len(extra) == 2 &&
+	return query == qSettleBudget && row.status == domain.ReservationSettled && len(extra) == 2 &&
 		row.settledTokens == extra[0].(int64) && row.settledCost == extra[1].(int64)
 }
 

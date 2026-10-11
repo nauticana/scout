@@ -72,7 +72,7 @@ func TestTurnRuntimeFailsClosedWhenTheReleaseLimitsCannotBeRead(t *testing.T) {
 	if started.MaxSteps != 0 || len(*stepLimits) != 0 {
 		t.Fatalf("a turn ran without its limits: policy %+v, steps %+v", *started, *stepLimits)
 	}
-	if len(recorder.failures) != 1 || recorder.failures[0] != "failed:not_found" {
+	if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnFailed)+":not_found" {
 		t.Fatalf("failures = %v", recorder.failures)
 	}
 	// The hold the turn was admitted on goes back rather than waiting out its expiry.

@@ -23,7 +23,7 @@ func listAgentsService(query *studioQueryFake) *StudioService {
 }
 
 func agentRow() []any {
-	return []any{"writer-a", "writer", "Writer", "active", true, int64(4), int64(2), true, "3", nil, nil}
+	return []any{"writer-a", "writer", "Writer", string(domain.AgentStateActive), true, int64(4), int64(2), true, "3", nil, nil}
 }
 
 // Recorded execution history and Studio's own test events are both "last

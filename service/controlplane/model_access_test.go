@@ -17,17 +17,20 @@ func TestModelAccessGrantsAndRevokesOneModel(t *testing.T) {
 		t.Fatalf("Grant: %v", err)
 	}
 	granted := query.args[qModelAccessGrant]
-	if len(granted) != 4 || granted[1] != "openai" || granted[2] != "text-embedding-3-small" || granted[3] != DefaultPriorityClass {
+	if len(granted) != 4 || granted[1] != "openai" || granted[2] != "text-embedding-3-small" || granted[3] != string(DefaultPriorityClass) {
 		t.Fatalf("grant args = %v", granted)
 	}
-	if err := access.Grant(ctx, 7, reference, "batch"); err != nil {
+	if err := access.Grant(ctx, 7, reference, domain.PriorityBatch); err != nil {
 		t.Fatalf("regrant: %v", err)
 	}
-	if query.args[qModelAccessGrant][3] != "batch" {
+	if query.args[qModelAccessGrant][3] != string(domain.PriorityBatch) {
 		t.Fatalf("a repeated grant updates the priority class, args = %v", query.args[qModelAccessGrant])
 	}
-	configured := &ModelAccess{DB: studioDBFake{qs: query}, PriorityClass: "batch"}
-	if err := configured.Grant(ctx, 7, reference, ""); err != nil || query.args[qModelAccessGrant][3] != "batch" {
+	if err := access.Grant(ctx, 7, reference, "standard"); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("an unknown priority class = %v, want validation", err)
+	}
+	configured := &ModelAccess{DB: studioDBFake{qs: query}, PriorityClass: domain.PriorityBatch}
+	if err := configured.Grant(ctx, 7, reference, ""); err != nil || query.args[qModelAccessGrant][3] != string(domain.PriorityBatch) {
 		t.Fatalf("a grant naming no class takes the configured class: %v, args = %v", err, query.args[qModelAccessGrant])
 	}
 	if err := access.Revoke(ctx, 7, reference); err != nil {

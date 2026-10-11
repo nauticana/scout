@@ -2,7 +2,7 @@ table: reservation_status
 comment: Budget reservation lifecycle states
 columns:
   - name: code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: is_terminal
     type: BOOLEAN
   - name: description

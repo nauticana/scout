@@ -14,13 +14,6 @@ import (
 	"github.com/nauticana/scout/internal/clk"
 )
 
-const (
-	runStatusRunning      = "running"
-	runStatusCompleted    = "completed"
-	runStatusStoppedEarly = "stopped_early"
-	runStatusFailed       = "failed"
-)
-
 // Runner replays baseline and candidate on identical examples, scores both arms
 // with heuristics, an optional blinded judge, and an optional trajectory
 // evaluator, marks doubtful pairs for human review in their results, and stops
@@ -108,7 +101,7 @@ func (runner *Runner) Run(ctx context.Context, manifest domain.EvaluationManifes
 	if scope == "" {
 		scope = domain.GoldenScopeDev
 	}
-	run := domain.EvaluationRun{TenantID: manifest.TenantID, ManifestID: manifest.ManifestID, Scope: scope, Status: runStatusRunning, StartedAt: runner.now()}
+	run := domain.EvaluationRun{TenantID: manifest.TenantID, ManifestID: manifest.ManifestID, Scope: scope, Status: domain.EvaluationRunning, StartedAt: runner.now()}
 	if runner.Results != nil {
 		runID, err := runner.Results.StartRun(ctx, run)
 		if err != nil {
@@ -122,11 +115,11 @@ func (runner *Runner) Run(ctx context.Context, manifest domain.EvaluationManifes
 	run.Usage = summary.Usage
 	switch {
 	case err != nil:
-		run.Status = runStatusFailed
+		run.Status = domain.EvaluationFailed
 	case summary.StoppedEarly:
-		run.Status = runStatusStoppedEarly
+		run.Status = domain.EvaluationStoppedEarly
 	default:
-		run.Status = runStatusCompleted
+		run.Status = domain.EvaluationCompleted
 	}
 	if runner.Results != nil {
 		if finishErr := runner.Results.FinishRun(ctx, run); finishErr != nil && err == nil {

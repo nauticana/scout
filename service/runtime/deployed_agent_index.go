@@ -17,7 +17,7 @@ const qDeployedAgents = "scout_runtime_deployed_agents"
 
 var deployedAgentQueries = map[string]string{
 	qDeployedAgents: `
-SELECT a.alias_id, a.agent_type_id, a.agent_id, p.state_code = 'active', d.enabled,
+SELECT a.alias_id, a.agent_type_id, a.agent_id, p.state_code = ` + sqlAgentActive + `, d.enabled,
        dep.stable_version, v.definition
   FROM agent_alias a
   JOIN agent_profile p

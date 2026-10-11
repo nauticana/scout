@@ -47,7 +47,7 @@ columns:
     type: VARCHAR(80)
     nullable: true
   - name: outcome_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: obligations
     type: VARCHAR(200)
     nullable: true

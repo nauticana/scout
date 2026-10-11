@@ -17,7 +17,7 @@ type chainHarness struct {
 	sink    *observability.MemoryAuditSink
 	ingress *TurnIngress
 	runtime *TurnRuntime
-	status  string
+	status  domain.TurnStatus
 }
 
 func newChainHarness(t *testing.T) *chainHarness {
@@ -29,10 +29,10 @@ func newChainHarness(t *testing.T) *chainHarness {
 	harness.runtime.Audit = harness.sink
 	// The turn record is what makes a later delivery a terminal replay.
 	harness.runtime.Records = &fake.TurnRecordStore{
-		FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
+		FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
 			return 1, harness.status, nil, nil
 		},
-		FailFunc: func(_ context.Context, _ int64, _ string, status, _ string) error {
+		FailFunc: func(_ context.Context, _ int64, _ string, status domain.TurnStatus, _ string) error {
 			harness.status = status
 			return nil
 		},

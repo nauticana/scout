@@ -36,7 +36,7 @@ type Observation struct {
 	Principal      PrincipalRef
 	ScopeID        string
 	TenantTier     string
-	PriorityClass  string
+	PriorityClass  PriorityClass
 	Region         string
 	Stage          TurnStage
 	Component      string

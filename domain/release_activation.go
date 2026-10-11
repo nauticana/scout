@@ -6,10 +6,10 @@ import "time"
 type ReleaseActivationState string
 
 const (
-	ActivationPending   ReleaseActivationState = "pending"
-	ActivationActivated ReleaseActivationState = "activated"
-	ActivationRefused   ReleaseActivationState = "refused"
-	ActivationCancelled ReleaseActivationState = "cancelled"
+	ActivationPending   ReleaseActivationState = "P"
+	ActivationActivated ReleaseActivationState = "A"
+	ActivationRefused   ReleaseActivationState = "R"
+	ActivationCancelled ReleaseActivationState = "X"
 )
 
 // ReleaseActivationReason says why an activation was refused.

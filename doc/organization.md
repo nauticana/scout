@@ -69,14 +69,14 @@ the template, every slot is mapped through `references`, and the origin is the t
 `state_reason`, `state_changed_by`, and `state_changed_at` recording why, by whom, and when.
 
 ```text
-draft ──→ active ──→ draining ──→ retired
-  │         ↕            ↑
-  │      suspended ──────┘
-  └──────────────────────→ retired
+D draft ──→ A active ──→ G draining ──→ R retired
+  │           ↕              ↑
+  │        S suspended ──────┘
+  └────────────────────────────→ R retired
 ```
 
-`draining` finishes in-flight work and admits none; `suspended` stops new work immediately and is
-reversible; `retired` is terminal. `Transition` refuses an illegal move with `domain.ErrConflict`,
+`G` (draining) finishes in-flight work and admits none; `S` (suspended) stops new work immediately and is
+reversible; `R` (retired) is terminal. `Transition` refuses an illegal move with `domain.ErrConflict`,
 compare-and-swaps on the current state so a concurrent change cannot be lost, and emits a decision
 record with reason and actor.
 

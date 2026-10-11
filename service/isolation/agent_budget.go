@@ -36,14 +36,14 @@ SELECT c.agent_id, c.agent_version
  WHERE t.partner_id = ? AND t.request_id = ?`,
 	qBudgetClock: `SELECT CURRENT_TIMESTAMP`,
 	qPrincipalPeriodUse: `
-SELECT CAST(COALESCE(SUM(CASE WHEN status_code = 'settled' THEN settled_tokens ELSE 0 END), 0) AS BIGINT),
-       CAST(COALESCE(SUM(CASE WHEN status_code = 'settled' AND currency_code = ? THEN settled_cost_minor_units ELSE 0 END), 0) AS BIGINT),
-       CAST(COALESCE(SUM(CASE WHEN status_code = 'held' THEN granted_tokens ELSE 0 END), 0) AS BIGINT),
-       CAST(COALESCE(SUM(CASE WHEN status_code = 'held' AND currency_code = ? THEN granted_cost_minor_units ELSE 0 END), 0) AS BIGINT)
+SELECT CAST(COALESCE(SUM(CASE WHEN status_code = ` + sqlReservationSettled + ` THEN settled_tokens ELSE 0 END), 0) AS BIGINT),
+       CAST(COALESCE(SUM(CASE WHEN status_code = ` + sqlReservationSettled + ` AND currency_code = ? THEN settled_cost_minor_units ELSE 0 END), 0) AS BIGINT),
+       CAST(COALESCE(SUM(CASE WHEN status_code = ` + sqlReservationHeld + ` THEN granted_tokens ELSE 0 END), 0) AS BIGINT),
+       CAST(COALESCE(SUM(CASE WHEN status_code = ` + sqlReservationHeld + ` AND currency_code = ? THEN granted_cost_minor_units ELSE 0 END), 0) AS BIGINT)
   FROM budget_reservation
  WHERE partner_id = ? AND principal_kind = ? AND principal_id = ?
-   AND (status_code = 'held' AND expires_at > CURRENT_TIMESTAMP
-     OR status_code = 'settled' AND settled_at >= ?)`,
+   AND (status_code = ` + sqlReservationHeld + ` AND expires_at > CURRENT_TIMESTAMP
+     OR status_code = ` + sqlReservationSettled + ` AND settled_at >= ?)`,
 }
 
 // turnAgent is the conversation agent a request's hold is charged to, pinned to the

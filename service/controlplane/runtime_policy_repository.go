@@ -94,7 +94,7 @@ func (repository *TableTenantPolicyRepository) GetRuntimePolicy(ctx context.Cont
 
 func runtimePolicyFromRow(row []any) domain.TenantRuntimePolicy {
 	return domain.TenantRuntimePolicy{
-		PriorityClass: common.AsString(row[0]), CapacityClass: domain.CapacityClass(common.AsString(row[1])),
+		PriorityClass: domain.PriorityClass(common.AsString(row[0])), CapacityClass: domain.CapacityClass(common.AsString(row[1])),
 		MaxSteps: int(common.AsInt64(row[2])), MaxTokens: common.AsInt64(row[3]),
 		MaxCostMinorUnits: common.AsInt64(row[4]), CostCurrency: strings.TrimSpace(common.AsString(row[5])),
 		TurnTimeout: time.Duration(common.AsInt64(row[6])) * time.Millisecond, MidTurnPolicy: domain.AdmissionQueue,
@@ -157,8 +157,8 @@ func validateRuntimePolicy(tenantID int64, version domain.RuntimePolicyVersion) 
 	switch {
 	case tenantID <= 0 || strings.TrimSpace(version.Version) == "":
 		return fmt.Errorf("%w: tenant and policy version are required", domain.ErrValidation)
-	case strings.TrimSpace(policy.PriorityClass) == "" || !policy.CapacityClass.Valid():
-		return fmt.Errorf("%w: a priority class and a known capacity class are required", domain.ErrValidation)
+	case !policy.PriorityClass.Valid() || !policy.CapacityClass.Valid():
+		return fmt.Errorf("%w: a known priority class and capacity class are required", domain.ErrValidation)
 	case policy.MaxSteps <= 0 || policy.MaxSteps > math.MaxInt32 || policy.MaxTokens <= 0 || policy.MaxCostMinorUnits < 0:
 		return fmt.Errorf("%w: max steps and tokens must be positive and max cost non-negative", domain.ErrValidation)
 	case len(policy.CostCurrency) != 3:

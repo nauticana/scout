@@ -660,7 +660,7 @@ func chainScopes(bindings []domain.ScopedBinding) *fake.ScopeRepository {
 
 // A comparison run judges two arms against each other; only a single-subject evaluation is evidence.
 func TestGateEvidenceExcludesComparisonRuns(t *testing.T) {
-	if sql := gateQueries[qGateRun]; !strings.Contains(sql, "NOT EXISTS") || !strings.Contains(sql, "b.role_code = 'baseline'") {
+	if sql := gateQueries[qGateRun]; !strings.Contains(sql, "NOT EXISTS") || !strings.Contains(sql, "b.role_code = "+sqlEvaluationBaseline) {
 		t.Fatalf("gate run query must skip comparison runs:\n%s", sql)
 	}
 }

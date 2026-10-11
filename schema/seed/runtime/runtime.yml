@@ -1,6 +1,26 @@
-comment: REST lookup metadata for runtime activity relations and the conversation authorization object
+comment: Runtime code lists, REST lookup metadata for runtime activity relations, and the conversation authorization object
 order: 40
 seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [turn_queue_status, Turn Queue Status]
+      - [agent_run_status, Agent Run Status]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [turn_queue_status, Q, Queued]
+      - [turn_queue_status, L, Leased]
+      - [turn_queue_status, A, Acknowledged]
+      - [turn_queue_status, D, Dead]
+      - [agent_run_status, C, Completed]
+      - [agent_run_status, F, Failed]
+      - [agent_run_status, X, Cancelled]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [turn_queue_status, turn_queue, status_code]
+      - [agent_run_status, agent_run, status_code]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:

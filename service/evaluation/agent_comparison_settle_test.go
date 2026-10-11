@@ -27,7 +27,7 @@ func TestAgentEvaluationWorkerSettlesArmAWhenArmBFails(t *testing.T) {
 	if got.A.Usage.CostMinorUnits != 2 || got.B.Usage.CostMinorUnits != 0 || got.Verdict != "" || !strings.HasPrefix(got.Reason, "arm b failed") {
 		t.Fatalf("settled = %+v", got)
 	}
-	if !strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|example a failed") {
+	if !strings.HasPrefix(queue.finished[0], string(domain.EvaluationFailed)+"|example a failed") {
 		t.Fatalf("finished = %v", queue.finished)
 	}
 }
@@ -69,7 +69,7 @@ func TestAgentEvaluationWorkerSettlesSpendWhenAnswersCannotBeStored(t *testing.T
 	}
 	got := queue.compared[0]
 	if got.A.Usage.CostMinorUnits != 2 || got.B.Usage.CostMinorUnits != 5 || got.A.Output.URI != "" || got.Verdict != "" ||
-		!strings.HasPrefix(got.Reason, "storing answers failed") || !strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|") {
+		!strings.HasPrefix(got.Reason, "storing answers failed") || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationFailed)+"|") {
 		t.Fatalf("settled = %+v, finished %v", got, queue.finished)
 	}
 }

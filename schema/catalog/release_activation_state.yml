@@ -2,7 +2,7 @@ table: release_activation_state
 comment: Lifecycle of one scheduled release activation
 columns:
   - name: code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: is_terminal
     type: BOOLEAN
   - name: description

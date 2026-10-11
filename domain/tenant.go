@@ -4,15 +4,29 @@ import "time"
 
 // TenantContext identifies the tenant and its scheduling class.
 type TenantContext struct {
-	TenantID          int64  `json:"tenant_id"`
-	PriorityClass     string `json:"priority_class,omitempty"`
-	DedicatedCapacity bool   `json:"dedicated_capacity,omitempty"`
+	TenantID          int64         `json:"tenant_id"`
+	PriorityClass     PriorityClass `json:"priority_class,omitempty"`
+	DedicatedCapacity bool          `json:"dedicated_capacity,omitempty"`
 	// Tier is the bounded commercial class used as a metric label; never the tenant id.
 	Tier string `json:"tier,omitempty"`
 	// Region is the tenant's home residency region.
 	Region string `json:"region,omitempty"`
 	// ScopeID places the work in the tenant's scope tree; empty means the tenant root.
 	ScopeID string `json:"scope_id,omitempty"`
+}
+
+// PriorityClass is a tenant scheduling class: a priority_class code.
+type PriorityClass string
+
+const (
+	PriorityInteractive PriorityClass = "I"
+	PriorityStandard    PriorityClass = "S"
+	PriorityBatch       PriorityClass = "B"
+)
+
+// Valid reports whether the class is a seeded priority_class code.
+func (class PriorityClass) Valid() bool {
+	return class == PriorityInteractive || class == PriorityStandard || class == PriorityBatch
 }
 
 // TurnAdmissionPolicy states what a new prompt does to a running turn.
@@ -38,7 +52,7 @@ func (class CapacityClass) Valid() bool {
 
 // TenantRuntimePolicy defines hard limits for one tenant turn.
 type TenantRuntimePolicy struct {
-	PriorityClass     string
+	PriorityClass     PriorityClass
 	CapacityClass     CapacityClass
 	MaxSteps          int
 	MaxTokens         int64

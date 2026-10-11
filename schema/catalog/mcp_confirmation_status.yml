@@ -2,7 +2,7 @@ table: mcp_confirmation_status
 comment: Lifecycle of one confirmed MCP tool call
 columns:
   - name: code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: is_open
     type: BOOLEAN
     comment: An open confirmation blocks an identical action from being prepared again

@@ -47,7 +47,7 @@ func TestAgentEvaluationWorkerAddsTheJudgesGradeAndSpend(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if *graded != 3 || len(queue.recorded) != 3 || queue.finished[0] != domain.EvaluationCompleted+"|" {
+	if *graded != 3 || len(queue.recorded) != 3 || queue.finished[0] != string(domain.EvaluationCompleted)+"|" {
 		t.Fatalf("graded %d, recorded %d, finished %v", *graded, len(queue.recorded), queue.finished)
 	}
 	for _, result := range queue.recorded {
@@ -74,7 +74,7 @@ func TestAgentEvaluationWorkerCountsTheJudgesSpendAgainstTheCeiling(t *testing.T
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 2 || !strings.HasPrefix(queue.finished[0], domain.EvaluationStoppedEarly+"|cost ceiling") {
+	if len(*requests) != 2 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationStoppedEarly)+"|cost ceiling") {
 		t.Fatalf("ran %d examples, finished %v; the judge's spend must stop the run after two", len(*requests), queue.finished)
 	}
 }
@@ -87,7 +87,7 @@ func TestAgentEvaluationWorkerFailsTheRunOnAJudgeError(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(queue.recorded) == 0 || queue.finished[0] != domain.EvaluationFailed+"|example a failed: invalid_output" {
+	if len(queue.recorded) == 0 || queue.finished[0] != string(domain.EvaluationFailed)+"|example a failed: invalid_output" {
 		t.Fatalf("recorded %d, finished %v", len(queue.recorded), queue.finished)
 	}
 	result := queue.recorded[0]
@@ -106,7 +106,7 @@ func TestAgentEvaluationWorkerFailsTheRunOnAJudgeError(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if reason := hidden.finished[0]; reason != domain.EvaluationFailed+"|a gate example failed: invalid_output" {
+	if reason := hidden.finished[0]; reason != string(domain.EvaluationFailed)+"|a gate example failed: invalid_output" {
 		t.Fatalf("failure reason %q must not name the hidden example or judge text", reason)
 	}
 }
@@ -125,7 +125,7 @@ func TestAgentEvaluationWorkerFailsClosedOnJudgeSpendItCannotCount(t *testing.T)
 		if err := w.Execute(context.Background(), testLease); err != nil {
 			t.Fatal(err)
 		}
-		if queue.finished[0] != domain.EvaluationFailed+"|example a failed: validation; its usage was not settled" {
+		if queue.finished[0] != string(domain.EvaluationFailed)+"|example a failed: validation; its usage was not settled" {
 			t.Fatalf("%s: finished %v", name, queue.finished)
 		}
 		result := queue.recorded[0]
@@ -150,7 +150,7 @@ func TestAgentEvaluationWorkerRefusesAnExampleOfAnotherTenant(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 0 || *graded != 0 || queue.finished[0] != domain.EvaluationFailed+"|example a failed: forbidden" {
+	if len(*requests) != 0 || *graded != 0 || queue.finished[0] != string(domain.EvaluationFailed)+"|example a failed: forbidden" {
 		t.Fatalf("ran %d, graded %d, finished %v", len(*requests), *graded, queue.finished)
 	}
 }
@@ -184,7 +184,7 @@ func TestAgentEvaluationWorkerFailsARunWhoseJudgingWasCancelled(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(queue.finished) != 1 || queue.finished[0] != domain.EvaluationFailed+"|example a failed: judging failed: canceled" {
+	if len(queue.finished) != 1 || queue.finished[0] != string(domain.EvaluationFailed)+"|example a failed: judging failed: canceled" {
 		t.Fatalf("reclaimed run finished %v; an unscored example must not leave it completed", queue.finished)
 	}
 	if len(*requests) != ran || len(queue.recorded) != 0 {
@@ -201,7 +201,7 @@ func TestAgentEvaluationWorkerFailsARunWhoseJudgingWasCancelled(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if gate.finished[0] != domain.EvaluationFailed+"|a gate example failed: scoring failed: canceled" {
+	if gate.finished[0] != string(domain.EvaluationFailed)+"|a gate example failed: scoring failed: canceled" {
 		t.Fatalf("hidden unscored example finished %v", gate.finished)
 	}
 }
@@ -218,7 +218,7 @@ func TestAgentEvaluationWorkerRefusesToJudgeWithoutTheRequester(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if *graded != 0 || queue.finished[0] != domain.EvaluationFailed+"|example a failed: forbidden" {
+	if *graded != 0 || queue.finished[0] != string(domain.EvaluationFailed)+"|example a failed: forbidden" {
 		t.Fatalf("graded %d, finished %v; the judge must be charged to the run's requester", *graded, queue.finished)
 	}
 }

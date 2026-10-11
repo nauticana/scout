@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,7 +136,7 @@ func TestResultStoreRunLifecycleArgumentOrder(t *testing.T) {
 		t.Fatalf("start = %d, %v", runID, err)
 	}
 	args := query.args[qRunInsert]
-	if len(args) != 6 || args[0] != int64(1) || args[1] != int64(7) || args[3] != "gate" || args[4] != runStatusRunning {
+	if len(args) != 6 || args[0] != int64(1) || args[1] != int64(7) || args[3] != "gate" || args[4] != string(domain.EvaluationRunning) {
 		t.Fatalf("run insert args = %v", args)
 	}
 
@@ -148,7 +149,7 @@ func TestResultStoreRunLifecycleArgumentOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	args = query.args[qResultInsert]
-	if len(args) != 14 || args[0] != int64(1) || args[2] != "core" || args[3] != int64(3) || args[5] != "candidate" || args[7] != int64(250) || args[11] != "USD" || args[12] != true {
+	if len(args) != 14 || args[0] != int64(1) || args[2] != "core" || args[3] != int64(3) || args[5] != string(domain.RoleCandidate) || args[7] != int64(250) || args[11] != "USD" || args[12] != true {
 		t.Fatalf("result insert args = %v", args)
 	}
 	foreign := []domain.EvaluationResult{{ManifestID: "other", ExampleID: "a", Role: domain.RoleCandidate}}
@@ -156,12 +157,12 @@ func TestResultStoreRunLifecycleArgumentOrder(t *testing.T) {
 		t.Fatalf("foreign manifest = %v", err)
 	}
 
-	finished := domain.EvaluationRun{RunID: runID, TenantID: 7, Status: runStatusCompleted, Samples: 4, Usage: domain.Usage{InputTokens: 1, OutputTokens: 2, CostMinorUnits: 3, Currency: "USD"}}
+	finished := domain.EvaluationRun{RunID: runID, TenantID: 7, Status: domain.EvaluationCompleted, Samples: 4, Usage: domain.Usage{InputTokens: 1, OutputTokens: 2, CostMinorUnits: 3, Currency: "USD"}}
 	if err := store.FinishRun(ctx, finished); err != nil {
 		t.Fatal(err)
 	}
 	args = query.args[qRunFinish]
-	if len(args) != 9 || args[0] != runStatusCompleted || args[2] != 4 || args[6] != "USD" || args[7] != int64(7) || args[8] != int64(1) {
+	if len(args) != 9 || args[0] != string(domain.EvaluationCompleted) || args[2] != 4 || args[6] != "USD" || args[7] != int64(7) || args[8] != int64(1) {
 		t.Fatalf("finish args = %v", args)
 	}
 	if err := store.FinishRun(ctx, domain.EvaluationRun{RunID: 1, TenantID: 7, Status: "weird"}); !errors.Is(err, domain.ErrValidation) {
@@ -202,5 +203,10 @@ func TestGateDecisionStoreRoundTripsSignedPayload(t *testing.T) {
 	tampered.Confidence = 0.99
 	if err := store.Put(ctx, tampered); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("stored a decision whose id does not match its content: %v", err)
+	}
+	worded := decision
+	worded.Verdict = "healthy"
+	if err := store.Put(ctx, worded); !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "verdict") {
+		t.Fatalf("stored a verdict that is not a rollout health verdict code: %v", err)
 	}
 }

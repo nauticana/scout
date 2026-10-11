@@ -51,6 +51,12 @@ const (
        deadline_at, created_at, resolved_at, notification_event_id, revises_step_id, release_version,
        requester_kind, requester_id, rule_source_code, approval_route_id, approver_reference_kind,
        approver_reference, route_step, route_resolution`
+
+	sqlApprovalPending = "'" + string(domain.ApprovalStatusPending) + "'"
+	sqlApprovalEdited  = "'" + string(domain.ApprovalStatusEdited) + "'"
+	sqlApprovalExpired = "'" + string(domain.ApprovalStatusExpired) + "'"
+	// sqlApprovalOpen lists the statuses that still owe a verdict.
+	sqlApprovalOpen = "(" + sqlApprovalPending + ", '" + string(domain.ApprovalStatusEscalated) + "')"
 )
 
 var approvalQueries = map[string]string{
@@ -61,7 +67,7 @@ INSERT INTO turn_approval_request
         risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at, revises_step_id,
         release_version, requester_kind, requester_id, rule_source_code, approval_route_id, approver_reference_kind,
         approver_reference, route_step, route_resolution)
-VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?,
+VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlApprovalPending + `, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, request_id, execution_step_id) DO NOTHING
 RETURNING id`,
@@ -75,7 +81,7 @@ SELECT ` + approvalColumns + `
 UPDATE turn_approval_request
    SET status_code = ?, resolved_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code IN ('pending', 'escalated') AND proposed_digest = ?
+   AND status_code IN ` + sqlApprovalOpen + ` AND proposed_digest = ?
    AND route_step = ? AND approver_kind IS NOT DISTINCT FROM ? AND approver_id IS NOT DISTINCT FROM ?
 RETURNING id`,
 	qApprovalDecision: `
@@ -95,12 +101,12 @@ SELECT d.decider_kind, d.decider_user_id, d.decider_agent_id, d.decider_service_
   FROM turn_approval_decision d
   JOIN turn_approval_request r ON r.id = d.turn_approval_request_id
  WHERE r.partner_id = ? AND r.request_id = ? AND r.execution_step_id = ?
-   AND d.status_code = 'edited' AND d.revised_arguments_uri IS NOT NULL`,
+   AND d.status_code = ` + sqlApprovalEdited + ` AND d.revised_arguments_uri IS NOT NULL`,
 	qApprovalPending: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request r
   JOIN approval_risk_tier risk ON risk.code = r.risk_tier_code
- WHERE r.partner_id = ? AND r.status_code IN ('pending', 'escalated')
+ WHERE r.partner_id = ? AND r.status_code IN ` + sqlApprovalOpen + `
    AND (? = '' OR approver_kind = ?)
    AND (? = '' OR approver_id = ?)
    AND (? = '' OR risk.severity_rank >= (SELECT severity_rank FROM approval_risk_tier WHERE code = ?))
@@ -110,7 +116,7 @@ SELECT ` + approvalColumns + `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request r
   JOIN approval_risk_tier risk ON risk.code = r.risk_tier_code
- WHERE r.partner_id = ? AND r.status_code IN ('pending', 'escalated') AND r.scope_id = ?
+ WHERE r.partner_id = ? AND r.status_code IN ` + sqlApprovalOpen + ` AND r.scope_id = ?
    AND (? = '' OR approver_kind = ?)
    AND (? = '' OR approver_id = ?)
    AND (? = '' OR risk.severity_rank >= (SELECT severity_rank FROM approval_risk_tier WHERE code = ?))
@@ -119,7 +125,7 @@ SELECT ` + approvalColumns + `
 	qApprovalDue: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request
- WHERE partner_id = ? AND status_code IN ('pending', 'escalated')
+ WHERE partner_id = ? AND status_code IN ` + sqlApprovalOpen + `
    AND deadline_at IS NOT NULL AND deadline_at <= ?
  ORDER BY deadline_at
  LIMIT ?`,
@@ -132,26 +138,26 @@ UPDATE turn_approval_request
 UPDATE turn_approval_request
    SET status_code = ?, approver_kind = ?, approver_id = ?, deadline_at = ?, route_step = ?,
        approver_reference_kind = ?, approver_reference = ?, route_resolution = ?
- WHERE partner_id = ? AND id = ? AND status_code IN ('pending', 'escalated')
+ WHERE partner_id = ? AND id = ? AND status_code IN ` + sqlApprovalOpen + `
    AND route_step = ? AND approver_kind IS NOT DISTINCT FROM ? AND approver_id IS NOT DISTINCT FROM ?
 RETURNING id`,
 	qApprovalVacant: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request
- WHERE partner_id = ? AND status_code IN ('pending', 'escalated') AND approval_route_id IS NOT NULL
+ WHERE partner_id = ? AND status_code IN ` + sqlApprovalOpen + ` AND approval_route_id IS NOT NULL
    AND approver_id IS NULL AND (deadline_at IS NULL OR deadline_at > ?)
  ORDER BY deadline_at NULLS LAST, id
  LIMIT ?`,
 	qApprovalUnsettled: `
 SELECT ` + approvalColumns + `
   FROM turn_approval_request
- WHERE partner_id = ? AND status_code = 'expired' AND turn_settled_at IS NULL
+ WHERE partner_id = ? AND status_code = ` + sqlApprovalExpired + ` AND turn_settled_at IS NULL
  ORDER BY resolved_at, id
  LIMIT ?`,
 	qApprovalTurnSettled: `
 UPDATE turn_approval_request
    SET turn_settled_at = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'expired' AND turn_settled_at IS NULL`,
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlApprovalExpired + ` AND turn_settled_at IS NULL`,
 }
 
 // TableStore is the durable ApprovalStore, inbox, and escalation writer.

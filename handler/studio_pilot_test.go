@@ -59,7 +59,7 @@ func TestStudioPilotAddActsAsTheSessionPerson(t *testing.T) {
 	configureConversationRequestLimit(t)
 	backend := &pilotBackendFake{}
 	recorder := httptest.NewRecorder()
-	body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"position","subject_id":"emea/sales-lead","reason":"pilot"}`)
+	body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPosition) + `","subject_id":"emea/sales-lead","reason":"pilot"}`)
 	pilotHandler(backend).Routes()[api.StudioPilotAddPath](recorder, authenticatedRequest(http.MethodPost, api.StudioPilotAddPath, body))
 	want := domain.PilotChange{AgentID: "writer-a", Version: "4", Reason: "pilot", Subject: domain.PilotSubject{Kind: domain.PilotPosition, ID: "emea/sales-lead"}}
 	if backend.change != want || backend.actor.TenantID != 7 || backend.actor.Principal != (domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}) {
@@ -67,7 +67,7 @@ func TestStudioPilotAddActsAsTheSessionPerson(t *testing.T) {
 	}
 	var member map[string]any
 	pilotData(t, recorder, &member)
-	if member["subject_kind"] != "position" || member["added_by_id"] != "42" || member["agent_name"] != "writer-a" {
+	if member["subject_kind"] != string(domain.PilotPosition) || member["added_by_id"] != "42" || member["agent_name"] != "writer-a" {
 		t.Fatalf("member = %v", member)
 	}
 	if _, ended := member["valid_to"]; ended {
@@ -78,7 +78,7 @@ func TestStudioPilotAddActsAsTheSessionPerson(t *testing.T) {
 func TestStudioPilotRemoveReportsTheEnd(t *testing.T) {
 	configureConversationRequestLimit(t)
 	recorder := httptest.NewRecorder()
-	body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"principal","subject_id":"1001","reason":"done"}`)
+	body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPrincipal) + `","subject_id":"1001","reason":"done"}`)
 	pilotHandler(&pilotBackendFake{}).Routes()[api.StudioPilotRemovePath](recorder, authenticatedRequest(http.MethodPost, api.StudioPilotRemovePath, body))
 	var member api.PilotMember
 	pilotData(t, recorder, &member)
@@ -91,7 +91,7 @@ func TestStudioPilotMapsRefusals(t *testing.T) {
 	configureConversationRequestLimit(t)
 	for err, status := range map[error]int{domain.ErrConflict: http.StatusConflict, domain.ErrForbidden: http.StatusForbidden, domain.ErrNotFound: http.StatusNotFound, domain.ErrValidation: http.StatusBadRequest} {
 		recorder := httptest.NewRecorder()
-		body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"principal","subject_id":"1001","reason":"pilot"}`)
+		body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPrincipal) + `","subject_id":"1001","reason":"pilot"}`)
 		pilotHandler(&pilotBackendFake{err: err}).Routes()[api.StudioPilotAddPath](recorder, authenticatedRequest(http.MethodPost, api.StudioPilotAddPath, body))
 		if recorder.Code != status {
 			t.Fatalf("%v: status = %d, want %d", err, recorder.Code, status)

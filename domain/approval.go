@@ -6,15 +6,15 @@ import "time"
 type ApprovalStatus string
 
 const (
-	ApprovalStatusPending  ApprovalStatus = "pending"
-	ApprovalStatusApproved ApprovalStatus = "approved"
-	ApprovalStatusRejected ApprovalStatus = "rejected"
+	ApprovalStatusPending  ApprovalStatus = "P"
+	ApprovalStatusApproved ApprovalStatus = "A"
+	ApprovalStatusRejected ApprovalStatus = "X"
 	// ApprovalStatusEdited closes the original proposal with revised arguments; the
 	// revision enters as a new request with its own digest and runs in its place.
-	ApprovalStatusEdited    ApprovalStatus = "edited"
-	ApprovalStatusExpired   ApprovalStatus = "expired"
-	ApprovalStatusEscalated ApprovalStatus = "escalated"
-	ApprovalStatusWithdrawn ApprovalStatus = "withdrawn"
+	ApprovalStatusEdited    ApprovalStatus = "E"
+	ApprovalStatusExpired   ApprovalStatus = "T"
+	ApprovalStatusEscalated ApprovalStatus = "S"
+	ApprovalStatusWithdrawn ApprovalStatus = "W"
 )
 
 // OutputClass states what an actionable output is, so a reviewer is never shown

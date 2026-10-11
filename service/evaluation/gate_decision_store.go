@@ -48,6 +48,9 @@ func (store *GateDecisionStore) Put(ctx context.Context, decision domain.GateDec
 	if !decision.ExpiresAt.After(decision.IssuedAt) {
 		return fmt.Errorf("%w: decision must expire after it is issued", domain.ErrValidation)
 	}
+	if !decision.Verdict.Valid() {
+		return fmt.Errorf("%w: decision verdict %q is not a rollout health verdict code", domain.ErrValidation, decision.Verdict)
+	}
 	payload, err := DecisionPayload(decision)
 	if err != nil {
 		return err

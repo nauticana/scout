@@ -50,9 +50,9 @@ var (
 )
 
 func draftRow(archived bool) []any {
-	state := "active"
+	state := string(domain.AgentStateActive)
 	if archived {
-		state = "archived"
+		state = string(domain.AgentStateArchived)
 	}
 	return []any{"writer", "Writer", state, true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}
 }

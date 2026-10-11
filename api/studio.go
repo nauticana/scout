@@ -40,7 +40,8 @@ const (
 	StudioRunsPath        = StudioBasePath + "runs"
 )
 
-// AgentRun is one settled execution of a release; next pages pass the last id as before.
+// AgentRun is one settled execution of a release; next pages pass the last id as before. status
+// is an agent_run_status code: C completed, F failed, or X cancelled.
 type AgentRun struct {
 	ID          int64     `json:"id"`
 	Version     string    `json:"version"`

@@ -29,7 +29,7 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	qRunFinish: `
 UPDATE evaluation_run
    SET status_code = ?, completed_at = ?, sample_count = ?, input_tokens = ?, output_tokens = ?, cost_minor_units = ?, currency_code = ?
- WHERE partner_id = ? AND id = ? AND status_code = 'running'
+ WHERE partner_id = ? AND id = ? AND status_code = ` + sqlRunRunning + `
 RETURNING id`,
 	qRunGetSet: `
 SELECT run.manifest_id, manifest.golden_set_id, manifest.golden_set_version
@@ -81,7 +81,7 @@ func (store *ResultStore) StartRun(ctx context.Context, run domain.EvaluationRun
 		startedAt = store.now()
 	}
 	runID := qs.GenID()
-	if _, err := qs.Query(ctx, qRunInsert, runID, run.TenantID, run.ManifestID, string(run.Scope), runStatusRunning, startedAt.UTC()); err != nil {
+	if _, err := qs.Query(ctx, qRunInsert, runID, run.TenantID, run.ManifestID, string(run.Scope), string(domain.EvaluationRunning), startedAt.UTC()); err != nil {
 		return 0, fmt.Errorf("insert evaluation run: %w", err)
 	}
 	return runID, nil
@@ -92,9 +92,7 @@ func (store *ResultStore) FinishRun(ctx context.Context, run domain.EvaluationRu
 	if run.TenantID <= 0 || run.RunID <= 0 {
 		return fmt.Errorf("%w: run tenant and id are required", domain.ErrValidation)
 	}
-	switch run.Status {
-	case runStatusCompleted, runStatusStoppedEarly, runStatusFailed:
-	default:
+	if !run.Status.Terminal() {
 		return fmt.Errorf("%w: %q is not a terminal run status", domain.ErrValidation, run.Status)
 	}
 	qs, err := store.queries(ctx, "result store", resultQueries)
@@ -105,7 +103,7 @@ func (store *ResultStore) FinishRun(ctx context.Context, run domain.EvaluationRu
 	if completedAt.IsZero() {
 		completedAt = store.now()
 	}
-	result, err := qs.Query(ctx, qRunFinish, run.Status, completedAt.UTC(), run.Samples, run.Usage.InputTokens, run.Usage.OutputTokens,
+	result, err := qs.Query(ctx, qRunFinish, string(run.Status), completedAt.UTC(), run.Samples, run.Usage.InputTokens, run.Usage.OutputTokens,
 		run.Usage.CostMinorUnits, nullable(run.Usage.Currency), run.TenantID, run.RunID)
 	if err != nil {
 		return fmt.Errorf("finish evaluation run: %w", err)
@@ -146,7 +144,7 @@ func (store *ResultStore) PutResults(ctx context.Context, tenantID int64, runID 
 		if result.ManifestID != manifestID {
 			return fmt.Errorf("%w: result for %q belongs to manifest %q, run has %q", domain.ErrValidation, result.ExampleID, result.ManifestID, manifestID)
 		}
-		if result.Role != domain.RoleBaseline && result.Role != domain.RoleCandidate {
+		if !result.Role.Valid() {
 			return fmt.Errorf("%w: unknown role %q", domain.ErrValidation, result.Role)
 		}
 		scores, err := json.Marshal(result.Scores)

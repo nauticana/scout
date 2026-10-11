@@ -69,7 +69,7 @@ func validateSourceChange(event domain.SourceChangeEvent) error {
 	if event.TenantID <= 0 || strings.TrimSpace(event.KnowledgeBaseID) == "" || strings.TrimSpace(event.ObjectID) == "" {
 		return fmt.Errorf("%w: source change needs tenant, knowledge base, and object", domain.ErrValidation)
 	}
-	if event.Op != domain.SourceUpserted && event.Op != domain.SourceDeleted {
+	if !event.Op.Valid() {
 		return fmt.Errorf("%w: source change op %q is not supported", domain.ErrValidation, event.Op)
 	}
 	return nil
@@ -117,6 +117,9 @@ func (source *TableSourceChangeSource) Poll(ctx context.Context, tenantID int64,
 		event := domain.SourceChangeEvent{
 			TenantID: common.AsInt64(row[0]), KnowledgeBaseID: common.AsString(row[1]), ObjectID: common.AsString(row[2]),
 			SourceVersion: common.AsString(row[3]), Op: domain.SourceChangeOp(common.AsString(row[4])), OccurredAt: common.AsTime(row[6]),
+		}
+		if !event.Op.Valid() {
+			return nil, fmt.Errorf("poll source changes: unknown op %q", event.Op)
 		}
 		if row[5] != nil {
 			event.Entitlements = []byte(common.AsString(row[5]))

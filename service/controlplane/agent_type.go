@@ -75,7 +75,7 @@ SELECT display_name, payload, payload_digest, created_at
  WHERE partner_id = ? AND package_id = ? AND package_version = ?`,
 	qInstanceProfile: `
 INSERT INTO agent_profile (partner_id, agent_id, agent_type_id, agent_type_version, display_name, state_code)
-VALUES (?, ?, ?, ?, ?, 'draft')`,
+VALUES (?, ?, ?, ?, ?, ` + sqlAgentDraft + `)`,
 	qInstanceBinding: `
 INSERT INTO config_scope_binding (partner_id, scope_id, resource_kind_code, resource_id, resource_version,
                             merge_mode_code, sealed, resource_value, resource_value_digest, bound_by)
@@ -506,7 +506,7 @@ func (s *AgentTypeStore) Transition(ctx context.Context, change domain.AgentStat
 		return err
 	}
 	if change.TenantID <= 0 || strings.TrimSpace(change.AgentID) == "" || strings.TrimSpace(change.Reason) == "" ||
-		change.Actor.Kind == "" || strings.TrimSpace(change.Actor.ID) == "" || !knownAgentState(change.To) {
+		change.Actor.Kind == "" || strings.TrimSpace(change.Actor.ID) == "" || !change.To.Valid() {
 		return fmt.Errorf("%w: a state change needs tenant, agent, target state, reason, and actor", domain.ErrValidation)
 	}
 	from, err := s.State(ctx, change.TenantID, change.AgentID)
@@ -614,11 +614,6 @@ func allowedTransition(from, to domain.AgentState) bool {
 		}
 	}
 	return false
-}
-
-func knownAgentState(state domain.AgentState) bool {
-	_, known := agentStateTransitions[state]
-	return known
 }
 
 func validateQuarantine(quarantine domain.AgentQuarantine) error {

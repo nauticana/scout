@@ -101,7 +101,7 @@ func TestStudioEvaluationHandlerMapsRunsAndPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run := view.(api.AgentEvaluationRun); run.RunID != 11 || run.Subject != "draft" || run.DefinitionDigest != "d" || !backend.request.Draft || backend.request.SetVersion != 3 {
+	if run := view.(api.AgentEvaluationRun); run.RunID != 11 || run.Subject != string(domain.SubjectDraft) || run.DefinitionDigest != "d" || !backend.request.Draft || backend.request.SetVersion != 3 {
 		t.Fatalf("run = %+v, request = %+v", run, backend.request)
 	}
 	view, err = h.evaluation(context.Background(), domain.StudioActor{}, url.Values{"run_id": {"11"}, "before": {"zeta"}, "limit": {"20"}})

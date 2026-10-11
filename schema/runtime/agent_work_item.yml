@@ -34,8 +34,8 @@ columns:
   - name: request_id
     type: VARCHAR(120)
   - name: status_code
-    type: VARCHAR(30)
-    default: queued
+    type: CHAR(1)
+    default: Q
   - name: budget_minor_units
     type: BIGINT
     nullable: true

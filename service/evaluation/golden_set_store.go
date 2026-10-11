@@ -41,7 +41,7 @@ SELECT ` + goldenExampleColumns + `
 SELECT ` + goldenExampleColumns + `
   FROM golden_example
  WHERE partner_id = ? AND golden_set_id = ? AND set_version = ?
-   AND (scope_code = ? OR ? = 'gate')
+   AND (scope_code = ? OR ? = ` + sqlScopeGate + `)
  ORDER BY example_id`,
 	qGoldenQueryInsert: `
 INSERT INTO golden_query (partner_id, golden_set_id, set_version, query_id, scope_code, knowledge_base_id, query_text,
@@ -52,7 +52,7 @@ SELECT partner_id, golden_set_id, set_version, query_id, knowledge_base_id, quer
        expected_document_ids, expect_abstention
   FROM golden_query
  WHERE partner_id = ? AND golden_set_id = ? AND set_version = ?
-   AND (scope_code = ? OR ? = 'gate')
+   AND (scope_code = ? OR ? = ` + sqlScopeGate + `)
  ORDER BY query_id`,
 }
 
@@ -71,7 +71,7 @@ func scopeOf(hidden bool) domain.GoldenScope {
 }
 
 func validScope(scope domain.GoldenScope) error {
-	if scope != domain.GoldenScopeDev && scope != domain.GoldenScopeGate {
+	if !scope.Valid() {
 		return fmt.Errorf("%w: unknown golden scope %q", domain.ErrValidation, scope)
 	}
 	return nil

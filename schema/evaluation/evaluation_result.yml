@@ -12,7 +12,7 @@ columns:
   - name: example_id
     type: VARCHAR(120)
   - name: role_code
-    type: VARCHAR(10)
+    type: CHAR(1)
   - name: scores
     type: TEXT
   - name: latency_ms
@@ -74,7 +74,7 @@ indexes:
     columns: [partner_id, golden_set_id, set_version, example_id]
 checks:
   - name: evaluation_result_role_ck
-    expression: role_code IN ('baseline', 'candidate')
+    expression: role_code IN ('B', 'C')
   - name: evaluation_result_usage_ck
     expression: latency_ms >= 0 AND input_tokens >= 0 AND output_tokens >= 0 AND cost_minor_units >= 0 AND evaluator_input_tokens >= 0 AND evaluator_output_tokens >= 0 AND evaluator_cost_minor_units >= 0
   - name: evaluation_result_currency_ck

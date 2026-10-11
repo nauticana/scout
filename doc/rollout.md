@@ -15,15 +15,15 @@ The resolved identity travels with the turn: put the platform version (or bundle
 
 ## State machine
 
-`build → offline_replay → shadow → internal_canary → tenant_canary → regional_ramp → global_default → retired`, plus `rolled_back` and `quarantined` reachable from any live stage. Stages come from `RolloutPlan`; `DefaultRolloutPlan` ships conservative ring, traffic, minimum-sample, and minimum-duration values.
+`BD` (build) → `OR` (offline replay) → `SH` (shadow) → `IC` (internal canary) → `TC` (tenant canary) → `RR` (regional ramp) → `GD` (global default) → `RT` (retired), plus `RB` (rolled back) and `QU` (quarantined) reachable from any live stage. Stages come from `RolloutPlan`; `DefaultRolloutPlan` ships conservative ring, traffic, minimum-sample, and minimum-duration values.
 
 Each cycle, `RolloutController`:
 
 1. takes the per-release lease (`RolloutLease`) — a second controller gets `ErrConflict`, not a concurrent write;
 2. asks `RolloutHealthEvaluator` for a healthy, unhealthy, or inconclusive verdict (an evaluation error is inconclusive);
-3. `healthy` → advance, but only past the stage's minimum samples, minimum duration, and post-breach cooldown;
-4. `inconclusive` (including evaluator errors) → pause with the reason recorded; an operator resumes;
-5. `unhealthy` → hard breach (isolation, severe safety, corrupt output, availability) rolls back and quarantines immediately; a soft breach needs `SoftBreachWindows` consecutive breached windows, and `HealthyToClear` clean windows reset the counter;
+3. `H` (healthy) → advance, but only past the stage's minimum samples, minimum duration, and post-breach cooldown;
+4. `I` (inconclusive, including evaluator errors) → pause with the reason recorded; an operator resumes;
+5. `U` (unhealthy) → hard breach (isolation, severe safety, corrupt output, availability) rolls back and quarantines immediately; a soft breach needs `SoftBreachWindows` consecutive breached windows, and `HealthyToClear` clean windows reset the counter;
 6. writes the new state with a monotonic **generation CAS** under the lease and records an audited `platform_rollout_transition`.
 
 `Tick` runs one cycle over every live, unpaused release. Rollback is idempotent and ordered so a partial failure is safe: it points the ring alias at the bundle's rollback target and restores that release's capacity *before* committing the rolled-back state, so a failed alias switch leaves the durable state live and the whole step retries rather than declaring a rollback that never took effect. Live conversations keep the release they were created on and the evidence stays in place. Calling it twice changes nothing and audits once.
@@ -42,7 +42,7 @@ The shadow stage mirrors a bounded share of authenticated, redacted traffic thro
 4. experiment cohort by stable hash of tenant, agent, experiment, salt, and subject,
 5. deployment default: canary by stable hash, else stable.
 
-A pilot is explicit, effective-dated membership in `agent_pilot_member`, not a hash cohort: Studio's `pilot` feature adds or ends one subject's membership of one published, unquarantined release (a `principal` by user id or a product `position` reference; one open membership per subject per agent, at most `agent_pilot_max_members` per agent). `TablePilotResolver` sees only the trusted subject, `VersionRequest.Subject`, which the data plane takes from the turn's `OnBehalfOf`; a turn acting for no one, a non-human subject, and alias resolution without a session are in no pilot. The person's own membership wins, otherwise the newest membership of a position the product's `PositionResolver` says they hold, each call bounded by `PositionTimeout` (`agent_pilot_position_timeout`). A release quarantined after it was added is skipped and resolution falls through. A pilot resolver error fails the resolution; it never falls through to cohort or deployment.
+A pilot is explicit, effective-dated membership in `agent_pilot_member`, not a hash cohort: Studio's `pilot` feature adds or ends one subject's membership of one published, unquarantined release (subject kind `P`, a principal by user id, or `O`, a product position reference; one open membership per subject per agent, at most `agent_pilot_max_members` per agent). `TablePilotResolver` sees only the trusted subject, `VersionRequest.Subject`, which the data plane takes from the turn's `OnBehalfOf`; a turn acting for no one, a non-human subject, and alias resolution without a session are in no pilot. The person's own membership wins, otherwise the newest membership of a position the product's `PositionResolver` says they hold, each call bounded by `PositionTimeout` (`agent_pilot_position_timeout`). A release quarantined after it was added is skipped and resolution falls through. A pilot resolver error fails the resolution; it never falls through to cohort or deployment.
 
 A pin whose `CompatiblePolicyVersions`/`CompatibleIndexVersions` exclude the running policy or index is rejected with `ErrConflict` — a pinned request never silently drifts onto another version. A manager with an audit sink records every resolution with the rule that won (`domain.AgentVersionResolution.Source`).
 

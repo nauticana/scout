@@ -67,6 +67,6 @@ func revisedCall(proposal domain.ToolCall, revision domain.CallRevision) domain.
 func (run *loopRun) recordRevision(call domain.ModelToolCall, tool domain.ToolReference) {
 	run.events = append(run.events, domain.TurnEvent{
 		Version: domain.TurnEventVersion, Kind: domain.TurnEventApprovalResolved,
-		Approval: &domain.TurnApprovalEvent{CallID: call.CallID, ToolID: tool.ToolID, Decision: string(domain.ApprovalStatusEdited)},
+		Approval: &domain.TurnApprovalEvent{CallID: call.CallID, ToolID: tool.ToolID, Decision: string(domain.ApprovalEdited)},
 	})
 }

@@ -310,7 +310,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_evaluation_max_page_size:            "200",
 		agent_evaluation_judge_max_verdict_bytes:  "8192",
 		agent_default_language:                    "en-US",
-		agent_default_priority_class:              "standard",
+		agent_default_priority_class:              string(domain.PriorityStandard),
 		agent_default_test_task:                   "",
 
 		agent_review_feedback_threshold:     "2",
@@ -352,12 +352,14 @@ func TestScoutConfigDefaultTexts(t *testing.T) {
 	if err := cfg.Apply(rows); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AgentDefaultLanguage != "en-US" || cfg.AgentDefaultPriorityClass != "standard" || cfg.AgentDefaultTestTask != "" {
+	if cfg.AgentDefaultLanguage != "en-US" || cfg.AgentDefaultPriorityClass != domain.PriorityStandard || cfg.AgentDefaultTestTask != "" {
 		t.Fatalf("defaults = %q, %q, %q", cfg.AgentDefaultLanguage, cfg.AgentDefaultPriorityClass, cfg.AgentDefaultTestTask)
 	}
-	for name, value := range map[string]string{agent_default_language: strings.Repeat("x", 17), agent_default_priority_class: strings.Repeat("x", 31)} {
+	for _, flag := range [][2]string{{agent_default_language, strings.Repeat("x", 17)}, {agent_default_priority_class, "SS"},
+		{agent_default_priority_class, "Z"}, {agent_default_priority_class, "standard"}} {
+		name := flag[0]
 		rows := scoutConfigRows()
-		rows[name] = keelconfig.ConfigRow{Value: value}
+		rows[name] = keelconfig.ConfigRow{Value: flag[1]}
 		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), name) {
 			t.Fatalf("%s: error = %v, want a refusal naming the flag", name, err)
 		}

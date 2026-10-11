@@ -7,10 +7,10 @@ type PilotSubjectKind string
 
 const (
 	// PilotPrincipal lists one person by decimal user_account id.
-	PilotPrincipal PilotSubjectKind = "principal"
+	PilotPrincipal PilotSubjectKind = "P"
 	// PilotPosition lists whoever the product says holds a position; Scout keeps the
 	// reference opaque, because positions are the product's vocabulary.
-	PilotPosition PilotSubjectKind = "position"
+	PilotPosition PilotSubjectKind = "O"
 )
 
 // PilotSubject is the person or position one pilot membership lists.

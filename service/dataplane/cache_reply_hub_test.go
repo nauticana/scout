@@ -130,11 +130,11 @@ func TestCacheReplyHubNeverHidesAGapAndFallsBackToTheTurnRecord(t *testing.T) {
 	}
 
 	// The cache holds nothing for this request, but the turn already completed.
-	hub.Records = &fake.TurnRecordStore{FindFunc: func(_ context.Context, _ int64, requestID string) (int64, string, []byte, error) {
+	hub.Records = &fake.TurnRecordStore{FindFunc: func(_ context.Context, _ int64, requestID string) (int64, domain.TurnStatus, []byte, error) {
 		if requestID == "failed" {
-			return 1, "failed", []byte("budget_exceeded"), nil
+			return 1, domain.TurnFailed, []byte("budget_exceeded"), nil
 		}
-		return 1, "completed", []byte("answer"), nil
+		return 1, domain.TurnCompleted, []byte("answer"), nil
 	}}
 	settled, _ := hub.Subscribe(ctx, 7, "settled")
 	if frame, err := settled.Receive(ctx); err != nil || !frame.Final || string(frame.Payload) != "answer" {
@@ -152,8 +152,8 @@ func TestCacheReplyHubNeverHidesAGapAndFallsBackToTheTurnRecord(t *testing.T) {
 	if err != nil || stored.Sequence != 10 || stored.ErrorCode != "budget_exceeded" {
 		t.Fatalf("stored failed frame = %+v, %v", stored, err)
 	}
-	hub.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
-		return 1, "cancelled", nil, nil
+	hub.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
+		return 1, domain.TurnCancelled, nil, nil
 	}}
 	stored, err = hub.StoredReply(ctx, 7, "cancelled", 11)
 	if err != nil || stored.ErrorCode != "canceled" {

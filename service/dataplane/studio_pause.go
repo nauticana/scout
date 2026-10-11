@@ -26,7 +26,7 @@ SELECT turn.request_id
   FROM conversation_turn turn
   JOIN agent_conversation conv ON conv.partner_id = turn.partner_id AND conv.conversation_id = turn.conversation_id
  WHERE turn.partner_id = ? AND conv.agent_id = ? AND turn.cancel_requested_at IS NULL
-   AND turn.status_code IN ('queued', 'running', 'streaming', 'suspended')
+   AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `, ` + sqlTurnSuspended + `)
  ORDER BY turn.request_id
  LIMIT ?`,
 }

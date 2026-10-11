@@ -122,14 +122,21 @@ type Embedding struct {
 	Usage  Usage
 }
 
-// How a bound knowledge version reaches a run.
+// KnowledgeBindingMode is how a bound knowledge version reaches a run.
+type KnowledgeBindingMode string
+
 const (
 	// KnowledgeModeRetrieval searches the version by similarity.
-	KnowledgeModeRetrieval = "retrieval"
+	KnowledgeModeRetrieval KnowledgeBindingMode = "R"
 	// KnowledgeModeWhole reads the bound documents in full on every run, for
 	// standing rules that top-K similarity would silently drop.
-	KnowledgeModeWhole = "whole"
+	KnowledgeModeWhole KnowledgeBindingMode = "W"
 )
+
+// Valid reports whether the mode is a known one.
+func (mode KnowledgeBindingMode) Valid() bool {
+	return mode == KnowledgeModeRetrieval || mode == KnowledgeModeWhole
+}
 
 // PinnedKnowledgeRequest asks for the whole-mode bindings of one agent version.
 // The entitlements are the resolved ones retrieval uses; nil fails closed.
@@ -206,9 +213,14 @@ type KnowledgeDocumentManifest struct {
 type SourceChangeOp string
 
 const (
-	SourceUpserted SourceChangeOp = "upsert"
-	SourceDeleted  SourceChangeOp = "delete"
+	SourceUpserted SourceChangeOp = "U"
+	SourceDeleted  SourceChangeOp = "D"
 )
+
+// Valid reports whether the op is a known one.
+func (op SourceChangeOp) Valid() bool {
+	return op == SourceUpserted || op == SourceDeleted
+}
 
 // SourceChangeEvent is one CDC/outbox record for a knowledge source object.
 type SourceChangeEvent struct {

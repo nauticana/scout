@@ -12,9 +12,9 @@ columns:
   - name: knowledge_version
     type: VARCHAR(80)
   - name: mode_code
-    type: VARCHAR(20)
-    default: retrieval
-    comment: retrieval searches the version by similarity; whole reads the bound documents in full on every run
+    type: CHAR(1)
+    default: R
+    comment: R (retrieval) searches the version by similarity; W (whole) reads the bound documents in full on every run
   - name: max_whole_tokens
     type: BIGINT
     nullable: true
@@ -33,6 +33,6 @@ foreign_keys:
       columns: [partner_id, knowledge_base_id, knowledge_version]
 checks:
   - name: agent_knowledge_binding_mode_ck
-    expression: mode_code IN ('retrieval', 'whole')
+    expression: mode_code IN ('R', 'W')
   - name: agent_knowledge_binding_whole_tokens_ck
     expression: max_whole_tokens IS NULL OR max_whole_tokens > 0

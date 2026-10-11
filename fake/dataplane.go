@@ -111,9 +111,9 @@ type TurnRecordStore struct {
 	AddressFunc     func(context.Context, int64, string, string, string) (string, error)
 	SelectableFunc  func(context.Context, int64, string) ([]domain.SelectableAgent, error)
 	OpenFunc        func(context.Context, domain.TurnRequest, domain.ObjectRef) (int64, error)
-	FindFunc        func(context.Context, int64, string) (int64, string, []byte, error)
+	FindFunc        func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error)
 	StartFunc       func(context.Context, int64, string) error
-	FailFunc        func(context.Context, int64, string, string, string) error
+	FailFunc        func(context.Context, int64, string, domain.TurnStatus, string) error
 	SuspendFunc     func(context.Context, int64, string, string) error
 	ResumeFunc      func(context.Context, int64, string) error
 	RecordUsageFunc func(context.Context, int64, string, int64, string, domain.UsageAttribution, domain.Usage) error
@@ -147,9 +147,9 @@ func (store *TurnRecordStore) Open(ctx context.Context, request domain.TurnReque
 }
 
 // Find invokes FindFunc when configured; the default reports a queued turn 1.
-func (store *TurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (int64, string, []byte, error) {
+func (store *TurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (int64, domain.TurnStatus, []byte, error) {
 	if store.FindFunc == nil {
-		return 1, "queued", nil, nil
+		return 1, domain.TurnQueued, nil, nil
 	}
 	return store.FindFunc(ctx, tenantID, requestID)
 }
@@ -163,7 +163,7 @@ func (store *TurnRecordStore) Start(ctx context.Context, tenantID int64, request
 }
 
 // Fail invokes FailFunc when configured.
-func (store *TurnRecordStore) Fail(ctx context.Context, tenantID int64, requestID, status, errorCode string) error {
+func (store *TurnRecordStore) Fail(ctx context.Context, tenantID int64, requestID string, status domain.TurnStatus, errorCode string) error {
 	if store.FailFunc == nil {
 		return nil
 	}

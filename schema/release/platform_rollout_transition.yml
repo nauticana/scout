@@ -6,9 +6,9 @@ columns:
   - name: platform_version
     type: VARCHAR(80)
   - name: from_stage_code
-    type: VARCHAR(30)
+    type: CHAR(2)
   - name: to_stage_code
-    type: VARCHAR(30)
+    type: CHAR(2)
   - name: from_generation
     type: BIGINT
   - name: actor

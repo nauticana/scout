@@ -82,7 +82,7 @@ UPDATE platform_rollout_state
  WHERE platform_version = ? AND lease_owner = ?`,
 	qRolloutStartRing: `
 INSERT INTO platform_rollout (platform_version, ring_code, traffic_percentage, status_code, started_at)
-SELECT ?, ?, ?, 'active', ?
+SELECT ?, ?, ?, '` + string(domain.RolloutStatusActive) + `', ?
  WHERE NOT EXISTS (SELECT 1 FROM platform_rollout WHERE platform_version = ? AND ring_code = ?)`,
 	qRolloutSetRing: `
 UPDATE platform_rollout
@@ -196,10 +196,10 @@ func (store *TableRolloutStateStore) Transition(ctx context.Context, transition 
 func (store *TableRolloutStateStore) mirrorRing(ctx context.Context, tx keelport.TxQueryService, transition domain.RolloutTransition, next domain.RolloutState) error {
 	switch next.Stage {
 	case domain.StageRolledBack, domain.StageQuarantined:
-		_, err := tx.Query(ctx, qRolloutFinishRings, "rolled_back", transition.OccurredAt, transition.Reason, next.PlatformVersion)
+		_, err := tx.Query(ctx, qRolloutFinishRings, string(domain.RolloutStatusRolledBack), transition.OccurredAt, transition.Reason, next.PlatformVersion)
 		return wrapErr("rollout transition: finish rings", err)
 	case domain.StageGlobalDefault, domain.StageRetired:
-		_, err := tx.Query(ctx, qRolloutFinishRings, "completed", transition.OccurredAt, nil, next.PlatformVersion)
+		_, err := tx.Query(ctx, qRolloutFinishRings, string(domain.RolloutStatusCompleted), transition.OccurredAt, nil, next.PlatformVersion)
 		return wrapErr("rollout transition: finish rings", err)
 	}
 	if next.Ring == "" {
@@ -208,11 +208,11 @@ func (store *TableRolloutStateStore) mirrorRing(ctx context.Context, tx keelport
 	if _, err := tx.Query(ctx, qRolloutStartRing, next.PlatformVersion, next.Ring, next.TrafficPercentage, transition.OccurredAt, next.PlatformVersion, next.Ring); err != nil {
 		return fmt.Errorf("rollout transition: start ring: %w", err)
 	}
-	status := "active"
+	status := domain.RolloutStatusActive
 	if next.Paused {
-		status = "paused"
+		status = domain.RolloutStatusPaused
 	}
-	_, err := tx.Query(ctx, qRolloutSetRing, next.TrafficPercentage, status, nullableString(next.PauseReason), next.PlatformVersion, next.Ring)
+	_, err := tx.Query(ctx, qRolloutSetRing, next.TrafficPercentage, string(status), nullableString(next.PauseReason), next.PlatformVersion, next.Ring)
 	return wrapErr("rollout transition: set ring", err)
 }
 

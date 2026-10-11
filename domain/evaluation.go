@@ -6,18 +6,29 @@ import "time"
 type EvaluationRole string
 
 const (
-	RoleBaseline  EvaluationRole = "baseline"
-	RoleCandidate EvaluationRole = "candidate"
+	RoleBaseline  EvaluationRole = "B"
+	RoleCandidate EvaluationRole = "C"
 )
 
+// Valid reports whether the role is a known one.
+func (role EvaluationRole) Valid() bool {
+	return role == RoleBaseline || role == RoleCandidate
+}
+
 // GoldenScope is the authorization scope a golden set is read under; the gate
-// scope is the only one that can see hidden examples.
+// scope is the only one that can see hidden examples. Its codes are words because
+// authored evaluation_gate policies name them.
 type GoldenScope string
 
 const (
 	GoldenScopeDev  GoldenScope = "dev"
 	GoldenScopeGate GoldenScope = "gate"
 )
+
+// Valid reports whether the scope is a known one.
+func (scope GoldenScope) Valid() bool {
+	return scope == GoldenScopeDev || scope == GoldenScopeGate
+}
 
 // Metric names shared by evaluators, paired scoring, gate decisions, and retrieval evaluation.
 const (
@@ -236,7 +247,7 @@ type EvaluationRun struct {
 	TenantID    int64
 	ManifestID  string
 	Scope       GoldenScope
-	Status      string
+	Status      EvaluationRunStatus
 	StartedAt   time.Time
 	CompletedAt time.Time
 	Samples     int

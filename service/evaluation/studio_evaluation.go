@@ -20,7 +20,7 @@ var studioEvaluationQueries = map[string]string{
 INSERT INTO agent_studio_event (id, partner_id, agent_id, event, detail, principal_kind, principal_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?, ?)`,
 	qStudioComparedDraft: `
-SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND subject_code = 'draft'`,
+SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_id = ? AND run_id = ? AND subject_code = 'D'`,
 	qStudioComparedRelease: `
 SELECT definition FROM agent_version WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 }

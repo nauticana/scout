@@ -35,7 +35,7 @@ const (
 var baselineQueries = map[string]string{
 	qBaselineExamples: `
 SELECT example_id FROM golden_example
- WHERE partner_id = ? AND golden_set_id = ? AND set_version = ? AND (scope_code = ? OR ? = 'gate')`,
+ WHERE partner_id = ? AND golden_set_id = ? AND set_version = ? AND (scope_code = ? OR ? = ` + sqlScopeGate + `)`,
 	qBaselineCount: `
 SELECT COUNT(*) FROM evaluation_baseline WHERE partner_id = ? AND golden_set_id = ? AND set_version = ?`,
 	qBaselineInsert: `

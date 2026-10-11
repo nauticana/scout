@@ -8,7 +8,7 @@ columns:
   - name: traffic_percentage
     type: SMALLINT
   - name: status_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: started_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP

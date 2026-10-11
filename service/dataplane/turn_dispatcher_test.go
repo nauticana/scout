@@ -67,7 +67,7 @@ func (db queueDBFake) BeginTx(context.Context, map[string]string) (keelport.TxQu
 func testDispatch(tenantID int64, requestID, conversationID string) domain.TurnDispatch {
 	return domain.TurnDispatch{
 		Turn: domain.TurnRequest{
-			TenantContext:  domain.TenantContext{TenantID: tenantID, PriorityClass: "interactive"},
+			TenantContext:  domain.TenantContext{TenantID: tenantID, PriorityClass: domain.PriorityInteractive},
 			RequestID:      requestID,
 			ConversationID: conversationID,
 			AgentID:        "agent",
@@ -112,8 +112,8 @@ func TestQueueTurnDispatcherDeduplicatesAndDetectsConflict(t *testing.T) {
 		record  [][]any
 		wantErr error
 	}{
-		"identical replay is a no-op": {queued: [][]any{{int64(11), digest, "queued"}}},
-		"different input conflicts":   {queued: [][]any{{int64(11), "other", "queued"}}, wantErr: domain.ErrConflict},
+		"identical replay is a no-op": {queued: [][]any{{int64(11), digest, string(domain.QueueQueued)}}},
+		"different input conflicts":   {queued: [][]any{{int64(11), "other", string(domain.QueueQueued)}}, wantErr: domain.ErrConflict},
 		"missing turn record":         {record: nil, wantErr: domain.ErrNotFound},
 	} {
 		t.Run(name, func(t *testing.T) {

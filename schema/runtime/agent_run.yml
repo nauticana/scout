@@ -16,7 +16,7 @@ columns:
     nullable: true
     comment: The durable turn's request id; null for an execution outside a turn
   - name: status_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: completed_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -49,4 +49,4 @@ checks:
   - name: agent_run_task_kind_ck
     expression: CHAR_LENGTH(TRIM(task_kind)) > 0
   - name: agent_run_status_ck
-    expression: status_code IN ('completed', 'failed', 'cancelled')
+    expression: status_code IN ('C', 'F', 'X')

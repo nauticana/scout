@@ -124,7 +124,7 @@ func TestTableVersionPinStoreArguments(t *testing.T) {
 		t.Fatalf("id = %d, err = %v", id, err)
 	}
 	args := query.args[qPinInsert]
-	if len(args) != 14 || args[0] != int64(8) || args[1] != "writer-a" || args[2] != "1" || args[3] != "compliance" ||
+	if len(args) != 14 || args[0] != int64(8) || args[1] != "writer-a" || args[2] != "1" || args[3] != string(domain.PinScopeCompliance) ||
 		args[4] != nil || args[7] != "dpo" || args[9] != `["safety-2026.08"]` || args[10] != nil {
 		t.Fatalf("args = %v", args)
 	}

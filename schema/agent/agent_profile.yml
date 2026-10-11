@@ -14,8 +14,8 @@ columns:
   - name: display_name
     type: VARCHAR(200)
   - name: state_code
-    type: VARCHAR(30)
-    default: active
+    type: CHAR(1)
+    default: A
   - name: state_reason
     type: VARCHAR(400)
     nullable: true

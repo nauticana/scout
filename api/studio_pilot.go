@@ -9,7 +9,7 @@ const (
 )
 
 // PilotChangeRequest serves version of agent_name to one subject, or with remove stops it:
-// subject_kind principal names a person by decimal user id, position the product's reference.
+// subject_kind P (principal) names a person by decimal user id, O (position) the product's reference.
 type PilotChangeRequest struct {
 	AgentName   string `json:"agent_name"`
 	Version     string `json:"version"`

@@ -9,10 +9,15 @@ import (
 type DecisionOutcome string
 
 const (
-	DecisionAllow   DecisionOutcome = "allow"
-	DecisionDeny    DecisionOutcome = "deny"
-	DecisionPending DecisionOutcome = "pending"
+	DecisionAllow   DecisionOutcome = "A"
+	DecisionDeny    DecisionOutcome = "D"
+	DecisionPending DecisionOutcome = "P"
 )
+
+// Valid reports whether the outcome is a seeded audit_decision_outcome code.
+func (outcome DecisionOutcome) Valid() bool {
+	return outcome == DecisionAllow || outcome == DecisionDeny || outcome == DecisionPending
+}
 
 // ObligationKind names a condition a policy attaches to an allow decision. An
 // enforcement point that does not recognize a kind must fail, never proceed.

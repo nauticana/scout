@@ -46,8 +46,8 @@ columns:
   - name: proposed_digest
     type: CHAR(64)
   - name: status_code
-    type: VARCHAR(30)
-    default: pending
+    type: CHAR(1)
+    default: P
   - name: deadline_at
     type: TIMESTAMP
     nullable: true
@@ -177,6 +177,6 @@ checks:
   - name: turn_approval_request_route_ck
     expression: (approval_route_id IS NULL AND approver_reference_kind IS NULL AND approver_reference IS NULL AND route_resolution IS NULL AND route_step = 0) OR (approval_route_id IS NOT NULL AND approver_reference_kind IS NOT NULL AND approver_reference IS NOT NULL AND release_version IS NOT NULL)
   - name: turn_approval_request_settled_ck
-    expression: turn_settled_at IS NULL OR status_code = 'expired'
+    expression: turn_settled_at IS NULL OR status_code = 'T'
   - name: turn_approval_request_resolved_ck
-    expression: (status_code IN ('pending', 'escalated') AND resolved_at IS NULL) OR (status_code NOT IN ('pending', 'escalated') AND resolved_at IS NOT NULL)
+    expression: (status_code IN ('P', 'S') AND resolved_at IS NULL) OR (status_code NOT IN ('P', 'S') AND resolved_at IS NOT NULL)

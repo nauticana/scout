@@ -38,90 +38,90 @@ const queueRowColumns = `id, partner_id, request_id, conversation_id, agent_id, 
 var turnSchedulerQueries = map[string]string{
 	qSchedReclaim: `
 UPDATE turn_queue
-   SET status_code = 'queued', lease_token = NULL, lease_until = NULL, worker_id = NULL,
+   SET status_code = ` + sqlQueueQueued + `, lease_token = NULL, lease_until = NULL, worker_id = NULL,
        last_error = 'lease expired'
- WHERE status_code = 'leased' AND lease_until < ? AND partition_no BETWEEN ? AND ?
+ WHERE status_code = ` + sqlQueueLeased + ` AND lease_until < ? AND partition_no BETWEEN ? AND ?
 	AND attempt < ?
 RETURNING ` + queueRowColumns,
 
 	qSchedExhausted: `
 SELECT ` + queueRowColumns + `
   FROM turn_queue
- WHERE status_code = 'leased' AND lease_until < ? AND partition_no BETWEEN ? AND ? AND attempt >= ?
+ WHERE status_code = ` + sqlQueueLeased + ` AND lease_until < ? AND partition_no BETWEEN ? AND ? AND attempt >= ?
  ORDER BY lease_until, id
  FOR UPDATE SKIP LOCKED`,
 
 	qSchedCandidates: `
 SELECT partner_id,
-       SUM(CASE WHEN status_code = 'leased' THEN 1 ELSE 0 END),
-       MIN(CASE WHEN status_code = 'queued' AND available_at <= ? THEN priority_rank END),
-       MIN(CASE WHEN status_code = 'queued' AND available_at <= ? THEN enqueued_at END)
+       SUM(CASE WHEN status_code = ` + sqlQueueLeased + ` THEN 1 ELSE 0 END),
+       MIN(CASE WHEN status_code = ` + sqlQueueQueued + ` AND available_at <= ? THEN priority_rank END),
+       MIN(CASE WHEN status_code = ` + sqlQueueQueued + ` AND available_at <= ? THEN enqueued_at END)
   FROM turn_queue
- WHERE status_code IN ('queued', 'leased') AND partition_no BETWEEN ? AND ?
+ WHERE status_code IN (` + sqlQueueQueued + `, ` + sqlQueueLeased + `) AND partition_no BETWEEN ? AND ?
  GROUP BY partner_id
-HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
+HAVING SUM(CASE WHEN status_code = ` + sqlQueueQueued + ` AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
 
 	// Head-of-line per conversation: nothing is claimable while an older
 	// message of the same conversation is queued (even if backed off) or leased.
 	// Leased turns per principal of one tenant that still has ready work.
 	qSchedPrincipals: `
-SELECT principal_kind, principal_id, SUM(CASE WHEN status_code = 'leased' THEN 1 ELSE 0 END)
+SELECT principal_kind, principal_id, SUM(CASE WHEN status_code = ` + sqlQueueLeased + ` THEN 1 ELSE 0 END)
   FROM turn_queue
- WHERE partner_id = ? AND status_code IN ('queued', 'leased') AND partition_no BETWEEN ? AND ?
+ WHERE partner_id = ? AND status_code IN (` + sqlQueueQueued + `, ` + sqlQueueLeased + `) AND partition_no BETWEEN ? AND ?
  GROUP BY principal_kind, principal_id
-HAVING SUM(CASE WHEN status_code = 'queued' AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
+HAVING SUM(CASE WHEN status_code = ` + sqlQueueQueued + ` AND available_at <= ? THEN 1 ELSE 0 END) > 0`,
 
 	qSchedClaim: `
 UPDATE turn_queue
-   SET status_code = 'leased', lease_token = ?, lease_until = ?, worker_id = ?, attempt = attempt + 1
+   SET status_code = ` + sqlQueueLeased + `, lease_token = ?, lease_until = ?, worker_id = ?, attempt = attempt + 1
  WHERE id = (SELECT q.id
                FROM turn_queue q
-              WHERE q.partner_id = ? AND q.status_code = 'queued' AND q.available_at <= ?
+              WHERE q.partner_id = ? AND q.status_code = ` + sqlQueueQueued + ` AND q.available_at <= ?
                 AND q.partition_no BETWEEN ? AND ? AND q.attempt < ?
                 AND (q.principal_kind || ':' || q.principal_id) <> ALL(string_to_array(?, chr(31)))
                 AND NOT EXISTS (SELECT 1
                                   FROM turn_queue o
                                  WHERE o.partner_id = q.partner_id AND o.conversation_id = q.conversation_id
                                    AND o.id <> q.id
-                                   AND (o.status_code = 'leased'
-                                        OR (o.status_code = 'queued'
+                                   AND (o.status_code = ` + sqlQueueLeased + `
+                                        OR (o.status_code = ` + sqlQueueQueued + `
                                             AND (o.enqueued_at < q.enqueued_at
                                                  OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))
               ORDER BY q.priority_rank, q.enqueued_at, q.id
               LIMIT 1
                 FOR UPDATE SKIP LOCKED)
-   AND status_code = 'queued'
+   AND status_code = ` + sqlQueueQueued + `
 RETURNING ` + queueRowColumns,
 
 	qSchedExtend: `
 UPDATE turn_queue
    SET lease_until = ?
- WHERE id = ? AND worker_id = ? AND lease_token = ? AND status_code = 'leased'
+ WHERE id = ? AND worker_id = ? AND lease_token = ? AND status_code = ` + sqlQueueLeased + `
 RETURNING id`,
 
 	qSchedAck: `
 UPDATE turn_queue
-   SET status_code = 'acked', lease_token = NULL, lease_until = NULL, worker_id = NULL
- WHERE id = ? AND worker_id = ? AND lease_token = ? AND status_code = 'leased'
+   SET status_code = ` + sqlQueueAcked + `, lease_token = NULL, lease_until = NULL, worker_id = NULL
+ WHERE id = ? AND worker_id = ? AND lease_token = ? AND status_code = ` + sqlQueueLeased + `
 RETURNING id`,
 
 	qSchedLockLeased: `
 SELECT ` + queueRowColumns + `
   FROM turn_queue
- WHERE id = ? AND worker_id = ? AND lease_token = ? AND status_code = 'leased'
+ WHERE id = ? AND worker_id = ? AND lease_token = ? AND status_code = ` + sqlQueueLeased + `
    FOR UPDATE`,
 
 	qSchedRetry: `
 UPDATE turn_queue
-   SET status_code = 'queued', lease_token = NULL, lease_until = NULL, worker_id = NULL,
+   SET status_code = ` + sqlQueueQueued + `, lease_token = NULL, lease_until = NULL, worker_id = NULL,
        available_at = ?, last_error = ?
- WHERE id = ? AND status_code = 'leased'
+ WHERE id = ? AND status_code = ` + sqlQueueLeased + `
 RETURNING id`,
 
 	qSchedDead: `
 UPDATE turn_queue
-   SET status_code = 'dead', lease_token = NULL, lease_until = NULL, worker_id = NULL, last_error = ?
- WHERE id = ? AND status_code IN ('leased', 'queued')
+   SET status_code = ` + sqlQueueDead + `, lease_token = NULL, lease_until = NULL, worker_id = NULL, last_error = ?
+ WHERE id = ? AND status_code IN (` + sqlQueueLeased + `, ` + sqlQueueQueued + `)
 RETURNING id`,
 }
 
@@ -526,33 +526,33 @@ func TurnQueueWorkerQueries(workerID string, lease time.Duration, batch, maxAtte
 		pending: fmt.Sprintf(`
 SELECT q.id
   FROM turn_queue q
- WHERE q.status_code = 'queued' AND q.available_at <= CURRENT_TIMESTAMP AND q.attempt < %d
+ WHERE q.status_code = `+sqlQueueQueued+` AND q.available_at <= CURRENT_TIMESTAMP AND q.attempt < %d
    AND NOT EXISTS (SELECT 1 FROM turn_queue o
                     WHERE o.partner_id = q.partner_id AND o.conversation_id = q.conversation_id AND o.id <> q.id
-                      AND (o.status_code = 'leased'
-                           OR (o.status_code = 'queued' AND (o.enqueued_at < q.enqueued_at
+                      AND (o.status_code = `+sqlQueueLeased+`
+                           OR (o.status_code = `+sqlQueueQueued+` AND (o.enqueued_at < q.enqueued_at
                                                              OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))
  ORDER BY q.priority_rank, q.enqueued_at, q.id
  LIMIT %d`, maxAttempts, batch),
 		claim: fmt.Sprintf(`
 UPDATE turn_queue
-   SET status_code = 'leased', lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds',
+   SET status_code = `+sqlQueueLeased+`, lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds',
        worker_id = '%s', attempt = attempt + 1
- WHERE id = ? AND status_code = 'queued'
+ WHERE id = ? AND status_code = `+sqlQueueQueued+`
 RETURNING `+queueRowColumns, leaseSeconds, strings.ReplaceAll(workerID, "'", "''")),
 		reclaim: fmt.Sprintf(`
 WITH expired AS (
     UPDATE turn_queue
-       SET status_code = CASE WHEN attempt >= %d THEN 'dead' ELSE 'queued' END,
+       SET status_code = CASE WHEN attempt >= %d THEN `+sqlQueueDead+` ELSE `+sqlQueueQueued+` END,
            lease_token = NULL, lease_until = NULL, worker_id = NULL,
            last_error = CASE WHEN attempt >= %d THEN 'lease expired after last attempt' ELSE 'lease expired' END
-     WHERE status_code = 'leased' AND lease_until < CURRENT_TIMESTAMP
+     WHERE status_code = `+sqlQueueLeased+` AND lease_until < CURRENT_TIMESTAMP
  RETURNING id, partner_id, request_id, attempt, input_uri, input_digest, status_code
 ), parked AS (
     INSERT INTO turn_dead_letter (id, partner_id, request_id, queue_id, reason, attempts, input_uri, input_digest)
     SELECT nextval('turn_dead_letter_seq'), partner_id, request_id, id, 'lease expired after last attempt', attempt, input_uri, input_digest
       FROM expired
-     WHERE status_code = 'dead'
+     WHERE status_code = `+sqlQueueDead+`
     ON CONFLICT (queue_id) DO NOTHING
 )
 SELECT id FROM expired`, maxAttempts, maxAttempts),

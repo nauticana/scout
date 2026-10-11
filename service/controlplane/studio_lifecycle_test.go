@@ -27,7 +27,7 @@ func createRows() map[string][][]any {
 		qStudioLockType:     {{"writer"}},
 		qStudioTypeCensus:   {{int64(1), int64(0)}},
 		qStudioCreateRecord: {{createdAgentID}},
-		qStudioListAgents:   {{createdAgentID, "writer", "Blog writer", "draft", false, int64(1), int64(0), false, nil, nil, nil}},
+		qStudioListAgents:   {{createdAgentID, "writer", "Blog writer", string(domain.AgentStateDraft), false, int64(1), int64(0), false, nil, nil, nil}},
 	}
 }
 
@@ -103,7 +103,7 @@ func TestCreateRefusesAnUnknownTypeAndACopyOfAnotherType(t *testing.T) {
 		t.Fatalf("unknown type error = %v", err)
 	}
 	rows = createRows()
-	rows[qStudioGetDraft] = [][]any{{"editor", "Editor", "active", true, nil, nil, nil, nil, nil, nil, nil, int64(4), int64(2), false}}
+	rows[qStudioGetDraft] = [][]any{{"editor", "Editor", string(domain.AgentStateActive), true, nil, nil, nil, nil, nil, nil, nil, int64(4), int64(2), false}}
 	service, query := lifecycleService(rows)
 	request := createRequest()
 	request.CopyFrom = "editor-a"
@@ -152,12 +152,12 @@ func archiveRows(state string, isDefault bool) map[string][][]any {
 	return map[string][][]any{
 		qStudioGetDraft:   {{"writer", "Writer", state, true, nil, nil, nil, nil, nil, nil, nil, int64(4), int64(2), isDefault}},
 		qStudioBumpDraft:  {{int64(5)}},
-		qStudioListAgents: {{"writer-a", "writer", "Writer", "archived", true, int64(5), int64(2), false, nil, nil, nil}},
+		qStudioListAgents: {{"writer-a", "writer", "Writer", string(domain.AgentStateArchived), true, int64(5), int64(2), false, nil, nil, nil}},
 	}
 }
 
 func TestArchiveWithdrawsAnAgentAndBlocksEdits(t *testing.T) {
-	service, query := lifecycleService(archiveRows("active", false))
+	service, query := lifecycleService(archiveRows(string(domain.AgentStateActive), false))
 	summary, err := service.Archive(context.Background(), humanActor(8, 9), domain.AgentArchiveRequest{AgentID: "writer-a", ExpectedDraftRevision: 4})
 	if err != nil || !summary.Archived {
 		t.Fatalf("summary = %+v, error = %v", summary, err)
@@ -165,19 +165,19 @@ func TestArchiveWithdrawsAnAgentAndBlocksEdits(t *testing.T) {
 	if state := query.args[qStudioSetProfileActive]; state[0] != string(domain.AgentStateArchived) {
 		t.Fatalf("state args = %v", state)
 	}
-	service, _ = lifecycleService(archiveRows("archived", false))
+	service, _ = lifecycleService(archiveRows(string(domain.AgentStateArchived), false))
 	if _, err = service.SetEnabled(context.Background(), humanActor(8, 9), domain.AgentSetEnabledRequest{AgentID: "writer-a", Enabled: true, ExpectedDraftRevision: 4}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("editing an archived agent = %v, want conflict", err)
 	}
 }
 
 func TestArchiveRefusesTheDefaultAndADelegatedAgent(t *testing.T) {
-	service, _ := lifecycleService(archiveRows("active", true))
+	service, _ := lifecycleService(archiveRows(string(domain.AgentStateActive), true))
 	request := domain.AgentArchiveRequest{AgentID: "writer-a", ExpectedDraftRevision: 4}
 	if _, err := service.Archive(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("default error = %v", err)
 	}
-	service, query := lifecycleService(archiveRows("active", false))
+	service, query := lifecycleService(archiveRows(string(domain.AgentStateActive), false))
 	service.Delegations = &fake.DelegationGrantRepository{ForAgentFunc: func(context.Context, int64, string) ([]domain.DelegationGrant, error) {
 		return []domain.DelegationGrant{{GrantID: "g-1"}}, nil
 	}}
@@ -190,28 +190,28 @@ func TestArchiveRefusesTheDefaultAndADelegatedAgent(t *testing.T) {
 }
 
 func TestUnarchiveRestoresDisabled(t *testing.T) {
-	service, query := lifecycleService(archiveRows("archived", false))
+	service, query := lifecycleService(archiveRows(string(domain.AgentStateArchived), false))
 	if _, err := service.Unarchive(context.Background(), humanActor(8, 9), domain.AgentArchiveRequest{AgentID: "writer-a", ExpectedDraftRevision: 4}); err != nil {
 		t.Fatalf("Unarchive: %v", err)
 	}
 	if state := query.args[qStudioSetProfileActive]; state[0] != string(domain.AgentStateSuspended) || !slices.Contains(query.queries, qStudioDisableDraft) {
 		t.Fatalf("state = %v, queries = %v", state, query.queries)
 	}
-	service, _ = lifecycleService(archiveRows("active", false))
+	service, _ = lifecycleService(archiveRows(string(domain.AgentStateActive), false))
 	if _, err := service.Unarchive(context.Background(), humanActor(8, 9), domain.AgentArchiveRequest{AgentID: "writer-a", ExpectedDraftRevision: 4}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("error = %v, want conflict", err)
 	}
 }
 
 func TestRenameRefusesATakenNameAndAStaleRevision(t *testing.T) {
-	rows := archiveRows("active", false)
+	rows := archiveRows(string(domain.AgentStateActive), false)
 	rows[qStudioNameTaken] = [][]any{{int64(1)}}
 	service, _ := lifecycleService(rows)
 	request := domain.AgentRenameRequest{AgentID: "writer-a", DisplayName: "Editor", ExpectedDraftRevision: 4}
 	if _, err := service.Rename(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("taken error = %v", err)
 	}
-	rows = archiveRows("active", false)
+	rows = archiveRows(string(domain.AgentStateActive), false)
 	delete(rows, qStudioBumpDraft)
 	service, query := lifecycleService(rows)
 	if _, err := service.Rename(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrRevisionConflict) {
@@ -224,8 +224,8 @@ func TestRenameRefusesATakenNameAndAStaleRevision(t *testing.T) {
 
 func TestListAgentsShowsOnlyGrantedAgents(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{qStudioListAgents: {
-		{"writer-a", "writer", "A", "active", true, int64(1), int64(1), true, nil, nil, nil},
-		{"writer-b", "writer", "B", "active", true, int64(1), int64(1), false, nil, nil, nil},
+		{"writer-a", "writer", "A", string(domain.AgentStateActive), true, int64(1), int64(1), true, nil, nil, nil},
+		{"writer-b", "writer", "B", string(domain.AgentStateActive), true, int64(1), int64(1), false, nil, nil, nil},
 	}}, args: map[string][]any{}}
 	service := listAgentsService(query)
 	service.Roles = fake.PrincipalAuthorizerFunc(func(_ context.Context, _ domain.Principal, _, _, value string) (domain.AuthorizationGrant, error) {
@@ -241,7 +241,7 @@ func TestListAgentsShowsOnlyGrantedAgents(t *testing.T) {
 }
 
 func TestArchiveRefusesAnAgentThatBecameTheDefault(t *testing.T) {
-	rows := archiveRows("active", false)
+	rows := archiveRows(string(domain.AgentStateActive), false)
 	rows[qStudioLockAlias] = [][]any{{"writer-a", int64(3)}}
 	service, query := lifecycleService(rows)
 	if _, err := service.Archive(context.Background(), humanActor(8, 9), domain.AgentArchiveRequest{AgentID: "writer-a", ExpectedDraftRevision: 4}); !errors.Is(err, domain.ErrConflict) {

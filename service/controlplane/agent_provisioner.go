@@ -57,7 +57,7 @@ SELECT ?, ?, 'autonomy', 'autonomy', ?, ` + sqlMergeReplace + `, FALSE, ?, ?
                     WHERE partner_id = ? AND scope_id = ? AND resource_kind_code = 'autonomy' AND endda IS NULL)`,
 	qProvisionAccess: `
 INSERT INTO tenant_model_access (partner_id, provider_id, model_id, priority_class_code)
-VALUES (?, ?, ?, 'standard')
+VALUES (?, ?, ?, ` + sqlPriorityStandard + `)
 ON CONFLICT (partner_id, provider_id, model_id) DO NOTHING`,
 	// A scope the product already placed elsewhere in its tree is left where it is.
 	qProvisionScope: `

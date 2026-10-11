@@ -95,7 +95,7 @@ reported; the sweep continues. Run it from a periodic worker.
 Producers record source changes with `EnqueueSourceChange` inside their own transaction (merge
 `SourceChangeWriteQueries()` into the transaction's query map) — the outbox guarantee: the source write and the
 change event commit together. An event carries tenant, knowledge base, object id, source version, op
-(`upsert`/`delete`), authorization attributes, and occurrence time. `TableSourceChangeSource.Poll` returns
+(`U` upsert or `D` delete), authorization attributes, and occurrence time. `TableSourceChangeSource.Poll` returns
 unacked events in occurrence order and `Ack` marks them applied. `Reconciler.Reconcile` reports freshness lag
 (age of the oldest unacked event), orphan chunks, and outstanding tombstones per knowledge base.
 

@@ -19,6 +19,8 @@ const (
 	qPinnedChunks   = "scout_knowledge_pinned_chunks"
 )
 
+const sqlModeWhole = "'" + string(domain.KnowledgeModeWhole) + "'"
+
 // The chunk scan reads no vector table, so knowledge is read whole without
 // knowledge_vector installed. Version, manifest and tombstone scope the scan;
 // the any-of entitlement rule retrieval compiles into SQL is applied in Go
@@ -30,7 +32,7 @@ SELECT b.knowledge_base_id, b.knowledge_version, b.max_whole_tokens, d.document_
   LEFT JOIN agent_knowledge_document d
     ON d.partner_id = b.partner_id AND d.agent_id = b.agent_id AND d.agent_version = b.agent_version
    AND d.knowledge_base_id = b.knowledge_base_id
- WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ? AND b.mode_code = 'whole'
+ WHERE b.partner_id = ? AND b.agent_id = ? AND b.agent_version = ? AND b.mode_code = ` + sqlModeWhole + `
  ORDER BY b.knowledge_base_id, d.ordinal, d.document_id`,
 	qPinnedChunks: `
 SELECT c.document_id, c.chunk_no, c.content_uri, c.token_count, d.source_uri, c.source_version,

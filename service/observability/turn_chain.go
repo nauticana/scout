@@ -12,9 +12,15 @@ import (
 
 // Turn chain categories: a turn's decision chain opens with admission and closes
 // with exactly one terminal state.
-const AuditCategoryTurnAdmitted = "turn_admitted"
+const (
+	AuditCategoryTurnAdmitted  = "turn_admitted"
+	AuditCategoryTurnSuspended = "turn_suspended"
+	AuditCategoryTurnCompleted = "turn_completed"
+	AuditCategoryTurnFailed    = "turn_failed"
+	AuditCategoryTurnCancelled = "turn_cancelled"
+)
 
-var terminalTurnCategories = []string{"turn_completed", "turn_failed", "turn_cancelled"}
+var terminalTurnCategories = []string{AuditCategoryTurnCompleted, AuditCategoryTurnFailed, AuditCategoryTurnCancelled}
 
 // MemoryAuditSink keeps decisions in process with the table sink's semantics: the
 // first record of a decision key wins, a keyless record always appends.

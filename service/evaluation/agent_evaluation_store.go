@@ -48,12 +48,12 @@ var agentEvaluationQueries = map[string]string{
 	qAgentEvalLockSet: `
 SELECT golden_set_id FROM agent_golden_set WHERE partner_id = ? AND agent_id = ? FOR UPDATE`,
 	qAgentEvalOpenRuns: `
-SELECT COUNT(*) FROM evaluation_run WHERE partner_id = ? AND agent_id = ? AND status_code IN ('queued', 'running')`,
+SELECT COUNT(*) FROM evaluation_run WHERE partner_id = ? AND agent_id = ? AND status_code IN (` + sqlRunQueued + `, ` + sqlRunRunning + `)`,
 	qAgentEvalVersion: `
 SELECT COUNT(e.example_id)
   FROM golden_set_version v
   LEFT JOIN golden_example e ON e.partner_id = v.partner_id AND e.golden_set_id = v.golden_set_id AND e.set_version = v.set_version
-                            AND (e.scope_code = ? OR ? = 'gate')
+                            AND (e.scope_code = ? OR ? = ` + sqlScopeGate + `)
  WHERE v.partner_id = ? AND v.golden_set_id = ? AND v.set_version = ?
  GROUP BY v.set_version`,
 	qAgentEvalRelease: `
@@ -61,7 +61,7 @@ SELECT definition_digest FROM agent_version WHERE partner_id = ? AND agent_id = 
 	qAgentEvalInsertRun: `
 INSERT INTO evaluation_run (id, partner_id, agent_id, golden_set_id, set_version, scope_code, status_code, started_at,
                             requested_by_kind, requested_by_id)
-VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ` + sqlRunQueued + `, NULL, ?, ?)
 RETURNING queued_at`,
 	qAgentEvalInsertSubj: `
 INSERT INTO evaluation_run_subject (run_id, partner_id, subject_code, agent_id, agent_version, definition_digest, definition_json, settings_json,
@@ -75,11 +75,11 @@ SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_
           FROM evaluation_result x
           JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
                                AND e.set_version = x.set_version AND e.example_id = x.example_id
-         WHERE x.partner_id = r.partner_id AND x.run_id = r.id AND e.scope_code = 'gate' AND ? <> 'gate'),
+         WHERE x.partner_id = r.partner_id AND x.run_id = r.id AND e.scope_code = ` + sqlScopeGate + ` AND ? <> ` + sqlScopeGate + `),
        s.provider_id, s.model_id, b.subject_code, b.agent_version, b.definition_digest, b.baseline_id, b.provider_id, b.model_id
   FROM evaluation_run r
-  JOIN evaluation_run_subject s ON s.partner_id = r.partner_id AND s.run_id = r.id AND s.role_code = 'candidate'
-  LEFT JOIN evaluation_run_subject b ON b.partner_id = r.partner_id AND b.run_id = r.id AND b.role_code = 'baseline'
+  JOIN evaluation_run_subject s ON s.partner_id = r.partner_id AND s.run_id = r.id AND s.role_code = ` + sqlRoleCandidate + `
+  LEFT JOIN evaluation_run_subject b ON b.partner_id = r.partner_id AND b.run_id = r.id AND b.role_code = ` + sqlRoleBaseline + `
   LEFT JOIN currency c ON c.code = r.currency_code
  WHERE r.partner_id = ? AND r.id = ? AND r.agent_id IS NOT NULL`,
 	qAgentEvalResults: `
@@ -90,8 +90,8 @@ SELECT x.example_id, x.scores, x.latency_ms, x.input_tokens, x.output_tokens, x.
   JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
                        AND e.set_version = x.set_version AND e.example_id = x.example_id
   LEFT JOIN currency c ON c.code = x.currency_code
- WHERE x.partner_id = ? AND x.run_id = ? AND x.role_code = 'candidate'
-   AND (e.scope_code = ? OR ? = 'gate')
+ WHERE x.partner_id = ? AND x.run_id = ? AND x.role_code = ` + sqlRoleCandidate + `
+   AND (e.scope_code = ? OR ? = ` + sqlScopeGate + `)
    AND (? = '' OR x.example_id < ?)
  ORDER BY x.example_id DESC
  LIMIT ?`,
@@ -101,17 +101,17 @@ SELECT definition_json, settings_json FROM evaluation_run_subject WHERE partner_
 SELECT example_id, input_tokens + evaluator_input_tokens, output_tokens + evaluator_output_tokens,
        cost_minor_units + evaluator_cost_minor_units, currency_code, reason
   FROM evaluation_result
- WHERE partner_id = ? AND run_id = ? AND role_code = 'candidate'`,
+ WHERE partner_id = ? AND run_id = ? AND role_code = ` + sqlRoleCandidate + ``,
 	qAgentEvalRenew: `
 UPDATE evaluation_run
    SET lease_until = CURRENT_TIMESTAMP + (? * INTERVAL '1 second')
- WHERE partner_id = ? AND id = ? AND lease_token = ? AND status_code = 'running'
+ WHERE partner_id = ? AND id = ? AND lease_token = ? AND status_code = ` + sqlRunRunning + `
 RETURNING golden_set_id, set_version`,
 	qAgentEvalPutResult: `
 INSERT INTO evaluation_result (run_id, partner_id, golden_set_id, set_version, example_id, role_code, scores, latency_ms,
                                input_tokens, output_tokens, cost_minor_units, currency_code, needs_human_review, reason,
                                evaluator_input_tokens, evaluator_output_tokens, evaluator_cost_minor_units)
-VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ` + sqlRoleCandidate + `, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (run_id, example_id, role_code) DO NOTHING
 RETURNING example_id`,
 	qAgentEvalAddTotals: `
@@ -123,7 +123,7 @@ RETURNING id`,
 	qAgentEvalFinish: `
 UPDATE evaluation_run
    SET status_code = ?, completed_at = CURRENT_TIMESTAMP, reason = ?, lease_token = NULL, lease_until = NULL
- WHERE partner_id = ? AND id = ? AND lease_token = ? AND status_code = 'running'
+ WHERE partner_id = ? AND id = ? AND lease_token = ? AND status_code = ` + sqlRunRunning + `
 RETURNING id`,
 	qAgentEvalBaseline: `
 SELECT scope_code FROM evaluation_baseline WHERE partner_id = ? AND id = ? AND golden_set_id = ? AND set_version = ?`,
@@ -158,13 +158,13 @@ SELECT c.example_id, c.verdict_code, CAST(c.confidence AS DOUBLE PRECISION), c.e
   FROM evaluation_comparison c
   JOIN golden_example e ON e.partner_id = c.partner_id AND e.golden_set_id = c.golden_set_id
                        AND e.set_version = c.set_version AND e.example_id = c.example_id
-  LEFT JOIN evaluation_result a ON a.partner_id = c.partner_id AND a.run_id = c.run_id AND a.example_id = c.example_id AND a.role_code = 'baseline'
-  LEFT JOIN evaluation_result b ON b.partner_id = c.partner_id AND b.run_id = c.run_id AND b.example_id = c.example_id AND b.role_code = 'candidate'
+  LEFT JOIN evaluation_result a ON a.partner_id = c.partner_id AND a.run_id = c.run_id AND a.example_id = c.example_id AND a.role_code = ` + sqlRoleBaseline + `
+  LEFT JOIN evaluation_result b ON b.partner_id = c.partner_id AND b.run_id = c.run_id AND b.example_id = c.example_id AND b.role_code = ` + sqlRoleCandidate + `
   LEFT JOIN currency cc ON cc.code = c.currency_code
   LEFT JOIN currency ac ON ac.code = a.currency_code
   LEFT JOIN currency bc ON bc.code = b.currency_code
  WHERE c.partner_id = ? AND c.run_id = ?
-   AND (e.scope_code = ? OR ? = 'gate')
+   AND (e.scope_code = ? OR ? = ` + sqlScopeGate + `)
    AND (? = '' OR c.example_id < ?)
  ORDER BY c.example_id DESC
  LIMIT ?`,
@@ -173,7 +173,7 @@ SELECT COALESCE(c.verdict_code, ''), COUNT(*)
   FROM evaluation_comparison c
   JOIN golden_example e ON e.partner_id = c.partner_id AND e.golden_set_id = c.golden_set_id
                        AND e.set_version = c.set_version AND e.example_id = c.example_id
- WHERE c.partner_id = ? AND c.run_id = ? AND (e.scope_code = ? OR ? = 'gate')
+ WHERE c.partner_id = ? AND c.run_id = ? AND (e.scope_code = ? OR ? = ` + sqlScopeGate + `)
  GROUP BY c.verdict_code`,
 }
 
@@ -187,22 +187,22 @@ func AgentEvaluationQueueQueries(lease time.Duration, batch, maxAttempts int) (q
 	queries = map[string]string{
 		pending: fmt.Sprintf(`
 SELECT id FROM evaluation_run
- WHERE status_code = 'queued' AND agent_id IS NOT NULL
+ WHERE status_code = `+sqlRunQueued+` AND agent_id IS NOT NULL
  ORDER BY id
  LIMIT %d`, batch),
 		claim: fmt.Sprintf(`
 UPDATE evaluation_run
-   SET status_code = 'running', lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds',
+   SET status_code = `+sqlRunRunning+`, lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds',
        attempt = attempt + 1, started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
- WHERE id = ? AND status_code = 'queued' AND agent_id IS NOT NULL
+ WHERE id = ? AND status_code = `+sqlRunQueued+` AND agent_id IS NOT NULL
 RETURNING id, partner_id, lease_token`, leaseSeconds),
 		reclaim: fmt.Sprintf(`
 UPDATE evaluation_run
-   SET status_code = CASE WHEN attempt >= %[1]d THEN 'failed' ELSE 'queued' END,
+   SET status_code = CASE WHEN attempt >= %[1]d THEN `+sqlRunFailed+` ELSE `+sqlRunQueued+` END,
        completed_at = CASE WHEN attempt >= %[1]d THEN CURRENT_TIMESTAMP ELSE NULL END,
        reason = CASE WHEN attempt >= %[1]d THEN 'lease expired after last attempt' ELSE reason END,
        lease_token = NULL, lease_until = NULL
- WHERE status_code = 'running' AND lease_token IS NOT NULL AND lease_until < CURRENT_TIMESTAMP
+ WHERE status_code = `+sqlRunRunning+` AND lease_token IS NOT NULL AND lease_until < CURRENT_TIMESTAMP
 RETURNING id`, maxAttempts),
 	}
 	return queries, pending, claim, reclaim
@@ -445,7 +445,7 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 	}
 	run := domain.AgentEvaluationRun{
 		RunID: common.AsInt64(row[0]), TenantID: tenantID, AgentID: common.AsString(row[1]), GoldenSetID: common.AsString(row[2]),
-		SetVersion: common.AsInt64(row[3]), Scope: domain.GoldenScope(common.AsString(row[4])), Status: common.AsString(row[5]),
+		SetVersion: common.AsInt64(row[3]), Scope: domain.GoldenScope(common.AsString(row[4])), Status: domain.EvaluationRunStatus(common.AsString(row[5])),
 		QueuedAt: common.AsTime(row[6]), StartedAt: optionalTime(row[7]), CompletedAt: optionalTime(row[8]),
 		RequestedBy: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[9])), ID: common.AsString(row[10])},
 		Samples:     int(common.AsInt64(row[11])),
@@ -455,6 +455,9 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 		Subject: domain.AgentEvaluationSubject{Kind: domain.EvaluationSubjectKind(common.AsString(row[18])), AgentID: common.AsString(row[1]),
 			Version: common.AsString(row[19]), DefinitionDigest: strings.TrimSpace(common.AsString(row[20]))},
 		HiddenResults: int(common.AsInt64(row[22])),
+	}
+	if !run.Status.Valid() || !run.Scope.Valid() {
+		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("evaluation run %d: unknown status %q or scope %q", runID, run.Status, run.Scope)
 	}
 	run.Subject.Model = optionalModel(row[23], row[24])
 	if kind := common.AsString(row[25]); kind != "" {
@@ -718,20 +721,18 @@ func resultTotal(result domain.EvaluationResult) (domain.Usage, error) {
 }
 
 // Finish records the terminal status and releases the lease; totals were settled per result.
-func (store *AgentEvaluationStore) Finish(ctx context.Context, lease domain.AgentEvaluationLease, status, reason string) error {
+func (store *AgentEvaluationStore) Finish(ctx context.Context, lease domain.AgentEvaluationLease, status domain.EvaluationRunStatus, reason string) error {
 	if err := validLease(lease); err != nil {
 		return err
 	}
-	switch status {
-	case domain.EvaluationCompleted, domain.EvaluationStoppedEarly, domain.EvaluationFailed:
-	default:
+	if !status.Terminal() {
 		return fmt.Errorf("%w: %q is not a terminal run status", domain.ErrValidation, status)
 	}
 	qs, err := store.queries(ctx, "agent evaluation store", agentEvaluationQueries)
 	if err != nil {
 		return err
 	}
-	finished, err := qs.Query(ctx, qAgentEvalFinish, status, nullable(truncate(reason, 400)), lease.TenantID, lease.RunID, lease.Token)
+	finished, err := qs.Query(ctx, qAgentEvalFinish, string(status), nullable(truncate(reason, 400)), lease.TenantID, lease.RunID, lease.Token)
 	if err != nil {
 		return fmt.Errorf("finish evaluation run: %w", err)
 	}

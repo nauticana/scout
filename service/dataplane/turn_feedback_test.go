@@ -22,7 +22,7 @@ func feedbackService(query *queueQueryFake, allowed bool) *TurnFeedback {
 }
 
 func TestFeedbackRatesACompletedTurnOnce(t *testing.T) {
-	query := &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), "completed", "writer-a", "42"}}}}
+	query := &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), string(domain.TurnCompleted), "writer-a", "42"}}}}
 	if err := feedbackService(query, true).RecordFeedback(context.Background(), domain.TenantContext{TenantID: 7}, feedbackPerson, "r-1", 4, "helpful"); err != nil {
 		t.Fatalf("RecordFeedback: %v", err)
 	}
@@ -33,21 +33,21 @@ func TestFeedbackRatesACompletedTurnOnce(t *testing.T) {
 
 func TestFeedbackRefusesBadRatingsRunningTurnsAndStrangers(t *testing.T) {
 	tenant := domain.TenantContext{TenantID: 7}
-	query := &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), "running", "writer-a", "42"}}}}
+	query := &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), string(domain.TurnRunning), "writer-a", "42"}}}}
 	if err := feedbackService(query, true).RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 6, ""); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("rating 6 = %v", err)
 	}
 	if err := feedbackService(query, true).RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 3, ""); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("running turn = %v", err)
 	}
-	query = &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), "completed", "writer-a", "42"}}}}
+	query = &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), string(domain.TurnCompleted), "writer-a", "42"}}}}
 	if err := feedbackService(query, false).RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 3, ""); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("stranger = %v", err)
 	}
 	if query.firstArgs(qFeedbackPut) != nil {
 		t.Fatal("refused feedback must not be stored")
 	}
-	query = &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), "completed", "writer-a", "7"}}}}
+	query = &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: {{"conversation-1", int64(3), string(domain.TurnCompleted), "writer-a", "7"}}}}
 	if err := feedbackService(query, true).RecordFeedback(context.Background(), tenant, feedbackPerson, "r-1", 3, ""); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("another person's turn = %v", err)
 	}
@@ -85,7 +85,7 @@ func (f *reviewIntakeFake) TurnRated(_ context.Context, turn domain.ReviewTurn, 
 
 func TestFeedbackOffersTheRatedTurnToReviewWithoutThePerson(t *testing.T) {
 	tenant := domain.TenantContext{TenantID: 7, Region: "eu"}
-	turnRow := [][]any{{"conversation-1", int64(3), "completed", "writer-a", "42", "3"}}
+	turnRow := [][]any{{"conversation-1", int64(3), string(domain.TurnCompleted), "writer-a", "42", "3"}}
 	query := &queueQueryFake{rows: map[string][][]any{qFeedbackTurn: turnRow}}
 	review := &reviewIntakeFake{}
 	feedback := feedbackService(query, true)

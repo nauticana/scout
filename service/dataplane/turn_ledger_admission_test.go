@@ -17,7 +17,7 @@ func TestTurnLedgerBeginAppliesAdmissionBeforePersistence(t *testing.T) {
 		return denied
 	}}}
 	_, _, err := ledger.Begin(context.Background(), 7, "user", "request", "task", "input",
-		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "running",
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", domain.TurnRunning,
 		domain.AgentReleaseReference{AgentID: "agent", Version: "1", Digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})
 	if !errors.Is(err, denied) || tenantID != 7 {
 		t.Fatalf("admission = tenant %d, error %v", tenantID, err)

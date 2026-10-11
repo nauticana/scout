@@ -20,9 +20,9 @@ var StatusSchema = mustStatusSchema()
 
 // Instructions explains a confirmation result once, for a server's instructions.
 const Instructions = "A tool that must be confirmed by a person returns confirmation_id and status instead of acting: " +
-	"pending waits for a decision (at approval_url when given) until expires_at; approved and executing are running; " +
-	"executed carries the result; failed and unknown carry reason, and unknown means the effect may have happened; " +
-	"declined, withdrawn and expired did nothing. preview is the complete action the person approves. " +
+	"status P (pending) waits for a decision (at approval_url when given) until expires_at; A (approved) and R (executing) are running; " +
+	"D (executed) carries the result; F (failed) and U (unknown) carry reason, and U means the effect may have happened; " +
+	"X (declined), W (withdrawn) and T (expired) did nothing. preview is the complete action the person approves. " +
 	"Never repeat a call to execute a confirmation; read its status instead."
 
 func mustStatusSchema() json.RawMessage {

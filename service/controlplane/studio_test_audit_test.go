@@ -24,7 +24,7 @@ func testDraftService(query *studioQueryFake, tester fake.DraftTester) *StudioSe
 
 func draftRows() map[string][][]any {
 	return map[string][][]any{
-		qStudioGetDraft: {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft: {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 	}
 }
 

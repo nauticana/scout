@@ -151,7 +151,7 @@ func TestActivationRefusesAReleaseWhoseBudgetUnitDrifted(t *testing.T) {
 	definition, digest := frozenDefinitionWithSettings(t, scope.SettingsDigest(published))
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qStudioGetSettings, [][]any{settingsRow(t, published)})
 	db.script(qCurrencyExponent, [][]any{{int16(3)}})

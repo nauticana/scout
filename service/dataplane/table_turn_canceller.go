@@ -32,14 +32,14 @@ var turnCancelQueries = map[string]string{
 UPDATE conversation_turn
    SET cancel_requested_at = COALESCE(cancel_requested_at, CURRENT_TIMESTAMP),
        cancel_reason = COALESCE(cancel_reason, ?)
- WHERE partner_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `, ` + sqlTurnSuspended + `)
 RETURNING status_code`,
 	// Nothing runs a suspended turn, so it goes back to a worker, which ends it cancelled
 	// and releases the reservation the suspension held.
 	qCancelWake: `
 UPDATE conversation_turn
-   SET status_code = 'queued'
- WHERE partner_id = ? AND request_id = ? AND status_code = 'suspended'
+   SET status_code = ` + sqlTurnQueued + `
+ WHERE partner_id = ? AND request_id = ? AND status_code = ` + sqlTurnSuspended + `
 RETURNING turn_no`,
 	qQueueRequeue: turnDispatcherQueries[qQueueRequeue],
 	qCancelRead: `
@@ -128,7 +128,7 @@ func (canceller *TableTurnCanceller) Cancel(ctx context.Context, tenantID int64,
 	if len(requested.Rows) == 0 {
 		return fmt.Errorf("%w: no live turn for request %q", domain.ErrNotFound, requestID)
 	}
-	if common.AsString(requested.Rows[0][0]) == "suspended" {
+	if domain.TurnStatus(common.AsString(requested.Rows[0][0])) == domain.TurnSuspended {
 		if _, err = tx.Query(ctx, qCancelWake, tenantID, requestID); err != nil {
 			return fmt.Errorf("wake suspended turn: %w", err)
 		}

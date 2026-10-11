@@ -35,13 +35,13 @@ func TestApprovalResolveDecidesAsTheSessionUser(t *testing.T) {
 	desk := &approvalDeskFake{}
 	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
 	recorder := httptest.NewRecorder()
-	spoofed := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"approved","proposed_digest":"d","tenant_id":99}`)
+	spoofed := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusApproved) + `","proposed_digest":"d","tenant_id":99}`)
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, spoofed))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("spoofed status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
-	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"approved","proposed_digest":"d"}`)
+	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusApproved) + `","proposed_digest":"d"}`)
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -54,7 +54,7 @@ func TestApprovalResolveDecidesAsTheSessionUser(t *testing.T) {
 func TestApprovalResolvePassesAnEditsRevisedArguments(t *testing.T) {
 	desk := &approvalDeskFake{}
 	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
-	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"edited","proposed_digest":"d","revised_arguments":{"qty":5}}`)
+	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusEdited) + `","proposed_digest":"d","revised_arguments":{"qty":5}}`)
 	recorder := httptest.NewRecorder()
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
 	if recorder.Code != http.StatusOK {
@@ -74,7 +74,7 @@ func TestApprovalResolvePassesAnEditsRevisedArguments(t *testing.T) {
 func TestApprovalResolveTreatsNullRevisedArgumentsAsAbsent(t *testing.T) {
 	desk := &approvalDeskFake{}
 	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
-	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"approved","proposed_digest":"d","revised_arguments":null}`)
+	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusApproved) + `","proposed_digest":"d","revised_arguments":null}`)
 	recorder := httptest.NewRecorder()
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
 	if recorder.Code != http.StatusOK || desk.verdict.RevisedArguments != nil {
@@ -85,7 +85,7 @@ func TestApprovalResolveTreatsNullRevisedArgumentsAsAbsent(t *testing.T) {
 func TestApprovalLinkMapsASpentLinkToNotFound(t *testing.T) {
 	handler := &ApprovalHandler{Desk: &approvalDeskFake{err: domain.ErrNotFound}}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, api.ApprovalLinkPath, bytes.NewReader([]byte(`{"token":"t","tenant_id":7,"request_id":"r-1","execution_step_id":3,"verdict":"approved"}`)))
+	request := httptest.NewRequest(http.MethodPost, api.ApprovalLinkPath, bytes.NewReader([]byte(`{"token":"t","tenant_id":7,"request_id":"r-1","execution_step_id":3,"verdict":"`+string(domain.ApprovalStatusApproved)+`"}`)))
 	request.Header.Set("Content-Type", "application/json")
 	handler.Routes()[api.ApprovalLinkPath](recorder, request)
 	if recorder.Code != http.StatusNotFound {

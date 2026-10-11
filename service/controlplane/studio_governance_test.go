@@ -65,7 +65,7 @@ type governanceFixture struct {
 func newGovernanceFixture(rows map[string][][]any) *governanceFixture {
 	fixture := &governanceFixture{query: &studioQueryFake{rows: rows, args: map[string][]any{}}}
 	if rows[qGovernanceAgent] == nil {
-		rows[qGovernanceAgent] = [][]any{{"active", int64(4)}}
+		rows[qGovernanceAgent] = [][]any{{string(domain.AgentStateActive), int64(4)}}
 	}
 	if rows[qStudioBumpDraft] == nil {
 		rows[qStudioBumpDraft] = [][]any{{int64(5)}}
@@ -348,7 +348,7 @@ func TestSaveGovernanceChecksTheAgentAndItsRevision(t *testing.T) {
 	if slices.Contains(stale.query.queries, qGovernancePut) || stale.query.commits != 0 {
 		t.Fatalf("a stale save must not write: %v", stale.query.queries)
 	}
-	archived := newGovernanceFixture(map[string][][]any{qGovernanceAgent: {{"archived", int64(4)}}})
+	archived := newGovernanceFixture(map[string][][]any{qGovernanceAgent: {{string(domain.AgentStateArchived), int64(4)}}})
 	if _, err := archived.service.SaveGovernance(context.Background(), humanActor(8, 9), governanceChange(billingGovernance())); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("error = %v, want conflict", err)
 	}

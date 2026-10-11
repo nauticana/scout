@@ -10,6 +10,8 @@ import (
 
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
+
+	"github.com/nauticana/scout/domain"
 )
 
 // confirmationRow is one mcp_confirmation row as the fake keeps it.
@@ -28,7 +30,7 @@ type confirmationRow struct {
 
 func (row *confirmationRow) open() bool {
 	switch row.status {
-	case "pending", "approved", "executing", "unknown":
+	case string(domain.MCPConfirmationPending), string(domain.MCPConfirmationApproved), string(domain.MCPConfirmationExecuting), string(domain.MCPConfirmationUnknown):
 		return true
 	}
 	return false
@@ -40,7 +42,7 @@ func (row *confirmationRow) values(now time.Time) []any {
 		row.digest, text(row.preview), row.requirements, row.channel, row.status, row.approvalRequired, row.approvalID,
 		row.expires, row.created, timeOrNil(row.decided), row.deciderKind, row.deciderID, row.note, row.fence,
 		row.attempts, row.result, row.reason, timeOrNil(row.completed), row.reconcilerKind, row.reconcilerID,
-		row.reconcileNote, row.status == "pending" && !row.expires.After(now)}
+		row.reconcileNote, row.status == string(domain.MCPConfirmationPending) && !row.expires.After(now)}
 }
 
 func timeOrNil(value time.Time) any {
@@ -126,7 +128,7 @@ func (db *confirmationDB) Query(_ context.Context, name string, args ...any) (*k
 		db.next++
 		db.rows[db.next] = &confirmationRow{id: db.next, tenant: id(0), makerKind: str(1), makerID: str(2), client: str(3),
 			tool: str(4), payload: str(5), digest: str(6), preview: str(7), requirements: str(8), channel: str(9),
-			approvalRequired: args[10].(bool), status: "pending", created: db.now, expires: db.now.Add(seconds(11))}
+			approvalRequired: args[10].(bool), status: string(domain.MCPConfirmationPending), created: db.now, expires: db.now.Add(seconds(11))}
 		return rowsOf([]any{db.next}), nil
 	case qConfirmOpen:
 		for _, row := range db.rows {
@@ -145,54 +147,54 @@ func (db *confirmationDB) Query(_ context.Context, name string, args ...any) (*k
 			row.eventID = id(0)
 		}
 	case qConfirmAttach:
-		if row := find(id(1), id(2)); row != nil && row.status == "pending" && row.approvalRequired && row.approvalID == 0 && row.expires.After(db.now) {
+		if row := find(id(1), id(2)); row != nil && row.status == string(domain.MCPConfirmationPending) && row.approvalRequired && row.approvalID == 0 && row.expires.After(db.now) {
 			row.approvalID = id(0)
 			return rowsOf([]any{row.id}), nil
 		}
 	case qConfirmAbandon:
-		if row := find(id(1), id(2)); row != nil && row.status == "pending" {
-			row.status, row.reason, row.completed = "failed", str(0), db.now
+		if row := find(id(1), id(2)); row != nil && row.status == string(domain.MCPConfirmationPending) {
+			row.status, row.reason, row.completed = string(domain.MCPConfirmationFailed), str(0), db.now
 			return rowsOf([]any{row.id}), nil
 		}
 	case qConfirmDecide:
-		if row := find(id(4), id(5)); row != nil && row.status == "pending" && !row.approvalRequired && row.approvalID == 0 && row.expires.After(db.now) {
+		if row := find(id(4), id(5)); row != nil && row.status == string(domain.MCPConfirmationPending) && !row.approvalRequired && row.approvalID == 0 && row.expires.After(db.now) {
 			row.status, row.deciderKind, row.deciderID, row.note, row.decided = str(0), str(1), str(2), str(3), db.now
 			return rowsOf([]any{row.id}), nil
 		}
 	case qConfirmDecideApproval:
-		if row := find(id(4), id(5)); row != nil && row.status == "pending" && row.approvalID == id(6) && row.expires.After(db.now) {
+		if row := find(id(4), id(5)); row != nil && row.status == string(domain.MCPConfirmationPending) && row.approvalID == id(6) && row.expires.After(db.now) {
 			row.status, row.deciderKind, row.deciderID, row.note, row.decided = str(0), str(1), str(2), str(3), db.now
 			return rowsOf([]any{row.id}), nil
 		}
 	case qConfirmWithdraw:
-		if row := find(id(0), id(1)); row != nil && row.status == "pending" && row.makerKind == str(2) && row.makerID == str(3) {
-			row.status, row.deciderKind, row.deciderID, row.decided = "withdrawn", row.makerKind, row.makerID, db.now
+		if row := find(id(0), id(1)); row != nil && row.status == string(domain.MCPConfirmationPending) && row.makerKind == str(2) && row.makerID == str(3) {
+			row.status, row.deciderKind, row.deciderID, row.decided = string(domain.MCPConfirmationWithdrawn), row.makerKind, row.makerID, db.now
 			return rowsOf([]any{row.approvalID}), nil
 		}
 	case qConfirmApproved:
 		var out [][]any
 		for rowID := int64(1); rowID <= db.next; rowID++ {
-			if row := db.rows[rowID]; row.status == "approved" {
+			if row := db.rows[rowID]; row.status == string(domain.MCPConfirmationApproved) {
 				out = append(out, []any{row.tenant, row.id})
 			}
 		}
 		return rowsOf(out...), nil
 	case qConfirmClaim:
-		if row := find(id(1), id(2)); row != nil && row.status == "approved" {
-			row.status, row.leaseUntil = "executing", db.now.Add(seconds(0))
+		if row := find(id(1), id(2)); row != nil && row.status == string(domain.MCPConfirmationApproved) {
+			row.status, row.leaseUntil = string(domain.MCPConfirmationExecuting), db.now.Add(seconds(0))
 			row.fence++
 			row.attempts++
 			return rowsOf([]any{row.fence}), nil
 		}
 	case qConfirmRenew:
-		if row := find(id(1), id(2)); row != nil && !db.renewErr && row.status == "executing" && row.fence == id(3) {
+		if row := find(id(1), id(2)); row != nil && !db.renewErr && row.status == string(domain.MCPConfirmationExecuting) && row.fence == id(3) {
 			row.leaseUntil = db.now.Add(seconds(0))
 			return rowsOf([]any{row.id}), nil
 		}
 	case qConfirmComplete:
-		if row := find(id(4), id(5)); row != nil && row.status == "executing" && row.fence == id(6) {
+		if row := find(id(4), id(5)); row != nil && row.status == string(domain.MCPConfirmationExecuting) && row.fence == id(6) {
 			row.status, row.result, row.reason, row.leaseUntil = str(0), str(1), str(2), time.Time{}
-			if row.status != "unknown" {
+			if row.status != string(domain.MCPConfirmationUnknown) {
 				row.completed = db.now
 			}
 			return rowsOf([]any{row.id}), nil
@@ -200,7 +202,7 @@ func (db *confirmationDB) Query(_ context.Context, name string, args ...any) (*k
 	case qConfirmLapse:
 		var candidates []*confirmationRow
 		for _, row := range db.rows {
-			if row.status == "executing" && !row.leaseUntil.After(db.now) {
+			if row.status == string(domain.MCPConfirmationExecuting) && !row.leaseUntil.After(db.now) {
 				candidates = append(candidates, row)
 			}
 		}
@@ -209,21 +211,21 @@ func (db *confirmationDB) Query(_ context.Context, name string, args ...any) (*k
 		})
 		var out [][]any
 		for _, row := range candidates[:min(args[0].(int), len(candidates))] {
-			row.status, row.leaseUntil = "unknown", time.Time{}
+			row.status, row.leaseUntil = string(domain.MCPConfirmationUnknown), time.Time{}
 			out = append(out, []any{row.id})
 		}
 		return rowsOf(out...), nil
 	case qConfirmExpire:
 		var out [][]any
 		for _, row := range db.rows {
-			if row.status == "pending" && !row.expires.After(db.now) {
-				row.status, row.decided = "expired", db.now
+			if row.status == string(domain.MCPConfirmationPending) && !row.expires.After(db.now) {
+				row.status, row.decided = string(domain.MCPConfirmationExpired), db.now
 				out = append(out, []any{row.id, row.tenant, row.makerKind, row.makerID, row.tool, row.approvalID})
 			}
 		}
 		return rowsOf(out...), nil
 	case qConfirmReconcile:
-		if row := find(id(4), id(5)); row != nil && row.status == "unknown" {
+		if row := find(id(4), id(5)); row != nil && row.status == string(domain.MCPConfirmationUnknown) {
 			row.status, row.reconcilerKind, row.reconcilerID, row.reconcileNote, row.completed = str(0), str(1), str(2), str(3), db.now
 			return rowsOf([]any{row.id}), nil
 		}

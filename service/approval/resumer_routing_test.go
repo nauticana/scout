@@ -20,7 +20,7 @@ func tableResumer(store *TableStore, resumed *int) *Resumer {
 		Authorizer: fake.ApprovalAuthorizerFunc(func(context.Context, domain.ApprovalRequest, domain.PrincipalRef) error { return nil }),
 		Records: &fake.TurnRecordStore{
 			ResumeFunc: func(context.Context, int64, string) error { *resumed++; return nil },
-			FailFunc:   func(context.Context, int64, string, string, string) error { return nil },
+			FailFunc:   func(context.Context, int64, string, domain.TurnStatus, string) error { return nil },
 		},
 		Queue: requeueFunc(func(context.Context, int64, string) error { return nil }),
 	}

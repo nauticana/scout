@@ -1,5 +1,14 @@
 package controlplane
 
+import "github.com/nauticana/scout/domain"
+
+const (
+	sqlActivationPending   = "'" + string(domain.ActivationPending) + "'"
+	sqlActivationActivated = "'" + string(domain.ActivationActivated) + "'"
+	sqlActivationRefused   = "'" + string(domain.ActivationRefused) + "'"
+	sqlActivationCancelled = "'" + string(domain.ActivationCancelled) + "'"
+)
+
 const (
 	qScheduleDeployment    = "scout_activation_schedule_deployment"
 	qSchedulePending       = "scout_activation_schedule_pending"
@@ -20,13 +29,13 @@ const (
 	qActivationLockDraft   = "scout_activation_lock_draft"
 	qActivationAgentState  = "scout_activation_agent_state"
 	activationColumns      = `id, partner_id, agent_id, agent_version, definition_digest, canary_percentage, base_stable_version, base_canary_version, effective_at, state_code, scheduled_by_kind, scheduled_by_id, scheduled_at, attempts, next_attempt_at, reason_code, detail, decided_by_kind, decided_by_id, decided_at`
-	activationDuePredicate = `state_code = 'pending' AND effective_at <= CURRENT_TIMESTAMP AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)`
+	activationDuePredicate = `state_code = ` + sqlActivationPending + ` AND effective_at <= CURRENT_TIMESTAMP AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)`
 )
 
 // scheduleQueries run inside the publish transaction.
 var scheduleQueries = map[string]string{
 	qScheduleDeployment: `SELECT stable_version, canary_version FROM agent_deployment WHERE partner_id = ? AND agent_id = ?`,
-	qSchedulePending:    `SELECT id FROM agent_release_activation WHERE partner_id = ? AND agent_id = ? AND state_code = 'pending'`,
+	qSchedulePending:    `SELECT id FROM agent_release_activation WHERE partner_id = ? AND agent_id = ? AND state_code = ` + sqlActivationPending,
 	qScheduleInsert: `
 INSERT INTO agent_release_activation (id, partner_id, agent_id, agent_version, definition_digest, canary_percentage,
        base_stable_version, base_canary_version, effective_at, scheduled_by_kind, scheduled_by_id)
@@ -42,9 +51,9 @@ var activationQueries = map[string]string{
 	qActivationGet: `SELECT ` + activationColumns + ` FROM agent_release_activation WHERE partner_id = ? AND agent_id = ? AND id = ?`,
 	qActivationCancel: `
 UPDATE agent_release_activation
-   SET state_code = 'cancelled', decided_by_kind = ?, decided_by_id = ?, decided_at = CURRENT_TIMESTAMP,
+   SET state_code = ` + sqlActivationCancelled + `, decided_by_kind = ?, decided_by_id = ?, decided_at = CURRENT_TIMESTAMP,
        detail = ?, next_attempt_at = NULL
- WHERE partner_id = ? AND agent_id = ? AND id = ? AND state_code = 'pending'
+ WHERE partner_id = ? AND agent_id = ? AND id = ? AND state_code = ` + sqlActivationPending + `
 RETURNING ` + activationColumns,
 	qActivationDue: `SELECT id FROM agent_release_activation WHERE ` + activationDuePredicate + ` ORDER BY effective_at, id LIMIT ?`,
 	qActivationClaim: `SELECT ` + activationColumns + ` FROM agent_release_activation
@@ -66,17 +75,17 @@ RETURNING stable_version`,
 	qActivationDeployment: `SELECT stable_version, canary_version, canary_percentage FROM agent_deployment WHERE partner_id = ? AND agent_id = ?`,
 	qActivationDone: `
 UPDATE agent_release_activation
-   SET state_code = 'activated', detail = ?, decided_at = CURRENT_TIMESTAMP, next_attempt_at = NULL
- WHERE id = ? AND state_code = 'pending' RETURNING id`,
+   SET state_code = ` + sqlActivationActivated + `, detail = ?, decided_at = CURRENT_TIMESTAMP, next_attempt_at = NULL
+ WHERE id = ? AND state_code = ` + sqlActivationPending + ` RETURNING id`,
 	qActivationRefuse: `
 UPDATE agent_release_activation
-   SET state_code = 'refused', reason_code = ?, detail = ?, attempts = attempts + ?,
+   SET state_code = ` + sqlActivationRefused + `, reason_code = ?, detail = ?, attempts = attempts + ?,
        decided_at = CURRENT_TIMESTAMP, next_attempt_at = NULL
- WHERE id = ? AND state_code = 'pending' RETURNING id`,
+ WHERE id = ? AND state_code = ` + sqlActivationPending + ` RETURNING id`,
 	qActivationDefer: `
 UPDATE agent_release_activation
    SET attempts = attempts + 1, next_attempt_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 second'), detail = ?
- WHERE id = ? AND state_code = 'pending' RETURNING attempts`,
+ WHERE id = ? AND state_code = ` + sqlActivationPending + ` RETURNING attempts`,
 	// Archive and Publish write the draft row; a separate state read then sees a committed archive.
 	qActivationLockDraft:  `SELECT draft_revision FROM agent_draft WHERE partner_id = ? AND agent_id = ? FOR SHARE`,
 	qActivationAgentState: `SELECT state_code FROM agent_profile WHERE partner_id = ? AND agent_id = ?`,

@@ -280,56 +280,56 @@ type ScoutConfig struct {
 	AgentEvaluationJudgeMaxTokens     int    // agent_evaluation_judge_max_tokens 512 Output tokens one rubric verdict may use
 	AgentEvaluationJudgeMaxInputBytes int    // agent_evaluation_judge_max_input_bytes 131072 Largest rubric judge prompt in bytes; a larger case fails its run
 
-	AgentCostWindow                      int    // agent_cost_window 3600 Seconds of trailing spend the data plane's cost breaker sums; 0 uses the default
-	AgentReplyRetention                  int    // agent_reply_retention 600 Seconds each reply frame stays in the delivery cache; 0 uses the default
-	AgentReplyPollMs                     int    // agent_reply_poll_ms 500 Milliseconds a reply subscriber waits before re-reading after a lost wake-up; 0 uses the default
-	AgentReplyRecordRead                 int    // agent_reply_record_read 5 Seconds between a reply subscriber's durable turn record reads; 0 uses the default
-	AgentCancelPollMs                    int    // agent_cancel_poll_ms 1000 Milliseconds between a running turn's cancellation reads; 0 uses the default
-	AgentCancelMaxReadFailures           int    // agent_cancel_max_read_failures 3 Consecutive failed cancellation reads that stop a running turn; 0 uses the default
-	AgentSessionRevisionMemory           int    // agent_session_revision_memory 4096 Conversations whose last written revision a process remembers; 0 uses the default
-	AgentResultCardMaxBytes              int    // agent_result_card_max_bytes 65536 Largest response in bytes copied into turn history; 0 uses the default
-	AgentRunPageMax                      int    // agent_run_page_max 500 Largest page of settled agent runs one query returns; 0 uses the default
-	AgentLoopMaxCallRevisions            int    // agent_loop_max_call_revisions 8 Decider revisions of one proposed tool call in a turn; 0 uses the default
-	AgentPauseBatch                      int    // agent_pause_batch 200 Live turns one Studio pause listing asks to stop; 0 uses the default
-	AgentStudioReportWindowDays          int    // agent_studio_report_window_days 92 Days one Studio usage or feedback report may span; 0 uses the default
-	AgentStudioUsageMaxLines             int    // agent_studio_usage_max_lines 1000 Lines one Studio usage report may return; 0 uses the default
-	AgentWorkItemMaxDepth                int    // agent_work_item_max_depth 32 Deepest delegated work item chain; 0 uses the default
-	AgentApprovalMaxCandidates           int    // agent_approval_max_candidates 20 Eligible holders one approver resolution considers; 0 takes 20
-	AgentApprovalMaxAsksPerCall          int    // agent_approval_max_asks_per_call 8 Approval requests one tool call may owe; 0 takes 8
-	AgentApprovalMaxRevisedArgumentBytes int    // agent_approval_max_revised_argument_bytes 65536 Largest revised arguments of an edited verdict in bytes; 0 takes 65536
-	AgentApprovalMaxRoutesPerBinding     int    // agent_approval_max_routes_per_binding 32 Routes one saved approval_routing binding may hold (1..32); 0 takes 32
-	AgentApprovalMaxRoutes               int    // agent_approval_max_routes 64 Effective approval routes one published agent may hold (1..64); 0 takes 64
-	AgentApprovalMaxRouteTools           int    // agent_approval_max_route_tools 16 Tool patterns one saved approval route may match (1..16); 0 takes 16
-	AgentApprovalMinRouteDuration        int    // agent_approval_min_route_duration 60 Shortest saved route deadline or extension in seconds (60..2592000); 0 takes 60
-	AgentApprovalMaxRouteDuration        int    // agent_approval_max_route_duration 2592000 Longest saved route deadline or extension in seconds (60..2592000); 0 takes 2592000
-	AgentApprovalMaxRouteWindow          int    // agent_approval_max_route_window 7776000 Longest saved route deadline plus extensions in seconds (60..7776000); 0 takes 7776000
-	AgentConfirmationMaxDocumentBytes    int    // agent_confirmation_max_document_bytes 1048576 Largest MCP confirmation payload, preview, requirements, or result in bytes; 0 takes 1048576
-	AgentConfirmationBatch               int    // agent_confirmation_batch 100 MCP confirmations one list or sweep reads when its caller names none; at most agent_confirmation_max_batch; 0 takes 100
-	AgentConfirmationMaxBatch            int    // agent_confirmation_max_batch 1000 MCP confirmations one list or sweep may read; 0 takes 1000
-	AgentConfirmationLease               int    // agent_confirmation_lease 60 Seconds one MCP confirmation execution claim lasts, renewed every third (1..2147483647); 0 takes 60
-	AgentActivationTimeout               int    // agent_activation_timeout 120 Seconds one scheduled activation's checks and swap may take; 0 uses Scout's default
-	AgentActivationMaxLeadDays           int    // agent_activation_max_lead_days 366 Days ahead a publish may schedule its activation; 0 uses Scout's default
-	AgentStudioMaxPortableBindings       int    // agent_studio_max_portable_bindings 1024 Bindings one portable document or template carries; 0 uses Scout's default
-	AgentStudioMaxReferences             int    // agent_studio_max_references 1024 Reference mappings one import or template create names; 0 uses Scout's default
-	AgentStudioMaxPortableExtensionBytes int    // agent_studio_max_portable_extension_bytes 262144 Bytes of one portable draft extension; 0 uses Scout's default
-	AgentStudioMaxTemplateAudience       int    // agent_studio_max_template_audience 100 Tenants one template publication names; 0 uses Scout's default
-	AgentStudioUsableTemplates           int    // agent_studio_usable_templates 200 Templates of each owner class one template list returns; 0 uses Scout's default
-	AgentStudioMaxGovernanceItems        int    // agent_studio_max_governance_items 32 Items one Studio-authored governance list holds; 0 uses Scout's default
-	AgentStudioMaxCommentsShown          int    // agent_studio_max_comments_shown 500 Draft comments one list returns; 0 uses Scout's default
-	AgentStudioMaxRestrictionEntries     int    // agent_studio_max_restriction_entries 256 Denials, and separately guardrail rules, of a tenant restriction layer written through Studio; 0 uses Scout's default
-	AgentRestrictionCacheTTLMs           int    // agent_restriction_cache_ttl_ms 5000 Milliseconds a read restriction layer is reused; 0 uses Scout's default
-	AgentRestrictionCacheEntries         int    // agent_restriction_cache_entries 4096 Tenant restriction layers held in the in-memory cache; 0 uses Scout's default
-	AgentAuditMaxPageSize                int    // agent_audit_max_page_size 1000 Largest decision record page an audit query may ask for; 0 uses Scout's default
-	AgentSafetyEventMaxPage              int    // agent_safety_event_max_page 500 Largest page of safety events one query may ask for; 0 uses Scout's default
-	AgentMetricLabelMaxLength            int    // agent_metric_label_max_length 64 Bytes of one fleet metric label value; 0 uses Scout's default
-	AgentKnowledgeMaxSourceBytes         int    // agent_knowledge_max_source_bytes 33554432 Bytes of one knowledge source object; 0 uses Scout's default
-	AgentKnowledgeRRFOffset              int    // agent_knowledge_rrf_offset 60 Reciprocal rank fusion constant k of hybrid retrieval; 0 uses Scout's default
-	AgentEvaluationPageSize              int    // agent_evaluation_page_size 50 Evaluation results one Studio page returns when the caller names no limit; 0 uses Scout's default
-	AgentEvaluationMaxPageSize           int    // agent_evaluation_max_page_size 200 Largest evaluation result page a Studio caller may ask for; 0 uses Scout's default
-	AgentEvaluationJudgeMaxVerdictBytes  int    // agent_evaluation_judge_max_verdict_bytes 8192 Bytes of one raw rubric verdict; 0 uses Scout's default
-	AgentDefaultLanguage                 string // agent_default_language en-US Language a runtime or draft test falls back to when the agent has no prompt in the requested one
-	AgentDefaultPriorityClass            string // agent_default_priority_class standard Scheduling class a model access grant takes when none is named
-	AgentDefaultTestTask                 string // agent_default_test_task (Scout's sample task) Task a Studio draft test runs when the caller sends none
+	AgentCostWindow                      int                  // agent_cost_window 3600 Seconds of trailing spend the data plane's cost breaker sums; 0 uses the default
+	AgentReplyRetention                  int                  // agent_reply_retention 600 Seconds each reply frame stays in the delivery cache; 0 uses the default
+	AgentReplyPollMs                     int                  // agent_reply_poll_ms 500 Milliseconds a reply subscriber waits before re-reading after a lost wake-up; 0 uses the default
+	AgentReplyRecordRead                 int                  // agent_reply_record_read 5 Seconds between a reply subscriber's durable turn record reads; 0 uses the default
+	AgentCancelPollMs                    int                  // agent_cancel_poll_ms 1000 Milliseconds between a running turn's cancellation reads; 0 uses the default
+	AgentCancelMaxReadFailures           int                  // agent_cancel_max_read_failures 3 Consecutive failed cancellation reads that stop a running turn; 0 uses the default
+	AgentSessionRevisionMemory           int                  // agent_session_revision_memory 4096 Conversations whose last written revision a process remembers; 0 uses the default
+	AgentResultCardMaxBytes              int                  // agent_result_card_max_bytes 65536 Largest response in bytes copied into turn history; 0 uses the default
+	AgentRunPageMax                      int                  // agent_run_page_max 500 Largest page of settled agent runs one query returns; 0 uses the default
+	AgentLoopMaxCallRevisions            int                  // agent_loop_max_call_revisions 8 Decider revisions of one proposed tool call in a turn; 0 uses the default
+	AgentPauseBatch                      int                  // agent_pause_batch 200 Live turns one Studio pause listing asks to stop; 0 uses the default
+	AgentStudioReportWindowDays          int                  // agent_studio_report_window_days 92 Days one Studio usage or feedback report may span; 0 uses the default
+	AgentStudioUsageMaxLines             int                  // agent_studio_usage_max_lines 1000 Lines one Studio usage report may return; 0 uses the default
+	AgentWorkItemMaxDepth                int                  // agent_work_item_max_depth 32 Deepest delegated work item chain; 0 uses the default
+	AgentApprovalMaxCandidates           int                  // agent_approval_max_candidates 20 Eligible holders one approver resolution considers; 0 takes 20
+	AgentApprovalMaxAsksPerCall          int                  // agent_approval_max_asks_per_call 8 Approval requests one tool call may owe; 0 takes 8
+	AgentApprovalMaxRevisedArgumentBytes int                  // agent_approval_max_revised_argument_bytes 65536 Largest revised arguments of an edited verdict in bytes; 0 takes 65536
+	AgentApprovalMaxRoutesPerBinding     int                  // agent_approval_max_routes_per_binding 32 Routes one saved approval_routing binding may hold (1..32); 0 takes 32
+	AgentApprovalMaxRoutes               int                  // agent_approval_max_routes 64 Effective approval routes one published agent may hold (1..64); 0 takes 64
+	AgentApprovalMaxRouteTools           int                  // agent_approval_max_route_tools 16 Tool patterns one saved approval route may match (1..16); 0 takes 16
+	AgentApprovalMinRouteDuration        int                  // agent_approval_min_route_duration 60 Shortest saved route deadline or extension in seconds (60..2592000); 0 takes 60
+	AgentApprovalMaxRouteDuration        int                  // agent_approval_max_route_duration 2592000 Longest saved route deadline or extension in seconds (60..2592000); 0 takes 2592000
+	AgentApprovalMaxRouteWindow          int                  // agent_approval_max_route_window 7776000 Longest saved route deadline plus extensions in seconds (60..7776000); 0 takes 7776000
+	AgentConfirmationMaxDocumentBytes    int                  // agent_confirmation_max_document_bytes 1048576 Largest MCP confirmation payload, preview, requirements, or result in bytes; 0 takes 1048576
+	AgentConfirmationBatch               int                  // agent_confirmation_batch 100 MCP confirmations one list or sweep reads when its caller names none; at most agent_confirmation_max_batch; 0 takes 100
+	AgentConfirmationMaxBatch            int                  // agent_confirmation_max_batch 1000 MCP confirmations one list or sweep may read; 0 takes 1000
+	AgentConfirmationLease               int                  // agent_confirmation_lease 60 Seconds one MCP confirmation execution claim lasts, renewed every third (1..2147483647); 0 takes 60
+	AgentActivationTimeout               int                  // agent_activation_timeout 120 Seconds one scheduled activation's checks and swap may take; 0 uses Scout's default
+	AgentActivationMaxLeadDays           int                  // agent_activation_max_lead_days 366 Days ahead a publish may schedule its activation; 0 uses Scout's default
+	AgentStudioMaxPortableBindings       int                  // agent_studio_max_portable_bindings 1024 Bindings one portable document or template carries; 0 uses Scout's default
+	AgentStudioMaxReferences             int                  // agent_studio_max_references 1024 Reference mappings one import or template create names; 0 uses Scout's default
+	AgentStudioMaxPortableExtensionBytes int                  // agent_studio_max_portable_extension_bytes 262144 Bytes of one portable draft extension; 0 uses Scout's default
+	AgentStudioMaxTemplateAudience       int                  // agent_studio_max_template_audience 100 Tenants one template publication names; 0 uses Scout's default
+	AgentStudioUsableTemplates           int                  // agent_studio_usable_templates 200 Templates of each owner class one template list returns; 0 uses Scout's default
+	AgentStudioMaxGovernanceItems        int                  // agent_studio_max_governance_items 32 Items one Studio-authored governance list holds; 0 uses Scout's default
+	AgentStudioMaxCommentsShown          int                  // agent_studio_max_comments_shown 500 Draft comments one list returns; 0 uses Scout's default
+	AgentStudioMaxRestrictionEntries     int                  // agent_studio_max_restriction_entries 256 Denials, and separately guardrail rules, of a tenant restriction layer written through Studio; 0 uses Scout's default
+	AgentRestrictionCacheTTLMs           int                  // agent_restriction_cache_ttl_ms 5000 Milliseconds a read restriction layer is reused; 0 uses Scout's default
+	AgentRestrictionCacheEntries         int                  // agent_restriction_cache_entries 4096 Tenant restriction layers held in the in-memory cache; 0 uses Scout's default
+	AgentAuditMaxPageSize                int                  // agent_audit_max_page_size 1000 Largest decision record page an audit query may ask for; 0 uses Scout's default
+	AgentSafetyEventMaxPage              int                  // agent_safety_event_max_page 500 Largest page of safety events one query may ask for; 0 uses Scout's default
+	AgentMetricLabelMaxLength            int                  // agent_metric_label_max_length 64 Bytes of one fleet metric label value; 0 uses Scout's default
+	AgentKnowledgeMaxSourceBytes         int                  // agent_knowledge_max_source_bytes 33554432 Bytes of one knowledge source object; 0 uses Scout's default
+	AgentKnowledgeRRFOffset              int                  // agent_knowledge_rrf_offset 60 Reciprocal rank fusion constant k of hybrid retrieval; 0 uses Scout's default
+	AgentEvaluationPageSize              int                  // agent_evaluation_page_size 50 Evaluation results one Studio page returns when the caller names no limit; 0 uses Scout's default
+	AgentEvaluationMaxPageSize           int                  // agent_evaluation_max_page_size 200 Largest evaluation result page a Studio caller may ask for; 0 uses Scout's default
+	AgentEvaluationJudgeMaxVerdictBytes  int                  // agent_evaluation_judge_max_verdict_bytes 8192 Bytes of one raw rubric verdict; 0 uses Scout's default
+	AgentDefaultLanguage                 string               // agent_default_language en-US Language a runtime or draft test falls back to when the agent has no prompt in the requested one
+	AgentDefaultPriorityClass            domain.PriorityClass // agent_default_priority_class S priority_class code a model access grant takes when none is named
+	AgentDefaultTestTask                 string               // agent_default_test_task (Scout's sample task) Task a Studio draft test runs when the caller sends none
 
 	AgentReviewFeedbackThreshold    int // agent_review_feedback_threshold 2 Highest turn rating that queues a rated turn for review; 0 queues none
 	AgentReviewMaxPending           int // agent_review_max_pending 1000 Pending sampled and rated turns one agent's review queue holds; 0 uses Scout's default
@@ -559,7 +559,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentEvaluationMaxPageSize = c.Int(rows, agent_evaluation_max_page_size)
 	c.AgentEvaluationJudgeMaxVerdictBytes = c.Int(rows, agent_evaluation_judge_max_verdict_bytes)
 	c.AgentDefaultLanguage = c.String(rows, agent_default_language)
-	c.AgentDefaultPriorityClass = c.String(rows, agent_default_priority_class)
+	c.AgentDefaultPriorityClass = domain.PriorityClass(c.String(rows, agent_default_priority_class))
 	c.AgentDefaultTestTask = c.String(rows, agent_default_test_task)
 	c.AgentReviewFeedbackThreshold = c.Int(rows, agent_review_feedback_threshold)
 	c.AgentReviewMaxPending = c.Int(rows, agent_review_max_pending)
@@ -701,10 +701,13 @@ func (c *ScoutConfig) defaultTextErrors() error {
 	for _, flag := range []struct {
 		name, value string
 		max         int
-	}{{agent_default_language, c.AgentDefaultLanguage, 16}, {agent_default_priority_class, c.AgentDefaultPriorityClass, 30}} {
+	}{{agent_default_language, c.AgentDefaultLanguage, 16}, {agent_default_priority_class, string(c.AgentDefaultPriorityClass), 1}} {
 		if len(strings.TrimSpace(flag.value)) > flag.max {
 			errs = append(errs, fmt.Errorf("%s: %q is longer than %d bytes", flag.name, flag.value, flag.max))
 		}
+	}
+	if class := c.AgentDefaultPriorityClass; class != "" && !class.Valid() {
+		errs = append(errs, fmt.Errorf("%s: %q is not a priority_class code", agent_default_priority_class, class))
 	}
 	return errors.Join(errs...)
 }

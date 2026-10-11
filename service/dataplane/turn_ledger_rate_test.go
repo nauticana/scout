@@ -28,7 +28,7 @@ func ledgerRateQuery(turnsPerMinute string, rows map[string][][]any) *queueQuery
 
 func beginLedgerTurn(query *queueQueryFake) (TurnState, bool, error) {
 	ledger := &TurnLedger{DB: queueDBFake{query: query}, Namespace: "ledger"}
-	return ledger.Begin(context.Background(), 7, "user", "request-1", "task", "input", testDigest("input"), "running", ledgerRelease)
+	return ledger.Begin(context.Background(), 7, "user", "request-1", "task", "input", testDigest("input"), domain.TurnRunning, ledgerRelease)
 }
 
 func TestTurnLedgerBeginRefusesATurnBeyondTheReleaseTurnRate(t *testing.T) {
@@ -64,7 +64,7 @@ func TestTurnLedgerBeginRefusesATurnBeyondTheReleaseTurnRate(t *testing.T) {
 func TestTurnLedgerBeginOpensATurnUnderTheReleaseTurnRate(t *testing.T) {
 	query := ledgerRateQuery("3", map[string][][]any{
 		qLedgerInsertTurn: {{int64(4)}},
-		qLedgerFindTurn: {{int64(7), "conversation-1", int64(4), "request-1", "running", testDigest("input"), nil,
+		qLedgerFindTurn: {{int64(7), "conversation-1", int64(4), "request-1", string(domain.TurnRunning), testDigest("input"), nil,
 			"task", "input", nil, nil, nil, nil, nil, ledgerRelease.Digest, nil, nil, nil, nil, nil, nil, nil, nil, nil, false,
 			"agent", "v1", time.Unix(1_700_000_000, 0).UTC(), nil}},
 	})

@@ -2,7 +2,7 @@ table: audit_decision_outcome
 comment: Result classes a governed decision may record
 columns:
   - name: code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: is_denial
     type: BOOLEAN
   - name: description

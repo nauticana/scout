@@ -285,7 +285,7 @@ func TestBudgetLedgerClampsAGovernedTurnToItsPerTurnCeiling(t *testing.T) {
 	}
 	// The ingress hold and the runtime's replay ask the same governed request.
 	replay := &budgetQueryFake{rows: map[string][][]any{
-		qFindBudget: {storedBudget("r", "req", "held", 500, 20, 1, time.Now().Add(time.Minute), nil, nil, false)},
+		qFindBudget: {storedBudget("r", "req", string(domain.ReservationHeld), 500, 20, 1, time.Now().Add(time.Minute), nil, nil, false)},
 	}}
 	if again, err := withBudget(newBudgetLedger(replay), perTurn, nil).Reserve(context.Background(), governed); err != nil || again.ReservationID != "r" || replay.ran(qReserveBudget) {
 		t.Fatalf("replay = %+v, %v", again, err)
@@ -302,14 +302,14 @@ func TestBudgetLedgerClampsAGovernedTurnToItsPerTurnCeiling(t *testing.T) {
 func TestBudgetLedgerReplaysALiveHoldButRechecksAnExpiredAttempt(t *testing.T) {
 	exhausted := [][]any{{int64(1_000), int64(0), int64(0), int64(0)}}
 	live := &budgetQueryFake{rows: map[string][][]any{
-		qFindBudget:         {storedBudget("r", "req", "held", 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
+		qFindBudget:         {storedBudget("r", "req", string(domain.ReservationHeld), 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
 		qPrincipalPeriodUse: exhausted,
 	}}
 	if reservation, err := withBudget(newBudgetLedger(live), dayUSD(1_000, 0), nil).Reserve(context.Background(), usd(10, 2)); err != nil || reservation.ReservationID != "r" {
 		t.Fatalf("live replay = %+v, %v", reservation, err)
 	}
 	expired := &budgetQueryFake{rows: map[string][][]any{
-		qFindBudget:         {storedBudget("old", "req", "held", 10, 2, 1, time.Now().Add(-time.Minute), nil, nil, true)},
+		qFindBudget:         {storedBudget("old", "req", string(domain.ReservationHeld), 10, 2, 1, time.Now().Add(-time.Minute), nil, nil, true)},
 		qExpireOneBudget:    {{"old"}},
 		qPrincipalPeriodUse: exhausted,
 		qReserveBudget:      {{"new", time.Now().Add(time.Minute)}},
@@ -335,14 +335,14 @@ func TestBudgetLedgerRecoversALiveHoldOfAnUnenforceableBudget(t *testing.T) {
 		"invalid period": {budget: invalidPeriod},
 	} {
 		live := &budgetQueryFake{rows: map[string][][]any{
-			qFindBudget:             {storedBudget("r", "req", "held", 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
+			qFindBudget:             {storedBudget("r", "req", string(domain.ReservationHeld), 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
 			scope.QCurrencyExponent: tc.catalog,
 		}}
 		if reservation, err := withBudget(newBudgetLedger(live), tc.budget, nil).Reserve(context.Background(), usd(10, 2)); err != nil || reservation.ReservationID != "r" {
 			t.Errorf("%s: live replay = %+v, %v", name, reservation, err)
 		}
 		renewed := &budgetQueryFake{rows: map[string][][]any{
-			qFindBudget:             {storedBudget("old", "req", "expired", 10, 2, 1, time.Now().Add(-time.Minute), int64(0), int64(0), false)},
+			qFindBudget:             {storedBudget("old", "req", string(domain.ReservationExpired), 10, 2, 1, time.Now().Add(-time.Minute), int64(0), int64(0), false)},
 			scope.QCurrencyExponent: tc.catalog,
 			qReserveBudget:          {{"new", time.Now().Add(time.Minute)}},
 		}}
@@ -460,7 +460,7 @@ func TestBudgetLedgerReserveValidation(t *testing.T) {
 
 func TestBudgetLedgerReserveIsIdempotentByRequest(t *testing.T) {
 	expires := time.Now().Add(time.Minute)
-	existing := storedBudget("reservation", "req", "held", 10, 2, 1, expires.Format(time.RFC3339), nil, nil, false)
+	existing := storedBudget("reservation", "req", string(domain.ReservationHeld), 10, 2, 1, expires.Format(time.RFC3339), nil, nil, false)
 	query := &budgetQueryFake{rows: map[string][][]any{qFindBudget: {existing}}}
 	reservation, err := newBudgetLedger(query).Reserve(context.Background(), usd(10, 2))
 	if err != nil || reservation.ReservationID != "reservation" || reservation.Attempt != 1 || !reservation.ExpiresAt.Equal(expires.Truncate(time.Second)) {
@@ -472,7 +472,7 @@ func TestBudgetLedgerReserveIsIdempotentByRequest(t *testing.T) {
 }
 
 func TestBudgetLedgerReserveClassifiesSettledReplay(t *testing.T) {
-	existing := storedBudget("reservation", "req", "settled", 10, 2, 1, time.Now(), int64(8), int64(1), false)
+	existing := storedBudget("reservation", "req", string(domain.ReservationSettled), 10, 2, 1, time.Now(), int64(8), int64(1), false)
 	query := &budgetQueryFake{rows: map[string][][]any{qFindBudget: {existing}}}
 	if _, err := newBudgetLedger(query).Reserve(context.Background(), usd(10, 2)); !errors.Is(err, domain.ErrBudgetSettled) {
 		t.Fatalf("settled replay = %v", err)
@@ -481,7 +481,7 @@ func TestBudgetLedgerReserveClassifiesSettledReplay(t *testing.T) {
 
 func TestBudgetLedgerRenewsExpiredReservation(t *testing.T) {
 	expires := time.Now().Add(-time.Minute)
-	existing := storedBudget("old", "req", "held", 10, 2, 1, expires, nil, nil, true)
+	existing := storedBudget("old", "req", string(domain.ReservationHeld), 10, 2, 1, expires, nil, nil, true)
 	newExpiry := time.Now().Add(time.Minute)
 	query := &budgetQueryFake{rows: map[string][][]any{
 		qFindBudget:      {existing},
@@ -500,8 +500,8 @@ func TestBudgetLedgerRenewsExpiredReservation(t *testing.T) {
 func TestBudgetLedgerRenewsAttemptExpiredBySweeper(t *testing.T) {
 	expires := time.Now().Add(-time.Minute)
 	query := &budgetQueryFake{rows: map[string][][]any{
-		qFindBudget:    {storedBudget("old", "req", "held", 10, 2, 1, expires, nil, nil, true)},
-		qGetBudget:     {storedBudget("old", "req", "expired", 10, 2, 1, expires, int64(0), int64(0), false)},
+		qFindBudget:    {storedBudget("old", "req", string(domain.ReservationHeld), 10, 2, 1, expires, nil, nil, true)},
+		qGetBudget:     {storedBudget("old", "req", string(domain.ReservationExpired), 10, 2, 1, expires, int64(0), int64(0), false)},
 		qReserveBudget: {{"new", time.Now().Add(time.Minute)}},
 	}}
 	reservation, err := newBudgetLedger(query).Reserve(context.Background(), usd(10, 2))
@@ -518,7 +518,7 @@ func TestBudgetLedgerDoesNotRenewTerminalTurn(t *testing.T) {
 }
 
 func TestBudgetLedgerCommitAndRelease(t *testing.T) {
-	current := storedBudget("r", "req", "held", 1_000, 50, 1, time.Now().Add(time.Minute), nil, nil, false)
+	current := storedBudget("r", "req", string(domain.ReservationHeld), 1_000, 50, 1, time.Now().Add(time.Minute), nil, nil, false)
 	query := &budgetQueryFake{rows: map[string][][]any{qGetBudget: {current}, qSettleBudget: {{"r"}}, qReleaseBudget: {{"r"}}}}
 	ledger := newBudgetLedger(query)
 	reservation := domain.BudgetReservation{TenantID: 8, ReservationID: "r", Currency: "USD", GrantedTokens: 1_000, GrantedCostMinorUnits: 50}
@@ -542,7 +542,7 @@ func TestBudgetLedgerCommitAndRelease(t *testing.T) {
 	}
 
 	// Repeating the same terminal transition is idempotent.
-	settled := storedBudget("r", "req", "settled", 1_000, 50, 1, time.Now(), int64(150), int64(30), false)
+	settled := storedBudget("r", "req", string(domain.ReservationSettled), 1_000, 50, 1, time.Now(), int64(150), int64(30), false)
 	replayed := newBudgetLedger(&budgetQueryFake{rows: map[string][][]any{qGetBudget: {settled}}})
 	if err := replayed.Commit(context.Background(), reservation, usage); err != nil {
 		t.Fatalf("double settle = %v", err)
@@ -560,7 +560,7 @@ func TestBudgetLedgerRejectsInvalidExpiryEncoding(t *testing.T) {
 }
 
 func TestBudgetLedgerFencesExpiredSettlement(t *testing.T) {
-	current := storedBudget("r", "req", "held", 100, 10, 1, time.Now().Add(-time.Minute), nil, nil, true)
+	current := storedBudget("r", "req", string(domain.ReservationHeld), 100, 10, 1, time.Now().Add(-time.Minute), nil, nil, true)
 	query := &budgetQueryFake{rows: map[string][][]any{qGetBudget: {current}, qExpireOneBudget: {{"r"}}}}
 	reservation := domain.BudgetReservation{TenantID: 8, ReservationID: "r", Currency: "USD"}
 	err := newBudgetLedger(query).Commit(context.Background(), reservation, domain.Usage{CostMinorUnits: 1, Currency: "USD"})

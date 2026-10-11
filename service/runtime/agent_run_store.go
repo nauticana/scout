@@ -51,7 +51,7 @@ SELECT id, agent_id, agent_version, task_kind, request_id, status_code, complete
 	qAgentLastRun: `
 SELECT agent_id, MAX(completed_at)
   FROM agent_run
- WHERE partner_id = ? AND status_code = 'completed'
+ WHERE partner_id = ? AND status_code = ` + sqlRunCompleted + `
  GROUP BY agent_id`,
 	qPurgeAgentRuns: `
 DELETE FROM agent_run
@@ -102,8 +102,8 @@ func (store *AgentRunStore) Record(ctx context.Context, tenantID int64, run doma
 		return fmt.Errorf("%w: tenant, release identity, and task kind are required", domain.ErrValidation)
 	case release.Digest != "" && !validRunDigest(release.Digest):
 		return fmt.Errorf("%w: release digest must be 64 hex characters", domain.ErrValidation)
-	case !terminalRunStatus(run.Status):
-		return fmt.Errorf("%w: run status %q is not terminal", domain.ErrValidation, run.Status)
+	case !run.Status.Valid():
+		return fmt.Errorf("%w: run status %q is not an agent_run_status code", domain.ErrValidation, run.Status)
 	}
 	if err := store.init(ctx); err != nil {
 		return err
@@ -165,8 +165,8 @@ func (store *AgentRunStore) Runs(ctx context.Context, tenantID int64, filter dom
 		return nil, fmt.Errorf("%w: run page limit must be between 1 and %d", domain.ErrValidation, store.maxPage())
 	case filter.Before < 0:
 		return nil, fmt.Errorf("%w: run cursor cannot be negative", domain.ErrValidation)
-	case filter.Status != "" && !terminalRunStatus(filter.Status):
-		return nil, fmt.Errorf("%w: run status %q is not terminal", domain.ErrValidation, filter.Status)
+	case filter.Status != "" && !filter.Status.Valid():
+		return nil, fmt.Errorf("%w: run status %q is not an agent_run_status code", domain.ErrValidation, filter.Status)
 	}
 	if err := store.init(ctx); err != nil {
 		return nil, err
@@ -196,10 +196,6 @@ func (store *AgentRunStore) Runs(ctx context.Context, tenantID int64, filter dom
 		})
 	}
 	return runs, nil
-}
-
-func terminalRunStatus(status domain.RunStatus) bool {
-	return status == domain.RunCompleted || status == domain.RunFailed || status == domain.RunCancelled
 }
 
 // LastRun returns the newest successful execution time for every tenant agent.

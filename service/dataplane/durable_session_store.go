@@ -75,7 +75,7 @@ SELECT turn.turn_no, COALESCE(snapshot.revision, 0)
     ON snapshot.partner_id = turn.partner_id
    AND snapshot.conversation_id = turn.conversation_id
  WHERE turn.partner_id = ? AND turn.conversation_id = ?
-   AND turn.status_code IN ('queued', 'running', 'streaming')
+   AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
  ORDER BY turn.turn_no
  LIMIT 1`,
 
@@ -83,10 +83,10 @@ SELECT turn.turn_no, COALESCE(snapshot.revision, 0)
 	qSessionCompleteTurn: `
 WITH completed AS (
 UPDATE conversation_turn turn
-   SET status_code = 'completed', response_uri = ?, response_digest = ?,
+   SET status_code = ` + sqlTurnCompleted + `, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
  WHERE turn.partner_id = ? AND turn.conversation_id = ? AND turn.turn_no = ?
-   AND turn.status_code IN ('queued', 'running', 'streaming')
+   AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND COALESCE((SELECT snapshot.revision
                    FROM session_snapshot snapshot
                   WHERE snapshot.partner_id = turn.partner_id

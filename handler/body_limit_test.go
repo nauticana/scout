@@ -10,6 +10,7 @@ import (
 	keelhandler "github.com/nauticana/keel/handler"
 
 	"github.com/nauticana/scout/api"
+	"github.com/nauticana/scout/domain"
 )
 
 func TestStudioCommandsAndApprovalsBoundTheirBodies(t *testing.T) {
@@ -35,7 +36,7 @@ func TestStudioCommandsRefuseASecondJSONValue(t *testing.T) {
 	configureConversationRequestLimit(t)
 	backend := &pilotBackendFake{}
 	recorder := httptest.NewRecorder()
-	trailing := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"position","subject_id":"lead","reason":"pilot"} {"agent_name":"writer-b"}`)
+	trailing := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPosition) + `","subject_id":"lead","reason":"pilot"} {"agent_name":"writer-b"}`)
 	pilotHandler(backend).Routes()[api.StudioPilotAddPath](recorder, authenticatedRequest(http.MethodPost, api.StudioPilotAddPath, trailing))
 	if recorder.Code != http.StatusBadRequest || backend.change.AgentID != "" {
 		t.Fatalf("a body with a second JSON value: status = %d, change = %+v", recorder.Code, backend.change)

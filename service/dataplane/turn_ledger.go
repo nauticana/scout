@@ -108,7 +108,7 @@ INSERT INTO conversation_turn
        (partner_id, conversation_id, turn_no, request_id, status_code,
         input_uri, input_digest, started_at)
 SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, ?, ?, ?,
-       CASE WHEN ? = 'queued' THEN NULL ELSE CURRENT_TIMESTAMP END
+       CASE WHEN ? = ` + sqlTurnQueued + ` THEN NULL ELSE CURRENT_TIMESTAMP END
   FROM conversation_turn
  WHERE partner_id = ? AND conversation_id = ?
 ON CONFLICT DO NOTHING
@@ -136,14 +136,14 @@ UPDATE conversation_turn_detail detail
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code IN ('queued', 'running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id IS NOT DISTINCT FROM ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = ?
                   AND reservation.request_id = runtime.request_id
                   AND reservation.attempt_no = ?
-                  AND reservation.status_code = 'held'
+                  AND reservation.status_code = ` + sqlReservationHeld + `
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.turn_no`,
 
@@ -158,13 +158,13 @@ UPDATE conversation_turn_detail detail
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code IN ('running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id = ?
    AND detail.result_payload IS NULL
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'held'
+                  AND reservation.status_code = ` + sqlReservationHeld + `
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.turn_no`,
 
@@ -176,12 +176,12 @@ UPDATE conversation_turn_detail detail
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code IN ('running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'held'
+                  AND reservation.status_code = ` + sqlReservationHeld + `
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.turn_no`,
 
@@ -196,77 +196,77 @@ UPDATE conversation_turn_detail detail
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code IN ('running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id = ?
    AND detail.result_payload IS NULL
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'held'
+                  AND reservation.status_code = ` + sqlReservationHeld + `
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.turn_no`,
 
 	qLedgerFinishBilledFailure: `
 UPDATE conversation_turn runtime
-   SET status_code = 'failed', completed_at = CURRENT_TIMESTAMP
+   SET status_code = ` + sqlTurnFailed + `, completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
  WHERE runtime.partner_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
    AND detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
-   AND runtime.status_code IN ('running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id = ?
    AND detail.error_text IS NOT NULL
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = runtime.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'settled'
+                  AND reservation.status_code = ` + sqlReservationSettled + `
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
                   AND reservation.settled_cost_minor_units = detail.staged_cost_minor_units)
 RETURNING runtime.turn_no`,
 
 	qLedgerFinishSuccess: `
 UPDATE conversation_turn runtime
-   SET status_code = 'completed', response_uri = ?, response_digest = ?,
+   SET status_code = ` + sqlTurnCompleted + `, response_uri = ?, response_digest = ?,
        completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
  WHERE runtime.partner_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
    AND detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
-   AND runtime.status_code IN ('running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = runtime.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'settled'
+                  AND reservation.status_code = ` + sqlReservationSettled + `
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
                   AND reservation.settled_cost_minor_units = detail.staged_cost_minor_units)
 RETURNING runtime.turn_no`,
 
 	qLedgerFinishFailure: `
 UPDATE conversation_turn runtime
-   SET status_code = 'failed', completed_at = CURRENT_TIMESTAMP
+   SET status_code = ` + sqlTurnFailed + `, completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
  WHERE runtime.partner_id = ? AND runtime.conversation_id = ? AND runtime.turn_no = ?
    AND detail.partner_id = runtime.partner_id
    AND detail.conversation_id = runtime.conversation_id
    AND detail.turn_no = runtime.turn_no
-   AND runtime.status_code IN ('running', 'streaming')
+   AND runtime.status_code IN (` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = runtime.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'released')
+                  AND reservation.status_code = ` + sqlReservationReleased + `)
 RETURNING runtime.turn_no`,
 
 	qLedgerFailUnreserved: `
 WITH failed AS (
   UPDATE conversation_turn
-     SET status_code = 'failed', started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+     SET status_code = ` + sqlTurnFailed + `, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
          completed_at = CURRENT_TIMESTAMP
    WHERE partner_id = ? AND conversation_id = ? AND turn_no = ?
-     AND status_code IN ('queued', 'running')
+     AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `)
   RETURNING partner_id, conversation_id, turn_no
 )
 UPDATE conversation_turn_detail detail
@@ -296,14 +296,14 @@ SELECT 1
 	qLedgerSetJobStatus: `
 UPDATE conversation_turn runtime
    SET status_code = ?,
-       started_at = CASE WHEN ? IN ('running', 'failed') THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
-       completed_at = CASE WHEN ? = 'failed' THEN CURRENT_TIMESTAMP ELSE NULL END
+       started_at = CASE WHEN ? IN (` + sqlTurnRunning + `, ` + sqlTurnFailed + `) THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
+       completed_at = CASE WHEN ? = ` + sqlTurnFailed + ` THEN CURRENT_TIMESTAMP ELSE NULL END
   FROM conversation_turn_detail detail
  WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code IN ('queued', 'running')
+   AND runtime.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `)
 RETURNING runtime.turn_no`,
 
 	qLedgerActivateJob: `
@@ -314,19 +314,19 @@ UPDATE conversation_turn_detail detail
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code = 'running'
+   AND runtime.status_code = ` + sqlTurnRunning + `
    AND (detail.active_reservation_id IS NULL
         OR detail.active_reservation_id = ?
         OR EXISTS (SELECT 1 FROM budget_reservation old
                     WHERE old.partner_id = detail.partner_id
                       AND old.reservation_id = detail.active_reservation_id
-                      AND old.status_code = 'expired'))
+                      AND old.status_code = ` + sqlReservationExpired + `))
    AND EXISTS (SELECT 1 FROM budget_reservation current
                 WHERE current.partner_id = detail.partner_id
                   AND current.reservation_id = ?
                   AND current.request_id = runtime.request_id
                   AND current.attempt_no = ?
-                  AND current.status_code = 'held'
+                  AND current.status_code = ` + sqlReservationHeld + `
                   AND current.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.conversation_id, detail.turn_no`,
 
@@ -340,12 +340,12 @@ UPDATE conversation_turn_detail detail
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code = 'running'
+   AND runtime.status_code = ` + sqlTurnRunning + `
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'held'
+                  AND reservation.status_code = ` + sqlReservationHeld + `
                   AND reservation.expires_at > CURRENT_TIMESTAMP)
 RETURNING detail.turn_no`,
 
@@ -359,19 +359,19 @@ RETURNING turn_no`,
 	// Finalization is fenced by the settled reservation matching staged usage.
 	qLedgerCompleteJobTurn: `
 UPDATE conversation_turn runtime
-   SET status_code = 'completed', started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+   SET status_code = ` + sqlTurnCompleted + `, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
        response_uri = ?, response_digest = ?, completed_at = CURRENT_TIMESTAMP
   FROM conversation_turn_detail detail
  WHERE detail.partner_id = ? AND detail.job_ref = ? AND detail.task_kind = ?
    AND runtime.partner_id = detail.partner_id
    AND runtime.conversation_id = detail.conversation_id
    AND runtime.turn_no = detail.turn_no
-   AND runtime.status_code = 'running'
+   AND runtime.status_code = ` + sqlTurnRunning + `
    AND detail.active_reservation_id = ?
    AND EXISTS (SELECT 1 FROM budget_reservation reservation
                 WHERE reservation.partner_id = detail.partner_id
                   AND reservation.reservation_id = detail.active_reservation_id
-                  AND reservation.status_code = 'settled'
+                  AND reservation.status_code = ` + sqlReservationSettled + `
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
                   AND reservation.settled_cost_minor_units = detail.staged_cost_minor_units)
 RETURNING runtime.turn_no`,
@@ -389,7 +389,7 @@ type TurnState struct {
 	ConversationID     string
 	TurnNo             int64
 	RequestID          string
-	Status             string
+	Status             domain.TurnStatus
 	InputDigest        string
 	ResponseDigest     string
 	TaskKind           string
@@ -407,7 +407,7 @@ type TurnState struct {
 	SearchQueries      int64
 	CostMinorUnits     int64
 	Currency           string
-	ReservationStatus  string
+	ReservationStatus  domain.ReservationStatus
 	ReservationAttempt int64
 	ReservationExpired bool
 	AgentID            string
@@ -558,7 +558,7 @@ func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID str
 	state := TurnState{
 		TenantID: common.AsInt64(row[0]), ConversationID: common.AsString(row[1]),
 		TurnNo: common.AsInt64(row[2]), RequestID: common.AsString(row[3]),
-		Status: common.AsString(row[4]), InputDigest: common.AsString(row[5]),
+		Status: domain.TurnStatus(common.AsString(row[4])), InputDigest: common.AsString(row[5]),
 		ResponseDigest: common.AsString(row[6]), TaskKind: common.AsString(row[7]),
 		InputSummary: common.AsString(row[8]), ResultKind: common.AsString(row[9]),
 		ResultPayload: common.AsString(row[10]), ErrorText: common.AsString(row[11]),
@@ -567,7 +567,7 @@ func (l *TurnLedger) findTurn(ctx context.Context, tenantID int64, requestID str
 		InputTokens: optionalInt64(row[16]), OutputTokens: optionalInt64(row[17]),
 		ToolCalls: int(optionalInt64(row[18])), SearchQueries: optionalInt64(row[19]),
 		CostMinorUnits: optionalInt64(row[20]), Currency: common.AsString(row[21]),
-		ReservationStatus: common.AsString(row[22]), ReservationAttempt: optionalInt64(row[23]),
+		ReservationStatus: domain.ReservationStatus(common.AsString(row[22])), ReservationAttempt: optionalInt64(row[23]),
 		ReservationExpired: common.AsBool(row[24]),
 		AgentID:            common.AsString(row[25]), AgentVersion: common.AsString(row[26]),
 	}
@@ -591,15 +591,15 @@ func (l *TurnLedger) Inspect(ctx context.Context, tenantID int64, requestID, tas
 		return state, nil, false, ErrTurnConflict
 	}
 	switch state.Status {
-	case "completed":
+	case domain.TurnCompleted:
 		if state.ResultPayload == "" {
 			return state, nil, true, nil
 		}
 		return state, json.RawMessage(state.ResultPayload), true, nil
-	case "failed", "cancelled":
+	case domain.TurnFailed, domain.TurnCancelled:
 		return state, nil, true, storedTurnError(state)
 	}
-	if state.ResultPayload != "" && state.ReservationStatus == "settled" {
+	if state.ResultPayload != "" && state.ReservationStatus == domain.ReservationSettled {
 		if err := l.finishSuccessful(ctx, state, domain.BudgetReservation{
 			TenantID: state.TenantID, ReservationID: state.ActiveReservation,
 			RequestID: state.RequestID, Attempt: state.ReservationAttempt,
@@ -608,19 +608,19 @@ func (l *TurnLedger) Inspect(ctx context.Context, tenantID int64, requestID, tas
 		}
 		return state, json.RawMessage(state.ResultPayload), true, nil
 	}
-	if state.ErrorText != "" && state.ReservationStatus == "settled" {
+	if state.ErrorText != "" && state.ReservationStatus == domain.ReservationSettled {
 		if err := l.finishBilledFailure(ctx, state, state.ActiveReservation); err != nil {
 			return state, nil, false, err
 		}
 		return state, nil, true, storedTurnError(state)
 	}
-	if state.ErrorText != "" && state.ReservationStatus == "released" {
+	if state.ErrorText != "" && state.ReservationStatus == domain.ReservationReleased {
 		if err := l.finishFailed(ctx, state, state.ActiveReservation); err != nil {
 			return state, nil, false, err
 		}
 		return state, nil, true, storedTurnError(state)
 	}
-	if state.ActiveReservation != "" && state.ReservationStatus == "held" && !state.ReservationExpired {
+	if state.ActiveReservation != "" && state.ReservationStatus == domain.ReservationHeld && !state.ReservationExpired {
 		return state, nil, false, ErrTurnInFlight
 	}
 	return state, nil, false, nil
@@ -636,10 +636,10 @@ func storedTurnError(state TurnState) error {
 
 // Begin creates the workspace conversation and turn for a new request id,
 // serialized per (tenant, end user, release), within the release's turns per minute.
-func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requestID, taskKind, inputSummary, inputDigest, status string, release domain.AgentReleaseReference) (TurnState, bool, error) {
+func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requestID, taskKind, inputSummary, inputDigest string, status domain.TurnStatus, release domain.AgentReleaseReference) (TurnState, bool, error) {
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(taskKind) == "" ||
 		len([]rune(requestID)) > 120 || len([]rune(taskKind)) > 30 || len(inputDigest) != 64 ||
-		(status != "queued" && status != "running") || release.AgentID == "" || release.Version == "" || len(release.Digest) != 64 ||
+		(status != domain.TurnQueued && status != domain.TurnRunning) || release.AgentID == "" || release.Version == "" || len(release.Digest) != 64 ||
 		len([]rune(endUserRef)) > 200 {
 		return TurnState{}, false, fmt.Errorf("%w: invalid turn identity, status, or release", domain.ErrValidation)
 	}
@@ -686,7 +686,7 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 		return TurnState{}, false, err
 	}
 	inserted, err := tx.Query(ctx, qLedgerInsertTurn,
-		tenantID, conversationID, requestID, status, l.inputURI(requestID), inputDigest, status,
+		tenantID, conversationID, requestID, string(status), l.inputURI(requestID), inputDigest, string(status),
 		tenantID, conversationID)
 	if err != nil {
 		return TurnState{}, false, fmt.Errorf("insert turn: %w", err)
@@ -728,7 +728,7 @@ func (l *TurnLedger) PrepareBudgeted(ctx context.Context, tenantID int64, endUse
 	found := state.RequestID != ""
 	created := false
 	if !found {
-		state, created, err = l.Begin(ctx, tenantID, endUserRef, requestID, taskKind, inputSummary, inputDigest, "running", release)
+		state, created, err = l.Begin(ctx, tenantID, endUserRef, requestID, taskKind, inputSummary, inputDigest, domain.TurnRunning, release)
 		if err != nil {
 			return TurnExecution{}, nil, false, err
 		}
@@ -899,7 +899,7 @@ func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, rese
 		if findErr != nil {
 			return findErr
 		}
-		if !found || current.Status != "completed" || current.ResponseDigest != responseDigest {
+		if !found || current.Status != domain.TurnCompleted || current.ResponseDigest != responseDigest {
 			return ErrTurnFenced
 		}
 		_ = tx.Rollback(ctx)
@@ -996,7 +996,7 @@ func (l *TurnLedger) finishFailed(ctx context.Context, state TurnState, reservat
 		if findErr != nil {
 			return findErr
 		}
-		if !found || current.Status != "failed" {
+		if !found || current.Status != domain.TurnFailed {
 			return ErrTurnFenced
 		}
 	}
@@ -1070,7 +1070,7 @@ func (l *TurnLedger) finishBilledFailure(ctx context.Context, state TurnState, r
 		if findErr != nil {
 			return findErr
 		}
-		if !found || current.Status != "failed" {
+		if !found || current.Status != domain.TurnFailed {
 			return ErrTurnFenced
 		}
 		return nil
@@ -1181,11 +1181,11 @@ func nullableUsageField(value string) any {
 // query map must include TurnLedgerQueries().
 
 // SetJobTurnStatus moves a queued/running job turn to the given status.
-func SetJobTurnStatus(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, status string) (bool, error) {
-	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || status != "queued" && status != "running" && status != "failed" {
+func SetJobTurnStatus(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind string, status domain.TurnStatus) (bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || status != domain.TurnQueued && status != domain.TurnRunning && status != domain.TurnFailed {
 		return false, fmt.Errorf("%w: invalid job status transition", domain.ErrValidation)
 	}
-	result, err := qs.Query(ctx, qLedgerSetJobStatus, status, status, status, tenantID, jobRef, taskKind)
+	result, err := qs.Query(ctx, qLedgerSetJobStatus, string(status), string(status), string(status), tenantID, jobRef, taskKind)
 	if err != nil {
 		return false, err
 	}

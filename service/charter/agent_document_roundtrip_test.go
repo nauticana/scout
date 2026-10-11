@@ -82,7 +82,7 @@ func TestAgentExportImportsIntoAnotherTenantThroughTheCharterDocument(t *testing
 		"scout_studio_lock_type":            {{"writer"}},
 		"scout_studio_type_census":          {{int64(0), int64(0)}},
 		"scout_studio_create_record":        {{"writer-00000000000000000000"}},
-		"scout_studio_list_agents":          {{"writer-00000000000000000000", "writer", "Writer", "draft", false, int64(1), int64(0), false, nil, nil, nil}},
+		"scout_studio_list_agents":          {{"writer-00000000000000000000", "writer", "Writer", string(domain.AgentStateDraft), false, int64(1), int64(0), false, nil, nil, nil}},
 	}}
 	studio := &controlplane.StudioService{
 		DB: studioRowsDB{rows: rows}, MaxAgentsPerType: 5, Entropy: bytes.NewReader(make([]byte, 16)),

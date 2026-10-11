@@ -49,7 +49,9 @@ groups:
 
   - name: knowledge
     path: knowledge
+    seed: seed/knowledge/knowledge.yml
     depends_on: [tenancy, agent]
+    seed_depends_on: [core]
 
   - name: knowledge_vector
     path: knowledge_vector

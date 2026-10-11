@@ -15,6 +15,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/stage"
+	"github.com/nauticana/scout/service/observability"
 )
 
 // TurnRuntime executes one durably delivered turn. Per step the order is
@@ -117,7 +118,7 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.Turn
 		return domain.TurnResult{}, err
 	}
 	execution := &turnExecution{dispatch: dispatch, turnNo: turnNo, bounds: turn.DelegationBounds}
-	if isTerminalTurnStatus(status) {
+	if status.Terminal() {
 		return runtime.replayTerminal(ctx, execution, status, payload)
 	}
 	turnCtx, release := ctx, func() {}
@@ -158,7 +159,7 @@ func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecutio
 		return err
 	}
 	// A turn may suspend more than once; the frame it suspends at tells the suspensions apart.
-	if err := runtime.audit(domain.WithDecisionScope(suspendCtx, "frame/", execution.published), execution, "turn_suspended", stage.ErrorClass(cause)); err != nil {
+	if err := runtime.audit(domain.WithDecisionScope(suspendCtx, "frame/", execution.published), execution, observability.AuditCategoryTurnSuspended, stage.ErrorClass(cause)); err != nil {
 		return err
 	}
 	pending := domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventApprovalPending, Approval: &domain.TurnApprovalEvent{}}
@@ -170,7 +171,7 @@ func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecutio
 
 // replayTerminal re-offers the terminal record and republishes the final frame of an
 // already terminal turn; it never re-executes and never settles again.
-func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnExecution, status string, payload []byte) (domain.TurnResult, error) {
+func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnExecution, status domain.TurnStatus, payload []byte) (domain.TurnResult, error) {
 	turn := execution.dispatch.Turn
 	snapshot, err := runtime.Sessions.Load(ctx, turn.TenantContext.TenantID, turn.ConversationID)
 	if err != nil {
@@ -179,21 +180,18 @@ func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnE
 	execution.snapshot = snapshot
 	execution.published = finalFrameSequence(snapshot, execution.turnNo)
 	errorCode := ""
-	if status != "completed" {
-		errorCode = string(payload)
-		if errorCode == "" {
-			errorCode = status
-		}
+	if status != domain.TurnCompleted {
+		errorCode = terminalTurnErrorCode(status, payload)
 	}
 	// The key of the first record makes this a no-op unless that write was lost.
-	if err := runtime.audit(context.WithoutCancel(ctx), execution, "turn_"+status, errorCode); err != nil {
+	if err := runtime.audit(context.WithoutCancel(ctx), execution, turnAuditCategory(status), errorCode); err != nil {
 		return domain.TurnResult{}, err
 	}
 	if err := runtime.publish(ctx, execution, nil, true, errorCode); err != nil {
 		return domain.TurnResult{}, err
 	}
-	if status != "completed" {
-		return domain.TurnResult{}, fmt.Errorf("%w: turn %q is already %s (%s)", domain.ErrConflict, turn.RequestID, status, errorCode)
+	if status != domain.TurnCompleted {
+		return domain.TurnResult{}, fmt.Errorf("%w: turn %q is already terminal (%s)", domain.ErrConflict, turn.RequestID, errorCode)
 	}
 	return domain.TurnResult{Response: payload, AgentVersion: snapshot.AgentVersion}, nil
 }
@@ -459,7 +457,7 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 	if err := runtime.Sessions.Complete(settleCtx, tenantID, turn.ConversationID, execution.revision, *result); err != nil {
 		return err
 	}
-	if err := runtime.audit(settleCtx, execution, "turn_completed", ""); err != nil {
+	if err := runtime.audit(settleCtx, execution, observability.AuditCategoryTurnCompleted, ""); err != nil {
 		return err
 	}
 	runtime.recordRun(settleCtx, execution, domain.RunCompleted)
@@ -477,9 +475,9 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	turn := execution.dispatch.Turn
 	tenantID := turn.TenantContext.TenantID
 	failCtx := context.WithoutCancel(ctx)
-	status, errorCode := "failed", stage.ErrorClass(cause)
+	status, errorCode := domain.TurnFailed, stage.ErrorClass(cause)
 	if errors.Is(cause, domain.ErrTurnCanceled) || errors.Is(cause, context.Canceled) {
-		status = "cancelled"
+		status = domain.TurnCancelled
 	}
 	errs := []error{cause}
 	if !execution.settled && execution.reservation.ReservationID != "" {
@@ -508,7 +506,7 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	} else {
 		runtime.recordRun(failCtx, execution, domain.RunStatus(status))
 	}
-	if err := runtime.audit(failCtx, execution, "turn_"+status, errorCode); err != nil {
+	if err := runtime.audit(failCtx, execution, turnAuditCategory(status), errorCode); err != nil {
 		errs = append(errs, err)
 	}
 	if err := runtime.publish(failCtx, execution, nil, true, errorCode); err != nil {
@@ -537,7 +535,7 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 		return err
 	}
 	execution := &turnExecution{dispatch: dispatch, turnNo: turnNo}
-	if isTerminalTurnStatus(status) {
+	if status.Terminal() {
 		return nil
 	}
 	snapshot, err := runtime.Sessions.Load(ctx, tenantID, turn.ConversationID)

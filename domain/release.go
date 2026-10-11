@@ -25,14 +25,35 @@ type RolloutTarget struct {
 	Percentage      int
 }
 
+// RolloutStatus is the traffic state of a platform release in one tenant ring.
+type RolloutStatus string
+
+const (
+	RolloutStatusPending    RolloutStatus = "P"
+	RolloutStatusActive     RolloutStatus = "A"
+	RolloutStatusPaused     RolloutStatus = "U"
+	RolloutStatusCompleted  RolloutStatus = "C"
+	RolloutStatusRolledBack RolloutStatus = "R"
+)
+
 // RolloutVerdict is a three-state health outcome; inconclusive pauses promotion.
 type RolloutVerdict string
 
 const (
-	RolloutHealthy      RolloutVerdict = "healthy"
-	RolloutUnhealthy    RolloutVerdict = "unhealthy"
-	RolloutInconclusive RolloutVerdict = "inconclusive"
+	RolloutHealthy      RolloutVerdict = "H"
+	RolloutUnhealthy    RolloutVerdict = "U"
+	RolloutInconclusive RolloutVerdict = "I"
 )
+
+// Valid reports whether verdict is one of the rollout_health_verdict codes.
+func (verdict RolloutVerdict) Valid() bool {
+	switch verdict {
+	case RolloutHealthy, RolloutUnhealthy, RolloutInconclusive:
+		return true
+	default:
+		return false
+	}
+}
 
 // RolloutHealth carries a verdict with the evidence behind it.
 type RolloutHealth struct {
@@ -50,16 +71,16 @@ type RolloutHealth struct {
 type RolloutStage string
 
 const (
-	StageBuild          RolloutStage = "build"
-	StageOfflineReplay  RolloutStage = "offline_replay"
-	StageShadow         RolloutStage = "shadow"
-	StageInternalCanary RolloutStage = "internal_canary"
-	StageTenantCanary   RolloutStage = "tenant_canary"
-	StageRegionalRamp   RolloutStage = "regional_ramp"
-	StageGlobalDefault  RolloutStage = "global_default"
-	StageRetired        RolloutStage = "retired"
-	StageRolledBack     RolloutStage = "rolled_back"
-	StageQuarantined    RolloutStage = "quarantined"
+	StageBuild          RolloutStage = "BD"
+	StageOfflineReplay  RolloutStage = "OR"
+	StageShadow         RolloutStage = "SH"
+	StageInternalCanary RolloutStage = "IC"
+	StageTenantCanary   RolloutStage = "TC"
+	StageRegionalRamp   RolloutStage = "RR"
+	StageGlobalDefault  RolloutStage = "GD"
+	StageRetired        RolloutStage = "RT"
+	StageRolledBack     RolloutStage = "RB"
+	StageQuarantined    RolloutStage = "QU"
 )
 
 // RolloutState is the durable, generation-fenced position of one platform release.
@@ -148,9 +169,14 @@ type ReleaseBundle struct {
 type PinScope string
 
 const (
-	PinScopeCompliance PinScope = "compliance"
-	PinScopeTenant     PinScope = "tenant"
+	PinScopeCompliance PinScope = "C"
+	PinScopeTenant     PinScope = "T"
 )
+
+// Valid reports whether scope is one of the version_pin_scope codes.
+func (scope PinScope) Valid() bool {
+	return scope == PinScopeCompliance || scope == PinScopeTenant
+}
 
 // VersionPin holds one tenant agent on an immutable version for a bounded period.
 type VersionPin struct {

@@ -17,7 +17,7 @@ func setting(scopeID string, kind domain.ResourceKind, value string) domain.Scop
 }
 
 func settingsService(bindings []domain.ScopedBinding) (*StudioService, *studioQueryFake) {
-	service, query := lifecycleService(archiveRows("active", false))
+	service, query := lifecycleService(archiveRows(string(domain.AgentStateActive), false))
 	service.Scopes = studioScopes(bindings)
 	query.rows[qStudioLockDraft] = [][]any{{int64(4), "writer"}}
 	query.rows[qStudioLockAlias] = [][]any{{"writer-a", int64(2)}}
@@ -156,7 +156,7 @@ func (section staticSection) Section(context.Context, int64, domain.AgentDraft) 
 
 func publishService() (*StudioService, *studioQueryFake) {
 	query := &studioQueryFake{rows: map[string][][]any{
-		qStudioGetDraft:    {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft:    {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 		qStudioLockDraft:   {{int64(4), "writer"}},
 		qStudioLockAlias:   {{"writer-a", int64(2)}},
 		qStudioNextVersion: {{int64(1)}},

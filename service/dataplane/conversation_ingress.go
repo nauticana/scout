@@ -92,7 +92,7 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
 	}
-	if err == nil && isTerminalTurnStatus(status) {
+	if err == nil && status.Terminal() {
 		return ingress.Replies.Subscribe(ctx, tenantID, request.RequestID)
 	}
 	input, err := ingress.Objects.Dehydrate(ctx, turnInputName(tenantID, request.RequestID), request.Input)
@@ -223,7 +223,7 @@ func (ingress *TurnIngress) refund(ctx context.Context, reservation domain.Budge
 	ctx = context.WithoutCancel(ctx)
 	return errors.Join(
 		ingress.Budget.Release(ctx, reservation),
-		ingress.Records.Fail(ctx, request.TenantContext.TenantID, request.RequestID, "failed", errorCode),
+		ingress.Records.Fail(ctx, request.TenantContext.TenantID, request.RequestID, domain.TurnFailed, errorCode),
 	)
 }
 

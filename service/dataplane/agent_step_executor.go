@@ -90,12 +90,12 @@ func (e *AgentStepExecutor) Execute(ctx context.Context, input domain.StepInput)
 		Input: input.Snapshot.State, RequestID: item.RequestID,
 	})
 	if err != nil {
-		if completeErr := e.Work.Complete(ctx, caller.TenantID, item.ID, "failed"); completeErr != nil {
+		if completeErr := e.Work.Complete(ctx, caller.TenantID, item.ID, domain.TurnFailed); completeErr != nil {
 			return domain.StepResult{}, fmt.Errorf("%w (work item not closed: %v)", err, completeErr)
 		}
 		return domain.StepResult{}, stage.At(domain.StageTool, err)
 	}
-	if err := e.Work.Complete(ctx, caller.TenantID, item.ID, "completed"); err != nil {
+	if err := e.Work.Complete(ctx, caller.TenantID, item.ID, domain.TurnCompleted); err != nil {
 		return domain.StepResult{}, err
 	}
 	return result, nil

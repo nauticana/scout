@@ -76,8 +76,12 @@ func (evaluator *GateHealthEvaluator) Evaluate(ctx context.Context, target domai
 		return domain.RolloutHealth{Verdict: domain.RolloutUnhealthy, BreachedMetric: online.Breached[0], Samples: online.Samples, Window: online.Window}, nil
 	}
 	health := domain.RolloutHealth{Verdict: decision.Verdict, Samples: online.Samples, Window: online.Window}
-	if decision.Verdict != domain.RolloutHealthy {
-		health.BreachedMetric = "gate_decision_" + string(decision.Verdict)
+	switch decision.Verdict {
+	case domain.RolloutHealthy:
+	case domain.RolloutUnhealthy:
+		health.BreachedMetric = "gate_decision_unhealthy"
+	default:
+		health.BreachedMetric = "gate_decision_inconclusive"
 	}
 	return health, nil
 }

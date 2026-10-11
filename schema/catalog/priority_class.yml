@@ -2,7 +2,7 @@ table: priority_class
 comment: Tenant scheduling priority catalog
 columns:
   - name: code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: dispatch_rank
     type: SMALLINT
   - name: description

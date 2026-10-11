@@ -47,7 +47,7 @@ func decodeEvaluationGate(raw []byte) (domain.EvaluationGatePolicy, bool, error)
 		return value, false, fmt.Errorf("%w: evaluation_gate required_scopes must name dev, gate, or both", domain.ErrValidation)
 	}
 	for index, scope := range value.RequiredScopes {
-		if scope != domain.GoldenScopeDev && scope != domain.GoldenScopeGate || slices.Contains(value.RequiredScopes[:index], scope) {
+		if !scope.Valid() || slices.Contains(value.RequiredScopes[:index], scope) {
 			return value, false, fmt.Errorf("%w: evaluation_gate required_scopes must be distinct dev or gate", domain.ErrValidation)
 		}
 	}

@@ -29,8 +29,8 @@ func newSweepFixture(t *testing.T, policy func(domain.ApprovalRequest) (domain.E
 		Policy: fake.EscalationPolicyFunc(func(_ context.Context, request domain.ApprovalRequest) (domain.EscalationStep, error) {
 			return policy(request)
 		}),
-		Records: &fake.TurnRecordStore{FailFunc: func(_ context.Context, tenantID int64, requestID, status, code string) error {
-			f.failed = append(f.failed, requestID+"/"+status+"/"+code)
+		Records: &fake.TurnRecordStore{FailFunc: func(_ context.Context, tenantID int64, requestID string, status domain.TurnStatus, code string) error {
+			f.failed = append(f.failed, requestID+"/"+string(status)+"/"+code)
 			return nil
 		}},
 		Audit: &fake.AuditSink{RecordFunc: func(_ context.Context, record domain.DecisionRecord) error {
@@ -114,7 +114,7 @@ func TestSweepWaitsOrFillsVacancies(t *testing.T) {
 	if filled.Approver.ID != "77" || !filled.DeadlineAt.Equal(vacant.DeadlineAt) || filled.Status != domain.ApprovalStatusPending {
 		t.Fatalf("filled = %+v", filled)
 	}
-	if record := f.audited[0]; record.Action != "escalated" || !strings.Contains(record.Reason, "route payments, role controller, step 0") || record.Outcome != domain.DecisionDeny {
+	if record := f.audited[0]; record.Action != string(domain.ApprovalStatusEscalated) || !strings.Contains(record.Reason, "route payments, role controller, step 0") || record.Outcome != domain.DecisionDeny {
 		t.Fatalf("audit = %+v", record)
 	}
 }
@@ -150,7 +150,7 @@ func TestSweepExpiresUnderTheFenceAndFailsTheTurn(t *testing.T) {
 	if fence := f.table.fences[0]; fence[0] != 1 || fence[1] != "human" || fence[2] != "77" {
 		t.Fatalf("expiry fence = %v", fence)
 	}
-	if len(f.failed) != 1 || f.failed[0] != "late/failed/expired" {
+	if len(f.failed) != 1 || f.failed[0] != "late/"+string(domain.TurnFailed)+"/"+string(domain.ApprovalStatusExpired) {
 		t.Fatalf("failed turns = %v", f.failed)
 	}
 }
@@ -170,12 +170,12 @@ func TestALaterSweepFailsATurnTheExpiryLeftParked(t *testing.T) {
 	down := errors.New("turn store down")
 	// The expiry commits and failing the turn does not, both at once and in the same sweep's retry.
 	failures := 2
-	f.sweeper.Records = &fake.TurnRecordStore{FailFunc: func(_ context.Context, _ int64, requestID, status, code string) error {
+	f.sweeper.Records = &fake.TurnRecordStore{FailFunc: func(_ context.Context, _ int64, requestID string, status domain.TurnStatus, code string) error {
 		if failures > 0 {
 			failures--
 			return down
 		}
-		f.failed = append(f.failed, requestID+"/"+status+"/"+code)
+		f.failed = append(f.failed, requestID+"/"+string(status)+"/"+code)
 		return nil
 	}}
 	opened := f.open(t, dueAt(routedOwed("late", "77", 1), gateNow.Add(-time.Minute)))
@@ -188,7 +188,7 @@ func TestALaterSweepFailsATurnTheExpiryLeftParked(t *testing.T) {
 	if moved, err := f.sweeper.Sweep(context.Background(), 7); moved != 0 || err != nil {
 		t.Fatalf("reconcile: moved %d, %v", moved, err)
 	}
-	if len(f.failed) != 1 || f.failed[0] != "late/failed/expired" || !f.table.settled[opened.ID] {
+	if len(f.failed) != 1 || f.failed[0] != "late/"+string(domain.TurnFailed)+"/"+string(domain.ApprovalStatusExpired) || !f.table.settled[opened.ID] {
 		t.Fatalf("failed %v, settled %t", f.failed, f.table.settled[opened.ID])
 	}
 	if _, err := f.sweeper.Sweep(context.Background(), 7); err != nil || len(f.failed) != 1 {
@@ -201,8 +201,10 @@ func TestASweepSettlesATurnThatEndedAnotherWay(t *testing.T) {
 		return domain.EscalationStep{Action: domain.EscalationExpire, Reason: "deadline passed"}, nil
 	})
 	f.sweeper.Records = &fake.TurnRecordStore{
-		FailFunc: func(context.Context, int64, string, string, string) error { return domain.ErrConflict },
-		FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) { return 1, "cancelled", nil, nil },
+		FailFunc: func(context.Context, int64, string, domain.TurnStatus, string) error { return domain.ErrConflict },
+		FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
+			return 1, domain.TurnCancelled, nil, nil
+		},
 	}
 	opened := f.open(t, dueAt(owed("gone", "77"), gateNow.Add(-time.Minute)))
 	if moved, err := f.sweeper.Sweep(context.Background(), 7); moved != 1 || err != nil || !f.table.settled[opened.ID] {

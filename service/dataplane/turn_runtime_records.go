@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/observability"
 )
 
 const (
@@ -97,7 +98,7 @@ ON CONFLICT (partner_id, conversation_id, turn_no) DO NOTHING`,
 	qRecordOpen: `
 INSERT INTO conversation_turn
        (partner_id, conversation_id, turn_no, request_id, status_code, input_uri, input_digest)
-SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, 'queued', ?, ?
+SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, ` + sqlTurnQueued + `, ?, ?
   FROM conversation_turn
  WHERE partner_id = ? AND conversation_id = ?
 ON CONFLICT DO NOTHING
@@ -105,22 +106,22 @@ RETURNING turn_no`,
 
 	qRecordStart: `
 UPDATE conversation_turn
-   SET status_code = 'running', started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
- WHERE partner_id = ? AND request_id = ? AND status_code = 'queued'
+   SET status_code = ` + sqlTurnRunning + `, started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+ WHERE partner_id = ? AND request_id = ? AND status_code = ` + sqlTurnQueued + `
 RETURNING turn_no`,
 
 	// Suspend and Resume move only between live states, so a terminal turn is
 	// never revived and a settled reservation is never re-held.
 	qRecordSuspend: `
 UPDATE conversation_turn
-   SET status_code = 'suspended'
- WHERE partner_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming')
+   SET status_code = ` + sqlTurnSuspended + `
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
 RETURNING turn_no`,
 
 	qRecordResume: `
 UPDATE conversation_turn
-   SET status_code = 'queued'
- WHERE partner_id = ? AND request_id = ? AND status_code IN ('suspended', 'queued')
+   SET status_code = ` + sqlTurnQueued + `
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnSuspended + `, ` + sqlTurnQueued + `)
 RETURNING turn_no`,
 
 	// The history row, when the turn has one, carries the same error in the same statement.
@@ -129,7 +130,7 @@ WITH failed AS (
 UPDATE conversation_turn
    SET status_code = ?, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND request_id = ? AND status_code IN ('queued', 'running', 'streaming', 'suspended')
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `, ` + sqlTurnSuspended + `)
 RETURNING partner_id, conversation_id, turn_no),
 mirrored AS (
 UPDATE conversation_turn_detail detail
@@ -180,7 +181,7 @@ func (store *TableTurnRecordStore) queries(ctx context.Context) port.QueryServic
 type turnRecordRow struct {
 	turnNo         int64
 	conversationID string
-	status         string
+	status         domain.TurnStatus
 	inputDigest    string
 	response       domain.ObjectRef
 }
@@ -199,7 +200,7 @@ func (store *TableTurnRecordStore) find(ctx context.Context, tenantID int64, req
 	}
 	return turnRecordRow{
 		turnNo: common.AsInt64(row[0]), conversationID: common.AsString(row[1]),
-		status: common.AsString(row[2]), inputDigest: common.AsString(row[3]),
+		status: domain.TurnStatus(common.AsString(row[2])), inputDigest: common.AsString(row[3]),
 		response: domain.ObjectRef{URI: common.AsString(row[4]), Digest: common.AsString(row[5])},
 	}, true, nil
 }
@@ -394,7 +395,7 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 }
 
 // Find resolves the request; terminal payloads are hydrated and digest-verified.
-func (store *TableTurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (int64, string, []byte, error) {
+func (store *TableTurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (int64, domain.TurnStatus, []byte, error) {
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
 		return 0, "", nil, fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
 	}
@@ -438,8 +439,8 @@ func (store *TableTurnRecordStore) Start(ctx context.Context, tenantID int64, re
 
 // Fail stores the error code as the turn's terminal payload; an already
 // terminal turn is left untouched.
-func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, requestID, status, errorCode string) error {
-	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || (status != "failed" && status != "cancelled") || strings.TrimSpace(errorCode) == "" {
+func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, requestID string, status domain.TurnStatus, errorCode string) error {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || (status != domain.TurnFailed && status != domain.TurnCancelled) || strings.TrimSpace(errorCode) == "" {
 		return fmt.Errorf("%w: tenant, request, failed or cancelled status, and error code are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
@@ -450,7 +451,7 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, req
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	failed, err := store.queries(ctx).Query(ctx, qRecordFail, status, ref.URI, ref.Digest, tenantID, requestID, errorCode)
+	failed, err := store.queries(ctx).Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, tenantID, requestID, errorCode)
 	if err != nil {
 		return fmt.Errorf("fail turn: %w", err)
 	}
@@ -546,8 +547,25 @@ func turnFailureName(tenantID int64, requestID, errorCode string) string {
 	return fmt.Sprintf("turn-failure/%d/%s/%s", tenantID, requestID, DigestBytes([]byte(errorCode))[:12])
 }
 
-func isTerminalTurnStatus(status string) bool {
-	return status == "completed" || status == "failed" || status == "cancelled"
+// terminalTurnFallbackCode is the client error code of a failed or cancelled turn that stored none.
+func terminalTurnFallbackCode(status domain.TurnStatus) string {
+	if status == domain.TurnCancelled {
+		return "canceled"
+	}
+	return "failed"
+}
+
+// turnAuditCategory is the audit category that records a turn reaching status.
+func turnAuditCategory(status domain.TurnStatus) string {
+	switch status {
+	case domain.TurnCompleted:
+		return observability.AuditCategoryTurnCompleted
+	case domain.TurnCancelled:
+		return observability.AuditCategoryTurnCancelled
+	case domain.TurnSuspended:
+		return observability.AuditCategoryTurnSuspended
+	}
+	return observability.AuditCategoryTurnFailed
 }
 
 // endUserRef names the human a turn acts for, when there is one.

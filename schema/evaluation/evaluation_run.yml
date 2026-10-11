@@ -20,7 +20,7 @@ columns:
   - name: scope_code
     type: VARCHAR(10)
   - name: status_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: queued_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -104,11 +104,11 @@ checks:
   - name: evaluation_run_scope_ck
     expression: scope_code IN ('dev', 'gate')
   - name: evaluation_run_status_ck
-    expression: status_code IN ('queued', 'running', 'completed', 'stopped_early', 'failed')
+    expression: status_code IN ('Q', 'R', 'C', 'S', 'F')
   - name: evaluation_run_subject_ck
     expression: manifest_id IS NOT NULL OR (agent_id IS NOT NULL AND golden_set_id IS NOT NULL AND set_version IS NOT NULL)
   - name: evaluation_run_started_ck
-    expression: status_code = 'queued' OR started_at IS NOT NULL
+    expression: status_code = 'Q' OR started_at IS NOT NULL
   - name: evaluation_run_dates_ck
     expression: completed_at IS NULL OR completed_at >= started_at
   - name: evaluation_run_requester_ck

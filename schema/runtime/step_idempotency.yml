@@ -8,7 +8,7 @@ columns:
   - name: execution_step_id
     type: BIGINT
   - name: status_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: result_uri
     type: TEXT
     nullable: true

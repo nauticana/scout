@@ -202,7 +202,7 @@ func newPortabilityHarness(t *testing.T) *portabilityHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft := []any{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, `{"tone":"formal"}`, int64(4), int64(2), false}
+	draft := []any{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, `{"tone":"formal"}`, int64(4), int64(2), false}
 	h := &portabilityHarness{denied: map[domain.StudioAction]bool{}, bindings: agentScopeBindings(), codec: &portableCodec{}}
 	h.db = newSeedDB(map[string][][]any{
 		qStudioGetDraft:         {draft},
@@ -219,8 +219,8 @@ func newPortabilityHarness(t *testing.T) *portabilityHarness {
 		qStudioLockAlias:        {{"writer-a", int64(2)}},
 		qStudioUpdateDraft:      {{int64(5)}},
 		qStudioListAgents: {
-			{"writer-00000000000000000000", "writer", "Imported", "draft", false, int64(1), int64(0), false, nil, nil, nil},
-			{"writer-a", "writer", "Writer", "active", true, int64(5), int64(2), false, nil, nil, nil},
+			{"writer-00000000000000000000", "writer", "Imported", string(domain.AgentStateDraft), false, int64(1), int64(0), false, nil, nil, nil},
+			{"writer-a", "writer", "Writer", string(domain.AgentStateActive), true, int64(5), int64(2), false, nil, nil, nil},
 		},
 	})
 	h.studio = &StudioService{

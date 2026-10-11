@@ -24,11 +24,11 @@ func TestTableRolloutStateStoreTransitionArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireArgs(t, query, qRolloutCasState,
-		"regional_ramp", "regional", 50, false, nil, testStart, int64(20_000), int64(3_600_000),
+		string(domain.StageRegionalRamp), "regional", 50, false, nil, testStart, int64(20_000), int64(3_600_000),
 		0, 0, nil, "2026.08.1", int64(2), "controller-a", testStart)
 	requireArgs(t, query, qRolloutInsertTransition,
-		"2026.08.1", "tenant_canary", "regional_ramp", int64(2), "rollout-controller", "healthy", testStart)
-	requireArgs(t, query, qRolloutSetRing, 50, "active", nil, "2026.08.1", "regional")
+		"2026.08.1", string(domain.StageTenantCanary), string(domain.StageRegionalRamp), int64(2), "rollout-controller", "healthy", testStart)
+	requireArgs(t, query, qRolloutSetRing, 50, string(domain.RolloutStatusActive), nil, "2026.08.1", "regional")
 }
 
 func TestTableRolloutStateStoreTransitionLosesStaleCAS(t *testing.T) {
@@ -54,7 +54,7 @@ func TestTableRolloutStateStoreRollbackFinishesRings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireArgs(t, query, qRolloutFinishRings, "rolled_back", testStart, "hard breach", "2026.08.1")
+	requireArgs(t, query, qRolloutFinishRings, string(domain.RolloutStatusRolledBack), testStart, "hard breach", "2026.08.1")
 }
 
 func TestTableRolloutStateStoreLease(t *testing.T) {
@@ -77,7 +77,7 @@ func TestTableRolloutStateStoreLease(t *testing.T) {
 
 func TestTableRolloutStateStoreGetDecodesRow(t *testing.T) {
 	query := newQueryFake(map[string][][]any{qRolloutGetState: {{
-		"2026.08.1", "tenant_canary", "canary", int64(10), int64(4), true, "operator hold", testStart,
+		"2026.08.1", string(domain.StageTenantCanary), "canary", int64(10), int64(4), true, "operator hold", testStart,
 		int64(5_000), int64(21_600_000), int64(1), int64(0), testStart, "controller-a", testStart.Add(time.Minute),
 	}}})
 	store := &TableRolloutStateStore{DB: dbFake{query: query}}

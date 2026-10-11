@@ -82,7 +82,7 @@ func TestRolloutControllerAdvancesThroughStages(t *testing.T) {
 	if len(fixture.states.Transitions) != 1 || fixture.states.Transitions[0].FromGeneration != 1 {
 		t.Fatalf("transitions = %+v", fixture.states.Transitions)
 	}
-	if got := fixture.audit.Categories(); len(got) != 1 || got[0] != "rollout.regional_ramp" {
+	if got := fixture.audit.Categories(); len(got) != 1 || got[0] != "rollout."+string(domain.StageRegionalRamp) {
 		t.Fatalf("audit = %v", got)
 	}
 }
@@ -167,7 +167,7 @@ func TestRolloutControllerHardBreachRollsBackAndQuarantines(t *testing.T) {
 	if fixture.aliases.Pointed["regional"] != "2026.07.9" || fixture.capacity.Restored["2026.07.9"] != 1 {
 		t.Fatalf("alias = %v capacity = %v", fixture.aliases.Pointed, fixture.capacity.Restored)
 	}
-	if got := fixture.audit.Categories(); len(got) != 2 || got[0] != "rollout.rolled_back" || got[1] != "rollout.quarantined" {
+	if got := fixture.audit.Categories(); len(got) != 2 || got[0] != "rollout."+string(domain.StageRolledBack) || got[1] != "rollout."+string(domain.StageQuarantined) {
 		t.Fatalf("audit = %v", got)
 	}
 }

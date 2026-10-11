@@ -146,7 +146,7 @@ type WorkItemStore struct {
 	AssignFunc    func(context.Context, domain.WorkItem) (domain.WorkItem, error)
 	GetFunc       func(context.Context, int64, int64) (domain.WorkItem, error)
 	PendingFunc   func(context.Context, int64, domain.PrincipalRef, int) ([]domain.WorkItem, error)
-	CompleteFunc  func(context.Context, int64, int64, string) error
+	CompleteFunc  func(context.Context, int64, int64, domain.TurnStatus) error
 	AncestorsFunc func(context.Context, int64, int64) ([]domain.WorkItem, error)
 }
 
@@ -155,7 +155,7 @@ func (s *WorkItemStore) Assign(ctx context.Context, item domain.WorkItem) (domai
 	if s.AssignFunc != nil {
 		return s.AssignFunc(ctx, item)
 	}
-	item.ID, item.Status = 1, "queued"
+	item.ID, item.Status = 1, domain.TurnQueued
 	return item, nil
 }
 
@@ -176,7 +176,7 @@ func (s *WorkItemStore) Pending(ctx context.Context, tenantID int64, assignee do
 }
 
 // Complete invokes CompleteFunc when configured.
-func (s *WorkItemStore) Complete(ctx context.Context, tenantID, id int64, status string) error {
+func (s *WorkItemStore) Complete(ctx context.Context, tenantID, id int64, status domain.TurnStatus) error {
 	if s.CompleteFunc != nil {
 		return s.CompleteFunc(ctx, tenantID, id, status)
 	}

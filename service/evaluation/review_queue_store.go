@@ -141,7 +141,7 @@ func (store *ReviewQueueStore) Enqueue(ctx context.Context, item domain.HumanRev
 		return fmt.Errorf("%w: turn %q", domain.ErrNotFound, item.Turn.RequestID)
 	}
 	row := turn.Rows[0]
-	if common.AsString(row[2]) != "completed" {
+	if domain.TurnStatus(common.AsString(row[2])) != domain.TurnCompleted {
 		return fmt.Errorf("%w: only a completed turn is reviewed", domain.ErrConflict)
 	}
 	agentID, agentVersion := common.AsString(row[3]), common.AsString(row[4])

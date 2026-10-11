@@ -25,8 +25,8 @@ columns:
   - name: effective_at
     type: TIMESTAMP
   - name: state_code
-    type: VARCHAR(20)
-    default: pending
+    type: CHAR(1)
+    default: P
   - name: scheduled_by_kind
     type: VARCHAR(20)
   - name: scheduled_by_id
@@ -85,7 +85,7 @@ indexes:
   - name: agent_release_activation_pending_uq
     columns: [partner_id, agent_id]
     unique: true
-    where: state_code = 'pending'
+    where: state_code = 'P'
   - name: agent_release_activation_due_ix
     columns: [state_code, effective_at]
   - name: agent_release_activation_agent_ix
@@ -100,6 +100,6 @@ checks:
   - name: agent_release_activation_reason_code_ck
     expression: reason_code IS NULL OR reason_code IN ('VM', 'DM', 'NA', 'AA', 'GR', 'DC', 'AE')
   - name: agent_release_activation_reason_ck
-    expression: (state_code = 'refused') = (reason_code IS NOT NULL)
+    expression: (state_code = 'R') = (reason_code IS NOT NULL)
   - name: agent_release_activation_decider_ck
     expression: (decided_by_kind IS NULL) = (decided_by_id IS NULL)

@@ -24,7 +24,7 @@ func TestScheduledPublishRecordsAPendingActivationInsteadOfDeploying(t *testing.
 	service.Now = func() time.Time { return scheduledAt }
 	effective := scheduledAt.Add(72 * time.Hour)
 	query.rows[qScheduleDeployment] = [][]any{{"3", nil}}
-	query.rows[qScheduleInsert] = [][]any{activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", effective, "pending", 0)}
+	query.rows[qScheduleInsert] = [][]any{activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", effective, string(domain.ActivationPending), 0)}
 
 	release, err := service.Publish(context.Background(), humanActor(8, 9), domain.AgentPublishRequest{
 		AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2, EffectiveAt: effective,
@@ -100,7 +100,7 @@ func TestActivationActivatesStableWithACompareAndSwap(t *testing.T) {
 	definition, digest := frozenDefinition(t)
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qActivationStable, [][]any{{"4"}})
 	db.script(qActivationDone, [][]any{{int64(41)}})
@@ -132,7 +132,7 @@ func TestActivationOfAFirstReleaseInsertsTheDeploymentOnlyIfNoneExists(t *testin
 	definition, digest := frozenDefinition(t)
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "1", digest, 0, "", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "1", digest, 0, "", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qActivationDeployment, [][]any{{"2", nil, int64(0)}})
 	db.script(qActivationRefuse, [][]any{{int64(41)}})
@@ -150,7 +150,7 @@ func TestActivationIsIdempotentWhenTheDeploymentAlreadyServesTheRelease(t *testi
 	definition, digest := frozenDefinition(t)
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 25, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 25, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qActivationDeployment, [][]any{{"3", "4", int64(25)}})
 	db.script(qActivationDone, [][]any{{int64(41)}})
@@ -193,12 +193,12 @@ func TestActivationRefusesWhatAPublishWouldRefuse(t *testing.T) {
 			}
 			db := newScriptedDB()
 			db.script(qActivationDue, [][]any{{int64(41)}})
-			db.script(qActivationClaim, [][]any{activationRow(41, "4", scheduled, 0, "3", "", scheduledAt, "pending", 0)})
+			db.script(qActivationClaim, [][]any{activationRow(41, "4", scheduled, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 			db.script(qActivationVersion, [][]any{{definition, digest}})
 			db.script(qActivationDeployment, [][]any{{"5", nil, int64(0)}})
 			db.script(qActivationRefuse, [][]any{{int64(41)}})
 			if tc.archived {
-				db.script(qActivationAgentState, [][]any{{"archived"}})
+				db.script(qActivationAgentState, [][]any{{string(domain.AgentStateArchived)}})
 			}
 			activations := activationService(db, guardFunc(func(context.Context, domain.PublishCandidate) error { return tc.guard }))
 			if tc.roles != nil {
@@ -226,9 +226,9 @@ func TestActivationReadsTheAgentStateUnderTheDraftLockBeforeTheSwap(t *testing.T
 	definition, digest := frozenDefinition(t)
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
-	db.script(qActivationAgentState, [][]any{{"archived"}})
+	db.script(qActivationAgentState, [][]any{{string(domain.AgentStateArchived)}})
 	db.script(qActivationRefuse, [][]any{{int64(41)}})
 	// An earlier, unlocked read still saw the agent active; only the locked read decides.
 	db.script(qStudioGetDraft, [][]any{draftRow(false)})
@@ -256,7 +256,7 @@ func TestActivationReadsTheAgentStateUnderTheDraftLockBeforeTheSwap(t *testing.T
 
 	db = newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qActivationLockDraft, nil)
 	db.script(qActivationRefuse, [][]any{{int64(41)}})
@@ -285,7 +285,7 @@ func TestActivationGuardsOnlyTheSettingsTheReleaseDigestCovers(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			db := newScriptedDB()
 			db.script(qActivationDue, [][]any{{int64(41)}})
-			db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+			db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 			db.script(qActivationVersion, [][]any{{definition, digest}})
 			db.script(qStudioGetSettings, tc.settings)
 			db.script(qActivationStable, [][]any{{"4"}})
@@ -321,7 +321,7 @@ func TestActivationInterruptedByWorkerShutdownIsNotCharged(t *testing.T) {
 	definition, digest := frozenDefinition(t)
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}, {int64(42)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 2)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 2)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -349,7 +349,7 @@ func TestActivationTimeoutIsChargedAsAnAttempt(t *testing.T) {
 	definition, digest := frozenDefinition(t)
 	db := newScriptedDB()
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qActivationDefer, [][]any{{int64(1)}})
 	activations := activationService(db, guardFunc(func(guardCtx context.Context, _ domain.PublishCandidate) error {
@@ -371,7 +371,7 @@ func TestActivationRetriesTransientFailuresAFixedNumberOfTimes(t *testing.T) {
 	run := func(attempts int) (*scriptedDB, domain.ReleaseActivationReport, error) {
 		db := newScriptedDB()
 		db.script(qActivationDue, [][]any{{int64(41)}})
-		db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", attempts)})
+		db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), attempts)})
 		db.script(qActivationVersion, [][]any{{definition, digest}})
 		db.script(qActivationDefer, [][]any{{int64(attempts + 1)}})
 		db.script(qActivationRefuse, [][]any{{int64(41)}})
@@ -439,7 +439,7 @@ func TestActivateDueRejectsUnboundedSettings(t *testing.T) {
 
 func TestCancelWithdrawsOnlyAPendingActivation(t *testing.T) {
 	db := newScriptedDB()
-	cancelled := activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", scheduledAt, "cancelled", 0)
+	cancelled := activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", scheduledAt, string(domain.ActivationCancelled), 0)
 	cancelled[17], cancelled[18] = "human", "9"
 	db.script(qActivationCancel, [][]any{cancelled})
 	activations := activationService(db)
@@ -456,7 +456,7 @@ func TestCancelWithdrawsOnlyAPendingActivation(t *testing.T) {
 	}
 
 	db = newScriptedDB()
-	db.script(qActivationGet, [][]any{activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", scheduledAt, "activated", 0)})
+	db.script(qActivationGet, [][]any{activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", scheduledAt, string(domain.ActivationActivated), 0)})
 	if _, err = activationService(db).Cancel(context.Background(), humanActor(8, 9), domain.ReleaseActivationCancel{AgentID: "writer-a", ActivationID: 41}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("cancel of an activated activation: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestCancelWithdrawsOnlyAPendingActivation(t *testing.T) {
 
 func TestActivationRoutesAuthorizeTheirStudioAction(t *testing.T) {
 	db := newScriptedDB()
-	db.script(qActivationList, [][]any{activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationList, [][]any{activationRow(41, "4", strings.Repeat("a", 64), 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	activations := activationService(db)
 	var actions []string
 	activations.Studio.Roles = fake.PrincipalAuthorizerFunc(func(_ context.Context, _ domain.Principal, _, action, value string) (domain.AuthorizationGrant, error) {
@@ -545,7 +545,7 @@ func activationService(db *scriptedDB, guards ...contract.PublishGuard) *Release
 		db.script(qActivationLockDraft, [][]any{{int64(4)}})
 	}
 	if _, ok := db.rows[qActivationAgentState]; !ok {
-		db.script(qActivationAgentState, [][]any{{"active"}})
+		db.script(qActivationAgentState, [][]any{{string(domain.AgentStateActive)}})
 	}
 	studio := &StudioService{Principals: studioPrincipals, Roles: studioRoles, DB: db, Guards: guards,
 		Sources: unusedSources{}, Assembler: unusedAssembler{}, Compiler: &PromptCompiler{}}

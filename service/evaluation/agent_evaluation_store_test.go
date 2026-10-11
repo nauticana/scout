@@ -59,7 +59,7 @@ func TestAgentEvaluationStorePinsTheDraftAndTheSetVersion(t *testing.T) {
 	if err := json.Unmarshal([]byte(args[6].(string)), &pinned); err != nil || pinned.DefinitionDigest != draftDigest {
 		t.Fatalf("pinned draft = %v (%v)", args[6], err)
 	}
-	if args[2] != "draft" || args[4] != nil || args[5] != draftDigest {
+	if args[2] != string(domain.SubjectDraft) || args[4] != nil || args[5] != draftDigest {
 		t.Fatalf("subject args = %v", args)
 	}
 	var settings []domain.EffectiveResource
@@ -76,7 +76,7 @@ func TestAgentEvaluationStorePinsTheDraftAndTheSetVersion(t *testing.T) {
 	if err != nil || run.Subject.DefinitionDigest != sha256Hex([]byte("v2")) {
 		t.Fatalf("release run = %+v, %v", run, err)
 	}
-	if args := query.args[qAgentEvalInsertSubj]; args[2] != "release" || args[4] != "v2" || args[6] != nil || args[7] != nil {
+	if args := query.args[qAgentEvalInsertSubj]; args[2] != string(domain.SubjectRelease) || args[4] != "v2" || args[6] != nil || args[7] != nil {
 		t.Fatalf("release subject args = %v", args)
 	}
 }
@@ -132,10 +132,10 @@ func TestAgentEvaluationStoreRefusesUnpinnableRuns(t *testing.T) {
 	refuse("unknown release", noRelease, release, domain.ErrNotFound)
 }
 
-func runRow(status string, token any) []any {
+func runRow(status domain.EvaluationRunStatus, token any) []any {
 	started := testClock
-	return []any{int64(11), "writer-a", "support", int64(3), "dev", status, testClock, started, nil, "human", "9",
-		int64(2), int64(100), int64(40), int64(12), "EUR", int64(2), nil, "draft", nil, draftDigest, token, int64(1),
+	return []any{int64(11), "writer-a", "support", int64(3), "dev", string(status), testClock, started, nil, "human", "9",
+		int64(2), int64(100), int64(40), int64(12), "EUR", int64(2), nil, string(domain.SubjectDraft), nil, draftDigest, token, int64(1),
 		nil, nil, nil, nil, nil, nil, nil, nil}
 }
 
@@ -143,7 +143,7 @@ func TestAgentEvaluationStoreReadsRunsAndPagesInTheReadersScope(t *testing.T) {
 	ctx := context.Background()
 	scores := `[{"Metric":"correctness","Value":1,"Evaluator":{"Kind":"heuristic","Version":"h1"},"Rationale":"ok"}]`
 	query := newQueryFake(map[string][][]any{
-		qAgentEvalRun:     {runRow("completed", nil)},
+		qAgentEvalRun:     {runRow(domain.EvaluationCompleted, nil)},
 		qAgentEvalResults: {{"refund", scores, int64(250), int64(50), int64(20), int64(6), "EUR", int64(2), false, nil, int64(30), int64(4), int64(2)}},
 	})
 	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
@@ -174,6 +174,11 @@ func TestAgentEvaluationStoreReadsRunsAndPagesInTheReadersScope(t *testing.T) {
 	if _, err := (&AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: newQueryFake(nil)}}}).Run(ctx, domain.GoldenScopeDev, 7, 12); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("another tenant's or a manifest run = %v", err)
 	}
+	legacy := newQueryFake(map[string][][]any{qAgentEvalRun: {runRow("running", nil)}})
+	if _, err := (&AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: legacy}}}).Run(ctx, domain.GoldenScopeDev, 7, 11); err == nil ||
+		!strings.Contains(err.Error(), "unknown status") {
+		t.Fatalf("a stored word status = %v, want refused", err)
+	}
 }
 
 func TestAgentEvaluationStoreFencesEveryWorkerWrite(t *testing.T) {
@@ -182,7 +187,7 @@ func TestAgentEvaluationStoreFencesEveryWorkerWrite(t *testing.T) {
 	definition, _ := json.Marshal(domain.AgentDefinition{AgentID: "writer-a", DefinitionDigest: draftDigest, SettingsDigest: scope.SettingsDigest(draftSettings())})
 	settings, _ := json.Marshal(draftSettings())
 	query := newQueryFake(map[string][][]any{
-		qAgentEvalRun:      {runRow("running", int64(99))},
+		qAgentEvalRun:      {runRow(domain.EvaluationRunning, int64(99))},
 		qAgentEvalDraft:    {{string(definition), string(settings)}},
 		qAgentEvalRecorded: {{"refund", int64(5), int64(2), int64(3), "EUR", nil}, {"probe", int64(40), int64(4), int64(7), "EUR", "judging failed: canceled"}},
 	})

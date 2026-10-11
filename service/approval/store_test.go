@@ -39,7 +39,9 @@ type approvalTx struct {
 // requestKey keys a row by request id and execution step, the store's natural key within a tenant.
 func requestKey(requestID, step any) string { return fmt.Sprintf("%v/%v", requestID, step) }
 
-func open(row []any) bool { return row[18] == "pending" || row[18] == "escalated" }
+func open(row []any) bool {
+	return row[18] == string(domain.ApprovalStatusPending) || row[18] == string(domain.ApprovalStatusEscalated)
+}
 
 // selectRows returns copies of the open rows keep accepts, in id order.
 func (table *approvalTable) selectRows(keep func([]any) bool) *keelmodel.QueryResult {
@@ -70,7 +72,7 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 		table.nextID++
 		row := make([]any, 33)
 		copy(row[1:18], args[1:18])
-		row[0], row[18], row[19], row[23] = table.nextID, "pending", args[18], args[19]
+		row[0], row[18], row[19], row[23] = table.nextID, string(domain.ApprovalStatusPending), args[18], args[19]
 		copy(row[24:33], args[20:29])
 		table.rows[requestKey(args[1], args[3])] = row
 		return &keelmodel.QueryResult{Rows: [][]any{{table.nextID}}}, nil
@@ -102,7 +104,7 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 	case qApprovalUnsettled:
 		result := &keelmodel.QueryResult{}
 		for _, row := range table.rows {
-			if row[18] == "expired" && !table.settled[row[0].(int64)] {
+			if row[18] == string(domain.ApprovalStatusExpired) && !table.settled[row[0].(int64)] {
 				result.Rows = append(result.Rows, slices.Clone(row))
 			}
 		}
@@ -128,7 +130,7 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 		if name == qApprovalDecisionGet {
 			return &keelmodel.QueryResult{Rows: [][]any{{d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[12]}}}, nil
 		}
-		if d[2] == "edited" && d[11] != nil {
+		if d[2] == string(domain.ApprovalStatusEdited) && d[11] != nil {
 			return &keelmodel.QueryResult{Rows: [][]any{{d[3], d[4], d[5], d[6], d[7], d[9], d[11], d[12]}}}, nil
 		}
 	case qApprovalNotified:

@@ -209,14 +209,14 @@ func (hub *CacheReplyHub) StoredReply(ctx context.Context, tenantID int64, reque
 	if err != nil {
 		return domain.TurnReply{}, err
 	}
-	if !isTerminalTurnStatus(status) {
+	if !status.Terminal() {
 		return domain.TurnReply{}, fmt.Errorf("%w: turn %q is not terminal", domain.ErrConflict, requestID)
 	}
 	reply := domain.TurnReply{
 		TenantID: tenantID, RequestID: requestID, ReplyRoute: replyTerminalRouteLabel,
 		Sequence: sequence, Final: true,
 	}
-	if status == "completed" {
+	if status == domain.TurnCompleted {
 		reply.Payload = payload
 	} else {
 		reply.ErrorCode = terminalTurnErrorCode(status, payload)
@@ -297,7 +297,7 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 	}
 	subscription.recordReadAt = time.Now()
 	_, status, payload, err := hub.Records.Find(ctx, subscription.tenantID, subscription.requestID)
-	if errors.Is(err, domain.ErrNotFound) || err == nil && !isTerminalTurnStatus(status) {
+	if errors.Is(err, domain.ErrNotFound) || err == nil && !status.Terminal() {
 		return domain.TurnReply{}, false, nil
 	}
 	if err != nil {
@@ -312,7 +312,7 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 		TenantID: subscription.tenantID, RequestID: subscription.requestID, ReplyRoute: replyTerminalRouteLabel,
 		Sequence: subscription.next, Final: true,
 	}
-	if status == "completed" {
+	if status == domain.TurnCompleted {
 		reply.Payload = payload
 	} else {
 		reply.ErrorCode = terminalTurnErrorCode(status, payload)
@@ -320,14 +320,11 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 	return reply, true, nil
 }
 
-func terminalTurnErrorCode(status string, payload []byte) string {
+func terminalTurnErrorCode(status domain.TurnStatus, payload []byte) string {
 	if len(payload) > 0 {
 		return string(payload)
 	}
-	if status == "cancelled" {
-		return "canceled"
-	}
-	return status
+	return terminalTurnFallbackCode(status)
 }
 
 func (subscription *cacheReplySubscription) Close() error {

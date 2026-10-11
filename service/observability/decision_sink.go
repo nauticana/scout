@@ -115,8 +115,8 @@ func (sink *TableAuditSink) RecordTx(ctx context.Context, tx keelport.TxQuerySer
 
 func (sink *TableAuditSink) insert(ctx context.Context, qs keelport.QueryService, decision domain.DecisionRecord) error {
 	if decision.TenantID < 0 || strings.TrimSpace(decision.Category) == "" ||
-		strings.TrimSpace(decision.Action) == "" || decision.Outcome == "" {
-		return fmt.Errorf("%w: decision needs tenant, category, action, and outcome", domain.ErrValidation)
+		strings.TrimSpace(decision.Action) == "" || !decision.Outcome.Valid() {
+		return fmt.Errorf("%w: decision needs tenant, category, action, and a known outcome", domain.ErrValidation)
 	}
 	if decision.Principal.Kind == "" || strings.TrimSpace(decision.Principal.ID) == "" {
 		return fmt.Errorf("%w: decision needs the acting principal", domain.ErrPrincipalUnknown)
@@ -183,6 +183,9 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 	}
 	if query.TenantID < 0 {
 		return domain.DecisionPage{}, fmt.Errorf("%w: audit tenant id cannot be negative", domain.ErrValidation)
+	}
+	if query.Outcome != "" && !query.Outcome.Valid() {
+		return domain.DecisionPage{}, fmt.Errorf("%w: audit outcome %q is not an audit_decision_outcome code", domain.ErrValidation, query.Outcome)
 	}
 	pageSize, maxPageSize, err := sink.pageBounds()
 	if err != nil {

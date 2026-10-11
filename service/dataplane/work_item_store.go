@@ -33,7 +33,7 @@ var workItemQueries = map[string]string{
 INSERT INTO agent_work_item (id, partner_id, assignee_kind, assignee_id, requester_kind, requester_id, grant_id,
                        parent_work_item_id, delegation_depth, scope_id, task_kind, input_uri, input_digest,
                        request_id, status_code, budget_minor_units, currency_code)
-VALUES (nextval('agent_work_item_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+VALUES (nextval('agent_work_item_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlTurnQueued + `, ?, ?)
 ON CONFLICT (partner_id, request_id) DO NOTHING
 RETURNING id`,
 	qWorkGet: `
@@ -46,7 +46,7 @@ SELECT ` + workColumns + `
 SELECT ` + workColumns + `
   FROM agent_work_item
  WHERE partner_id = ? AND assignee_kind = ? AND assignee_id = ?
-   AND status_code IN ('queued', 'running', 'streaming', 'suspended')
+   AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `, ` + sqlTurnSuspended + `)
  ORDER BY created_at, id
  LIMIT ?`,
 	qWorkComplete: `
@@ -124,7 +124,7 @@ func (s *TableWorkItemStore) Assign(ctx context.Context, item domain.WorkItem) (
 	}
 	if len(inserted.Rows) > 0 {
 		item.ID = common.AsInt64(inserted.Rows[0][0])
-		item.Status = "queued"
+		item.Status = domain.TurnQueued
 		return item, nil
 	}
 	existing, err := s.qs.Query(ctx, qWorkByRequest, item.TenantID, item.RequestID)
@@ -172,15 +172,15 @@ func (s *TableWorkItemStore) Pending(ctx context.Context, tenantID int64, assign
 }
 
 // Complete records a terminal status once.
-func (s *TableWorkItemStore) Complete(ctx context.Context, tenantID, id int64, status string) error {
+func (s *TableWorkItemStore) Complete(ctx context.Context, tenantID, id int64, status domain.TurnStatus) error {
 	if err := s.init(ctx); err != nil {
 		return err
 	}
-	if !isTerminalTurnStatus(status) {
+	if !status.Terminal() {
 		return fmt.Errorf("%w: %q is not a terminal work-item status", domain.ErrValidation, status)
 	}
 	ctx = context.WithoutCancel(ctx)
-	updated, err := s.qs.Query(ctx, qWorkComplete, status, tenantID, id)
+	updated, err := s.qs.Query(ctx, qWorkComplete, string(status), tenantID, id)
 	if err != nil {
 		return fmt.Errorf("complete work item: %w", err)
 	}
@@ -216,7 +216,7 @@ func scanWorkItem(tenantID int64, row []any) domain.WorkItem {
 		GrantID:   common.AsString(row[5]), ParentID: common.AsInt64(row[6]), Depth: int(common.AsInt64(row[7])),
 		ScopeID: common.AsString(row[8]), TaskKind: common.AsString(row[9]),
 		Input:     domain.ObjectRef{URI: common.AsString(row[10]), Digest: common.AsString(row[11])},
-		RequestID: common.AsString(row[12]), Status: common.AsString(row[13]),
+		RequestID: common.AsString(row[12]), Status: domain.TurnStatus(common.AsString(row[13])),
 		BudgetMinorUnits: common.AsInt64(row[14]), Currency: common.AsString(row[15]),
 		CreatedAt: common.AsTime(row[16]), CompletedAt: completed,
 	}

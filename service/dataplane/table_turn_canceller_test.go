@@ -70,7 +70,7 @@ func awaitCause(t *testing.T, ctx context.Context) error {
 }
 
 func TestTableTurnCancellerStopsATurnRunningInAnotherProcess(t *testing.T) {
-	table := &cancelTable{live: true, status: "running"}
+	table := &cancelTable{live: true, status: string(domain.TurnRunning)}
 	for name, shared := range map[string]cache.CacheService{"polling only": nil, "with cache wake-up": cache.NewMemoryCacheService()} {
 		table.reason = nil
 		api := &TableTurnCanceller{DB: table, Cache: shared}
@@ -103,7 +103,7 @@ func TestTableTurnCancellerStopsATurnRunningInAnotherProcess(t *testing.T) {
 	if len(table.woken) != 0 {
 		t.Fatalf("a running turn must not be requeued: %v", table.woken)
 	}
-	table.status = "suspended"
+	table.status = string(domain.TurnSuspended)
 	if err = (&TableTurnCanceller{DB: table}).Cancel(context.Background(), 7, "request-1", "again"); err != nil || len(table.woken) != 2 {
 		t.Fatalf("a suspended turn must be resumed and requeued: %v, %v", table.woken, err)
 	}

@@ -96,9 +96,9 @@ func TestCacheReplyHubThrottlesRecordReadsByItsInterval(t *testing.T) {
 	reads := func(interval time.Duration) int64 {
 		var finds atomic.Int64
 		hub := &CacheReplyHub{Cache: cache.NewMemoryCacheService(), PollInterval: 2 * time.Millisecond, RecordReadInterval: interval,
-			Records: &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
+			Records: &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
 				finds.Add(1)
-				return 1, "running", nil, nil
+				return 1, domain.TurnRunning, nil, nil
 			}}}
 		defer hub.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)

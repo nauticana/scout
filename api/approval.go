@@ -38,7 +38,8 @@ type ApprovalRequest struct {
 	ApproverReference *ApproverReference `json:"approver_reference,omitempty"`
 }
 
-// ApprovalResolveRequest is a signed-in decider's verdict: approved, rejected, or edited.
+// ApprovalResolveRequest is a signed-in decider's verdict, an approval_status code: A approved,
+// X rejected, or E edited.
 // An edited verdict carries RevisedArguments, the JSON object the tool call runs with instead.
 type ApprovalResolveRequest struct {
 	RequestID        string          `json:"request_id"`

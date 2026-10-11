@@ -30,8 +30,8 @@ columns:
   - name: channel_code
     type: CHAR(1)
   - name: status_code
-    type: VARCHAR(20)
-    default: pending
+    type: CHAR(1)
+    default: P
   - name: approval_required
     type: BOOLEAN
     default: FALSE
@@ -123,7 +123,7 @@ indexes:
   - name: mcp_confirmation_open_uq
     columns: [partner_id, tool, payload_digest]
     unique: true
-    where: status_code IN ('pending', 'approved', 'executing', 'unknown')
+    where: status_code IN ('P', 'A', 'R', 'U')
   - name: mcp_confirmation_work_ix
     columns: [status_code, expires_at]
   - name: mcp_confirmation_tenant_ix
@@ -140,6 +140,6 @@ checks:
   - name: mcp_confirmation_reconciler_ck
     expression: (reconciler_kind IS NULL) = (reconciler_id IS NULL)
   - name: mcp_confirmation_lease_ck
-    expression: (status_code = 'executing') = (lease_until IS NOT NULL)
+    expression: (status_code = 'R') = (lease_until IS NOT NULL)
   - name: mcp_confirmation_approval_ck
     expression: approval_id IS NULL OR approval_required

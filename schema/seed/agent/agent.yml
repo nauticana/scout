@@ -182,7 +182,7 @@ seeds:
       - [agent_evaluation_max_page_size, int, true, "200", "Largest evaluation result page a Studio caller may ask for; 0 uses Scout's default of 200"]
       - [agent_evaluation_judge_max_verdict_bytes, int, true, "8192", "Bytes of one raw rubric verdict; a larger verdict is an evaluator error; 0 uses Scout's default of 8192"]
       - [agent_default_language, string, true, "en-US", "Language code a runtime or Studio draft test falls back to when the agent has no prompt in the requested language; at most 16 bytes; empty takes en-US"]
-      - [agent_default_priority_class, string, true, "standard", "priority_class code a model access grant takes when the caller names none; at most 30 bytes; empty takes standard"]
+      - [agent_default_priority_class, string, true, "S", "priority_class code (I, S, or B) a model access grant takes when the caller names none; empty takes S"]
       - [agent_default_test_task, string, true, "", "Task text a Studio draft test runs when the caller sends none; empty takes Scout's built-in sample task"]
       - [agent_review_feedback_threshold, int, true, "2", "Highest turn rating (0..5) that queues a rated turn for Studio review; 0 queues none"]
       - [agent_review_max_pending, int, true, "1000", "Pending sampled and rated turns one agent's review queue holds before new ones are skipped; 0 uses Scout's default of 1000"]

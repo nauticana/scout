@@ -2,7 +2,7 @@ table: rollout_stage
 comment: Ordered platform release rollout stages
 columns:
   - name: code
-    type: VARCHAR(30)
+    type: CHAR(2)
   - name: stage_order
     type: SMALLINT
   - name: is_live

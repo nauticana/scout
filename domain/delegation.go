@@ -38,7 +38,7 @@ type WorkItem struct {
 	Input    ObjectRef
 	// RequestID links the item to the turn that satisfies it, once dispatched.
 	RequestID        string
-	Status           string
+	Status           TurnStatus
 	BudgetMinorUnits int64
 	Currency         string
 	CreatedAt        time.Time

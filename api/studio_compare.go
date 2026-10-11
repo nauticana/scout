@@ -28,7 +28,7 @@ type AgentCompareRequest struct {
 	B          CompareSubject `json:"b"`
 }
 
-// ComparedSubject is one pinned arm: subject is draft, release, or baseline; a draft frozen on
+// ComparedSubject is one pinned arm: subject is D (draft), R (release), or B (baseline); a draft frozen on
 // another text model names it in provider and model.
 type ComparedSubject struct {
 	Subject          string `json:"subject"`

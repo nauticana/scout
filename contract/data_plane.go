@@ -222,11 +222,11 @@ type TurnRecordStore interface {
 	// turns per minute of the conversation's release is ErrRateLimited with retry advice.
 	Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error)
 	// Find returns the turn number, its status code, and once terminal the stored payload: the response of a completed turn or the error code of a failed one; unknown ids are ErrNotFound.
-	Find(ctx context.Context, tenantID int64, requestID string) (turnNo int64, status string, payload []byte, err error)
+	Find(ctx context.Context, tenantID int64, requestID string) (turnNo int64, status domain.TurnStatus, payload []byte, err error)
 	// Start marks a queued turn running; it is a no-op once running or terminal.
 	Start(ctx context.Context, tenantID int64, requestID string) error
 	// Fail marks a live turn failed or cancelled with its error code once; a later Fail is a no-op.
-	Fail(ctx context.Context, tenantID int64, requestID, status, errorCode string) error
+	Fail(ctx context.Context, tenantID int64, requestID string, status domain.TurnStatus, errorCode string) error
 	// Suspend parks a live turn awaiting a human decision. The budget reservation
 	// is held, not settled, and the worker releases its lease; a turn that is
 	// already suspended or terminal is a no-op.

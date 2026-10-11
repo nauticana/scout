@@ -17,19 +17,22 @@ func TestSourceChangeEnqueuePollAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	insert := query.named(qSourceEventInsert)
-	if len(insert) != 1 || insert[0].args[0] != int64(42) || insert[0].args[1] != int64(7) || insert[0].args[2] != "kb" || insert[0].args[3] != "obj" || insert[0].args[4] != "s3" || insert[0].args[5] != "upsert" || insert[0].args[6] != `{"a":1}` || insert[0].args[7] != occurred {
+	if len(insert) != 1 || insert[0].args[0] != int64(42) || insert[0].args[1] != int64(7) || insert[0].args[2] != "kb" || insert[0].args[3] != "obj" || insert[0].args[4] != "s3" || insert[0].args[5] != string(domain.SourceUpserted) || insert[0].args[6] != `{"a":1}` || insert[0].args[7] != occurred {
 		t.Fatalf("insert args = %v", insert)
 	}
 	if err := EnqueueSourceChange(context.Background(), query, domain.SourceChangeEvent{TenantID: 7, KnowledgeBaseID: "kb", ObjectID: "obj", Op: "rename"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("bad op = %v", err)
+	}
+	if err := EnqueueSourceChange(context.Background(), query, domain.SourceChangeEvent{TenantID: 7, KnowledgeBaseID: "kb", ObjectID: "obj", Op: "upsert"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("word op = %v, want only the code", err)
 	}
 	if queries := SourceChangeWriteQueries(); queries[qSourceEventInsert] == "" {
 		t.Fatal("write queries missing insert")
 	}
 
 	query.rows = map[string][][]any{qSourceEventPoll: {
-		{int64(7), "kb", "obj", "s3", "upsert", `{"a":1}`, occurred},
-		{int64(7), "kb", "gone", "s4", "delete", nil, occurred.Add(time.Second)},
+		{int64(7), "kb", "obj", "s3", string(domain.SourceUpserted), `{"a":1}`, occurred},
+		{int64(7), "kb", "gone", "s4", string(domain.SourceDeleted), nil, occurred.Add(time.Second)},
 	}}
 	source := &TableSourceChangeSource{DB: ingestDBFake{query: query}}
 	events, err := source.Poll(context.Background(), 7, "kb", 50)
@@ -49,10 +52,14 @@ func TestSourceChangeEnqueuePollAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	acks := query.named(qSourceEventAck)
-	if len(acks) != 2 || acks[1].args[2] != "gone" || acks[1].args[3] != "s4" || acks[1].args[4] != "delete" || query.commits != 1 {
+	if len(acks) != 2 || acks[1].args[2] != "gone" || acks[1].args[3] != "s4" || acks[1].args[4] != string(domain.SourceDeleted) || query.commits != 1 {
 		t.Fatalf("acks = %v commits = %d", acks, query.commits)
 	}
 	if err := source.Ack(context.Background(), nil); err != nil {
 		t.Fatalf("empty ack = %v", err)
+	}
+	query.rows = map[string][][]any{qSourceEventPoll: {{int64(7), "kb", "obj", "s3", "upsert", nil, occurred}}}
+	if _, err := source.Poll(context.Background(), 7, "kb", 50); err == nil {
+		t.Fatal("a stored word op must be refused")
 	}
 }

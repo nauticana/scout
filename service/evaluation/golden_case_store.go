@@ -62,10 +62,10 @@ SELECT working_revision FROM golden_set WHERE partner_id = ? AND golden_set_id =
 SELECT ` + caseColumns + `
   FROM golden_case c
   LEFT JOIN human_review_item r ON r.partner_id = c.partner_id AND r.id = c.review_item_id
- WHERE c.partner_id = ? AND c.golden_set_id = ? AND (c.scope_code = ? OR ? = 'gate')
+ WHERE c.partner_id = ? AND c.golden_set_id = ? AND (c.scope_code = ? OR ? = ` + sqlScopeGate + `)
  ORDER BY c.case_id`,
 	qCaseHiddenCount: `
-SELECT COUNT(*) FROM golden_case WHERE partner_id = ? AND golden_set_id = ? AND scope_code = 'gate'`,
+SELECT COUNT(*) FROM golden_case WHERE partner_id = ? AND golden_set_id = ? AND scope_code = ` + sqlScopeGate + ``,
 	qCaseVersions: `
 SELECT set_version, dataset_revision, example_count, frozen_at
   FROM golden_set_version
@@ -109,11 +109,11 @@ ON CONFLICT (partner_id, golden_set_id, case_id) DO UPDATE
        rubric_ref = EXCLUDED.rubric_ref, risk_tier_code = EXCLUDED.risk_tier_code,
        principal_kind = EXCLUDED.principal_kind, principal_id = EXCLUDED.principal_id, modified_at = EXCLUDED.modified_at,
        review_item_id = COALESCE(golden_case.review_item_id, EXCLUDED.review_item_id)
- WHERE golden_case.scope_code = EXCLUDED.scope_code OR ? = 'gate'
+ WHERE golden_case.scope_code = EXCLUDED.scope_code OR ? = ` + sqlScopeGate + `
 RETURNING case_id`,
 	qCaseDelete: `
 DELETE FROM golden_case
- WHERE partner_id = ? AND golden_set_id = ? AND case_id = ? AND (scope_code = ? OR ? = 'gate')
+ WHERE partner_id = ? AND golden_set_id = ? AND case_id = ? AND (scope_code = ? OR ? = ` + sqlScopeGate + `)
 RETURNING case_id`,
 	qCaseNextVersion: `
 SELECT COALESCE(MAX(set_version), 0) + 1 FROM golden_set_version WHERE partner_id = ? AND golden_set_id = ?`,

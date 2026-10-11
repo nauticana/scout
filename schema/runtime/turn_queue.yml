@@ -2,8 +2,8 @@ table: turn_queue
 comment: >-
   Durable turn delivery for the fair scheduler: one row per admitted request,
   shuffle-sharded into a fixed partition pool, leased with a fencing token.
-  Status is a CHECK rather than a catalog table because the runtime group has
-  no seed and the four states are a fixed queue protocol, not tenant data.
+  Status is a turn_queue_status code checked in place: the four states are a
+  fixed queue protocol, not tenant data.
 columns:
   - name: id
     type: BIGINT
@@ -37,8 +37,8 @@ columns:
     type: INTEGER
     default: "0"
   - name: status_code
-    type: VARCHAR(10)
-    default: "'queued'"
+    type: CHAR(1)
+    default: Q
   - name: lease_token
     type: BIGINT
     nullable: true
@@ -89,7 +89,7 @@ indexes:
     columns: [partner_id, principal_kind, principal_id, status_code]
 checks:
   - name: turn_queue_status_ck
-    expression: status_code IN ('queued', 'leased', 'acked', 'dead')
+    expression: status_code IN ('Q', 'L', 'A', 'D')
   - name: turn_queue_partition_ck
     expression: partition_no >= 0
   - name: turn_queue_attempt_ck
@@ -97,4 +97,4 @@ checks:
   - name: turn_queue_digest_ck
     expression: CHAR_LENGTH(input_digest) = 64
   - name: turn_queue_lease_ck
-    expression: (status_code = 'leased') = (lease_token IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL)
+    expression: (status_code = 'L') = (lease_token IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL)

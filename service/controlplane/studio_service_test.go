@@ -76,7 +76,7 @@ func (f studioSourcesFake) Languages(context.Context, int64, string) ([]string, 
 
 func TestStudioSetEnabledIsTargeted(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
-		qStudioGetDraft:        {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft:        {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 		qStudioSetDraftEnabled: {{int64(5)}},
 	}, args: map[string][]any{}}
 	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
@@ -182,7 +182,7 @@ func TestStudioRefusesALayerUnderASealedOne(t *testing.T) {
 
 func TestStudioPublishFreezesAndDeploysDefaultAgent(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
-		qStudioGetDraft:    {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft:    {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 		qStudioLockDraft:   {{int64(4), "writer"}},
 		qStudioLockAlias:   {{"writer-a", int64(2)}},
 		qStudioNextVersion: {{int64(1)}},
@@ -231,7 +231,7 @@ func (recorder *releaseWriterRecorder) WriteRelease(_ context.Context, _ keelpor
 func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testing.T) {
 	newService := func(writers ...ReleaseWriter) (*StudioService, *studioQueryFake) {
 		query := &studioQueryFake{rows: map[string][][]any{
-			qStudioGetDraft:    {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+			qStudioGetDraft:    {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 			qStudioLockDraft:   {{int64(4), "writer"}},
 			qStudioLockAlias:   {{"writer-a", int64(2)}},
 			qStudioNextVersion: {{int64(1)}},
@@ -305,7 +305,7 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 // A model outside the agent's model setting cannot be published.
 func TestStudioPublishRefusesAModelOutsideTheSetting(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{
-		qStudioGetDraft:  {{"writer", "Writer", "active", true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioGetDraft:  {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
 		qStudioLockDraft: {{int64(4), "writer"}},
 	}, args: map[string][]any{}}
 	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, DB: studioDBFake{qs: query},

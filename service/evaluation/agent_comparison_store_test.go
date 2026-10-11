@@ -69,10 +69,10 @@ func TestAgentEvaluationStorePinsBothArmsOfAComparison(t *testing.T) {
 	if len(subjects) != 2 {
 		t.Fatalf("pinned %d subjects, want both arms", len(subjects))
 	}
-	if b := subjects[0]; b[2] != "draft" || b[8] != "candidate" || b[9] != nil || b[10] != "provider-b" || b[11] != "model-b" {
+	if b := subjects[0]; b[2] != string(domain.SubjectDraft) || b[8] != string(domain.RoleCandidate) || b[9] != nil || b[10] != "provider-b" || b[11] != "model-b" {
 		t.Fatalf("arm b = %v", b)
 	}
-	if a := subjects[1]; a[2] != "release" || a[4] != "v2" || a[5] != sha256Hex([]byte("v2")) || a[6] != nil || a[8] != "baseline" || a[10] != nil {
+	if a := subjects[1]; a[2] != string(domain.SubjectRelease) || a[4] != "v2" || a[5] != sha256Hex([]byte("v2")) || a[6] != nil || a[8] != string(domain.RoleBaseline) || a[10] != nil {
 		t.Fatalf("arm a = %v", a)
 	}
 
@@ -84,7 +84,7 @@ func TestAgentEvaluationStorePinsBothArmsOfAComparison(t *testing.T) {
 	if run, err = store.Enqueue(ctx, baseline); err != nil || run.Baseline.BaselineID != 5 || run.Baseline.DefinitionDigest != "" {
 		t.Fatalf("baseline run = %+v, %v", run, err)
 	}
-	if a := query.calls[qAgentEvalInsertSubj][1]; a[2] != "baseline" || a[5] != nil || a[9] != int64(5) || a[8] != "baseline" {
+	if a := query.calls[qAgentEvalInsertSubj][1]; a[2] != string(domain.SubjectBaseline) || a[5] != nil || a[9] != int64(5) || a[8] != string(domain.RoleBaseline) {
 		t.Fatalf("baseline arm = %v", a)
 	}
 	if args := query.calls[qAgentEvalBaseline][0]; args[1] != int64(5) || args[2] != "support" || args[3] != int64(3) {
@@ -142,8 +142,8 @@ func TestAgentEvaluationStoreRefusesUnpinnableComparisons(t *testing.T) {
 }
 
 func comparisonRunRow(token any) []any {
-	row := runRow("running", token)
-	copy(row[23:], []any{nil, nil, "baseline", nil, nil, int64(5), nil, nil})
+	row := runRow(domain.EvaluationRunning, token)
+	copy(row[23:], []any{nil, nil, string(domain.SubjectBaseline), nil, nil, int64(5), nil, nil})
 	return row
 }
 
@@ -169,7 +169,7 @@ func TestAgentEvaluationStoreLoadsAComparisonClaim(t *testing.T) {
 	if claim.Recorded["probe"].CostMinorUnits != 12 || len(query.calls[qAgentEvalRecorded]) != 0 {
 		t.Fatalf("a comparison must read what it recorded from its verdicts: %+v", claim.Recorded)
 	}
-	if args := query.calls[qAgentEvalDraft][0]; args[2] != "candidate" {
+	if args := query.calls[qAgentEvalDraft][0]; args[2] != string(domain.RoleCandidate) {
 		t.Fatalf("draft args = %v", args)
 	}
 	if recorded := agentEvaluationQueries[qAgentEvalCompared]; !strings.Contains(recorded, "c.evaluator_cost_minor_units + COALESCE(SUM(x.cost_minor_units), 0)") {
@@ -217,8 +217,8 @@ func TestAgentEvaluationStoreRecordsComparisonsUnderTheLease(t *testing.T) {
 		t.Fatalf("verdict args = %v", verdict)
 	}
 	arms := query.calls[qAgentEvalPutArm]
-	if len(arms) != 2 || arms[0][5] != "baseline" || arms[0][10] != int64(4) || arms[0][12] != "object://out/a" ||
-		arms[1][5] != "candidate" || arms[1][7] != int64(2000) || arms[1][13] != sha256Hex([]byte("b")) {
+	if len(arms) != 2 || arms[0][5] != string(domain.RoleBaseline) || arms[0][10] != int64(4) || arms[0][12] != "object://out/a" ||
+		arms[1][5] != string(domain.RoleCandidate) || arms[1][7] != int64(2000) || arms[1][13] != sha256Hex([]byte("b")) {
 		t.Fatalf("arm args = %v", arms)
 	}
 	if totals := query.calls[qAgentEvalAddTotals][0]; totals[0] != int64(60) || totals[1] != int64(5) || totals[2] != int64(12) || totals[3] != "EUR" {

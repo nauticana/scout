@@ -117,7 +117,7 @@ type TenantPolicyPublisher interface {
 // definition — a probe, an embedder, a classifier — is only routable once it is
 // granted. Grant is idempotent; a repeated grant only updates the priority class.
 type ModelAccessWriter interface {
-	Grant(ctx context.Context, tenantID int64, reference domain.ModelReference, priorityClass string) error
+	Grant(ctx context.Context, tenantID int64, reference domain.ModelReference, priorityClass domain.PriorityClass) error
 	Revoke(ctx context.Context, tenantID int64, reference domain.ModelReference) error
 }
 

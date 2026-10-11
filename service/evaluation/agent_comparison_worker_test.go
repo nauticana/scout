@@ -75,7 +75,7 @@ func TestAgentEvaluationWorkerComparesBothArmsOfEveryExample(t *testing.T) {
 			}
 		}
 	}
-	if len(outputs.Objects) != 4 || queue.finished[0] != domain.EvaluationCompleted+"|" {
+	if len(outputs.Objects) != 4 || queue.finished[0] != string(domain.EvaluationCompleted)+"|" {
 		t.Fatalf("stored %d answers, finished %v", len(outputs.Objects), queue.finished)
 	}
 }
@@ -88,7 +88,7 @@ func TestAgentEvaluationWorkerStopsAComparisonAtTheCostCeiling(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(queue.compared) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationStoppedEarly+"|") {
+	if len(queue.compared) != 1 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationStoppedEarly)+"|") {
 		t.Fatalf("compared %d, finished %v", len(queue.compared), queue.finished)
 	}
 }
@@ -126,7 +126,7 @@ func TestAgentEvaluationWorkerDecidesFailedArmsAndFailsOnJudgingErrors(t *testin
 		failing.compared[0].EvaluatorUsage.CostMinorUnits != 1 {
 		t.Fatalf("judging failure recorded %+v", failing.compared)
 	}
-	if reason := failing.finished[0]; !strings.HasPrefix(reason, domain.EvaluationFailed+"|a gate example failed") || strings.Contains(reason, "example a") {
+	if reason := failing.finished[0]; !strings.HasPrefix(reason, string(domain.EvaluationFailed)+"|a gate example failed") || strings.Contains(reason, "example a") {
 		t.Fatalf("finished = %q", reason)
 	}
 
@@ -185,7 +185,7 @@ func TestAgentEvaluationWorkerComparesWithARecordedBaseline(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(tampered.compared) != 0 || !strings.HasPrefix(tampered.finished[0], domain.EvaluationFailed+"|") {
+	if len(tampered.compared) != 0 || !strings.HasPrefix(tampered.finished[0], string(domain.EvaluationFailed)+"|") {
 		t.Fatalf("a baseline output not matching its digest compared %d, finished %v", len(tampered.compared), tampered.finished)
 	}
 }
@@ -204,7 +204,7 @@ func TestAgentEvaluationWorkerRefusesAnUncomposedComparison(t *testing.T) {
 		if err := w.Execute(context.Background(), testLease); err != nil {
 			t.Fatal(err)
 		}
-		if len(*pairs) != 0 || len(queue.compared) != 0 || !strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|") {
+		if len(*pairs) != 0 || len(queue.compared) != 0 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationFailed)+"|") {
 			t.Fatalf("%s: judged %d, finished %v", name, len(*pairs), queue.finished)
 		}
 	}

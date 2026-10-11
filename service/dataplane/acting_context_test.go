@@ -10,7 +10,7 @@ import (
 
 func TestActingContextSurvivesTheQueueAndNeverCrossesATenant(t *testing.T) {
 	delegated := domain.TurnRequest{
-		TenantContext: domain.TenantContext{TenantID: 7, PriorityClass: "interactive", ScopeID: "emea"},
+		TenantContext: domain.TenantContext{TenantID: 7, PriorityClass: domain.PriorityInteractive, ScopeID: "emea"},
 		Principal: domain.Principal{Kind: domain.PrincipalAgent, ID: "specialist", TenantID: 7, Release: "v3",
 			Authority: domain.AuthorityChain{{GrantID: "g1", Grantor: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "lead"}, MaxDepth: 1}}},
 		OnBehalfOf:       domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"},

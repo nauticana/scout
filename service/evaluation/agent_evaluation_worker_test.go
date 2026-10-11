@@ -51,8 +51,8 @@ func (queue *queueFake) RecordComparison(_ context.Context, _ domain.AgentEvalua
 	return nil
 }
 
-func (queue *queueFake) Finish(_ context.Context, _ domain.AgentEvaluationLease, status, reason string) error {
-	queue.finished = append(queue.finished, status+"|"+reason)
+func (queue *queueFake) Finish(_ context.Context, _ domain.AgentEvaluationLease, status domain.EvaluationRunStatus, reason string) error {
+	queue.finished = append(queue.finished, string(status)+"|"+reason)
 	return nil
 }
 
@@ -147,7 +147,7 @@ func TestAgentEvaluationWorkerRunsTheDraftOnlyOnUnrecordedExamples(t *testing.T)
 	if scope := w.Examples.(*examplesFake).scope; scope != domain.GoldenScopeDev {
 		t.Fatalf("examples read in the %s scope, want the run's", scope)
 	}
-	if len(queue.finished) != 1 || queue.finished[0] != domain.EvaluationCompleted+"|" {
+	if len(queue.finished) != 1 || queue.finished[0] != string(domain.EvaluationCompleted)+"|" {
 		t.Fatalf("finished = %v", queue.finished)
 	}
 }
@@ -159,7 +159,7 @@ func TestAgentEvaluationWorkerStopsAtTheCostCeiling(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 2 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationStoppedEarly+"|cost ceiling") {
+	if len(*requests) != 2 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationStoppedEarly)+"|cost ceiling") {
 		t.Fatalf("ran %d, finished %v", len(*requests), queue.finished)
 	}
 
@@ -169,7 +169,7 @@ func TestAgentEvaluationWorkerStopsAtTheCostCeiling(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 0 || spent.finished[0] != domain.EvaluationStoppedEarly+"|cost ceiling of 10 EUR minor units reached" {
+	if len(*requests) != 0 || spent.finished[0] != string(domain.EvaluationStoppedEarly)+"|cost ceiling of 10 EUR minor units reached" {
 		t.Fatalf("a retried run past its ceiling ran %d examples, finished %v", len(*requests), spent.finished)
 	}
 }
@@ -180,7 +180,7 @@ func TestAgentEvaluationWorkerFailsClosed(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(queue.recorded) != 0 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|example a failed: validation") {
+	if len(queue.recorded) != 0 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationFailed)+"|example a failed: validation") {
 		t.Fatalf("a result in another currency: recorded %d, finished %v", len(queue.recorded), queue.finished)
 	}
 
@@ -190,7 +190,7 @@ func TestAgentEvaluationWorkerFailsClosed(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 0 || !strings.HasPrefix(tampered.finished[0], domain.EvaluationFailed+"|") {
+	if len(*requests) != 0 || !strings.HasPrefix(tampered.finished[0], string(domain.EvaluationFailed)+"|") {
 		t.Fatalf("an input not matching its digest ran %d times, finished %v", len(*requests), tampered.finished)
 	}
 
@@ -206,7 +206,7 @@ func TestAgentEvaluationWorkerFailsClosed(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if reason := hidden.finished[0]; reason != domain.EvaluationFailed+"|a gate example failed: rate_limited" {
+	if reason := hidden.finished[0]; reason != string(domain.EvaluationFailed)+"|a gate example failed: rate_limited" {
 		t.Fatalf("failure reason %q must name neither the hidden example nor provider text", reason)
 	}
 
@@ -243,7 +243,7 @@ func TestAgentEvaluationWorkerSettlesUsageItCannotScore(t *testing.T) {
 	if settled.ExampleID != "a" || settled.Usage.CostMinorUnits != 900 || settled.Scores != nil || settled.Reason != "scoring failed: validation" {
 		t.Fatalf("settled result = %+v", settled)
 	}
-	if len(queue.finished) != 1 || queue.finished[0] != domain.EvaluationFailed+"|example a failed: validation" {
+	if len(queue.finished) != 1 || queue.finished[0] != string(domain.EvaluationFailed)+"|example a failed: validation" {
 		t.Fatalf("finished = %v", queue.finished)
 	}
 
@@ -252,7 +252,7 @@ func TestAgentEvaluationWorkerSettlesUsageItCannotScore(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(free.recorded) != 3 || free.finished[0] != domain.EvaluationCompleted+"|" {
+	if len(free.recorded) != 3 || free.finished[0] != string(domain.EvaluationCompleted)+"|" {
 		t.Fatalf("free foreign-currency results: recorded %d, finished %v", len(free.recorded), free.finished)
 	}
 
@@ -261,7 +261,7 @@ func TestAgentEvaluationWorkerSettlesUsageItCannotScore(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(refused.finished) != 1 || refused.finished[0] != domain.EvaluationFailed+"|example a failed: validation; its usage was not settled" {
+	if len(refused.finished) != 1 || refused.finished[0] != string(domain.EvaluationFailed)+"|example a failed: validation; its usage was not settled" {
 		t.Fatalf("a result the run cannot hold must fail the run, not wait for reclaim: %v", refused.finished)
 	}
 }
@@ -302,13 +302,13 @@ func TestAgentEvaluationWorkerReplaysAReleaseThroughTheCaseExecutor(t *testing.T
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 0 || len(subjects) != 3 || subjects[0].AgentID != "writer-a" || subjects[0].AgentVersion != "v2" || queue.finished[0] != domain.EvaluationCompleted+"|" {
+	if len(*requests) != 0 || len(subjects) != 3 || subjects[0].AgentID != "writer-a" || subjects[0].AgentVersion != "v2" || queue.finished[0] != string(domain.EvaluationCompleted)+"|" {
 		t.Fatalf("draft runs %d, release subjects %+v, finished %v", len(*requests), subjects, queue.finished)
 	}
 
 	uncomposed := &queueFake{claim: claim}
 	w, _ = draftWorker(t, uncomposed, 5, "EUR")
-	if err := w.Execute(context.Background(), testLease); err != nil || uncomposed.finished[0] != domain.EvaluationFailed+"|release evaluation is not composed" {
+	if err := w.Execute(context.Background(), testLease); err != nil || uncomposed.finished[0] != string(domain.EvaluationFailed)+"|release evaluation is not composed" {
 		t.Fatalf("release run without an executor: %v, %v", err, uncomposed.finished)
 	}
 }
@@ -341,7 +341,7 @@ func TestAgentEvaluationWorkerScoresADraftStoppedByItsFrozenDuration(t *testing.
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(queue.recorded) != 1 || len(queue.finished) != 1 || queue.finished[0] != domain.EvaluationCompleted+"|" ||
+	if len(queue.recorded) != 1 || len(queue.finished) != 1 || queue.finished[0] != string(domain.EvaluationCompleted)+"|" ||
 		len(trajectory) != 1 || trajectory[0].Name != "execution_limit" || !trajectory[0].Failed {
 		t.Fatalf("recorded %d, finished %v, trajectory %+v; the draft's limit is a scored outcome", len(queue.recorded), queue.finished, trajectory)
 	}
@@ -363,7 +363,7 @@ func TestAgentEvaluationWorkerCountsStoppedDraftsTowardTheCostCeiling(t *testing
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if ran != 2 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationStoppedEarly+"|cost ceiling") {
+	if ran != 2 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationStoppedEarly)+"|cost ceiling") {
 		t.Fatalf("ran %d, finished %v; stopped drafts must not run free past the ceiling", ran, queue.finished)
 	}
 }
@@ -377,7 +377,7 @@ func TestAgentEvaluationWorkerFailsAStopThatSettledNoUsage(t *testing.T) {
 	if err := w.Execute(context.Background(), testLease); err != nil {
 		t.Fatal(err)
 	}
-	if len(queue.recorded) != 0 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|") {
+	if len(queue.recorded) != 0 || len(queue.finished) != 1 || !strings.HasPrefix(queue.finished[0], string(domain.EvaluationFailed)+"|") {
 		t.Fatalf("recorded %d, finished %v; an unsettled stop must fail the run", len(queue.recorded), queue.finished)
 	}
 }
@@ -406,7 +406,7 @@ func TestAgentEvaluationWorkerFailsADraftRunWhoseLimitsCannotBeRead(t *testing.T
 				t.Fatal(err)
 			}
 			if len(*requests) != 0 || len(queue.recorded) != 0 || len(queue.finished) != 1 ||
-				!strings.HasPrefix(queue.finished[0], domain.EvaluationFailed+"|draft limits cannot be read") {
+				!strings.HasPrefix(queue.finished[0], string(domain.EvaluationFailed)+"|draft limits cannot be read") {
 				t.Fatalf("ran %d, finished %v; the run must fail before any example", len(*requests), queue.finished)
 			}
 		})

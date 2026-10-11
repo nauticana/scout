@@ -139,7 +139,7 @@ SELECT COALESCE(MAX(CASE WHEN agent_version ~ '^[0-9]+$' THEN CAST(agent_version
   FROM agent_version WHERE partner_id = ? AND agent_id = ?`,
 	qStudioGrantModel: `
 INSERT INTO tenant_model_access (partner_id, provider_id, model_id, priority_class_code)
-VALUES (?, ?, ?, 'standard')
+VALUES (?, ?, ?, ` + sqlPriorityStandard + `)
 ON CONFLICT (partner_id, provider_id, model_id) DO NOTHING`,
 	qStudioInsertVersion: `
 INSERT INTO agent_version
@@ -198,10 +198,10 @@ SELECT agent_id, MAX(occurred_at) FROM agent_studio_event
 	qStudioLockType: `SELECT agent_type_id FROM agent_type WHERE partner_id = ? AND agent_type_id = ? FOR UPDATE`,
 	qStudioTypeCensus: `
 SELECT COUNT(*), COUNT(*) FILTER (WHERE LOWER(display_name) = LOWER(?))
-  FROM agent_profile WHERE partner_id = ? AND agent_type_id = ? AND state_code <> 'retired'`,
+  FROM agent_profile WHERE partner_id = ? AND agent_type_id = ? AND state_code <> ` + sqlAgentRetired + ``,
 	qStudioNameTaken: `
 SELECT 1 FROM agent_profile
- WHERE partner_id = ? AND agent_type_id = ? AND LOWER(display_name) = LOWER(?) AND agent_id <> ? AND state_code <> 'retired'`,
+ WHERE partner_id = ? AND agent_type_id = ? AND LOWER(display_name) = LOWER(?) AND agent_id <> ? AND state_code <> ` + sqlAgentRetired + ``,
 	qStudioCreateReplay: `
 SELECT request_digest, agent_id FROM agent_create_request
  WHERE partner_id = ? AND principal_kind = ? AND principal_id = ? AND idempotency_key = ?`,

@@ -2,14 +2,20 @@ package domain
 
 import "time"
 
-// RunStatus is the terminal outcome of one agent run; the codes are turn_status's terminal codes.
+// RunStatus is the terminal outcome of one agent run: an agent_run_status code, equal to
+// the terminal turn_status code of the same name.
 type RunStatus string
 
 const (
-	RunCompleted RunStatus = "completed"
-	RunFailed    RunStatus = "failed"
-	RunCancelled RunStatus = "cancelled"
+	RunCompleted RunStatus = RunStatus(TurnCompleted)
+	RunFailed    RunStatus = RunStatus(TurnFailed)
+	RunCancelled RunStatus = RunStatus(TurnCancelled)
 )
+
+// Valid reports whether the status is a seeded agent_run_status code.
+func (status RunStatus) Valid() bool {
+	return status == RunCompleted || status == RunFailed || status == RunCancelled
+}
 
 // AgentRun is one settled execution of an immutable release. RequestID is the
 // durable turn's request id, empty for an execution outside a turn; a recorded

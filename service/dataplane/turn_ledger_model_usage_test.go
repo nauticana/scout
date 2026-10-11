@@ -72,8 +72,8 @@ func TestTurnLedgerCompleteSettlesUsagePerModel(t *testing.T) {
 
 func recoveredTurnRow(staged any) []any {
 	row := make([]any, 29)
-	copy(row, []any{int64(7), "c", int64(1), "r", "running", "digest", nil, "draft", "summary", "text", `"done"`, nil,
-		nil, nil, "release", "res-1", int64(30), int64(5), int64(2), int64(3), int64(7), "USD", "settled", int64(1), false, "writer", "v1", nil, staged})
+	copy(row, []any{int64(7), "c", int64(1), "r", string(domain.TurnRunning), "digest", nil, "draft", "summary", "text", `"done"`, nil,
+		nil, nil, "release", "res-1", int64(30), int64(5), int64(2), int64(3), int64(7), "USD", string(domain.ReservationSettled), int64(1), false, "writer", "v1", nil, staged})
 	return row
 }
 

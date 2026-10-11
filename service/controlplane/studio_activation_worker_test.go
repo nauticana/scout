@@ -68,7 +68,7 @@ func TestReleaseActivationWorkerComposesOnceAndJournalsEachPass(t *testing.T) {
 
 	definition, digest := frozenDefinition(t)
 	db.script(qActivationDue, [][]any{{int64(41)}})
-	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, "pending", 0)})
+	db.script(qActivationClaim, [][]any{activationRow(41, "4", digest, 0, "3", "", scheduledAt, string(domain.ActivationPending), 0)})
 	db.script(qActivationVersion, [][]any{{definition, digest}})
 	db.script(qActivationStable, [][]any{{"4"}})
 	db.script(qActivationDone, [][]any{{int64(41)}})

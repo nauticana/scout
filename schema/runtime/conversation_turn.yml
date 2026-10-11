@@ -10,7 +10,7 @@ columns:
   - name: request_id
     type: VARCHAR(120)
   - name: status_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: input_uri
     type: TEXT
   - name: input_digest

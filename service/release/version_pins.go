@@ -45,7 +45,7 @@ SELECT id, agent_version, scope_code, region, reason, owner, approved_by, signat
        compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at
   FROM agent_version_pin
  WHERE partner_id = ? AND agent_id = ? AND effective_at <= ? AND (expires_at IS NULL OR expires_at > ?)
- ORDER BY CASE scope_code WHEN 'compliance' THEN 0 ELSE 1 END, created_at DESC, id DESC`,
+ ORDER BY CASE scope_code WHEN '` + string(domain.PinScopeCompliance) + `' THEN 0 ELSE 1 END, created_at DESC, id DESC`,
 	qPinExpire: `
 UPDATE agent_version_pin SET expires_at = ?
  WHERE partner_id = ? AND id = ? AND (expires_at IS NULL OR expires_at > ?)`,
@@ -131,8 +131,8 @@ func (store *TableVersionPinStore) Put(ctx context.Context, pin domain.VersionPi
 	switch {
 	case pin.TenantID <= 0 || strings.TrimSpace(pin.AgentID) == "" || strings.TrimSpace(pin.Version) == "":
 		return 0, fmt.Errorf("%w: pin tenant, agent, and version are required", domain.ErrValidation)
-	case pin.Scope != domain.PinScopeCompliance && pin.Scope != domain.PinScopeTenant:
-		return 0, fmt.Errorf("%w: pin scope must be compliance or tenant", domain.ErrValidation)
+	case !pin.Scope.Valid():
+		return 0, fmt.Errorf("%w: pin scope must be C (compliance) or T (tenant)", domain.ErrValidation)
 	case strings.TrimSpace(pin.Reason) == "" || strings.TrimSpace(pin.Owner) == "" || pin.EffectiveAt.IsZero():
 		return 0, fmt.Errorf("%w: pin reason, owner, and effective time are required", domain.ErrValidation)
 	case !pin.ExpiresAt.IsZero() && !pin.ExpiresAt.After(pin.EffectiveAt):

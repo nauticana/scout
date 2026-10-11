@@ -6,7 +6,7 @@ columns:
   - name: agent_id
     type: VARCHAR(80)
   - name: subject_kind
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: subject_id
     type: VARCHAR(200)
     comment: The person's user_account id or the product's opaque position reference; a mixed subject prevents a foreign key
@@ -38,6 +38,6 @@ indexes:
     where: endda IS NULL
 checks:
   - name: agent_pilot_member_subject_ck
-    expression: subject_kind IN ('principal', 'position')
+    expression: subject_kind IN ('P', 'O')
   - name: agent_pilot_member_window_ck
     expression: endda IS NULL OR endda > begda

@@ -20,7 +20,7 @@ func (s stubDelegation) Authorize(context.Context, domain.Principal, domain.Prin
 type stubWork struct {
 	assigned  []domain.WorkItem
 	ancestors []domain.WorkItem
-	completed []string
+	completed []domain.TurnStatus
 }
 
 func (w *stubWork) Assign(_ context.Context, item domain.WorkItem) (domain.WorkItem, error) {
@@ -37,7 +37,7 @@ func (w *stubWork) Pending(context.Context, int64, domain.PrincipalRef, int) ([]
 	return nil, nil
 }
 
-func (w *stubWork) Complete(_ context.Context, _, _ int64, status string) error {
+func (w *stubWork) Complete(_ context.Context, _, _ int64, status domain.TurnStatus) error {
 	w.completed = append(w.completed, status)
 	return nil
 }
@@ -103,7 +103,7 @@ func TestAgentStepNarrowsBoundsBeforeInvoking(t *testing.T) {
 	if work.assigned[0].GrantID != "g1" || invoker.call.Authority.GrantID != "g1" {
 		t.Fatalf("delegation lost grant identity: item = %+v, call = %+v", work.assigned[0], invoker.call)
 	}
-	if len(work.completed) != 1 || work.completed[0] != "completed" {
+	if len(work.completed) != 1 || work.completed[0] != domain.TurnCompleted {
 		t.Fatalf("completed = %v", work.completed)
 	}
 }
@@ -148,7 +148,7 @@ func TestAgentStepClosesTheWorkItemWhenTheCallFails(t *testing.T) {
 	if _, err := step.Execute(context.Background(), delegatingStep("assistant")); err == nil {
 		t.Fatal("a failed delegation must surface its error")
 	}
-	if len(work.completed) != 1 || work.completed[0] != "failed" {
+	if len(work.completed) != 1 || work.completed[0] != domain.TurnFailed {
 		t.Fatalf("completed = %v, want the item closed as failed", work.completed)
 	}
 }

@@ -1,16 +1,33 @@
-comment: Platform release rollout stage catalog
+comment: Platform release rollout stage catalog and release code lists
 order: 50
 seeds:
   - table: rollout_stage
     columns: [code, stage_order, is_live, is_terminal, description]
     rows:
-      - [build, 1, false, false, Artifact built and bundle signed]
-      - [offline_replay, 2, false, false, Replayed against recorded traffic and contract corpus]
-      - [shadow, 3, true, false, Mirrored sampled traffic with no user-visible output]
-      - [internal_canary, 4, true, false, Serving internal tenants]
-      - [tenant_canary, 5, true, false, Serving the canary tenant ring]
-      - [regional_ramp, 6, true, false, Ramping across regional rings]
-      - [global_default, 7, true, false, Default release for every ring]
-      - [retired, 8, false, true, Superseded by a later default]
-      - [rolled_back, 9, false, true, Withdrawn from new assignments while sessions drain]
-      - [quarantined, 10, false, true, Unfit for any assignment until cleared]
+      - [BD, 1, false, false, Artifact built and bundle signed]
+      - [OR, 2, false, false, Replayed against recorded traffic and contract corpus]
+      - [SH, 3, true, false, Mirrored sampled traffic with no user-visible output]
+      - [IC, 4, true, false, Serving internal tenants]
+      - [TC, 5, true, false, Serving the canary tenant ring]
+      - [RR, 6, true, false, Ramping across regional rings]
+      - [GD, 7, true, false, Default release for every ring]
+      - [RT, 8, false, true, Superseded by a later default]
+      - [RB, 9, false, true, Withdrawn from new assignments while sessions drain]
+      - [QU, 10, false, true, Unfit for any assignment until cleared]
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [version_pin_scope, Version Pin Scope]
+      - [pilot_subject_kind, Pilot Subject Kind]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [version_pin_scope, C, Compliance]
+      - [version_pin_scope, T, Tenant]
+      - [pilot_subject_kind, P, Principal]
+      - [pilot_subject_kind, O, Position]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [version_pin_scope, agent_version_pin, scope_code]
+      - [pilot_subject_kind, agent_pilot_member, subject_kind]

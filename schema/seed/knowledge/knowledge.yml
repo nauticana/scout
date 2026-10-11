@@ -1,0 +1,20 @@
+comment: Knowledge code lists
+order: 32
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [knowledge_binding_mode, Knowledge Binding Mode]
+      - [knowledge_source_op, Knowledge Source Change]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [knowledge_binding_mode, R, Retrieval]
+      - [knowledge_binding_mode, W, Whole Document]
+      - [knowledge_source_op, U, Upsert]
+      - [knowledge_source_op, D, Delete]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [knowledge_binding_mode, agent_knowledge_binding, mode_code]
+      - [knowledge_source_op, knowledge_source_event, op_code]

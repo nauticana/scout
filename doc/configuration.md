@@ -230,7 +230,7 @@ validates them at load.
 | Flag | Type | Default | Min | Max | Meaning |
 |---|---|---|---|---|---|
 | `agent_default_language` | string | `en-US` | — | 16 bytes | Language code a published runtime or Studio draft test falls back to when the agent has no prompt in the requested language; empty uses `en-US`. |
-| `agent_default_priority_class` | string | `standard` | — | 30 bytes | `priority_class` code a model access grant takes when the caller names none (`controlplane.ModelAccess.PriorityClass`); empty uses `standard`. |
+| `agent_default_priority_class` | string | `S` | — | 1 byte | `priority_class` code (`I` interactive, `S` standard, or `B` batch) a model access grant takes when the caller names none (`controlplane.ModelAccess.PriorityClass`); empty uses `S`. |
 | `agent_default_test_task` | string | `""` | — | — | Task text a Studio draft test runs when the caller sends none (`BaseDraftTester.DefaultTask`); empty uses Scout's built-in sample task. |
 
 ## Admission (`service/isolation`)

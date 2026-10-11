@@ -96,7 +96,7 @@ func (f *TurnFeedback) RecordFeedback(ctx context.Context, tenant domain.TenantC
 	if common.AsString(row[4]) != person.ID {
 		return fmt.Errorf("%w: turn %q does not belong to this person", domain.ErrForbidden, requestID)
 	}
-	if common.AsString(row[2]) != "completed" {
+	if domain.TurnStatus(common.AsString(row[2])) != domain.TurnCompleted {
 		return fmt.Errorf("%w: only a completed turn is rated", domain.ErrConflict)
 	}
 	principal := domain.Principal{Kind: person.Kind, ID: person.ID, TenantID: tenant.TenantID, ScopeID: tenant.ScopeID}

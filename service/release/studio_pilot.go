@@ -303,7 +303,7 @@ func validatePilotChange(change domain.PilotChange) error {
 			problems = append(problems, fmt.Sprintf("subject_id of a position must contain 1 to %d bytes", pilotSubjectSize))
 		}
 	default:
-		problems = append(problems, "subject_kind must be principal or position")
+		problems = append(problems, "subject_kind must be P (principal) or O (position)")
 	}
 	if change.Reason == "" || utf8.RuneCountInString(change.Reason) > pilotReasonSize {
 		problems = append(problems, fmt.Sprintf("reason must contain 1 to %d characters", pilotReasonSize))

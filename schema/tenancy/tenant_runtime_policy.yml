@@ -6,7 +6,7 @@ columns:
   - name: policy_version
     type: VARCHAR(80)
   - name: priority_class_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: capacity_class_code
     type: CHAR(1)
   - name: max_steps

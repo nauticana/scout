@@ -124,7 +124,7 @@ func apiComparedSubject(subject domain.AgentEvaluationSubject) api.ComparedSubje
 func apiComparisonRun(run domain.AgentEvaluationRun) api.AgentComparisonRun {
 	result := api.AgentComparisonRun{
 		RunID: run.RunID, AgentName: run.AgentID, GoldenSetID: run.GoldenSetID, SetVersion: run.SetVersion, B: apiComparedSubject(run.Subject),
-		Status: run.Status, QueuedAt: run.QueuedAt, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
+		Status: string(run.Status), QueuedAt: run.QueuedAt, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
 		Samples: run.Samples, HiddenResults: run.HiddenResults, Cost: apiCost(run.Usage, run.Exponent), Reason: run.Reason,
 	}
 	if run.Baseline != nil {

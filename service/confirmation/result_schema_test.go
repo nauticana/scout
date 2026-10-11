@@ -45,7 +45,7 @@ func TestResultSchemaRefusesSchemasTheValidatorCannotEnforce(t *testing.T) {
 	if _, err := ResultSchema(nil, json.RawMessage(`{"type":`)); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("malformed result schema error = %v", err)
 	}
-	if string(StatusSchema) != `{"enum":["pending","approved","executing","executed","failed","unknown","declined","withdrawn","expired"],"type":"string"}` {
+	if string(StatusSchema) != `{"enum":["P","A","R","D","F","U","X","W","T"],"type":"string"}` {
 		t.Fatalf("status schema = %s", StatusSchema)
 	}
 }

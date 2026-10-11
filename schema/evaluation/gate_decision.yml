@@ -13,7 +13,7 @@ columns:
   - name: dataset_revision
     type: CHAR(64)
   - name: verdict_code
-    type: VARCHAR(20)
+    type: CHAR(1)
   - name: confidence_bp
     type: INTEGER
   - name: decision_json
@@ -51,7 +51,7 @@ checks:
   - name: gate_decision_revision_ck
     expression: CHAR_LENGTH(dataset_revision) = 64
   - name: gate_decision_verdict_ck
-    expression: verdict_code IN ('healthy', 'unhealthy', 'inconclusive')
+    expression: verdict_code IN ('H', 'U', 'I')
   - name: gate_decision_confidence_ck
     expression: confidence_bp BETWEEN 0 AND 10000
   - name: gate_decision_dates_ck

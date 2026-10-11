@@ -188,7 +188,7 @@ func TestStreamPumpObservesTTFTAndTPOT(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	turn := pumpTurn
 	turn.TenantContext.Tier = "gold"
-	turn.TenantContext.PriorityClass = "interactive"
+	turn.TenantContext.PriorityClass = domain.PriorityInteractive
 	turn.TenantContext.Region = "eu"
 	pump := &StreamPump{
 		Guardrails: &fake.GuardrailEnforcer{},
@@ -209,7 +209,7 @@ func TestStreamPumpObservesTTFTAndTPOT(t *testing.T) {
 	if got.Stage != domain.StageModel || got.Component != StreamPumpComponent || got.Outcome != domain.OutcomeOK || got.ErrorClass != "" {
 		t.Fatalf("observation = %+v", got)
 	}
-	if got.TenantID != 1 || got.TenantTier != "gold" || got.PriorityClass != "interactive" || got.Region != "eu" || got.Versions.Agent != "v3" {
+	if got.TenantID != 1 || got.TenantTier != "gold" || got.PriorityClass != domain.PriorityInteractive || got.Region != "eu" || got.Versions.Agent != "v3" {
 		t.Fatalf("attribution = %+v", got)
 	}
 	// TTFT = 10ms; TPOT = (30ms-10ms)/(5-1) = 5ms; duration = 40ms.

@@ -59,6 +59,13 @@ const DefaultGateMaxResults = 2000
 
 const maxGateReason = 400
 
+// Evaluation codes quoted for the gate's named SQL.
+const (
+	sqlEvaluationCompleted = "'" + string(domain.EvaluationCompleted) + "'"
+	sqlEvaluationBaseline  = "'" + string(domain.RoleBaseline) + "'"
+	sqlEvaluationCandidate = "'" + string(domain.RoleCandidate) + "'"
+)
+
 const gateActive = `
 SELECT dep.stable_version, v.definition_digest
   FROM agent_deployment dep
@@ -81,16 +88,16 @@ SELECT a.golden_set_id, MAX(v.set_version)
 	qGateRun: `
 SELECT r.id
   FROM evaluation_run r
-  JOIN evaluation_run_subject s ON s.partner_id = r.partner_id AND s.run_id = r.id AND s.role_code = 'candidate'
+  JOIN evaluation_run_subject s ON s.partner_id = r.partner_id AND s.run_id = r.id AND s.role_code = ` + sqlEvaluationCandidate + `
  WHERE r.partner_id = ? AND r.agent_id = ? AND r.golden_set_id = ? AND r.set_version = ? AND r.scope_code = ?
-   AND r.status_code = 'completed' AND s.definition_digest = ?
+   AND r.status_code = ` + sqlEvaluationCompleted + ` AND s.definition_digest = ?
    AND NOT EXISTS (SELECT 1 FROM evaluation_run_subject b
-                    WHERE b.partner_id = r.partner_id AND b.run_id = r.id AND b.role_code = 'baseline')
+                    WHERE b.partner_id = r.partner_id AND b.run_id = r.id AND b.role_code = ` + sqlEvaluationBaseline + `)
  ORDER BY r.completed_at DESC, r.id DESC
  LIMIT 1`,
 	qGateResults: `
 SELECT scores FROM evaluation_result
- WHERE partner_id = ? AND run_id = ? AND role_code = 'candidate'
+ WHERE partner_id = ? AND run_id = ? AND role_code = ` + sqlEvaluationCandidate + `
  ORDER BY example_id
  LIMIT ?`,
 	qGateDecision: `

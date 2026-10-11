@@ -30,7 +30,7 @@ DELETE FROM tenant_model_access
 }
 
 // DefaultPriorityClass is the scheduling class a grant takes when none is named.
-const DefaultPriorityClass = "standard"
+const DefaultPriorityClass = domain.PriorityStandard
 
 // ModelAccess writes the tenant's routable model set. AgentProvisioner and
 // Studio publishing grant the models an agent definition names; this grants
@@ -39,7 +39,7 @@ type ModelAccess struct {
 	DB keelport.DatabaseRepository
 	// PriorityClass is the scheduling class a grant takes when none is named; empty takes
 	// DefaultPriorityClass.
-	PriorityClass string
+	PriorityClass domain.PriorityClass
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -68,7 +68,7 @@ func (access *ModelAccess) target(tenantID int64, reference domain.ModelReferenc
 }
 
 // Grant makes the model routable for the tenant under a scheduling class.
-func (access *ModelAccess) Grant(ctx context.Context, tenantID int64, reference domain.ModelReference, priorityClass string) error {
+func (access *ModelAccess) Grant(ctx context.Context, tenantID int64, reference domain.ModelReference, priorityClass domain.PriorityClass) error {
 	reference, err := access.target(tenantID, reference)
 	if err != nil {
 		return err
@@ -76,10 +76,11 @@ func (access *ModelAccess) Grant(ctx context.Context, tenantID int64, reference 
 	if err := access.init(ctx); err != nil {
 		return err
 	}
-	if priorityClass = strings.TrimSpace(priorityClass); priorityClass == "" {
-		priorityClass = cmp.Or(strings.TrimSpace(access.PriorityClass), DefaultPriorityClass)
+	priorityClass = cmp.Or(priorityClass, access.PriorityClass, DefaultPriorityClass)
+	if !priorityClass.Valid() {
+		return fmt.Errorf("%w: priority class %q is not a priority_class code", domain.ErrValidation, priorityClass)
 	}
-	if _, err := access.qs.Query(ctx, qModelAccessGrant, tenantID, reference.ProviderID, reference.ModelID, priorityClass); err != nil {
+	if _, err := access.qs.Query(ctx, qModelAccessGrant, tenantID, reference.ProviderID, reference.ModelID, string(priorityClass)); err != nil {
 		return fmt.Errorf("grant model %s/%s to tenant %d: %w", reference.ProviderID, reference.ModelID, tenantID, err)
 	}
 	return nil

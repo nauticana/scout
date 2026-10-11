@@ -114,19 +114,19 @@ refuses to run with both.
 The digest is also a `WHERE` predicate in the resolve statement, so approving a changed action
 updates nothing rather than resolving the wrong proposal.
 
-The turn lifecycle includes `suspended`:
+The turn lifecycle includes `U` (suspended):
 
 | Step | What happens |
 | --- | --- |
 | Pending approval | `guardrail.ErrApprovalPending` wraps `domain.ErrApprovalPending`, not `ErrForbidden` |
 | `TurnRuntime.suspend` | Records the suspension, publishes a final frame, acks the delivery |
 | Budget | The reservation stays **held** — settling would resume with no budget, releasing would let a tenant park work to dodge its ceiling |
-| Verdict | `approval.Resumer` records it; `approved` and `edited` return the turn to `queued` and requeue its delivery, `rejected` fails it |
+| Verdict | `approval.Resumer` records it; `A` (approved) and `E` (edited) return the turn to `Q` (queued) and requeue its delivery, `X` (rejected) fails it |
 | Replay | The worker resumes from the last checkpoint through `StepIdempotencyStore`; committed steps do not re-execute |
 
 Resolving without requeueing would leave the turn parked forever, so `Resumer` owns all three
 steps rather than leaving the last one to a caller. It is the decider's whole desk: `Pending` lists
-only what the decider may decide now, `Resolve` takes `approved`, `rejected`, or `edited`, and a
+only what the decider may decide now, `Resolve` takes `A` (approved), `X` (rejected), or `E` (edited), and a
 single-use decision link from keel's `actiontoken` lets a person approve or reject from email or
 chat. A link is bound to one person, request, verdict, and proposal digest, is refused above
 `LinkMaxRisk`, and authorizes its person again when redeemed.
@@ -200,7 +200,7 @@ opened under:
 No outcome approves, and a backup needs its own grant — escalation moves *who decides*, never *what
 may be decided*. Expiry commits the verdict, then fails the parked turn and marks the request
 settled (`turn_settled_at`); a later sweep retries any expired request whose turn is not settled.
-Each move is audited as `escalated`, `held`, or `expired`, naming the route, reference, and step.
+Each move is audited as `S` (escalated), `held`, or `T` (expired), naming the route, reference, and step.
 `TableStore.Reassign` refuses a plain backup step on a routed request, so a product with unrouted
 requests composes its `BackupEscalation` as `ReleaseRouter.Unrouted`.
 
@@ -306,18 +306,27 @@ so `service/confirmation` holds it instead of the turn approval module:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: Prepare
-    pending --> approved: Decide / Answer / keel approval
-    pending --> declined
-    pending --> withdrawn: maker
-    pending --> expired: ExpireDue
-    pending --> failed: Abandon
-    approved --> executing: Claim (new fence)
-    executing --> executed
-    executing --> failed
-    executing --> unknown: effect unknown, cancel, or lapsed lease
-    unknown --> executed: Reconcile
-    unknown --> failed: Reconcile
+    state "P pending" as P
+    state "A approved" as A
+    state "X declined" as X
+    state "W withdrawn" as W
+    state "T expired" as T
+    state "F failed" as F
+    state "R executing" as R
+    state "D executed" as D
+    state "U unknown" as U
+    [*] --> P: Prepare
+    P --> A: Decide / Answer / keel approval
+    P --> X
+    P --> W: maker
+    P --> T: ExpireDue
+    P --> F: Abandon
+    A --> R: Claim (new fence)
+    R --> D
+    R --> F
+    R --> U: effect unknown, cancel, or lapsed lease
+    U --> D: Reconcile
+    U --> F: Reconcile
 ```
 
 - **The stored action is what runs.** `Prepare` keeps the exact payload under an action digest; the
@@ -331,7 +340,7 @@ stateDiagram-v2
   `approval.Service.OnDecided`, decides both records in keel's transaction.
 - **Exactly once, or unknown.** A run holds a store-clock lease under a fence that only it may
   complete. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be
-  stored, a cancellation, or a lost claim is `unknown`, never success and never retried; a person records the verified outcome with `Reconcile`.
+  stored, a cancellation, or a lost claim is `U` (unknown), never success and never retried; a person records the verified outcome with `Reconcile`.
 - **Client-safe reasons.** The stored and returned reason is generic or the product's `Reason`; the
   cause goes to `Executor.OnFailure`.
 - **The store is a seam.** The executor drives `contract.MCPConfirmationStore`. `TableStore` and the

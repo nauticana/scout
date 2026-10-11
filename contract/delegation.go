@@ -41,7 +41,7 @@ type WorkItemStore interface {
 	// Pending lists open items for one assignee, oldest first.
 	Pending(ctx context.Context, tenantID int64, assignee domain.PrincipalRef, limit int) ([]domain.WorkItem, error)
 	// Complete records a terminal status for an item.
-	Complete(ctx context.Context, tenantID, id int64, status string) error
+	Complete(ctx context.Context, tenantID, id int64, status domain.TurnStatus) error
 	// Ancestors returns the item's chain to the root, used for cycle detection.
 	Ancestors(ctx context.Context, tenantID, id int64) ([]domain.WorkItem, error)
 }

@@ -6,7 +6,7 @@ columns:
   - name: partner_id
     type: BIGINT
   - name: status_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: decider_kind
     type: VARCHAR(20)
   - name: decider_user_id
@@ -69,4 +69,4 @@ checks:
   - name: turn_approval_decision_digest_ck
     expression: CHAR_LENGTH(proposed_digest) = 64
   - name: turn_approval_decision_revision_ck
-    expression: (revised_arguments_uri IS NULL AND revised_arguments_digest IS NULL) OR (status_code = 'edited' AND revised_arguments_uri IS NOT NULL AND CHAR_LENGTH(revised_arguments_digest) = 64)
+    expression: (revised_arguments_uri IS NULL AND revised_arguments_digest IS NULL) OR (status_code = 'E' AND revised_arguments_uri IS NOT NULL AND CHAR_LENGTH(revised_arguments_digest) = 64)

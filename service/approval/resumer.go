@@ -125,12 +125,12 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 // failTurn fails the turn parked on a refused or expired request; a replay that finds the turn
 // already failed with the same code succeeds.
 func failTurn(ctx context.Context, records contract.TurnRecordStore, key domain.ApprovalKey, status domain.ApprovalStatus) error {
-	err := records.Fail(ctx, key.TenantID, key.RequestID, "failed", string(status))
+	err := records.Fail(ctx, key.TenantID, key.RequestID, domain.TurnFailed, string(status))
 	if !errors.Is(err, domain.ErrConflict) {
 		return err
 	}
 	_, turnStatus, payload, findErr := records.Find(ctx, key.TenantID, key.RequestID)
-	if findErr == nil && turnStatus == "failed" && string(payload) == string(status) {
+	if findErr == nil && turnStatus == domain.TurnFailed && string(payload) == string(status) {
 		return nil
 	}
 	return errors.Join(err, findErr)

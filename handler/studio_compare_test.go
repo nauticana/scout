@@ -83,7 +83,7 @@ func TestStudioCompareHandlerMapsRequestsAndPages(t *testing.T) {
 		t.Fatalf("request = %+v", request)
 	}
 	run := view.(api.AgentComparisonRun)
-	if run.RunID != 12 || run.A.Subject != "baseline" || run.A.BaselineID != 4 || run.B.Subject != "draft" || run.B.Model != "m" || run.B.Provider != "p" {
+	if run.RunID != 12 || run.A.Subject != string(domain.SubjectBaseline) || run.A.BaselineID != 4 || run.B.Subject != string(domain.SubjectDraft) || run.B.Model != "m" || run.B.Provider != "p" {
 		t.Fatalf("run = %+v", run)
 	}
 

@@ -8,7 +8,7 @@ columns:
   - name: model_id
     type: VARCHAR(120)
   - name: priority_class_code
-    type: VARCHAR(30)
+    type: CHAR(1)
   - name: daily_token_limit
     type: BIGINT
     nullable: true

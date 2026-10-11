@@ -29,7 +29,7 @@ func reviewRow(id int64, status string, score any, verdict, notes, expected, rev
 func TestReviewQueueStoreDerivesProductionItemsFromTheCompletedTurn(t *testing.T) {
 	ctx := context.Background()
 	query := newQueryFake(map[string][][]any{
-		qReviewTurn:    {{"c1", int64(2), "completed", "writer-a", "3"}},
+		qReviewTurn:    {{"c1", int64(2), string(domain.TurnCompleted), "writer-a", "3"}},
 		qReviewPending: {{int64(0)}},
 	})
 	store := reviewQueue(query)
@@ -46,7 +46,7 @@ func TestReviewQueueStoreDerivesProductionItemsFromTheCompletedTurn(t *testing.T
 		t.Fatalf("turn lookup args = %v", turn)
 	}
 
-	running := reviewQueue(newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), "running", "writer-a", "3"}}}))
+	running := reviewQueue(newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), string(domain.TurnRunning), "writer-a", "3"}}}))
 	if err := running.Enqueue(ctx, domain.HumanReviewItem{TenantID: 7, Source: domain.ReviewSourceSampled, Reason: "sampled: base",
 		Turn: domain.ReviewTurnRef{RequestID: "req-1"}}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("running turn = %v", err)
@@ -57,7 +57,7 @@ func TestReviewQueueStoreDerivesProductionItemsFromTheCompletedTurn(t *testing.T
 		t.Fatalf("missing turn = %v", err)
 	}
 
-	full := newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), "completed", "writer-a", "3"}}, qReviewPending: {{int64(3)}}})
+	full := newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), string(domain.TurnCompleted), "writer-a", "3"}}, qReviewPending: {{int64(3)}}})
 	fullStore := reviewQueue(full)
 	fullStore.MaxPending = 3
 	if err := fullStore.Enqueue(ctx, domain.HumanReviewItem{TenantID: 7, Source: domain.ReviewSourceSampled, Reason: "sampled: base",
@@ -68,7 +68,7 @@ func TestReviewQueueStoreDerivesProductionItemsFromTheCompletedTurn(t *testing.T
 		t.Fatal("an item over the pending cap was inserted")
 	}
 	replay := newQueryFake(map[string][][]any{
-		qReviewTurn: {{"c1", int64(2), "completed", "writer-a", "3"}}, qReviewExisting: {{int64(11)}},
+		qReviewTurn: {{"c1", int64(2), string(domain.TurnCompleted), "writer-a", "3"}}, qReviewExisting: {{int64(11)}},
 	})
 	replayStore := reviewQueue(replay)
 	replayStore.MaxPending = 1
@@ -98,7 +98,7 @@ func TestReviewQueuePendingCapCountsOnlyResolvableItems(t *testing.T) {
 	if !strings.Contains(sql, "status_code = ? AND source_code IN (?, ?)") {
 		t.Fatalf("pending count = %s", sql)
 	}
-	query := newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), "completed", "writer-a", "3"}}, qReviewPending: {{int64(0)}}})
+	query := newQueryFake(map[string][][]any{qReviewTurn: {{"c1", int64(2), string(domain.TurnCompleted), "writer-a", "3"}}, qReviewPending: {{int64(0)}}})
 	if err := reviewQueue(query).Enqueue(context.Background(), domain.HumanReviewItem{TenantID: 7, Source: domain.ReviewSourceSampled,
 		Reason: "sampled: base", Turn: domain.ReviewTurnRef{RequestID: "req-1"}}); err != nil {
 		t.Fatal(err)

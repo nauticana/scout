@@ -54,7 +54,7 @@ type AgentEvaluationQueue interface {
 	// RecordComparison stores one example's two arms and verdict like Record.
 	RecordComparison(ctx context.Context, lease domain.AgentEvaluationLease, comparison domain.CaseComparison) error
 	// Finish settles the run's totals from its recorded results and releases the lease.
-	Finish(ctx context.Context, lease domain.AgentEvaluationLease, status, reason string) error
+	Finish(ctx context.Context, lease domain.AgentEvaluationLease, status domain.EvaluationRunStatus, reason string) error
 }
 
 // StudioEvaluationBackend serves an agent's saved test cases and evaluations to Studio.

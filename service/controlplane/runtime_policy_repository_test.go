@@ -17,7 +17,7 @@ func TestTableTenantPolicyRepositoryNeverAssumesLimits(t *testing.T) {
 	if _, err := repository.GetRuntimePolicy(context.Background(), 7); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("a tenant without a current policy must be ErrNotReady, got %v", err)
 	}
-	query.rows[qRuntimePolicyCurrent] = [][]any{{"standard", string(domain.CapacityShared), int64(12), int64(9000), int64(50), "USD", int64(30000)}}
+	query.rows[qRuntimePolicyCurrent] = [][]any{{string(domain.PriorityStandard), string(domain.CapacityShared), int64(12), int64(9000), int64(50), "USD", int64(30000)}}
 	policy, err := repository.GetRuntimePolicy(context.Background(), 7)
 	if err != nil || policy.CapacityClass != domain.CapacityShared || policy.MaxSteps != 12 || policy.MaxTokens != 9000 || policy.CostCurrency != "USD" || policy.TurnTimeout != 30*time.Second {
 		t.Fatalf("policy = %+v, %v", policy, err)
@@ -51,12 +51,12 @@ func TestTableGuardrailConfigRepositoryIsImmutableAndReadsThePinnedVersion(t *te
 
 func standardPolicy() domain.RuntimePolicyVersion {
 	return domain.RuntimePolicyVersion{Version: "p1", Policy: domain.TenantRuntimePolicy{
-		PriorityClass: "standard", CapacityClass: domain.CapacityShared, MaxSteps: 12, MaxTokens: 9000,
+		PriorityClass: domain.PriorityStandard, CapacityClass: domain.CapacityShared, MaxSteps: 12, MaxTokens: 9000,
 		MaxCostMinorUnits: 50, CostCurrency: "USD", TurnTimeout: 30 * time.Second,
 	}}
 }
 
-var standardPolicyRow = []any{"standard", string(domain.CapacityShared), int64(12), int64(9000), int64(50), "USD", int64(30000)}
+var standardPolicyRow = []any{string(domain.PriorityStandard), string(domain.CapacityShared), int64(12), int64(9000), int64(50), "USD", int64(30000)}
 
 func TestPublishRuntimePolicyIsImmutableAndMovesThePointerInOneTransaction(t *testing.T) {
 	query := &studioQueryFake{rows: map[string][][]any{qRuntimePolicyGet: {standardPolicyRow}}, args: map[string][]any{}}

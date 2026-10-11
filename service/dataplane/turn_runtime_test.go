@@ -43,9 +43,9 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 	return &TurnRuntime{
 		Records: &fake.TurnRecordStore{
 			StartFunc: func(context.Context, int64, string) error { recorder.record("start"); return nil },
-			FailFunc: func(_ context.Context, _ int64, _ string, status, errorCode string) error {
+			FailFunc: func(_ context.Context, _ int64, _ string, status domain.TurnStatus, errorCode string) error {
 				recorder.record("fail")
-				recorder.failures = append(recorder.failures, status+":"+errorCode)
+				recorder.failures = append(recorder.failures, string(status)+":"+errorCode)
 				return nil
 			},
 			RecordUsageFunc: func(_ context.Context, _ int64, _ string, _ int64, _ string, _ domain.UsageAttribution, usage domain.Usage) error {
@@ -231,8 +231,8 @@ func TestTurnRuntimeDuplicateDeliveryOnlyReplaysTheFinalFrame(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
 	recorder.snapshot = domain.SessionSnapshot{ConversationID: "conversation-1", AgentVersion: "v1", Revision: 3, LatestTurnNo: 1, LatestStepNo: 2}
-	runtime.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, string, []byte, error) {
-		return 1, "completed", []byte("step-2-state"), nil
+	runtime.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
+		return 1, domain.TurnCompleted, []byte("step-2-state"), nil
 	}}
 	result, err := runtime.HandleTurn(context.Background(), runtimeDispatch())
 	if err != nil {
@@ -272,7 +272,7 @@ func TestTurnRuntimeGuardrailRejectionPublishesNoRawOutput(t *testing.T) {
 	if len(recorder.usage) != 1 || recorder.usage[0].OutputTokens != 5 {
 		t.Fatalf("usage = %+v", recorder.usage)
 	}
-	if len(recorder.failures) != 1 || recorder.failures[0] != "failed:internal" {
+	if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnFailed)+":internal" {
 		t.Fatalf("failures = %v", recorder.failures)
 	}
 	if len(recorder.audits) != 1 || recorder.audits[0] != "turn_failed" {
@@ -361,7 +361,7 @@ func TestTurnRuntimeCancellationRefundsAndMarksCancelled(t *testing.T) {
 	if recorder.released != 1 || recorder.committed != 0 {
 		t.Fatalf("refunded %d times, settled %d", recorder.released, recorder.committed)
 	}
-	if len(recorder.failures) != 1 || recorder.failures[0] != "cancelled:canceled" {
+	if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnCancelled)+":canceled" {
 		t.Fatalf("failures = %v", recorder.failures)
 	}
 }
@@ -375,7 +375,7 @@ func TestTurnRuntimeAbandonRefundsExhaustedDelivery(t *testing.T) {
 	if recorder.released != 1 || recorder.committed != 0 {
 		t.Fatalf("refunded %d times, settled %d", recorder.released, recorder.committed)
 	}
-	if len(recorder.failures) != 1 || recorder.failures[0] != "failed:execution_limit" {
+	if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnFailed)+":execution_limit" {
 		t.Fatalf("failures = %v", recorder.failures)
 	}
 	if len(recorder.frames) != 1 || !recorder.frames[0].Final {
@@ -404,7 +404,7 @@ func TestTurnRuntimeAbandonFailsATurnTheBudgetNoLongerAdmits(t *testing.T) {
 		if recorder.released != 0 || recorder.committed != 0 {
 			t.Errorf("%s: settled a hold that was never recovered", name)
 		}
-		if len(recorder.failures) != 1 || recorder.failures[0] != "failed:execution_limit" {
+		if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnFailed)+":execution_limit" {
 			t.Errorf("%s: failures = %v", name, recorder.failures)
 		}
 	}
@@ -604,7 +604,7 @@ func TestTurnRuntimeStopsAStepWhenItsTurnIsCancelledElsewhere(t *testing.T) {
 	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrTurnCanceled) {
 		t.Fatalf("error = %v", err)
 	}
-	if len(recorder.failures) != 1 || recorder.failures[0] != "cancelled:canceled" || recorder.released != 1 {
+	if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnCancelled)+":canceled" || recorder.released != 1 {
 		t.Fatalf("failures = %v, refunds = %d", recorder.failures, recorder.released)
 	}
 }
@@ -617,7 +617,7 @@ func TestTurnRuntimeSettlesATurnCancelledBeforePickup(t *testing.T) {
 	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrTurnCanceled) {
 		t.Fatalf("error = %v", err)
 	}
-	if len(recorder.executed) != 0 || recorder.released != 1 || len(recorder.failures) != 1 || recorder.failures[0] != "cancelled:canceled" {
+	if len(recorder.executed) != 0 || recorder.released != 1 || len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnCancelled)+":canceled" {
 		t.Fatalf("executed %v, refunds %d, failures %v", recorder.executed, recorder.released, recorder.failures)
 	}
 }

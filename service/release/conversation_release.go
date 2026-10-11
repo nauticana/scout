@@ -55,7 +55,7 @@ SELECT s.platform_version, s.stage_code, s.traffic_percentage, COALESCE(ring.rol
   FROM platform_rollout_state s
   JOIN rollout_stage stage ON stage.code = s.stage_code
   LEFT JOIN tenant_ring ring ON ring.ring_code = s.ring_code
- WHERE stage.is_live = TRUE AND s.paused = FALSE AND s.stage_code <> 'shadow'
+ WHERE stage.is_live = TRUE AND s.paused = FALSE AND s.stage_code <> '` + string(domain.StageShadow) + `'
  ORDER BY stage.stage_order DESC, s.stage_started_at DESC, s.platform_version`,
 }
 
