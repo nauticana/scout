@@ -68,6 +68,8 @@ C claimed (live) --Begin--> ErrConflict
 delivery → no-op). `Abandon` twice is a no-op; `Abandon` after `M` is `ErrConflict`. The schema has no
 owner column, so a worker whose lease expired can still commit if it finishes before the reclaimer; both ran the
 side effect (inherent to lease expiry) and the second `Commit` observes `ErrConflict`.
+[Turn takeover](turn_takeover.md) is the accepted design, not yet implemented, for fencing a turn's writes to
+its current owner and reconciling unknown tool outcomes before another worker takes the turn over.
 
 ## Tool-loop journal
 

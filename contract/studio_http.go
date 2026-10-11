@@ -44,9 +44,10 @@ type StudioFeedbackBackend interface {
 	Feedback(ctx context.Context, actor domain.StudioActor, agentID string, from, to time.Time) ([]domain.FeedbackSummary, error)
 }
 
-// StudioRunsBackend pages an agent's settled runs, newest first.
+// StudioRunsBackend pages an agent's settled runs, newest first, and traces one of them.
 type StudioRunsBackend interface {
 	Runs(ctx context.Context, actor domain.StudioActor, filter domain.AgentRunFilter) ([]domain.AgentRun, error)
+	Trace(ctx context.Context, actor domain.StudioActor, agentID string, runID int64) (domain.RunTrace, error)
 }
 
 // AgentStudioHTTPBackend is the single service dependency of authenticated Studio

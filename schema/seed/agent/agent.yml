@@ -213,6 +213,9 @@ seeds:
       - [agent_evaluation_case_max_tools, int, true, "20", "Sandboxed tool responses one golden case may script (1..200); 0 uses Scout's default of 20"]
       - [agent_evaluation_case_tool_max_bytes, int, true, "16384", "Bytes of one scripted tool output (2..1048576); 0 uses Scout's default of 16384"]
       - [agent_evaluation_trajectory_max_bytes, int, true, "1048576", "Bytes of one stored case trajectory Studio reads; a larger one is refused (1024..16777216); 0 uses Scout's default of 1048576"]
+      - [agent_run_trace_max_events, int, true, "500", "Events one Studio run trace returns; reading stops there and the trace is marked truncated (1..5000); 0 takes 500"]
+      - [agent_run_trace_max_journal_entries, int, true, "1000", "Loop journal entries one Studio run trace reads to classify events; a longer journal truncates the trace (1..10000); 0 takes 1000"]
+      - [agent_run_trace_max_journal_bytes, int, true, "4194304", "Cumulative loop journal payload bytes one Studio run trace classifies; past them the trace is truncated (1024..67108864); 0 takes 4194304"]
   - table: authorization_object
     columns: [id, caption]
     rows:

@@ -44,6 +44,19 @@ var errorClasses = []struct {
 	{domain.ErrDegraded, "degraded"},
 }
 
+// KnownErrorClass reports whether class is one ErrorClass returns.
+func KnownErrorClass(class string) bool {
+	if class == ErrorClassInternal {
+		return true
+	}
+	for _, candidate := range errorClasses {
+		if candidate.class == class {
+			return true
+		}
+	}
+	return false
+}
+
 // ErrorClass maps an error to a bounded class by sentinel identity, never by text.
 func ErrorClass(err error) string {
 	if err == nil {

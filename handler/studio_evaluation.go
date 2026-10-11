@@ -65,10 +65,7 @@ func (h *StudioEvaluationHandler) trajectory(ctx context.Context, actor domain.S
 			Sequence: event.Sequence, Kind: string(event.Kind), Name: event.Name, Payload: event.Payload,
 			OffsetMs: event.Offset.Milliseconds(), Failed: event.Failed, Recovered: event.Recovered,
 		}
-		if usage := event.Usage; usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.ToolCalls != 0 || usage.SearchQueries != 0 || usage.CostMinorUnits != 0 {
-			item.Usage = &api.TrajectoryUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, ToolCalls: usage.ToolCalls,
-				SearchQueries: usage.SearchQueries, CostMinorUnits: usage.CostMinorUnits, Currency: usage.Currency}
-		}
+		item.Usage = trajectoryUsage(event.Usage)
 		result.Events = append(result.Events, item)
 	}
 	return result, nil

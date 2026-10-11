@@ -80,6 +80,18 @@ type AgentRunQuery interface {
 	Runs(ctx context.Context, tenantID int64, filter domain.AgentRunFilter) ([]domain.AgentRun, error)
 }
 
+// RunTraceQuery assembles the payload-free trace of one settled run of an agent; a run of
+// another tenant or another agent is domain.ErrNotFound.
+type RunTraceQuery interface {
+	Trace(ctx context.Context, tenantID int64, agentID string, runID int64) (domain.RunTrace, error)
+}
+
+// CharterActionSource returns, in time order and at most limit, the governed actions Charter
+// recorded in the execution context a run's request id names.
+type CharterActionSource interface {
+	RunActions(ctx context.Context, tenantID int64, requestID string, limit int) ([]domain.CharterAction, error)
+}
+
 // ModelPricer prices usage for one model reference, returning minor units in
 // the catalog currency. controlplane.ModelCatalog implements it.
 type ModelPricer interface {

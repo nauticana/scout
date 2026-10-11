@@ -398,6 +398,11 @@ the delivery rather than passing silently, and the terminal replay offers the te
 which the key makes a no-op unless the first write was lost. `observability.VerifyTurnChain` asserts
 all of this over one request's records.
 
+Studio's `runs/trace` shows one run's audit decisions in order with its model steps, tool calls,
+guardrail hits, and approvals, and, when `charter.RunActions` is composed, the disposition Charter
+recorded for each governed action of the run's execution context, without reasons, inputs, or
+subjects; see [run traces](observability.md#run-traces).
+
 ## Attribution
 
 `usage_event` records `principal_kind`, `principal_id`, and `scope_id`, and `RecordUsage` takes a

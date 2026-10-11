@@ -176,6 +176,9 @@ const (
 	agent_evaluation_case_max_tools       = "agent_evaluation_case_max_tools"
 	agent_evaluation_case_tool_max_bytes  = "agent_evaluation_case_tool_max_bytes"
 	agent_evaluation_trajectory_max_bytes = "agent_evaluation_trajectory_max_bytes"
+	agent_run_trace_max_events            = "agent_run_trace_max_events"
+	agent_run_trace_max_journal_entries   = "agent_run_trace_max_journal_entries"
+	agent_run_trace_max_journal_bytes     = "agent_run_trace_max_journal_bytes"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -363,6 +366,9 @@ type ScoutConfig struct {
 	AgentEvaluationCaseMaxTools       int // agent_evaluation_case_max_tools 20 Sandboxed tool responses one golden case scripts (1..200); 0 uses Scout's default
 	AgentEvaluationCaseToolMaxBytes   int // agent_evaluation_case_tool_max_bytes 16384 Bytes of one scripted tool output (2..1048576); 0 uses Scout's default
 	AgentEvaluationTrajectoryMaxBytes int // agent_evaluation_trajectory_max_bytes 1048576 Bytes of one stored case trajectory (1024..16777216); 0 uses Scout's default
+	AgentRunTraceMaxEvents            int // agent_run_trace_max_events 500 Events one Studio run trace returns before it is truncated (1..5000); 0 takes 500
+	AgentRunTraceMaxJournalEntries    int // agent_run_trace_max_journal_entries 1000 Loop journal entries one run trace reads (1..10000); 0 takes 1000
+	AgentRunTraceMaxJournalBytes      int // agent_run_trace_max_journal_bytes 4194304 Cumulative loop journal payload bytes one run trace classifies (1024..67108864); 0 takes 4194304
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -603,6 +609,9 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentEvaluationCaseMaxTools = c.Int(rows, agent_evaluation_case_max_tools)
 	c.AgentEvaluationCaseToolMaxBytes = c.Int(rows, agent_evaluation_case_tool_max_bytes)
 	c.AgentEvaluationTrajectoryMaxBytes = c.Int(rows, agent_evaluation_trajectory_max_bytes)
+	c.AgentRunTraceMaxEvents = c.Int(rows, agent_run_trace_max_events)
+	c.AgentRunTraceMaxJournalEntries = c.Int(rows, agent_run_trace_max_journal_entries)
+	c.AgentRunTraceMaxJournalBytes = c.Int(rows, agent_run_trace_max_journal_bytes)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -612,7 +621,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 			judgeErr = fmt.Errorf("agent_evaluation_judge_*: %w", judgeErr)
 		}
 	}
-	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors())
+	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors())
 }
 
 // runtimeRangeErr refuses a negative data plane or runtime tuning flag; zero takes Scout's default.
@@ -813,6 +822,32 @@ func (c *ScoutConfig) caseScriptFlagErrors() error {
 		{agent_evaluation_case_max_tools, c.AgentEvaluationCaseMaxTools, 1, 200},
 		{agent_evaluation_case_tool_max_bytes, c.AgentEvaluationCaseToolMaxBytes, 2, 1 << 20},
 		{agent_evaluation_trajectory_max_bytes, c.AgentEvaluationTrajectoryMaxBytes, 1 << 10, 16 << 20},
+	} {
+		if flag.value != 0 && (flag.value < flag.lo || flag.value > flag.hi) {
+			errs = append(errs, fmt.Errorf("%s: %d is outside %d..%d; 0 takes the default", flag.name, flag.value, flag.lo, flag.hi))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// RunTraceLimits is what the agent_run_trace_* flags configure for dataplane.TableRunTrace.
+func (c *ScoutConfig) RunTraceLimits() domain.RunTraceLimits {
+	return domain.RunTraceLimits{
+		MaxEvents: c.AgentRunTraceMaxEvents, MaxJournalEntries: c.AgentRunTraceMaxJournalEntries,
+		MaxJournalBytes: int64(c.AgentRunTraceMaxJournalBytes),
+	}
+}
+
+// runTraceFlagErrors refuses a run trace bound outside its range; zero takes the default.
+func (c *ScoutConfig) runTraceFlagErrors() error {
+	var errs []error
+	for _, flag := range []struct {
+		name          string
+		value, lo, hi int
+	}{
+		{agent_run_trace_max_events, c.AgentRunTraceMaxEvents, 1, dataplane.MaxRunTraceEvents},
+		{agent_run_trace_max_journal_entries, c.AgentRunTraceMaxJournalEntries, 1, dataplane.MaxRunTraceJournalEntries},
+		{agent_run_trace_max_journal_bytes, c.AgentRunTraceMaxJournalBytes, 1 << 10, dataplane.MaxRunTraceJournalBytes},
 	} {
 		if flag.value != 0 && (flag.value < flag.lo || flag.value > flag.hi) {
 			errs = append(errs, fmt.Errorf("%s: %d is outside %d..%d; 0 takes the default", flag.name, flag.value, flag.lo, flag.hi))

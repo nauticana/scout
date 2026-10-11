@@ -64,6 +64,9 @@ indexes:
     columns: [partner_id, agent_id, id]
   - name: safety_event_agent_time_ix
     columns: [partner_id, agent_id, occurred_at]
+  - name: safety_event_request_ix
+    columns: [partner_id, request_id, occurred_at, id]
+    where: request_id IS NOT NULL
 checks:
   - name: safety_event_duration_ck
     expression: duration_ms >= 0

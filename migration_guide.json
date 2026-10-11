@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.6",
+      "title": "Run trace",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "Studio shows what happened inside one run — model steps, tool calls, guardrail hits, approvals, and governed and Charter decisions — without carrying model or tool payloads.",
+      "body_markdown": "**Run trace.** Studio `GET runs/trace?agent_name=&run_id=` (`VIEW`; the `runs` feature is version 2) assembles one settled run's trace from the records its turn already wrote: model steps and tool calls from the loop journal (each entry checked against its digest), guardrail hits from `safety_event`, approvals, governed decisions from `audit_event`, and, when composed, each Charter action's disposition. A trace carries no payload content — names, codes, timing, usage, and digests only — and is bounded and marked `truncated` by the new flags `agent_run_trace_max_events`, `agent_run_trace_max_journal_entries`, and `agent_run_trace_max_journal_bytes`.\n\n| Before | After |\n|---|---|\n| `contract.StudioRunsBackend.Runs` | also `Trace(ctx, actor, agentID, runID)` |\n| `runtime.StudioRuns{Query, Authorizer}` | adds `Traces contract.RunTraceQuery` (`dataplane.TableRunTrace` with `Limits: cfg.RunTraceLimits()`); without it the route answers 503 |\n| — | optional `TableRunTrace.Charter` (`contract.CharterActionSource`, `charter.RunActions`) |\n\nSchema: index `safety_event_request_ix`."
+    },
+    {
       "version": "v1.2.5",
       "title": "Scripted cases, trajectories, and agent health alerts",
       "tags": [

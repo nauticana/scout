@@ -10,6 +10,19 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
+func TestKnownErrorClassAcceptsOnlyWhatErrorClassReturns(t *testing.T) {
+	for _, err := range []error{errors.New("opaque"), context.Canceled, domain.ErrRateLimited, domain.ErrEffectUnknown} {
+		if class := ErrorClass(err); !KnownErrorClass(class) {
+			t.Fatalf("ErrorClass(%v) = %q is not known", err, class)
+		}
+	}
+	for _, class := range []string{"", "Rate_Limited", "rate limited", "internal error"} {
+		if KnownErrorClass(class) {
+			t.Fatalf("%q must not be a known class", class)
+		}
+	}
+}
+
 func TestErrorClassUsesSentinelIdentity(t *testing.T) {
 	cases := []struct {
 		name string

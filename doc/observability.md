@@ -73,6 +73,33 @@ Fleet series carry no tenant, agent, or person, so per-agent views read exact re
   apart, with cost counted only in the budget's currency. A budget the ledger cannot enforce reports its
   `problem` code instead of spend; see [release budgets](governance.md#release-budgets).
 
+## Run traces
+
+`dataplane.TableRunTrace` (`contract.RunTraceQuery`) answers what happened inside one settled run, behind
+Studio's `runs/trace` route. It reads the `agent_run` row by tenant, agent, and run id, then every source by
+the tenant and the run's request id: the `conversation_turn` (status and timing), the `step_loop_entry`
+journal, `safety_event` rows, `turn_approval_request` with its `turn_approval_decision`, `audit_event`
+decisions, and, when `Charter` is composed (`charter.RunActions`, a `contract.CharterActionSource`), the
+actions Charter recorded in the execution context the request id names. A run without a request id has no
+events. It stores nothing and takes no lock.
+
+The trace is payload-free: names, codes, timing, usage, error classes, and digests, never model output, tool
+arguments, or tool results. Journal objects are read through the `EvidenceArchive` only to classify entries
+and are checked against their digest; a mismatch or malformed entry fails the trace. A model entry becomes `model_step` (models
+from `Usage.Models`, finish, tool-call count), an observation becomes `tool_call` (outcome, observed effect,
+and the error class only when `stage.KnownErrorClass` accepts it), and approval-pending and revision entries
+produce no event because the approval source records the same pause. Safety events become `guardrail`,
+approval requests `approval`, and audit records and Charter dispositions `decision`.
+
+Events order by time, then by the fixed source order journal, guardrail, approval, audit, Charter, then by
+each source's own order. The sources are stamped by different clocks (journal creation, guardrail and audit
+occurrence, request creation, Charter action time), so the order across sources near one instant is
+approximate. `RunTraceLimits` bounds a trace: `agent_run_trace_max_events`, and the journal's
+`agent_run_trace_max_journal_entries` and `agent_run_trace_max_journal_bytes`. Every SQL event source reads at most
+its row bound plus one; journal objects also obey the archive's per-object limit. The first journal entry past an entry
+or cumulative byte bound is a horizon: every event at or after it is dropped so
+the trace is a consistent prefix, and the trace is marked `truncated`, as it is when events exceed the bound.
+
 ## Agent health and alerts
 
 `dataplane.AgentHealth` measures one agent's production health from the same exact records, by the
