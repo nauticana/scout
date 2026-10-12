@@ -149,6 +149,7 @@ const (
 	agent_metric_label_max_length             = "agent_metric_label_max_length"
 	agent_knowledge_max_source_bytes          = "agent_knowledge_max_source_bytes"
 	agent_knowledge_rrf_offset                = "agent_knowledge_rrf_offset"
+	agent_memory_section_max_chars            = "agent_memory_section_max_chars"
 	agent_evaluation_page_size                = "agent_evaluation_page_size"
 	agent_evaluation_max_page_size            = "agent_evaluation_max_page_size"
 	agent_evaluation_judge_max_verdict_bytes  = "agent_evaluation_judge_max_verdict_bytes"
@@ -347,6 +348,7 @@ type ScoutConfig struct {
 	AgentMetricLabelMaxLength            int                  // agent_metric_label_max_length 64 Bytes of one fleet metric label value; 0 uses Scout's default
 	AgentKnowledgeMaxSourceBytes         int                  // agent_knowledge_max_source_bytes 33554432 Bytes of one knowledge source object; 0 uses Scout's default
 	AgentKnowledgeRRFOffset              int                  // agent_knowledge_rrf_offset 60 Reciprocal rank fusion constant k of hybrid retrieval; 0 uses Scout's default
+	AgentMemorySectionMaxChars           int                  // agent_memory_section_max_chars 8000 Characters of one tenant memory section; 0 uses Scout's default
 	AgentEvaluationPageSize              int                  // agent_evaluation_page_size 50 Evaluation results one Studio page returns when the caller names no limit; 0 uses Scout's default
 	AgentEvaluationMaxPageSize           int                  // agent_evaluation_max_page_size 200 Largest evaluation result page a Studio caller may ask for; 0 uses Scout's default
 	AgentEvaluationJudgeMaxVerdictBytes  int                  // agent_evaluation_judge_max_verdict_bytes 8192 Bytes of one raw rubric verdict; 0 uses Scout's default
@@ -601,6 +603,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentMetricLabelMaxLength = c.Int(rows, agent_metric_label_max_length)
 	c.AgentKnowledgeMaxSourceBytes = c.Int(rows, agent_knowledge_max_source_bytes)
 	c.AgentKnowledgeRRFOffset = c.Int(rows, agent_knowledge_rrf_offset)
+	c.AgentMemorySectionMaxChars = c.Int(rows, agent_memory_section_max_chars)
 	c.AgentEvaluationPageSize = c.Int(rows, agent_evaluation_page_size)
 	c.AgentEvaluationMaxPageSize = c.Int(rows, agent_evaluation_max_page_size)
 	c.AgentEvaluationJudgeMaxVerdictBytes = c.Int(rows, agent_evaluation_judge_max_verdict_bytes)
@@ -792,6 +795,7 @@ func (c *ScoutConfig) limitFlagErrors() error {
 		{agent_metric_label_max_length, c.AgentMetricLabelMaxLength},
 		{agent_knowledge_max_source_bytes, c.AgentKnowledgeMaxSourceBytes},
 		{agent_knowledge_rrf_offset, c.AgentKnowledgeRRFOffset},
+		{agent_memory_section_max_chars, c.AgentMemorySectionMaxChars},
 		{agent_evaluation_page_size, c.AgentEvaluationPageSize},
 		{agent_evaluation_max_page_size, c.AgentEvaluationMaxPageSize},
 		{agent_evaluation_judge_max_verdict_bytes, c.AgentEvaluationJudgeMaxVerdictBytes},

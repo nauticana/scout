@@ -21,12 +21,14 @@ const (
 )
 
 var publishedAgentQueries = map[string]string{
+	// An empty agent id serves the alias target; a named one must be of the alias's type.
 	qPublishedAgent: `
-SELECT p.state_code = ` + sqlAgentActive + `, dep.stable_version, dep.canary_version, dep.canary_percentage,
+SELECT p.state_code = ` + sqlAgentActive + ` AND d.enabled, dep.stable_version, dep.canary_version, dep.canary_percentage,
        stable.definition, canary.definition, p.agent_id
   FROM agent_alias a
   JOIN agent_profile p
-    ON p.partner_id = a.partner_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = a.agent_id
+    ON p.partner_id = a.partner_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = COALESCE(NULLIF(?, ''), a.agent_id)
+  JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
   JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
   JOIN agent_version stable
     ON stable.partner_id = dep.partner_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version
@@ -39,7 +41,8 @@ SELECT definition
  WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
 }
 
-// PublishedAgentResolver resolves one active alias to an immutable definition.
+// PublishedAgentResolver resolves an alias, or a named agent of its type, to an immutable
+// definition; an agent that is inactive, disabled, or unpublished never falls back to another.
 // Versions, when set, owns the version choice (pins, cohorts, canary); without
 // it the resolver applies the reference stable/canary hash directly. An alias
 // resolution carries no session, so it names no subject and no pilot applies.
@@ -62,16 +65,19 @@ func (resolver *PublishedAgentResolver) init(ctx context.Context) error {
 	return nil
 }
 
-func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (domain.AgentDefinition, error) {
+func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID int64, aliasID, agentID, languageCode, conversationID string) (domain.AgentDefinition, error) {
 	if tenantID <= 0 || strings.TrimSpace(aliasID) == "" {
 		return domain.AgentDefinition{}, fmt.Errorf("%w: tenant and alias are required", domain.ErrValidation)
 	}
 	if err := resolver.init(ctx); err != nil {
 		return domain.AgentDefinition{}, err
 	}
-	result, err := resolver.qs.Query(ctx, qPublishedAgent, tenantID, aliasID)
+	result, err := resolver.qs.Query(ctx, qPublishedAgent, agentID, tenantID, aliasID)
 	if err != nil {
 		return domain.AgentDefinition{}, fmt.Errorf("resolve published agent: %w", err)
+	}
+	if len(result.Rows) == 0 && agentID != "" {
+		return domain.AgentDefinition{}, fmt.Errorf("%w: no published agent %q of type %q", domain.ErrNotFound, agentID, aliasID)
 	}
 	if len(result.Rows) == 0 || !common.AsBool(result.Rows[0][0]) {
 		return domain.AgentDefinition{}, domain.ErrNotReady

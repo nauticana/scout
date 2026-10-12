@@ -6,7 +6,6 @@ import (
 
 	charterkeel "github.com/nauticana/charter/sdk/adapter/keel"
 	"github.com/nauticana/charter/sdk/model"
-	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -22,7 +21,8 @@ const BudgetLimitKind = "spend"
 // invoker's DelegationPolicy can verify the presented path. A hop with no end
 // date becomes an open-ended validity, never a nil one — Charter fails closed
 // on nil. Scout's service principals have no Charter identity kind and fail.
-func CharterChain(chain domain.AuthorityChain, namespace string) (model.AuthorityChain, error) {
+// exponent reads a budget currency's exponent from the currency catalog.
+func CharterChain(chain domain.AuthorityChain, namespace string, exponent func(currency string) (int, error)) (model.AuthorityChain, error) {
 	if len(chain) == 0 {
 		return nil, nil
 	}
@@ -40,13 +40,16 @@ func CharterChain(chain domain.AuthorityChain, namespace string) (model.Authorit
 			ApprovalRequired: hop.ApprovalRequired,
 		}
 		if hop.BudgetMinorUnits > 0 {
-			exponent, ok := common.CurrencyExponent(hop.Currency)
-			if !ok {
-				return nil, fmt.Errorf("%w: authority hop %d has unknown currency %q", domain.ErrValidation, index, hop.Currency)
+			if exponent == nil {
+				return nil, fmt.Errorf("authority hop %d: a currency exponent lookup is required", index)
+			}
+			digits, err := exponent(hop.Currency)
+			if err != nil {
+				return nil, fmt.Errorf("authority hop %d currency %q: %w", index, hop.Currency, err)
 			}
 			converted.Limits = []model.Limit{{
 				LimitKind: BudgetLimitKind, Operator: "lte", Value: hop.BudgetMinorUnits,
-				Currency: hop.Currency, CurrencyExponent: &exponent,
+				Currency: hop.Currency, CurrencyExponent: &digits,
 			}}
 		}
 		out = append(out, converted)

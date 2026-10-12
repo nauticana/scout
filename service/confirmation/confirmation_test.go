@@ -22,14 +22,19 @@ var (
 
 // checks refuses whoever is listed, at the moment of asking.
 type checks struct {
-	makerErr   error
-	deciderErr map[string]error
+	makerErr      error
+	deciderErr    map[string]error
+	reconcilerErr map[string]error
 }
 
 func (c *checks) Maker(context.Context, domain.MCPConfirmation) error { return c.makerErr }
 
 func (c *checks) Decider(_ context.Context, _ domain.MCPConfirmation, decider domain.PrincipalRef) error {
 	return c.deciderErr[decider.ID]
+}
+
+func (c *checks) Reconciler(_ context.Context, _ domain.MCPConfirmation, reconciler domain.PrincipalRef) error {
+	return c.reconcilerErr[reconciler.ID]
 }
 
 type runner struct {

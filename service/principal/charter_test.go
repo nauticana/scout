@@ -1,6 +1,7 @@
 package principal
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,13 @@ import (
 
 	"github.com/nauticana/scout/domain"
 )
+
+func catalogExponent(currency string) (int, error) {
+	if currency == "USD" {
+		return 2, nil
+	}
+	return 0, errors.New("not in the currency catalog")
+}
 
 func TestCharterChain_IsAcceptedByDelegationPolicy(t *testing.T) {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -19,7 +27,7 @@ func TestCharterChain_IsAcceptedByDelegationPolicy(t *testing.T) {
 			ApprovalRequired: true, NotBefore: from, NotAfter: from.AddDate(1, 0, 0)},
 	}
 
-	converted, err := CharterChain(chain, "acme")
+	converted, err := CharterChain(chain, "acme", catalogExponent)
 	if err != nil {
 		t.Fatalf("convert: %v", err)
 	}
@@ -58,11 +66,15 @@ func TestCharterChain_FailsClosed(t *testing.T) {
 		"unassigned currency": {{GrantID: "g", Grantor: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "1"}, BudgetMinorUnits: 1, Currency: "ZZZ", NotBefore: from}},
 	}
 	for name, chain := range cases {
-		if _, err := CharterChain(chain, "acme"); err == nil {
+		if _, err := CharterChain(chain, "acme", catalogExponent); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
-	if out, err := CharterChain(nil, "acme"); err != nil || out != nil {
+	budgeted := domain.AuthorityChain{{GrantID: "g", Grantor: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "1"}, BudgetMinorUnits: 1, Currency: "USD", NotBefore: from}}
+	if _, err := CharterChain(budgeted, "acme", nil); err == nil {
+		t.Error("a budgeted hop without an exponent lookup must fail")
+	}
+	if out, err := CharterChain(nil, "acme", nil); err != nil || out != nil {
 		t.Errorf("empty chain = %v, %v", out, err)
 	}
 }

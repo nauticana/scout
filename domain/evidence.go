@@ -10,15 +10,18 @@ const (
 	EvidenceToolResult EvidenceSource = "tool_result"
 	// EvidenceMCPResource is a resource link an MCP tool result returned.
 	EvidenceMCPResource EvidenceSource = "mcp_resource"
+	// EvidenceFact is a fact the tenant verified, named by FactKey.
+	EvidenceFact EvidenceSource = "fact"
 )
 
 // EvidenceRef points at one piece of support for a claim.
 type EvidenceRef struct {
-	ID     string         `json:"id"`
-	Source EvidenceSource `json:"source"`
-	Object ObjectRef      `json:"object,omitzero"`
-	CallID string         `json:"call_id,omitempty"`
-	URI    string         `json:"uri,omitempty"`
+	ID      string         `json:"id"`
+	Source  EvidenceSource `json:"source"`
+	Object  ObjectRef      `json:"object,omitzero"`
+	CallID  string         `json:"call_id,omitempty"`
+	URI     string         `json:"uri,omitempty"`
+	FactKey string         `json:"fact_key,omitempty"`
 }
 
 // Claim is one factual statement and the evidence ids offered for it.
@@ -35,7 +38,8 @@ type EvidencedAnswer struct {
 	Evidence []EvidenceRef `json:"evidence"`
 }
 
-// ClaimFinding explains why one claim is unsupported.
+// ClaimFinding explains why one claim is unsupported; ClaimIndex is -1 for a claim
+// the answer states but does not declare.
 type ClaimFinding struct {
 	ClaimIndex int    `json:"claim_index"`
 	Claim      string `json:"claim"`

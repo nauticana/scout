@@ -29,10 +29,10 @@ type PublishedAgentRuntime struct {
 
 var _ contract.AgentRuntimeResolver = (*PublishedAgentRuntime)(nil)
 
-// Resolve builds the text and optional media executors for one active alias.
+// Resolve builds the text and optional media executors for an alias or a named agent of its type.
 // Definition.Enabled is deliberately not consulted: PublishedAgentResolver
 // owns the live agent_profile switch, while the release value is historical.
-func (runtime *PublishedAgentRuntime) Resolve(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (contract.AgentRuntime, error) {
+func (runtime *PublishedAgentRuntime) Resolve(ctx context.Context, tenantID int64, aliasID, agentID, languageCode, conversationID string) (contract.AgentRuntime, error) {
 	if runtime == nil || runtime.Definitions == nil || runtime.Providers == nil {
 		return nil, fmt.Errorf("published agent runtime: definition resolver and provider factory are required")
 	}
@@ -43,7 +43,7 @@ func (runtime *PublishedAgentRuntime) Resolve(ctx context.Context, tenantID int6
 	if renderer == nil {
 		renderer = PromptRenderer{}
 	}
-	definition, err := runtime.Definitions.Resolve(ctx, tenantID, aliasID, "", conversationID)
+	definition, err := runtime.Definitions.Resolve(ctx, tenantID, aliasID, agentID, "", conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +168,11 @@ type PricedAgents struct {
 // ResolvePriced resolves an alias and wraps every present modality in a
 // PricedAgent, so a billing caller does not repeat the decoration per modality.
 // Absent media modalities stay nil.
-func (runtime *PublishedAgentRuntime) ResolvePriced(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (PricedAgents, error) {
+func (runtime *PublishedAgentRuntime) ResolvePriced(ctx context.Context, tenantID int64, aliasID, agentID, languageCode, conversationID string) (PricedAgents, error) {
 	if runtime == nil || runtime.Pricer == nil {
 		return PricedAgents{}, fmt.Errorf("published agent runtime: pricer is required to resolve priced agents")
 	}
-	resolved, err := runtime.Resolve(ctx, tenantID, aliasID, languageCode, conversationID)
+	resolved, err := runtime.Resolve(ctx, tenantID, aliasID, agentID, languageCode, conversationID)
 	if err != nil {
 		return PricedAgents{}, err
 	}

@@ -41,6 +41,7 @@ const (
 	qConfirmReconcile      = "scout_mcp_confirmation_reconcile"
 	qConfirmPurge          = "scout_mcp_confirmation_purge"
 	qConfirmList           = "scout_mcp_confirmation_list"
+	qConfirmInbox          = "scout_mcp_confirmation_inbox"
 
 	// Aggregate and PendingEvent name the outbox notice of an inbox confirmation.
 	Aggregate    = "mcp_confirmation"
@@ -175,6 +176,11 @@ UPDATE mcp_confirmation SET payload = NULL, preview = NULL, result = NULL, purge
 RETURNING id`,
 	qConfirmList: `SELECT ` + confirmationColumns + ` FROM mcp_confirmation
  WHERE partner_id = ? AND (status_code IN ` + openStatuses + ` OR created_at >= ?)
+ ORDER BY created_at DESC, id DESC
+ LIMIT ?`,
+	qConfirmInbox: `SELECT ` + confirmationColumns + ` FROM mcp_confirmation
+ WHERE (partner_id = ANY(CAST(? AS BIGINT[])) OR (maker_kind = ? AND maker_id = ?))
+   AND (status_code IN ` + openStatuses + ` OR created_at >= ?)
  ORDER BY created_at DESC, id DESC
  LIMIT ?`,
 }
@@ -642,6 +648,34 @@ func (s *TableStore) List(ctx context.Context, tenantID int64, since time.Time, 
 	listed, err := s.qs.Query(ctx, qConfirmList, tenantID, since, s.batch(limit))
 	if err != nil {
 		return nil, fmt.Errorf("list confirmations: %w", err)
+	}
+	out := make([]domain.MCPConfirmation, 0, len(listed.Rows))
+	for _, row := range listed.Rows {
+		out = append(out, scanConfirmation(row))
+	}
+	return out, nil
+}
+
+// Inbox returns the open confirmations and those created since in tenantIDs, plus the maker's own
+// in any tenant, newest first. A negative limit is refused; zero takes the default batch.
+func (s *TableStore) Inbox(ctx context.Context, tenantIDs []int64, maker domain.PrincipalRef, since time.Time, limit int) ([]domain.MCPConfirmation, error) {
+	if err := s.init(ctx); err != nil {
+		return nil, err
+	}
+	switch {
+	case limit < 0:
+		return nil, fmt.Errorf("%w: limit cannot be negative", domain.ErrValidation)
+	case maker.Kind == "" || strings.TrimSpace(maker.ID) == "":
+		return nil, fmt.Errorf("%w: the inbox owner is required", domain.ErrPrincipalUnknown)
+	}
+	for _, tenantID := range tenantIDs {
+		if tenantID <= 0 {
+			return nil, fmt.Errorf("%w: tenant %d", domain.ErrValidation, tenantID)
+		}
+	}
+	listed, err := s.qs.Query(ctx, qConfirmInbox, tenantIDs, string(maker.Kind), maker.ID, since, s.batch(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list the confirmation inbox: %w", err)
 	}
 	out := make([]domain.MCPConfirmation, 0, len(listed.Rows))
 	for _, row := range listed.Rows {

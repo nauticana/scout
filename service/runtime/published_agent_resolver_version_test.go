@@ -23,7 +23,7 @@ func TestPublishedAgentResolverAsksForTheServingAgentWithoutAPerson(t *testing.T
 	}}}
 	versions := &versionRequestRecorder{versionManagerFake: "3"}
 	resolver := &PublishedAgentResolver{qs: query, Versions: versions}
-	if _, err := resolver.Resolve(context.Background(), 8, "writer", "en-US", "conversation-a"); err != nil {
+	if _, err := resolver.Resolve(context.Background(), 8, "writer", "", "en-US", "conversation-a"); err != nil {
 		t.Fatal(err)
 	}
 	// An alias resolution carries no session, so it names no person and no pilot can apply.

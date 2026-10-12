@@ -1,0 +1,26 @@
+table: agent_memory
+comment: A tenant's living memory, one bounded body per section, appended to with provenance
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: section_id
+    type: VARCHAR(40)
+  - name: body
+    type: TEXT
+  - name: updated_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: updated_by
+    type: VARCHAR(80)
+primary_key: [partner_id, section_id]
+foreign_keys:
+  - name: agent_memories
+    columns: [partner_id]
+    references:
+      table: agent_tenant
+      columns: [partner_id]
+  - name: memory_section_contents
+    columns: [section_id]
+    references:
+      table: memory_section
+      columns: [id]

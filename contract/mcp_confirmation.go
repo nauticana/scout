@@ -15,6 +15,24 @@ type MCPConfirmationChecker interface {
 	Maker(ctx context.Context, confirmation domain.MCPConfirmation) error
 	// Decider reports whether decider may decide the action now.
 	Decider(ctx context.Context, confirmation domain.MCPConfirmation, decider domain.PrincipalRef) error
+	// Reconciler reports whether reconciler may record the verified outcome of an unknown action.
+	Reconciler(ctx context.Context, confirmation domain.MCPConfirmation, reconciler domain.PrincipalRef) error
+}
+
+// MCPInboxAuthorizer resolves, once per request, what a person may see and do in the confirmation inbox.
+type MCPInboxAuthorizer interface {
+	Viewer(ctx context.Context, person domain.PrincipalRef) (MCPInboxViewer, error)
+}
+
+// MCPInboxViewer is one person's inbox scope; the person's own submissions are always listed.
+// Any error refuses.
+type MCPInboxViewer interface {
+	// Tenants are the tenants whose confirmations the person may see.
+	Tenants() []int64
+	// Decider reports whether the person may decide the confirmation now.
+	Decider(ctx context.Context, confirmation domain.MCPConfirmation) error
+	// Reconciler reports whether the person may record the confirmation's verified outcome.
+	Reconciler(ctx context.Context, confirmation domain.MCPConfirmation) error
 }
 
 // MCPConfirmedRunner runs a confirmed action's stored payload through the

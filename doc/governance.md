@@ -45,14 +45,17 @@ decision time on top of the pinned release:
 `policy.RestrictedResolver` wraps the release resolver: it appends both layers' denials, and the
 decision's policy version digests the release and both layers. `guardrail.EnforcerConfig.Restrictions`
 runs the layers' rules between the baseline and the release, attributed to layer `P` (platform) or
-`T` (tenant) in safety events. Reads are cached in each process for `DefaultRestrictionTTL`, which bounds how
+`T` (tenant) in safety events. `BaseDataPlane` composes the rules by default; the denials reach its
+tool gateway only when the product sets `BaseDataPlane.Policy` to a `SetEvaluator` over `RestrictedResolver`,
+and then a release without an allow for a tool denies it. Reads are cached in each process for `DefaultRestrictionTTL`, which bounds how
 long a new prohibition takes to arrive.
 
 `policy.StudioRestrictions` is Studio's view. `AGENT_RESTRICTION` `VIEW` shows both layers;
 `REPLACE_TENANT` replaces the tenant's layer whole behind its digest, bounded to `MaxEntries` denials
 and guardrail rules; nothing in Studio writes the platform layer. For one agent it also lists which
 effective `tool` and `policy` settings each restriction overrides: a denial matching `tool:invoke` and
-a tool, a denial that can meet a policy allow, or a blocking `tool_allowlist` that leaves a tool out.
+a tool, a denial that can meet a policy allow, a blocking `tool_allowlist` that leaves a tool out, or a blocking
+`tool_denylist` that names one.
 Overrides are computed from the settings the next publish would freeze, and a denial with conditions
 is marked `conditional`.
 
@@ -395,8 +398,13 @@ stateDiagram-v2
   executor never runs re-sent arguments. One action has one open confirmation, and it belongs to its
   maker and client: anyone else preparing it gets `ErrConflict`, and an elicitation answer must name
   the maker's own confirmation for the same tool and digest.
-- **The product decides who may act.** `contract.MCPConfirmationChecker` checks a direct decider,
-  then re-checks both maker and recorded decider before the run. Its error refuses.
+- **The product decides who may act.** `contract.MCPConfirmationChecker` checks a direct decider
+  and a reconciler, then re-checks both maker and recorded decider before the run. Its error refuses.
+- **One inbox across tenants.** `confirmation.Inbox` resolves a `contract.MCPInboxViewer` once per
+  request through the product's `contract.MCPInboxAuthorizer`: it lists the viewer's tenants plus the
+  person's own submissions (`TableStore.Inbox`) with what the person may decide, withdraw, or
+  reconcile, and routes a maker-checker decision or withdrawal through keel's approval service with
+  the person as checker or maker. `Inbox.OnDecided` is keel's `OnDecided` and ignores other object types.
 - **Maker-checker is keel's.** Set `ApprovalRequired` at preparation so direct decisions fail closed
   while the keel request is opened. `AttachApproval` links it, and `DecideApprovalTx`, called from
   `approval.Service.OnDecided`, decides both records in keel's transaction.

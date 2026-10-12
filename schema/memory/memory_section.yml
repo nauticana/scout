@@ -1,0 +1,14 @@
+table: memory_section
+comment: Named sections of tenant memory a product defines; agents append only to writable ones
+columns:
+  - name: id
+    type: VARCHAR(40)
+  - name: caption
+    type: VARCHAR(80)
+  - name: display_order
+    type: SMALLINT
+    default: 0
+  - name: agent_writable
+    type: BOOLEAN
+    default: true
+primary_key: [id]

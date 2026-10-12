@@ -79,9 +79,10 @@ type StudioModelCatalog interface {
 	Validate(ctx context.Context, tenantID int64, selection domain.AgentModelSelection) ([]domain.AgentFieldError, error)
 }
 
-// PublishedAgentResolver resolves an alias and locale to one immutable definition.
+// PublishedAgentResolver resolves an alias, or agentID of its type when set, and a locale to one
+// immutable definition. A named agent that cannot serve fails; it never falls back to the alias target.
 type PublishedAgentResolver interface {
-	Resolve(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (domain.AgentDefinition, error)
+	Resolve(ctx context.Context, tenantID int64, aliasID, agentID, languageCode, conversationID string) (domain.AgentDefinition, error)
 }
 
 // AgentProvisioner idempotently registers a tenant and seeds its agent

@@ -72,6 +72,20 @@ func TestBaseDataPlanePassesObservabilityAndRestrictionSettings(t *testing.T) {
 	}
 }
 
+func TestBaseDataPlanePassesThePolicyPointToTheGateway(t *testing.T) {
+	plane := composablePlane()
+	point := &policy.SetEvaluator{Policies: &policy.RestrictedResolver{}}
+	plane.Policy = point
+	if err := plane.Compose(); err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	t.Cleanup(func() { _ = plane.Close() })
+	gateway, ok := plane.ToolGateway.(*toolgateway.GovernedGateway)
+	if !ok || gateway.Policy != point {
+		t.Fatalf("gateway = %T, policy = %v", plane.ToolGateway, ok && gateway.Policy != nil)
+	}
+}
+
 func TestBaseDataPlaneComposesEveryDefault(t *testing.T) {
 	plane := composablePlane()
 	if err := plane.Compose(); err != nil {

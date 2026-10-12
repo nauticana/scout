@@ -389,8 +389,7 @@ func (s *StudioTurnControl) evidenceRule(ctx context.Context, tenantID int64, pi
 		return stage.At(domain.StageGuardrail, err)
 	}
 	if len(report.Unsupported) > 0 {
-		finding := report.Unsupported[0]
-		return stage.At(domain.StageGuardrail, fmt.Errorf("%w: claim %d (%s)", domain.ErrUnsupportedClaim, finding.ClaimIndex, finding.Reason))
+		return stage.At(domain.StageGuardrail, unsupportedClaim(report.Unsupported[0]))
 	}
 	return nil
 }

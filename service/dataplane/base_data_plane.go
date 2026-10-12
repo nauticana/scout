@@ -78,7 +78,9 @@ type BaseDataPlane struct {
 	// turns; nil means no release binds knowledge whole.
 	Knowledge    contract.PinnedKnowledgeResolver
 	Entitlements contract.EntitlementResolver
-	Weights      contract.TenantWeightPolicy
+	// Memory puts the tenant's memory into every turn; nil keeps none.
+	Memory  contract.MemoryStore
+	Weights contract.TenantWeightPolicy
 	// PrincipalLimits reads each agent's frozen budget, operating mode, and execution limits; nil uses
 	// isolation.ReleaseLimits over DB.
 	PrincipalLimits contract.PrincipalLimits
@@ -113,7 +115,10 @@ type BaseDataPlane struct {
 	Skills           contract.SkillRegistry
 	Credentials      contract.ToolCredentialProvider
 	Egress           contract.ToolEgressPolicy
-	ToolGateway      contract.GovernedToolGateway
+	// Policy decides tool:invoke before guardrails; nil decides nothing, so standing denials reach
+	// the gateway only through policy.SetEvaluator over policy.RestrictedResolver composed here.
+	Policy      contract.PolicyDecisionPoint
+	ToolGateway contract.GovernedToolGateway
 	// WrapToolGateway, when set, wraps the composed gateway the tool loop calls, such as
 	// charter.CapabilityGateway; the wrapper reaches the gateway it is given.
 	WrapToolGateway func(contract.GovernedToolGateway) (contract.GovernedToolGateway, error)
@@ -429,7 +434,7 @@ func (plane *BaseDataPlane) composeTools() error {
 		if err != nil {
 			return err
 		}
-		gateway.Audit = plane.Audit
+		gateway.Audit, gateway.Policy = plane.Audit, plane.Policy
 		plane.ToolGateway = gateway
 		if plane.Reconciler == nil {
 			plane.Reconciler = gateway
@@ -465,7 +470,7 @@ func (plane *BaseDataPlane) composeLoop() error {
 	if plane.Requests == nil {
 		plane.Requests = &ReleaseLoopRequestBuilder{
 			Definitions: &controlplane.TableAgentDefinitionReader{DB: plane.DB}, Renderer: &agentruntime.PromptRenderer{}, Skills: plane.Skills,
-			Knowledge: plane.Knowledge, Entitlements: plane.Entitlements, KnowledgeMaxBytes: plane.Settings.GuardrailMaxInputBytes,
+			Knowledge: plane.Knowledge, Entitlements: plane.Entitlements, KnowledgeMaxBytes: plane.Settings.GuardrailMaxInputBytes, Memory: plane.Memory,
 			LanguageCode: plane.LanguageCode, MaxOutputTokens: plane.MaxOutputTokens, Task: plane.Task,
 		}
 	}

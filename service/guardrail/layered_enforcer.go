@@ -367,6 +367,12 @@ func (enforcer *LayeredEnforcer) match(ctx context.Context, rule *compiledRule, 
 		}
 		_, allowed := rule.names[in.call.ToolID]
 		return nil, !allowed, nil
+	case domain.GuardrailKindToolDenylist:
+		if in.call == nil {
+			return nil, true, nil
+		}
+		_, denied := rule.names[in.call.ToolID]
+		return nil, denied, nil
 	case domain.GuardrailKindDestinationAllowlist:
 		return nil, !destinationsAllowed(in.content, rule.names), nil
 	case domain.GuardrailKindExactPhrase:

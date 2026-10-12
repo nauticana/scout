@@ -26,7 +26,8 @@ type allowStatement struct {
 
 // restrictionOverrides lists the platform's, then the tenant's, restrictions that override an
 // agent's effective settings: a denial overrides the policy allows it can meet and, covering
-// tool:invoke, the tools it matches; a blocking tool_allowlist overrides the tools it leaves out.
+// tool:invoke, the tools it matches; a blocking tool_allowlist overrides the tools it leaves out,
+// and a blocking tool_denylist the tools it names.
 // An undecodable setting is ErrValidation; an undecodable restriction is ErrConflict.
 func restrictionOverrides(layers domain.RestrictionLayers, effective []domain.ResourceExplanation) ([]domain.RestrictionOverride, error) {
 	settings, err := decodeOverridable(effective)
@@ -122,10 +123,11 @@ func deniedBy(settings []overridable, denial domain.PolicyStatement, conditions 
 	return found
 }
 
-// blockedBy returns the tools of each tool set a blocking tool_allowlist rule leaves out;
-// no other guardrail kind decides on a setting.
+// blockedBy returns the tools of each tool set a blocking tool_allowlist rule leaves out or a
+// blocking tool_denylist rule names; no other guardrail kind decides on a setting.
 func blockedBy(settings []overridable, rule domain.GuardrailRule) ([]domain.RestrictedSetting, error) {
-	if rule.Kind != domain.GuardrailKindToolAllowlist || rule.Action != domain.GuardrailActionBlock {
+	deny := rule.Kind == domain.GuardrailKindToolDenylist
+	if !deny && rule.Kind != domain.GuardrailKindToolAllowlist || rule.Action != domain.GuardrailActionBlock {
 		return nil, nil
 	}
 	var params struct {
@@ -138,7 +140,7 @@ func blockedBy(settings []overridable, rule domain.GuardrailRule) ([]domain.Rest
 	for _, setting := range settings {
 		var members []string
 		for _, tool := range setting.tools {
-			if !slices.Contains(params.Tools, tool) {
+			if slices.Contains(params.Tools, tool) == deny {
 				members = append(members, tool)
 			}
 		}

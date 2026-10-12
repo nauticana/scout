@@ -9,22 +9,25 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/service/knowledge"
+	"github.com/nauticana/scout/service/memory"
 	"github.com/nauticana/scout/service/skill"
 )
 
 // ReleaseLoopRequestBuilder opens a tool loop with the pinned release's compiled
 // prompt and the turn input as the task. Task is the hook for product context; the
-// documents the release binds whole and the index of its skills follow it.
+// tenant's memory, the documents the release binds whole, and the index of its skills follow it.
 type ReleaseLoopRequestBuilder struct {
 	Definitions contract.AgentDefinitionReader
 	Renderer    contract.PromptRenderer
 	// Skills is required only by a release that binds skills.
 	Skills contract.SkillRegistry
 	// Knowledge and Entitlements read the release's whole-mode bindings, pinned to
-	// its version; nil reads none. KnowledgeMaxBytes bounds them, fail closed.
+	// its version; nil reads none. KnowledgeMaxBytes bounds them and the memory, fail closed.
 	Knowledge         contract.PinnedKnowledgeResolver
 	Entitlements      contract.EntitlementResolver
 	KnowledgeMaxBytes int
+	// Memory is the tenant's memory; nil reads none, and a read failure fails the turn.
+	Memory contract.MemoryStore
 	// LanguageCode selects the compiled prompt; empty takes the release's only language.
 	LanguageCode    string
 	MaxOutputTokens int64
@@ -55,6 +58,9 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	if strings.TrimSpace(task.Task) == "" {
 		return domain.ModelRequest{}, fmt.Errorf("%w: the turn has no input to act on", domain.ErrValidation)
 	}
+	if task.Context, err = builder.withMemory(ctx, principal.TenantID, task.Context); err != nil {
+		return domain.ModelRequest{}, err
+	}
 	if task.Context, err = builder.withPinnedKnowledge(ctx, principal, task.Context); err != nil {
 		return domain.ModelRequest{}, err
 	}
@@ -80,6 +86,21 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 		Output:          task.Output,
 		Search:          search,
 	}, nil
+}
+
+func (builder *ReleaseLoopRequestBuilder) withMemory(ctx context.Context, tenantID int64, taskContext string) (string, error) {
+	if builder.Memory == nil {
+		return taskContext, nil
+	}
+	sections, err := builder.Memory.Sections(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	rendered, err := memory.Context(sections, builder.KnowledgeMaxBytes)
+	if err != nil || rendered == "" {
+		return taskContext, err
+	}
+	return strings.TrimSpace(taskContext + "\n\n" + rendered), nil
 }
 
 // withPinnedKnowledge appends the documents the release binds whole. A release

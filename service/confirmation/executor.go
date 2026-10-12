@@ -123,7 +123,7 @@ func (e *Executor) Answer(ctx context.Context, call domain.MCPToolCall, maker do
 	return e.Execute(ctx, key)
 }
 
-// Reconcile authorizes reconciler as a decider and records the verified outcome.
+// Reconcile authorizes reconciler and records the verified outcome.
 func (e *Executor) Reconcile(ctx context.Context, key domain.MCPConfirmationKey, reconciler domain.PrincipalRef, outcome domain.MCPConfirmationStatus, note string) (domain.MCPConfirmation, error) {
 	if err := e.readyToDecide(); err != nil {
 		return domain.MCPConfirmation{}, err
@@ -132,7 +132,7 @@ func (e *Executor) Reconcile(ctx context.Context, key domain.MCPConfirmationKey,
 	if err != nil {
 		return domain.MCPConfirmation{}, err
 	}
-	if err = e.Checker.Decider(ctx, stored, reconciler); err != nil {
+	if err = e.Checker.Reconciler(ctx, stored, reconciler); err != nil {
 		return domain.MCPConfirmation{}, fmt.Errorf("%w: %w", domain.ErrForbidden, err)
 	}
 	if err = e.Store.Reconcile(ctx, key, reconciler, outcome, note); err != nil {

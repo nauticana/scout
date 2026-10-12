@@ -42,12 +42,12 @@ func TestPublishedAgentRuntimeBindsDisabledReleaseThroughLiveResolver(t *testing
 	}
 
 	ctx := keelcommon.WithRequestID(context.Background(), "request-42")
-	resolved, err := resolver.Resolve(ctx, 42, "writer", "de-DE", "conversation")
+	resolved, err := resolver.Resolve(ctx, 42, "writer", "writer-b", "de-DE", "conversation")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if definitionResolver.languageCode != "" || definitionResolver.conversationID != "conversation" {
-		t.Fatalf("definition resolver arguments: language=%q conversation=%q", definitionResolver.languageCode, definitionResolver.conversationID)
+	if definitionResolver.agentID != "writer-b" || definitionResolver.languageCode != "" || definitionResolver.conversationID != "conversation" {
+		t.Fatalf("definition resolver arguments: agent=%q language=%q conversation=%q", definitionResolver.agentID, definitionResolver.languageCode, definitionResolver.conversationID)
 	}
 	if resolved.Release() != (domain.AgentReleaseReference{AgentID: "writer", Version: "7", Digest: "digest"}) {
 		t.Fatalf("release = %+v", resolved.Release())
@@ -81,7 +81,7 @@ func TestPublishedAgentRuntimeRequiresTextAndMediaCapabilities(t *testing.T) {
 		Providers:       &providerFactoryStub{provider: &modelProviderRecorder{}},
 		MaxOutputTokens: 100,
 	}
-	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", ""); !errors.Is(err, domain.ErrNotReady) {
+	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", "", ""); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("missing text error = %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestPublishedAgentRuntimeRequiresTextAndMediaCapabilities(t *testing.T) {
 	image := domain.ModelReference{ProviderID: "provider", ModelID: "image"}
 	base.Models = domain.AgentModelSelection{Text: &text, Image: &image}
 	resolver.Definitions = &publishedResolverStub{definition: base}
-	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", ""); !errors.Is(err, domain.ErrNotReady) {
+	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", "", ""); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("missing media error = %v", err)
 	}
 }
@@ -122,11 +122,13 @@ func TestSelectLanguageExactFallbackAndMissing(t *testing.T) {
 type publishedResolverStub struct {
 	definition     domain.AgentDefinition
 	err            error
+	agentID        string
 	languageCode   string
 	conversationID string
 }
 
-func (resolver *publishedResolverStub) Resolve(_ context.Context, _ int64, _, languageCode, conversationID string) (domain.AgentDefinition, error) {
+func (resolver *publishedResolverStub) Resolve(_ context.Context, _ int64, _, agentID, languageCode, conversationID string) (domain.AgentDefinition, error) {
+	resolver.agentID = agentID
 	resolver.languageCode = languageCode
 	resolver.conversationID = conversationID
 	return resolver.definition, resolver.err

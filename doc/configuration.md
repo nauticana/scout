@@ -238,6 +238,7 @@ validates them at load.
 | `agent_safety_event_max_page` | int | 500 | 0 | — | Largest page of safety events one query may ask for; a larger limit is refused; 0 uses the default 500. |
 | `agent_metric_label_max_length` | int | 64 | 0 | — | Bytes of one fleet metric label value (`observability.LabelPolicy.MaxValueLength`); a longer value is refused, which keeps free text out of metric dimensions; 0 uses the default 64. |
 | `agent_knowledge_max_source_bytes` | int | 33554432 | 0 | — | Bytes of one knowledge source object the ingestion loader reads (`knowledge.ObjectStorageLoader.MaxBytes`); 0 uses the default 33554432. |
+| `agent_memory_section_max_chars` | int | 8000 | 0 | — | Characters of one tenant memory section (`memory.TableStore.MaxSectionChars`); an append past it drops the oldest whole lines; 0 uses the default 8000. |
 | `agent_knowledge_rrf_offset` | int | 60 | 0 | — | Reciprocal rank fusion constant k of hybrid retrieval (`knowledge.HybridRetriever.RRFOffset`), scoring rank r as 1/(k+r); a larger k flattens the advantage of top ranks; 0 uses the default 60. |
 
 ### Agent health and alerts

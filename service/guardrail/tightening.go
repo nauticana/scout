@@ -91,6 +91,13 @@ func looserParams(kind domain.GuardrailRuleKind, parent, child ruleParams) strin
 				return fmt.Sprintf("allows tool %q", tool)
 			}
 		}
+	case domain.GuardrailKindToolDenylist:
+		denied := toSet(child.Tools, false)
+		for _, tool := range parent.Tools {
+			if _, ok := denied[strings.TrimSpace(tool)]; !ok {
+				return fmt.Sprintf("allows tool %q", tool)
+			}
+		}
 	case domain.GuardrailKindDestinationAllowlist:
 		allowed := toSet(parent.Hosts, true)
 		for _, host := range child.Hosts {

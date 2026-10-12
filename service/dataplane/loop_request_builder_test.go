@@ -197,3 +197,33 @@ func TestPinnedPrincipalFollowsTheConversationsAgentVersion(t *testing.T) {
 		t.Fatalf("another agent's release is not this conversation's to pin, got %q", got)
 	}
 }
+
+type memoryStub struct {
+	sections []domain.MemorySection
+	err      error
+}
+
+func (stub memoryStub) Sections(context.Context, int64) ([]domain.MemorySection, error) {
+	return stub.sections, stub.err
+}
+
+func (memoryStub) Append(context.Context, domain.MemoryFact) error { return nil }
+
+func TestReleaseLoopRequestBuilderAddsTheTenantsMemory(t *testing.T) {
+	reader := &definitionReaderStub{definition: domain.AgentDefinition{
+		AgentID: "writer", Version: "v3",
+		Languages: []domain.CompiledPrompt{{LanguageCode: "en-US", Sections: []domain.CompiledPromptSection{{Instruction: "be brief"}}}},
+	}}
+	builder := &ReleaseLoopRequestBuilder{Definitions: reader, Renderer: taskRenderer{}, MaxOutputTokens: 500,
+		Memory: memoryStub{sections: []domain.MemorySection{{SectionID: "DONE", Caption: "Done", Body: "- shipped titles"}}}}
+	input := loopInput()
+	input.Input = []byte("audit the homepage")
+	request, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{})
+	if err != nil || !strings.Contains(string(request.Prompt), "Done:\n<untrusted_content>- shipped titles") {
+		t.Fatalf("prompt %q, %v", request.Prompt, err)
+	}
+	builder.Memory = memoryStub{err: errors.New("database down")}
+	if _, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{}); err == nil {
+		t.Fatal("a memory read failure must fail the turn")
+	}
+}

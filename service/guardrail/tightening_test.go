@@ -40,6 +40,8 @@ func TestCheckTighteningAcceptsOnlyAStricterRule(t *testing.T) {
 		{"hard to soft", tighteningRule(domain.GuardrailKindMaxInputBytes, block, hard, `{"max":100}`), tighteningRule(domain.GuardrailKindMaxInputBytes, block, soft, `{"max":100}`), false},
 		{"fewer tools", tighteningRule(domain.GuardrailKindToolAllowlist, block, hard, `{"tools":["a","b"]}`), tighteningRule(domain.GuardrailKindToolAllowlist, block, hard, `{"tools":["a"]}`), true},
 		{"another tool", tighteningRule(domain.GuardrailKindToolAllowlist, block, hard, `{"tools":["a","b"]}`), tighteningRule(domain.GuardrailKindToolAllowlist, block, hard, `{"tools":["a","c"]}`), false},
+		{"more denied tools", tighteningRule(domain.GuardrailKindToolDenylist, block, hard, `{"tools":["a"]}`), tighteningRule(domain.GuardrailKindToolDenylist, block, hard, `{"tools":["a","b"]}`), true},
+		{"fewer denied tools", tighteningRule(domain.GuardrailKindToolDenylist, block, hard, `{"tools":["a","b"]}`), tighteningRule(domain.GuardrailKindToolDenylist, block, hard, `{"tools":["b"]}`), false},
 		{"subdomain host", tighteningRule(domain.GuardrailKindDestinationAllowlist, block, hard, `{"hosts":["example.com"]}`), tighteningRule(domain.GuardrailKindDestinationAllowlist, block, hard, `{"hosts":["API.example.com"]}`), true},
 		{"parent domain host", tighteningRule(domain.GuardrailKindDestinationAllowlist, block, hard, `{"hosts":["api.example.com"]}`), tighteningRule(domain.GuardrailKindDestinationAllowlist, block, hard, `{"hosts":["example.com"]}`), false},
 		{"more phrases", tighteningRule(domain.GuardrailKindExactPhrase, block, hard, `{"phrases":["Secret"]}`), tighteningRule(domain.GuardrailKindExactPhrase, block, hard, `{"phrases":["Secret","code"]}`), true},

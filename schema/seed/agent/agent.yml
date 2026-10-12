@@ -189,6 +189,7 @@ seeds:
       - [agent_metric_label_max_length, int, true, "64", "Bytes of one fleet metric label value; 0 uses Scout's default of 64"]
       - [agent_knowledge_max_source_bytes, int, true, "33554432", "Bytes of one knowledge source object; 0 uses Scout's default of 33554432"]
       - [agent_knowledge_rrf_offset, int, true, "60", "Reciprocal rank fusion constant k of hybrid retrieval, scoring a rank r as 1/(k+r); 0 uses Scout's default of 60"]
+      - [agent_memory_section_max_chars, int, true, "8000", "Characters of one tenant memory section before its oldest lines give way; 0 uses Scout's default of 8000"]
       - [agent_evaluation_page_size, int, true, "50", "Evaluation results one Studio page returns when the caller names no limit (0..agent_evaluation_max_page_size); 0 uses Scout's default of 50"]
       - [agent_evaluation_max_page_size, int, true, "200", "Largest evaluation result page a Studio caller may ask for; 0 uses Scout's default of 200"]
       - [agent_evaluation_judge_max_verdict_bytes, int, true, "8192", "Bytes of one raw rubric verdict; a larger verdict is an evaluator error; 0 uses Scout's default of 8192"]

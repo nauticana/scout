@@ -557,11 +557,19 @@ func (executor *ToolLoopExecutor) requireEvidence(ctx context.Context, run *loop
 		return stage.At(domain.StageGuardrail, err)
 	}
 	if len(report.Unsupported) > 0 {
-		finding := report.Unsupported[0]
-		return stage.At(domain.StageGuardrail, fmt.Errorf("%w: claim %d (%s)", domain.ErrUnsupportedClaim, finding.ClaimIndex, finding.Reason))
+		return stage.At(domain.StageGuardrail, unsupportedClaim(report.Unsupported[0]))
 	}
 	run.events = append(run.events, domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventEvidence, Evidence: answer.Evidence})
 	return nil
+}
+
+// unsupportedClaim names the first failing claim by its index, or by its text when the
+// answer states it without declaring it.
+func unsupportedClaim(finding domain.ClaimFinding) error {
+	if finding.ClaimIndex < 0 {
+		return fmt.Errorf("%w: undeclared claim %q (%s)", domain.ErrUnsupportedClaim, finding.Claim, finding.Reason)
+	}
+	return fmt.Errorf("%w: claim %d (%s)", domain.ErrUnsupportedClaim, finding.ClaimIndex, finding.Reason)
 }
 
 func (run *loopRun) holdRequested() bool {

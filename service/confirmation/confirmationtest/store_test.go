@@ -31,6 +31,9 @@ func (allow) Maker(context.Context, domain.MCPConfirmation) error { return nil }
 func (allow) Decider(context.Context, domain.MCPConfirmation, domain.PrincipalRef) error {
 	return nil
 }
+func (allow) Reconciler(context.Context, domain.MCPConfirmation, domain.PrincipalRef) error {
+	return nil
+}
 
 type runnerFunc func(context.Context, domain.MCPConfirmation) (json.RawMessage, error)
 

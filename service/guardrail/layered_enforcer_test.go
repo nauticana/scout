@@ -181,6 +181,7 @@ func TestCompilerRejectsUnsafeRules(t *testing.T) {
 		"invalid regex":    rule("a", domain.GuardrailKindRegex, domain.GuardrailActionBlock, `{"pattern":"(","max_match_bytes":8}`),
 		"unknown param":    rule("a", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["x"],"nope":1}`),
 		"empty allowlist":  rule("a", domain.GuardrailKindToolAllowlist, domain.GuardrailActionBlock, `{"tools":[]}`),
+		"empty denylist":   rule("a", domain.GuardrailKindToolDenylist, domain.GuardrailActionBlock, `{"tools":[]}`),
 		"bad threshold":    rule("a", domain.GuardrailKindPII, domain.GuardrailActionBlock, `{"threshold":2}`),
 		"missing severity": {ID: "a", Kind: domain.GuardrailKindExactPhrase, Action: domain.GuardrailActionBlock, Params: json.RawMessage(`{"phrases":["x"]}`)},
 	}
@@ -250,6 +251,17 @@ func TestToolAllowlistAndDestinationAllowlist(t *testing.T) {
 	var violation *ViolationError
 	if !errors.As(err, &violation) || violation.RuleIDs[0] != "release.hosts" {
 		t.Fatalf("destination allowlist: %v", err)
+	}
+}
+
+func TestToolDenylistBlocksOnlyTheNamedTools(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	config := rules(t, rule("tenant.never", domain.GuardrailKindToolDenylist, domain.GuardrailActionBlock, `{"tools":["delete"]}`))
+	if _, err := h.enforcer.BeforeTool(context.Background(), config, toolCall("search", `{}`)); err != nil {
+		t.Fatalf("other tool: %v", err)
+	}
+	if _, err := h.enforcer.BeforeTool(context.Background(), config, toolCall("delete", `{}`)); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("denied tool: %v", err)
 	}
 }
 

@@ -66,7 +66,7 @@ type AgentRuntime interface {
 // AgentRuntimeResolver resolves a live alias and binds its immutable release
 // to configured provider adapters.
 type AgentRuntimeResolver interface {
-	Resolve(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (AgentRuntime, error)
+	Resolve(ctx context.Context, tenantID int64, aliasID, agentID, languageCode, conversationID string) (AgentRuntime, error)
 }
 
 // AgentRunRecorder records one settled execution, successful or not, against

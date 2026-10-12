@@ -1,5 +1,4 @@
 tables:
-  - currency
   - priority_class
   - turn_status
   - idempotency_status

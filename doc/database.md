@@ -8,7 +8,7 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 
 ## Module dependency graph
 
-Scout's schema is seventeen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
+Scout's schema is eighteen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
 
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
@@ -22,36 +22,41 @@ Scout's schema is seventeen selectable modules declared in `schema/dependency.ym
 %%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 30, "rankSpacing": 55, "diagramPadding": 12}, "themeVariables": {"fontSize": "12px"}}}%%
 flowchart BT
 
-    tenant_management --> core
-    tenancy --> catalog
-    tenancy --> tenant_management
-    model --> tenancy
     agent --> prompt
+    tenancy --> catalog
+    tenant_management --> core
+
+    tenancy --> tenant_management
+    keel_approval --> tenant_management
+
+    model --> tenancy
+    memory --> tenancy
+
     agent --> model
-    tool --> agent
-    tool --> agent_authorization_module
     knowledge --> agent
-    configuration_module --> agent
     execution_graph_module --> agent
+    configuration_module --> agent
     agent_authorization_module --> agent
-    knowledge_vector --> knowledge
+    approval --> agent_authorization_module
+    tool --> agent_authorization_module
+    tool --> agent
+
     runtime --> tool
     runtime --> configuration_module
     runtime --> execution_graph_module
-    release --> runtime
-    evaluation --> knowledge
-    evaluation --> release
-    approval --> agent_authorization_module
+    knowledge_vector --> knowledge
     approval --> configuration_module
     skill --> tool
+    release --> runtime
     mcp_confirmation --> runtime
     mcp_confirmation --> keel_approval
-    keel_approval --> tenant_management
+    evaluation --> knowledge
+    evaluation --> release
 
     core["keel core"]
     tenant_management["keel tenant_management"]
     keel_approval["keel approval"]
-    catalog["Catalog<br/>15 tables"]
+    catalog["Catalog<br/>14 tables"]
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
     model["Model<br/>6 tables"]
@@ -60,19 +65,20 @@ flowchart BT
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>9 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
-    runtime["Runtime<br/>17 tables"]
+    runtime["Runtime<br/>18 tables"]
     release["Release<br/>16 tables"]
     evaluation["Evaluation<br/>20 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
     skill["Skill<br/>10 tables"]
+    memory["Memory<br/>2 tables"]
     mcp_confirmation["MCP Confirmation<br/>2 tables"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 150. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 61 Scout tables — while the full platform is 152. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -85,7 +91,6 @@ The same modules with their tables and the foreign keys inside each one, again w
 flowchart RL
     subgraph catalog["Catalog"]
         direction BT
-        currency["currency"]
         priority_class["priority_class"]
         turn_status["turn_status"]
         idempotency_status["idempotency_status"]
@@ -438,6 +443,14 @@ flowchart RL
     turn_call_confirmation --> mcp_confirmation
     turn_call_confirmation --> turn_call_outcome
 
+    subgraph memory_module["Memory"]
+        direction BT
+        memory_section["memory_section"]
+        agent_memory["agent_memory"]
+    end
+    agent_memory --> memory_section
+    agent_memory --> agent_tenant
+
 ```
 
 ## Storage boundaries
@@ -541,10 +554,6 @@ erDiagram
         char code PK
         smallint dispatch_rank UK
     }
-    currency {
-        char code PK
-        smallint exponent
-    }
     model_provider {
         varchar provider_id PK
         text endpoint_uri
@@ -592,7 +601,7 @@ erDiagram
     }
 ```
 
-`tenant_runtime_policy`, `tenant_quota`, and `model_price` reference `currency`; those edges are omitted from the diagram to keep the layout readable. Policies are immutable by `(partner_id, policy_version)`, and `tenant_current_policy` changes only the active pointer.
+`tenant_runtime_policy`, `tenant_quota`, and `model_price` reference keel's `currency`; those edges are omitted from the diagram to keep the layout readable. Policies are immutable by `(partner_id, policy_version)`, and `tenant_current_policy` changes only the active pointer.
 
 ## Agent, tool, and execution control plane
 
@@ -600,13 +609,15 @@ erDiagram
 erDiagram
     agent_tenant ||--o{ agent_profile : agent_profiles
     agent_tenant ||--o{ tool_profile : tool_profiles
+
     agent_profile ||--o{ guardrail_config : guardrail_configs
     agent_profile ||--o{ safety_event : agent_safety_events
     agent_profile ||--o{ agent_alert : agent_alerts
     agent_profile ||--o| agent_health_state : agent_health_states
     agent_profile ||--o{ agent_version : agent_versions
-    guardrail_config ||--o{ agent_version : agent_versions_guardrail
     agent_profile ||--o| agent_deployment : agent_deployments
+
+    guardrail_config ||--o{ agent_version : agent_versions_guardrail
     agent_version ||--o{ agent_deployment : stable_agent_deployments
     agent_version ||--o{ agent_deployment : canary_agent_deployments
     agent_version ||--o| execution_graph : execution_graphs
@@ -1633,6 +1644,33 @@ erDiagram
 
 `knowledge_document_manifest` names the active version of each document plus its tombstone and garbage-collection flags. Retrieval reads it on every query, so a deleted document disappears at the tombstone and a rebuilt one stops serving its old generation at the pointer swap, both long before any chunk is reclaimed. `knowledge_base_alias` is the compare-and-set pointer that makes a rebuilt knowledge version visible atomically. `knowledge_source_event` is the CDC/outbox row a producer writes inside its own transaction, carrying tenant, object, source version, operation (`op_code` `U` upsert or `D` delete), and authorization attributes so ingestion can poll upstream changes and reconciliation can measure freshness lag from the oldest unacknowledged row.
 
+## Tenant memory
+
+```mermaid
+erDiagram
+    agent_tenant ||--o{ agent_memory : agent_memories
+    memory_section ||--o{ agent_memory : memory_section_contents
+
+    memory_section {
+        varchar id PK
+        varchar caption
+        smallint display_order
+        boolean agent_writable
+    }
+    agent_memory {
+        bigint partner_id PK,FK
+        varchar section_id PK,FK
+        text body
+        timestamp updated_at
+        varchar updated_by
+    }
+```
+
+`memory_section` is the product's catalog of sections, seeded by the product, not Scout; `agent_writable`
+is false for a section only a person may append to. `agent_memory` holds one body per tenant and section,
+each line dated by the store clock and stamped with who vouched for it; an append past
+`agent_memory_section_max_chars` drops the oldest whole lines.
+
 ## Conversation runtime and metering
 
 ```mermaid
@@ -1670,20 +1708,20 @@ erDiagram
     step_idempotency }o--|| execution_step : execution_step_idempotencies
     step_idempotency }o--|| idempotency_status : status_step_idempotencies
     step_idempotency ||--o{ step_loop_entry : step_loop_entries
-    conversation_turn ||--o{ turn_call_outcome : turn_call_outcomes
+    step_idempotency |o--o{ turn_operator_entry : step_operator_entries
     step_idempotency ||--o{ turn_call_outcome : step_call_outcomes
     tool_version ||--o{ turn_call_outcome : tool_call_outcomes
-    turn_call_outcome ||--o{ turn_call_attestation : call_outcome_attestations
     conversation_turn ||--o{ turn_operator_entry : turn_operator_entries
-    step_idempotency |o--o{ turn_operator_entry : step_operator_entries
+    conversation_turn ||--o{ turn_call_outcome : turn_call_outcomes
+    turn_call_outcome ||--o{ turn_call_attestation : call_outcome_attestations
     conversation_turn ||--o{ budget_reservation : budget_reservations
     budget_reservation }o--|| reservation_status : status_budget_reservations
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
     conversation_turn ||--o{ usage_event : usage_events
-    conversation_turn ||--o{ turn_feedback : turn_feedbacks
     usage_event }o--|| usage_category : category_usage_events
     model_definition |o--o{ usage_event : model_usage_events
     turn_status ||--o{ conversation_turn : status_conversation_turns
+    turn_feedback }o--|| conversation_turn : turn_feedbacks
     conversation_turn ||--o| conversation_turn_detail : conversation_turn_details
     agent_run }o--|| turn_status : status_agent_runs
     agent_version ||--o{ agent_run : agent_run_versions
@@ -1939,7 +1977,7 @@ Settlement writes one `usage_event` per model that performed part of the turn, p
 
 `turn_feedback` holds one person's rating, 1 to 5, of one completed turn; the person is kept for audit, and reports count ratings per release, never per person.
 
-`step_checkpoint`, `budget_reservation`, `usage_event`, and `turn_operator_entry` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of an `L` (tool loop) step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
+`step_checkpoint`, `budget_reservation`, `usage_event`, and `turn_operator_entry` reference keel's `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of an `L` (tool loop) step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
 
 Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry. Each turn hold is charged to the turn's agent in `principal_kind` and `principal_id`, and a person's hold for a tool call in a turn they operate to that person; the unique `budget_reservation_request_attempt_uq (partner_id, request_id, principal_kind, attempt_no)` numbers each kind's attempts apart, and the ledger's turn lookup reads only the agent's. A release budget — per turn, rolling window, or calendar day or month, with a frozen currency exponent — is enforced against the agent's settled and live holds in the current period, measured by the database clock, which the `budget_reservation_principal_ix` index on principal, status, and `settled_at` serves.
 
@@ -2547,7 +2585,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 
 | Module | Tables |
 |---|---|
-| `catalog` | `currency`, `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_state`, `mcp_confirmation_status`, `release_activation_state` |
+| `catalog` | `priority_class`, `turn_status`, `idempotency_status`, `reservation_status`, `rollout_status`, `usage_category`, `config_scope_kind`, `config_resource_kind`, `audit_decision_outcome`, `approval_status`, `approval_risk_tier`, `agent_state`, `mcp_confirmation_status`, `release_activation_state` |
 | `tenancy` | `agent_tenant`, `tenant_runtime_policy`, `tenant_current_policy`, `tenant_quota` |
 | `prompt` | `prompt_section`, `prompt_baseline` |
 | `model` | `model_provider`, `model_definition`, `model_capability`, `model_route`, `model_price`, `tenant_model_access` |
@@ -2563,6 +2601,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |
 | `mcp_confirmation` | `mcp_confirmation`, `turn_call_confirmation` |
+| `memory` | `memory_section`, `agent_memory` |
 | `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_tool`, `skill_catalog_example`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them

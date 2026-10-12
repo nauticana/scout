@@ -59,6 +59,16 @@ func TestRestrictionOverridesNameWhatEachRestrictionTakesAway(t *testing.T) {
 	}
 }
 
+func TestRestrictionOverridesNameTheDeniedTools(t *testing.T) {
+	never := domain.GuardrailRule{ID: "never-refund", Kind: domain.GuardrailKindToolDenylist, Action: domain.GuardrailActionBlock,
+		Severity: domain.GuardrailSeverityHard, Params: []byte(`{"tools":["payments.refund"]}`)}
+	tools := []domain.ResourceExplanation{effectiveSetting(domain.ResourceTool, "tools", `["payments.refund","search"]`)}
+	overrides, err := restrictionOverrides(domain.RestrictionLayers{Tenant: domain.RestrictionLayer{Guardrails: []domain.GuardrailRule{never}}}, tools)
+	if err != nil || len(overrides) != 1 || !reflect.DeepEqual(overrides[0].Settings[0].Members, []string{"payments.refund"}) {
+		t.Fatalf("overrides = %+v, %v", overrides, err)
+	}
+}
+
 func TestRestrictionOverridesOfNothing(t *testing.T) {
 	layers := domain.RestrictionLayers{Tenant: domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}, Guardrails: []domain.GuardrailRule{onlySearch()}}}
 	overrides, err := restrictionOverrides(layers, nil)

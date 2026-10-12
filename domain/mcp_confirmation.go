@@ -97,3 +97,11 @@ type ExpiredMCPConfirmation struct {
 	Tool       string
 	ApprovalID int64
 }
+
+// MCPInboxEntry is a confirmation as one person's inbox shows it, with what that person may do now.
+type MCPInboxEntry struct {
+	MCPConfirmation
+	CanDecide    bool
+	CanWithdraw  bool
+	CanReconcile bool
+}

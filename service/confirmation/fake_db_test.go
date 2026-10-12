@@ -63,6 +63,8 @@ type confirmationDB struct {
 	catalogNil bool
 	// renewErr makes every renewal fail, as when another executor took the claim.
 	renewErr bool
+	// inboxArgs records the arguments of every inbox query.
+	inboxArgs [][]any
 }
 
 func newConfirmationDB() *confirmationDB {
@@ -229,6 +231,24 @@ func (db *confirmationDB) Query(_ context.Context, name string, args ...any) (*k
 			row.status, row.reconcilerKind, row.reconcilerID, row.reconcileNote, row.completed = str(0), str(1), str(2), str(3), db.now
 			return rowsOf([]any{row.id}), nil
 		}
+	case qConfirmInbox:
+		db.inboxArgs = append(db.inboxArgs, args)
+		tenants, since := args[0].([]int64), args[3].(time.Time)
+		var listed []*confirmationRow
+		for _, row := range db.rows {
+			if (slices.Contains(tenants, row.tenant) || (row.makerKind == str(1) && row.makerID == str(2))) &&
+				(row.open() || !row.created.Before(since)) {
+				listed = append(listed, row)
+			}
+		}
+		slices.SortFunc(listed, func(a, b *confirmationRow) int {
+			return cmp.Or(b.created.Compare(a.created), cmp.Compare(b.id, a.id))
+		})
+		var out [][]any
+		for _, row := range listed[:min(args[4].(int), len(listed))] {
+			out = append(out, row.values(db.now))
+		}
+		return rowsOf(out...), nil
 	default:
 		return nil, fmt.Errorf("unexpected query %s", name)
 	}

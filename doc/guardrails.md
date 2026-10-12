@@ -22,7 +22,7 @@ truncated envelope can never execute.
 
 Structural kinds are deterministic and implemented here: `max_input_bytes`, `max_output_bytes`,
 `json_schema` (tiny subset: type, properties, required, additionalProperties, items, enum, lengths,
-ranges, maxItems, maxProperties), `tool_allowlist`, `destination_allowlist`, `exact_phrase`,
+ranges, maxItems, maxProperties), `tool_allowlist`, `tool_denylist`, `destination_allowlist`, `exact_phrase`,
 `regex` (bounded by a required `max_match_bytes`), `untrusted_content_marker`, and
 `irreversible_tool_approval`. Classifier kinds (`pii`, `toxicity`, `malware`, `prompt_injection`,
 `jailbreak`) delegate to injected `contract.ClassifierProvider`s; a rule whose provider is missing
@@ -62,7 +62,7 @@ rule compiler with the enforcer's `CompilerConfig`, or Studio may accept rules t
 | --- | --- | --- |
 | input | `BeforeModel` | instructions and prompt: size, phrases, classifiers |
 | output | `AfterModelChunk`, `OpenOutputSession` | prefer the session |
-| tool_input | `BeforeTool` | tool and destination allowlists, approval gate |
+| tool_input | `BeforeTool` | tool allowlist and denylist, destination allowlist, approval gate |
 | tool_output | `AfterTool` | schema, classifiers, untrusted fencing |
 | retrieval | `InspectRetrieved` | retrieved content is fenced as untrusted |
 

@@ -248,7 +248,7 @@ func (compiler *RuleSetCompiler) compileParams(item *compiledRule) error {
 			return err
 		}
 		item.schema = params.Schema
-	case domain.GuardrailKindToolAllowlist:
+	case domain.GuardrailKindToolAllowlist, domain.GuardrailKindToolDenylist:
 		if len(params.Tools) == 0 {
 			return fmt.Errorf("tools must not be empty")
 		}
@@ -431,6 +431,7 @@ var (
 		domain.GuardrailKindMaxOutputBytes:           {stages: stageSet(domain.GuardrailStageOutput, domain.GuardrailStageToolOutput), defaultStages: []domain.GuardrailStage{domain.GuardrailStageOutput}, actions: blockOrFlag},
 		domain.GuardrailKindJSONSchema:               {stages: stageSet(domain.GuardrailStageToolInput, domain.GuardrailStageToolOutput), defaultStages: []domain.GuardrailStage{domain.GuardrailStageToolOutput}, actions: blockOrFlag},
 		domain.GuardrailKindToolAllowlist:            {stages: stageSet(domain.GuardrailStageToolInput), defaultStages: []domain.GuardrailStage{domain.GuardrailStageToolInput}, actions: blockOrFlag},
+		domain.GuardrailKindToolDenylist:             {stages: stageSet(domain.GuardrailStageToolInput), defaultStages: []domain.GuardrailStage{domain.GuardrailStageToolInput}, actions: blockOrFlag},
 		domain.GuardrailKindDestinationAllowlist:     {stages: stageSet(domain.GuardrailStageToolInput), defaultStages: []domain.GuardrailStage{domain.GuardrailStageToolInput}, actions: blockOrFlag},
 		domain.GuardrailKindExactPhrase:              contentKindSpec,
 		domain.GuardrailKindRegex:                    contentKindSpec,

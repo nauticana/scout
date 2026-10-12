@@ -112,12 +112,12 @@ type RuntimeMetrics struct {
 
 // PublishedAgentResolver contains a configurable immutable-definition lookup.
 type PublishedAgentResolver struct {
-	ResolveFunc func(context.Context, int64, string, string, string) (domain.AgentDefinition, error)
+	ResolveFunc func(context.Context, int64, string, string, string, string) (domain.AgentDefinition, error)
 }
 
 // Resolve invokes ResolveFunc.
-func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID int64, aliasID, languageCode, conversationID string) (domain.AgentDefinition, error) {
-	return resolver.ResolveFunc(ctx, tenantID, aliasID, languageCode, conversationID)
+func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID int64, aliasID, agentID, languageCode, conversationID string) (domain.AgentDefinition, error) {
+	return resolver.ResolveFunc(ctx, tenantID, aliasID, agentID, languageCode, conversationID)
 }
 
 // RecordTurn invokes RecordTurnFunc when configured.

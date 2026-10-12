@@ -129,7 +129,7 @@ The interfaces are deliberately smaller than a complete runtime. Implement only 
 | `contract/policy.go` | `PolicyDecisionPoint`, `PolicyResolver`, `ObligationEnforcer` | Decide whether a governed action is allowed, and enforce what rides along |
 | `contract/restriction.go` | `RestrictionLayerReader`, `RestrictionLayerWriter` | Hold platform- and tenant-wide prohibitions that apply on top of every release |
 | `contract/approval.go`, `approval_revision.go`, `approval_routing.go` | `ApprovalStore`, `ApprovalInbox`, `ApprovalDesk`, `ApproverRouter`, `EscalationPolicy`, `Notifier`, `EvidenceArchive`, `ProposalRevisions`, `ApproverResolver` | Resolve roles and positions to approvers, park work a human owes, route it, and resume on the verdict, including an edited call |
-| `contract/mcp_confirmation.go` | `MCPConfirmationChecker`, `MCPConfirmedRunner`, `MCPConfirmationStore` | Re-authorize, run, and record an MCP tool call a person confirmed |
+| `contract/mcp_confirmation.go` | `MCPConfirmationChecker`, `MCPConfirmedRunner`, `MCPConfirmationStore`, `MCPInboxAuthorizer`, `MCPInboxViewer` | Re-authorize, run, and record an MCP tool call a person confirmed |
 | `contract/agent_type.go` | `AgentTypeRepository`, `AgentTypeService`, `AgentLifecycle`, `AgentVersionQuarantine`, capability packages | Publish templates, instantiate agents from them, and own their state |
 | `contract/delegation.go` | `DelegationGrantRepository`, `DelegationAuthorizer`, `AgentInvoker`, `WorkItemStore` | Bound who may hand work to whom, and address work to a principal |
 | `contract/health.go` | `HealthProbe` | Expose dependency readiness to composition code |
@@ -156,7 +156,7 @@ The `contract` package remains flat so consumers use one stable import path. Con
 | `service/runtime` | `published_agent_runtime.go`, `studio_runs.go` | `PublishedAgentRuntime`, `PublishedAgentResolver`, `PromptRenderer`, `ProviderAgent`, `PricedAgent`, `MultimodalGenerator`, `AgentRunStore`, `StudioRuns`, `Registry` | Keel database, model pricing, provider factories, and quota accounting |
 | `service/policy` | `policy.go`, `restriction.go`, `studio_restriction.go` | `SetEvaluator`, `ReleaseResolver`, `RestrictedResolver`, `TableRestrictionLayers`, `StudioRestrictions` | Optional external evaluators behind the decision point |
 | `service/approval` | `approval.go`, `approval_routing.go` | `TableStore`, `Gate`, `ReleaseRouter`, `Resumer`, `BackupEscalation`, `Sweeper` | Keel database, the product's approver directory, notification transport, turn dispatch |
-| `service/confirmation` | `store.go`, `executor.go`, `result.go` | `TableStore`, `Executor`, `ToolResult`, `confirmationtest.Store` | Keel database, keel approval and outbox, product checker and runner |
+| `service/confirmation` | `store.go`, `executor.go`, `inbox.go`, `result.go` | `TableStore`, `Executor`, `Inbox`, `ToolResult`, `confirmationtest.Store` | Keel database, keel approval and outbox, product checker and runner |
 | `service/principal` | `principal.go`, `delegation.go` | `RoleAuthorizer`, `TableResolver`, `ChainVerifier`, `TableGrants`, `GrantAuthorizer` | Keel database, external identity planes |
 | `service/scope` | `scope.go` | `Compiler`, `MergerRegistry`, `LatticeChecker`, `TableScopeRepository`, `TableEffectiveReleaseStore`, `Explainer` | Keel database and product-registered resource mergers |
 | `service/toolgateway` | `tool_gateway.go` | `GovernedGateway`, `TableToolRegistry`, `SchemaResultValidator`, `BindingAuthorizer`, `BoundCredentialProvider`, `TableCredentialBindings`, and jittered bounded `RetryPolicy` | Tool registry, authorization, credentials, egress, circuit breaking, transport, and result validation |
@@ -231,7 +231,7 @@ definition.DefinitionDigest, err = compiler.DefinitionDigest(definition)
 
 `controlplane.PromptRepository` implements `PromptSourceRepository` over `prompt_baseline` and the bindings of the agent's scope chain (`contract.ScopeRepository`). The injected `PromptBaselineSelector` supplies ordered product keys; Scout selects the first matching baseline per section and never embeds product precedence. A `contract.PromptScopeLayout` places the agent in the tenant's tree; `BasePromptScopeLayout` is the convention `AgentProvisioner` creates — `tenant` → `t:<agent type>` → `a:<agent>` — and the repository, the provisioner, and `StudioService` must share one layout. Studio edits the agent's scope and its type's scope, behind the draft and prompt-profile revisions; a layer of any other scope is read-only. Bindings are temporal, so an edit ends the open binding and binds a new one, and a save that would bind under a sealed layer is refused before anything is written.
 
-`runtime.PublishedAgentResolver` resolves an active alias to its immutable stable or sticky canary definition, enforces the operational kill switch, and validates the requested language.
+`runtime.PublishedAgentResolver` resolves an active alias, or a named agent of the alias's type, to its immutable stable or sticky canary definition, enforces the operational kill switch (the agent's state admits work and its draft is enabled, as a turn requires), and validates the requested language. An empty agent id serves the alias target; a named agent that cannot serve is `ErrNotFound` or `ErrNotReady` and never falls back to the target, so a queued job can run the writer it named. The choice of agents is `TurnIngress.Selectable`.
 
 ## Agent runtime
 
@@ -336,7 +336,7 @@ Protocol frames and manifest entries belong to `mcp-go`; Scout defines only what
 
 An MCP tool call that must not run until a person confirms it is not a turn, so the turn `approval` module cannot hold it. `confirmation.TableStore.Prepare` records the exact payload, a preview, and the product's authorization requirements under an action digest (`confirmation.ActionDigest`); an identical open action returns the maker's own confirmation and is `ErrConflict` for anyone else. `confirmation.ToolResult` then asks the maker through an elicitation form, or returns the status and the product's inbox link. Set `MCPConfirmationDraft.ApprovalRequired` before preparing a maker-checker action; direct decisions then fail closed before and after `AttachApproval`. Wire `TableStore.DecideApprovalTx` into `approval.Service.OnDecided`.
 
-`Executor.Execute` claims an approved confirmation under a store-clock lease and a new fence, re-checks maker and decider through the product's `contract.MCPConfirmationChecker`, and runs the stored payload, never a re-sent one, through `contract.MCPConfirmedRunner`. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be stored, a cancellation, or a lost claim never becomes success or a retry: the confirmation is `U` (unknown) until a person records what happened with `Executor.Reconcile`. A product worker calls `RunApproved`, `TableStore.MarkLapsed`, `ExpireDue`, and `Purge`. `Executor.Store` is a `contract.MCPConfirmationStore`; `confirmationtest.Store` keeps confirmations in memory under the same guards, so product tests run the real executor without a database, and `confirmationtest.RunStoreSuite` is the conformance suite both stores pass. A confirmed tool declares the result `ToolResult` returns with `confirmation.ResultSchema(preview, result)`, built from the product's preview and executed-result schemas; `confirmation.StatusSchema` is its status enum and `confirmation.Instructions` explains the statuses once for the server's instructions. Credits, tiers and product-specific safety statuses stay in the product's own result schema. See [Confirmed MCP tool calls](governance.md#confirmed-mcp-tool-calls).
+`Executor.Execute` claims an approved confirmation under a store-clock lease and a new fence, re-checks maker and decider through the product's `contract.MCPConfirmationChecker`, and runs the stored payload, never a re-sent one, through `contract.MCPConfirmedRunner`. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be stored, a cancellation, or a lost claim never becomes success or a retry: the confirmation is `U` (unknown) until a person the checker admits as reconciler records what happened with `Executor.Reconcile`. `confirmation.Inbox` is the person-facing surface across the tenants a product's `contract.MCPInboxAuthorizer` grants: it lists, decides (directly or through keel's maker-checker request), withdraws, and reconciles, and its `OnDecided` is wired into `approval.Service.OnDecided`. A product worker calls `RunApproved`, `TableStore.MarkLapsed`, `ExpireDue`, and `Purge`. `Executor.Store` is a `contract.MCPConfirmationStore`; `confirmationtest.Store` keeps confirmations in memory under the same guards, so product tests run the real executor without a database, and `confirmationtest.RunStoreSuite` is the conformance suite both stores pass. A confirmed tool declares the result `ToolResult` returns with `confirmation.ResultSchema(preview, result)`, built from the product's preview and executed-result schemas; `confirmation.StatusSchema` is its status enum and `confirmation.Instructions` explains the statuses once for the server's instructions. Credits, tiers and product-specific safety statuses stay in the product's own result schema. See [Confirmed MCP tool calls](governance.md#confirmed-mcp-tool-calls).
 
 ### Migrating an existing MCP server
 
@@ -604,7 +604,7 @@ Run `mcp/mcptest` conformance checks before publishing a server: manifest and to
 
 ## Database schema
 
-Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 62 Scout tables rather than all 150.
+Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 61 Scout tables rather than all 152.
 
 The schema uses portable types supported by keel's PostgreSQL and MySQL dialects. Structured definitions are canonical JSON stored as `TEXT` and validated at service or compilation boundaries. Timestamps use `TIMESTAMP`; large data stays outside the relational database behind URI and digest columns.
 
@@ -614,11 +614,11 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 
 ### Schema modules
 
-Scout's schema is seventeen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
+Scout's schema is eighteen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
 
 | Module | Tables | Purpose | Depends on |
 |---|---:|---|---|
-| `catalog` | 15 | Currency, priority, lifecycle, usage, scope, resource-kind, decision, approval, risk, agent-state, release-activation, and MCP confirmation catalogs | — |
+| `catalog` | 14 | Priority, lifecycle, usage, scope, resource-kind, decision, approval, risk, agent-state, release-activation, and MCP confirmation catalogs | — |
 | `tenancy` | 4 | Tenant identity, active policies, and quotas | `catalog` |
 | `prompt` | 2 | Prompt sections and platform baselines | — |
 | `model` | 6 | Providers, model definitions, capabilities, routes, pricing, tenant access | `catalog`, `tenancy` |
@@ -627,13 +627,14 @@ Scout's schema is seventeen modules so a downstream installs only what its produ
 | `execution_graph` | 4 | Compiled execution graphs, steps, entries, transitions | `agent` |
 | `knowledge` | 9 | Knowledge bases, versions, documents, chunks, agent bindings and their whole-read documents, manifests, aliases, source events | `tenancy`, `agent` |
 | `knowledge_vector` | 1 | PostgreSQL-resident chunk embeddings and full-text vectors | `knowledge` |
-| `runtime` | 17 | Conversations, turns, checkpoints, replay, tool-loop journal, tool call outcomes and their attestations, durable turn queue and dead letters, budgets, usage per model, turn feedback, activity, principal-addressed work items | `catalog`, `tenancy`, `model`, `agent`, `execution_graph`, `agent_authorization`, `configuration`, `tool` |
+| `runtime` | 18 | Conversations, turns, checkpoints, replay, tool-loop journal, tool call outcomes and their attestations, durable turn queue and dead letters, budgets, usage per model, turn feedback, activity, principal-addressed work items | `catalog`, `tenancy`, `model`, `agent`, `execution_graph`, `agent_authorization`, `configuration`, `tool` |
 | `release` | 16 | Platform artifacts, bundles, rings, rollout state and transitions, version pins, pilots, cohorts, conversation release identity, compatibility results | `catalog`, `tenancy`, `agent`, `runtime` |
 | `evaluation` | 20 | Manifests, agent golden sets and cases with their scripted turns and tool responses, immutable set versions, run subjects and results, human baselines, pairwise comparisons, platform and agent gate decisions, the production review queue, production samples | `catalog`, `tenancy`, `model`, `agent`, `knowledge`, `release`, `runtime` |
 | `skill` | 10 | Platform skill catalog, tenant skill profiles, immutable procedure versions, the tools and skills each uses, selection examples, agent bindings | `tenancy`, `agent`, `tool` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
 | `configuration` | 8 | Configuration hierarchy, scoped bindings, compiled effective releases, governed decision records, platform and tenant restriction layers | `catalog`, `tenancy`, `agent` |
 | `approval` | 2 | Durable turn approval requests with the release, route, and approver reference that routed them, their verdicts, and the outbox event that notified the approver | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization`, keel `outbox` |
+| `memory` | 2 | Product-defined memory sections and each tenant's bounded, provenance-stamped memory body | `tenancy` |
 | `mcp_confirmation` | 2 | MCP tool calls held for a person's confirmation and run once under a fenced lease, and the runtime tool calls waiting on them | `catalog`, `tenancy`, `runtime`, keel `approval`, keel `outbox` |
 
 `schema/dependency.yml` declares those modules, their dependencies, and their seed files; [Database reference](database.md#module-dependency-graph) draws the graph. `agent` is the common core every other module reaches through; `catalog` and `tenancy` sit under it. Module boundaries follow the `contract/` and `service/` boundaries, so a downstream picks modules by the Scout packages it actually constructs.
@@ -652,27 +653,28 @@ for group in "${keel_groups[@]}"; do
   keel_in="${keel_in:+${keel_in},}${keel}/${group}"
   keel_seed="${keel_seed:+${keel_seed},}${keel}/seed/${group}.yml"
 done
-scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill,schema/mcp_confirmation"
+scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill,schema/memory,schema/mcp_confirmation"
 scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/configuration,schema/seed/approval,schema/seed/execution_graph,schema/seed/knowledge,schema/seed/runtime,schema/seed/release,schema/seed/evaluation,schema/seed/mcp_confirmation"
 
 go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_seed},${scout_seed}" -out build/scout_pgsql.sql
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 48 selected keel tables and 150 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
+That full set is 49 selected keel tables and 152 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 62 |
-| … plus agent principals and delegation | `+ agent_authorization` | 64 |
-| … plus compiled execution graphs | `+ execution_graph` | 68 |
-| … plus governed tools and credential bindings | `+ tool` | 73 |
-| … plus durable human approvals | `+ approval` (and keel `outbox`; keel `action_token` for decision links) | 75 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 85 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 61 |
+| … plus agent principals and delegation | `+ agent_authorization` | 63 |
+| … plus compiled execution graphs | `+ execution_graph` | 67 |
+| … plus governed tools and credential bindings | `+ tool` | 72 |
+| … plus durable human approvals | `+ approval` (and keel `outbox`; keel `action_token` for decision links) | 74 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 84 |
 | … plus the durable turn runtime | `+ runtime` | 102 |
 | Everything, including rollout and evaluation | `+ release`, `evaluation` | 138 |
 | … plus versioned skills | `+ skill` | 148 |
 | … plus confirmed MCP tool calls | `+ mcp_confirmation` (and keel `approval`, `outbox`) | 150 |
+| … plus tenant memory | `+ memory` | 152 |
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration`, `approval`, `execution_graph`, `knowledge`, `runtime`, `release`, `evaluation`, and `mcp_confirmation`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 
@@ -847,7 +849,7 @@ Build the query set with `dataplane.TurnQueueWorkerQueries(workerID, leaseDurati
 
 ### Composing the data plane
 
-`dataplane.BaseDataPlane` is the whole table-backed wiring behind `contract.DataPlane` (`Runtime`, `Scheduler`, `Ingress`, `Replies`, `Canceller`): object state, turn records, durable sessions behind a memory cache, the graph resolver, the execution governor, step idempotency, the layered enforcer over `DefaultBaseline`, the audit and safety sinks, `CacheReplyHub`, `TableTurnControl` (as `Control`), the queue scheduler with its dead-letter queue, the dispatcher, `TurnIngress`, and a `ToolLoopExecutor` over `FactoryProviderRegistry`, `PinnedModelRouter`, `TableToolRegistry`, the governed gateway, `TableLoopJournal`, `TableCallOutcomeStore`, and `EvidenceValidator`. A product injects what is its own — database, cache, object storage, provider factory, tool transport, budget manager (a `contract.TenantBudgetManager` that is also a `dataplane.TurnBudgetSettler`, normally `isolation.BudgetLedger`), pricer, metrics, currency, usage category and a distinct `OperatorUsageCategory`, the operator `Operation` settings (`ScoutConfig.OperatorSettings()`), and, for tools whose outcomes can be recovered, `ToolOutcomes` and `OutcomeLookup` — and `Compose` builds the rest.
+`dataplane.BaseDataPlane` is the whole table-backed wiring behind `contract.DataPlane` (`Runtime`, `Scheduler`, `Ingress`, `Replies`, `Canceller`): object state, turn records, durable sessions behind a memory cache, the graph resolver, the execution governor, step idempotency, the layered enforcer over `DefaultBaseline`, the audit and safety sinks, `CacheReplyHub`, `TableTurnControl` (as `Control`), the queue scheduler with its dead-letter queue, the dispatcher, `TurnIngress`, and a `ToolLoopExecutor` over `FactoryProviderRegistry`, `PinnedModelRouter`, `TableToolRegistry`, the governed gateway, `TableLoopJournal`, `TableCallOutcomeStore`, and `EvidenceValidator`. A product injects what is its own — database, cache, object storage, provider factory, tool transport, budget manager (a `contract.TenantBudgetManager` that is also a `dataplane.TurnBudgetSettler`, normally `isolation.BudgetLedger`), pricer, metrics, currency, usage category and a distinct `OperatorUsageCategory`, the operator `Operation` settings (`ScoutConfig.OperatorSettings()`), the tenant `Memory`, the `Policy` decision point (normally `policy.SetEvaluator` over `RestrictedResolver`; without one no policy statement or standing denial is evaluated at the tool gateway), and, for tools whose outcomes can be recovered, `ToolOutcomes` and `OutcomeLookup` — and `Compose` builds the rest.
 
 Every default is an exported field that `Compose` fills only while it is nil. Assign another implementation before `Compose` to replace one collaborator; embed `BaseDataPlane` to extend the whole. A refused composition leaves the plane untouched.
 
@@ -1138,7 +1140,15 @@ What stays downstream: `evaluation.SkillSelection` turns the skills' examples in
 
 `domain.TurnEvent` is the versioned event vocabulary — `text_delta`, `tool_proposal`, `tool_result`, `approval_pending`, `approval_resolved`, `held`, `operator_reply` (a reply a person sent in a turn they took over), `evidence`, `effect`, `progress`, `result`, and a typed, versioned `extension` for product payloads. A step returns events in `StepResult.Events` and the runtime publishes them on that step's `TurnReply.Events`, after the step is committed and its guardrails passed, so they inherit the frame's sequence, deduplication, and replay; `Payload` stays the opaque view. When an output guardrail rewrites the step's state, the rewritten state is what is checkpointed, returned, published, and carried as the `result` event's text. A tool result becomes an event only after the gateway validated it and applied the tool guardrails.
 
-`domain.EvidencedAnswer` is the optional result shape for agents that make factual claims: each `Claim` cites `EvidenceRef`s. `guardrail.EvidenceValidator` accepts evidence only as an object whose digest verifies, a tool result of the same turn, or a resource link such a tool returned (`ToolResult.Evidence`); a URL the model supplies verifies as nothing. The `EvidenceReport` names each unsupported claim and keeps the supported ones, so a caller can return the safe part. An `L` (tool loop) step with `require_evidence` fails with `ErrUnsupportedClaim` instead.
+`domain.EvidencedAnswer` is the optional result shape for agents that make factual claims: each `Claim` cites `EvidenceRef`s. `guardrail.EvidenceValidator` accepts evidence only as an object whose digest verifies, a tool result of the same turn, a resource link such a tool returned (`ToolResult.Evidence`), or a fact the tenant verified (`EvidenceFact` with `FactKey`, read through `Facts`, a product `contract.FactSource`); a URL the model supplies verifies as nothing. With `Claims` (a product `contract.ClaimDetector`), every claim detected in the answer text must appear in a supported claim, and one citing facts must be stated by one of them, so a claim the model leaves undeclared fails as `ClaimIndex` -1. A product composes both by setting `BaseDataPlane.Evidence`; work outside a turn calls `Validate` directly. The `EvidenceReport` names each unsupported claim and keeps the supported ones, so a caller can return the safe part. An `L` (tool loop) step with `require_evidence` fails with `ErrUnsupportedClaim` instead.
+
+### Tenant memory
+
+`contract.MemoryStore` is a tenant's living memory, which every turn reads and runs append to. `memory.TableStore` keeps one body per product-seeded `memory_section` in `agent_memory`: `Append` writes one line, dated by the store clock and stamped `stated by` a person (`MemoryStated`) or `verified by` a tool (`MemoryVerified`), and refuses any other source with `ErrUnprovenFact`. A tool may write only a section marked `agent_writable`. Past `agent_memory_section_max_chars`, the oldest whole lines give way. `BaseDataPlane.Memory` puts the sections into every turn's task context as fenced untrusted data ahead of pinned knowledge (`memory.Context`), within the knowledge byte bound; a read failure fails the turn. Section names, their captions, and the tool that appends stay with the product. Standing rules belong in the tenant restriction layer, not in memory: `tool_denylist` refuses named tools, and `exact_phrase` at `tool_input` refuses arguments that touch a subject.
+
+### Outcome follow-ups
+
+A product that measures what an agent's work achieved and asks the agent to read the result needs no Scout worker. Its own worker calls `ConversationIngress.OpenTurn` with a `RequestID` derived from the follow-up, so a redelivery only resubscribes, a `WorkRef` naming the measured change, and no `OnBehalfOf` when nobody asked. It then reads `StoredTurnReplyReader.StoredReply` and keeps the reply with its measurement.
 
 ## Principals and scoped configuration
 

@@ -61,6 +61,18 @@ type EvidenceObjectVerifier interface {
 	VerifyObject(ctx context.Context, tenantID int64, object domain.ObjectRef) error
 }
 
+// FactSource returns the value of a fact the tenant verified; ok is false when the
+// tenant has no such verified fact.
+type FactSource interface {
+	VerifiedFact(ctx context.Context, tenantID int64, key string) (value string, ok bool, err error)
+}
+
+// ClaimDetector finds the factual statements in a text, such as prices or
+// specifications, whatever claims the model declared for it.
+type ClaimDetector interface {
+	Detect(ctx context.Context, tenantID int64, text string) ([]string, error)
+}
+
 // EvidenceValidator reports which claims of an answer their evidence supports.
 // It is usable as a guardrail; agents whose output makes no claims skip it.
 type EvidenceValidator interface {

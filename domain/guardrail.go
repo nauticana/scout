@@ -58,6 +58,7 @@ const (
 	GuardrailKindMaxOutputBytes           GuardrailRuleKind = "max_output_bytes"
 	GuardrailKindJSONSchema               GuardrailRuleKind = "json_schema"
 	GuardrailKindToolAllowlist            GuardrailRuleKind = "tool_allowlist"
+	GuardrailKindToolDenylist             GuardrailRuleKind = "tool_denylist"
 	GuardrailKindDestinationAllowlist     GuardrailRuleKind = "destination_allowlist"
 	GuardrailKindExactPhrase              GuardrailRuleKind = "exact_phrase"
 	GuardrailKindRegex                    GuardrailRuleKind = "regex"

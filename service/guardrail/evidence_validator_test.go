@@ -88,3 +88,60 @@ func TestEvidenceValidatorRejectsAmbiguousDuplicateEvidenceIDs(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 }
+
+type factTable map[string]string
+
+func (facts factTable) VerifiedFact(_ context.Context, _ int64, key string) (string, bool, error) {
+	value, ok := facts[key]
+	return value, ok, nil
+}
+
+type spanDetector []string
+
+func (spans spanDetector) Detect(context.Context, int64, string) ([]string, error) { return spans, nil }
+
+func TestEvidenceValidatorChecksFactsAndUndeclaredClaims(t *testing.T) {
+	validator := &EvidenceValidator{Facts: factTable{"price": "The kit costs $49 and ships free"}, Claims: spanDetector{"$49", "10-year warranty"}}
+	answer := domain.EvidencedAnswer{
+		Answer:   "Only $49, with a 10-year warranty.",
+		Evidence: []domain.EvidenceRef{{ID: "f", Source: domain.EvidenceFact, FactKey: "price"}, {ID: "x", Source: domain.EvidenceFact, FactKey: "warranty"}},
+		Claims:   []domain.Claim{{Text: "costs $49", EvidenceIDs: []string{"f"}}, {Text: "10-year warranty", EvidenceIDs: []string{"x"}}},
+	}
+	report, err := validator.Validate(context.Background(), domain.EvidenceScope{TenantID: 1}, answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Supported) != 1 || report.Supported[0].Text != "costs $49" {
+		t.Fatalf("supported = %+v", report.Supported)
+	}
+	// The unverified fact fails its declared claim, and the detector catches the same statement in the text.
+	if len(report.Unsupported) != 2 || report.Unsupported[0].ClaimIndex != 1 || report.Unsupported[1].ClaimIndex != -1 || report.Unsupported[1].Claim != "10-year warranty" {
+		t.Fatalf("unsupported = %+v", report.Unsupported)
+	}
+
+	// A supported claim citing a fact that does not state the detected value does not cover it.
+	answer = domain.EvidencedAnswer{
+		Answer:   "Only $39.",
+		Evidence: []domain.EvidenceRef{{ID: "f", Source: domain.EvidenceFact, FactKey: "price"}},
+		Claims:   []domain.Claim{{Text: "only $39", EvidenceIDs: []string{"f"}}},
+	}
+	validator.Claims = spanDetector{"$39"}
+	if report, err = validator.Validate(context.Background(), domain.EvidenceScope{TenantID: 1}, answer); err != nil || len(report.Unsupported) != 1 || report.Unsupported[0].ClaimIndex != -1 {
+		t.Fatalf("report = %+v, err = %v", report, err)
+	}
+
+	// An undeclared claim fails even when the answer declares none.
+	if report, err = validator.Validate(context.Background(), domain.EvidenceScope{TenantID: 1}, domain.EvidencedAnswer{Answer: "Only $39."}); err != nil || len(report.Unsupported) != 1 {
+		t.Fatalf("report = %+v, err = %v", report, err)
+	}
+
+	unsourced := &EvidenceValidator{}
+	fact := domain.EvidencedAnswer{Evidence: []domain.EvidenceRef{{ID: "f", Source: domain.EvidenceFact, FactKey: "price"}}, Claims: []domain.Claim{{Text: "x", EvidenceIDs: []string{"f"}}}}
+	if _, err := unsourced.Validate(context.Background(), domain.EvidenceScope{TenantID: 1}, fact); !errors.Is(err, domain.ErrDegraded) {
+		t.Fatalf("no fact source err = %v, want degraded", err)
+	}
+	fact.Evidence[0].FactKey = " "
+	if report, err := unsourced.Validate(context.Background(), domain.EvidenceScope{TenantID: 1}, fact); err != nil || len(report.Unsupported) != 1 {
+		t.Fatalf("blank key report = %+v, err = %v", report, err)
+	}
+}

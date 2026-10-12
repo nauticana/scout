@@ -2,10 +2,10 @@
 # pass their directories to schemagen -input, and the matching seed directories
 # to -seed. depends_on lists direct table-FK dependencies and fixes DDL order;
 # seed_depends_on names components whose tables receive this module's seed rows.
-# Scout tenancy additionally requires keel tenant_management, which depends on
-# keel core and geo; approval additionally requires keel outbox, and mcp_confirmation
-# keel approval and outbox. mcp_confirmation links a confirmation to the runtime tool call that
-# waits on it, so it also requires runtime.
+# Currency columns reference keel geo's currency. tenancy additionally requires
+# keel tenant_management (which depends on keel core and geo), approval keel
+# outbox, and mcp_confirmation keel approval and outbox; mcp_confirmation links a
+# confirmation to the runtime tool call that waits on it, so it requires runtime.
 version: 1
 groups:
   - name: catalog
@@ -95,6 +95,10 @@ groups:
     seed: seed/approval/approval.yml
     depends_on: [catalog, tenancy, agent, configuration, agent_authorization]
     seed_depends_on: [core]
+
+  - name: memory
+    path: memory
+    depends_on: [tenancy]
 
   - name: mcp_confirmation
     path: mcp_confirmation

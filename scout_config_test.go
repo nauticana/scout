@@ -307,6 +307,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_metric_label_max_length:             "64",
 		agent_knowledge_max_source_bytes:          "33554432",
 		agent_knowledge_rrf_offset:                "60",
+		agent_memory_section_max_chars:            "8000",
 		agent_evaluation_page_size:                "50",
 		agent_evaluation_max_page_size:            "200",
 		agent_evaluation_judge_max_verdict_bytes:  "8192",
@@ -446,7 +447,7 @@ func TestLimitFlagsParseAndReachTheSettingsHelpers(t *testing.T) {
 	if cfg.AgentActivationMaxLeadDays != 366 || cfg.AgentStudioMaxPortableBindings != 1024 || cfg.AgentStudioMaxReferences != 1024 ||
 		cfg.AgentStudioMaxPortableExtensionBytes != 262144 || cfg.AgentStudioMaxTemplateAudience != 100 || cfg.AgentStudioUsableTemplates != 200 ||
 		cfg.AgentStudioMaxGovernanceItems != 32 || cfg.AgentStudioMaxCommentsShown != 500 || cfg.AgentStudioMaxRestrictionEntries != 256 ||
-		cfg.AgentMetricLabelMaxLength != 64 || cfg.AgentKnowledgeMaxSourceBytes != 32<<20 || cfg.AgentKnowledgeRRFOffset != 60 ||
+		cfg.AgentMetricLabelMaxLength != 64 || cfg.AgentKnowledgeMaxSourceBytes != 32<<20 || cfg.AgentKnowledgeRRFOffset != 60 || cfg.AgentMemorySectionMaxChars != 8000 ||
 		cfg.AgentEvaluationPageSize != 50 || cfg.AgentEvaluationMaxPageSize != 200 {
 		t.Fatalf("defaults = %+v", cfg)
 	}
