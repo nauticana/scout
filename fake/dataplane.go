@@ -106,17 +106,20 @@ func (estimator *TurnBudgetEstimator) Estimate(ctx context.Context, request doma
 	return estimator.EstimateFunc(ctx, request)
 }
 
-// TurnRecordStore contains configurable durable turn identity callbacks.
+// TurnRecordStore contains configurable durable turn identity callbacks. Every owner write
+// fails closed on a missing owner before its callback runs.
 type TurnRecordStore struct {
 	AddressFunc     func(context.Context, int64, string, string, string) (string, error)
 	SelectableFunc  func(context.Context, int64, string) ([]domain.SelectableAgent, error)
 	OpenFunc        func(context.Context, domain.TurnRequest, domain.ObjectRef) (int64, error)
-	FindFunc        func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error)
-	StartFunc       func(context.Context, int64, string) error
-	FailFunc        func(context.Context, int64, string, domain.TurnStatus, string) error
-	SuspendFunc     func(context.Context, int64, string, string) error
+	FindFunc        func(context.Context, int64, string) (domain.TurnRecord, error)
+	AcquireFunc     func(context.Context, domain.TurnClaim) (domain.TurnOwner, error)
+	HoldFunc        func(context.Context, domain.TurnOwner) (int64, error)
+	FailFunc        func(context.Context, domain.TurnOwner, domain.TurnStatus, string) error
+	FailParkedFunc  func(context.Context, int64, string, string) error
+	SuspendFunc     func(context.Context, domain.TurnOwner, string) (int64, error)
 	ResumeFunc      func(context.Context, int64, string) error
-	RecordUsageFunc func(context.Context, int64, string, int64, string, domain.UsageAttribution, domain.Usage) error
+	RecordUsageFunc func(context.Context, domain.TurnOwner, string, int64, string, domain.UsageAttribution, domain.Usage) error
 }
 
 // Address invokes AddressFunc when configured; the default serves the named agent, else the alias.
@@ -146,37 +149,65 @@ func (store *TurnRecordStore) Open(ctx context.Context, request domain.TurnReque
 	return store.OpenFunc(ctx, request, input)
 }
 
-// Find invokes FindFunc when configured; the default reports a queued turn 1.
-func (store *TurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (int64, domain.TurnStatus, []byte, error) {
+// Find invokes FindFunc when configured; the default reports a queued turn 1 at fence 0.
+func (store *TurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (domain.TurnRecord, error) {
 	if store.FindFunc == nil {
-		return 1, domain.TurnQueued, nil, nil
+		return domain.TurnRecord{TurnNo: 1, Status: domain.TurnQueued}, nil
 	}
 	return store.FindFunc(ctx, tenantID, requestID)
 }
 
-// Start invokes StartFunc when configured.
-func (store *TurnRecordStore) Start(ctx context.Context, tenantID int64, requestID string) error {
-	if store.StartFunc == nil {
-		return nil
+// Acquire invokes AcquireFunc when configured; the default grants fence 1 to a valid claim.
+func (store *TurnRecordStore) Acquire(ctx context.Context, claim domain.TurnClaim) (domain.TurnOwner, error) {
+	if err := claim.Validate(); err != nil {
+		return domain.TurnOwner{}, err
 	}
-	return store.StartFunc(ctx, tenantID, requestID)
+	if store.AcquireFunc == nil {
+		turn := claim.Dispatch.Turn
+		return domain.TurnOwner{TenantID: turn.TenantContext.TenantID, RequestID: turn.RequestID, Fence: 1}, nil
+	}
+	return store.AcquireFunc(ctx, claim)
+}
+
+// Hold invokes HoldFunc when configured; the default advances the owner's fence.
+func (store *TurnRecordStore) Hold(ctx context.Context, owner domain.TurnOwner) (int64, error) {
+	if err := owner.Check(); err != nil {
+		return 0, err
+	}
+	if store.HoldFunc == nil {
+		return owner.Fence + 1, nil
+	}
+	return store.HoldFunc(ctx, owner)
 }
 
 // Fail invokes FailFunc when configured.
-func (store *TurnRecordStore) Fail(ctx context.Context, tenantID int64, requestID string, status domain.TurnStatus, errorCode string) error {
+func (store *TurnRecordStore) Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if store.FailFunc == nil {
 		return nil
 	}
-	return store.FailFunc(ctx, tenantID, requestID, status, errorCode)
+	return store.FailFunc(ctx, owner, status, errorCode)
 }
 
-// RecordUsage invokes RecordUsageFunc when configured.
-// Suspend parks the turn awaiting a decision.
-func (store *TurnRecordStore) Suspend(ctx context.Context, tenantID int64, requestID, reason string) error {
-	if store.SuspendFunc != nil {
-		return store.SuspendFunc(ctx, tenantID, requestID, reason)
+// FailParked invokes FailParkedFunc when configured.
+func (store *TurnRecordStore) FailParked(ctx context.Context, tenantID int64, requestID, errorCode string) error {
+	if store.FailParkedFunc == nil {
+		return nil
 	}
-	return nil
+	return store.FailParkedFunc(ctx, tenantID, requestID, errorCode)
+}
+
+// Suspend parks the turn awaiting a decision; the default advances the owner's fence.
+func (store *TurnRecordStore) Suspend(ctx context.Context, owner domain.TurnOwner, reason string) (int64, error) {
+	if err := owner.Check(); err != nil {
+		return 0, err
+	}
+	if store.SuspendFunc != nil {
+		return store.SuspendFunc(ctx, owner, reason)
+	}
+	return owner.Fence + 1, nil
 }
 
 // Resume returns a suspended turn to the queue.
@@ -187,49 +218,62 @@ func (store *TurnRecordStore) Resume(ctx context.Context, tenantID int64, reques
 	return nil
 }
 
-func (store *TurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
+// RecordUsage invokes RecordUsageFunc when configured.
+func (store *TurnRecordStore) RecordUsage(ctx context.Context, owner domain.TurnOwner, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if store.RecordUsageFunc == nil {
 		return nil
 	}
-	return store.RecordUsageFunc(ctx, tenantID, conversationID, turnNo, subjectRef, attribution, usage)
+	return store.RecordUsageFunc(ctx, owner, conversationID, turnNo, subjectRef, attribution, usage)
 }
 
-// StepIdempotencyStore contains configurable replay-safety callbacks.
+// StepIdempotencyStore contains configurable replay-safety callbacks; a missing owner fails closed.
 type StepIdempotencyStore struct {
-	BeginFunc   func(context.Context, int64, string, domain.ExecutionStep) (domain.StepResult, bool, error)
-	CommitFunc  func(context.Context, int64, string, domain.ExecutionStep, domain.StepResult) error
-	AbandonFunc func(context.Context, int64, string, domain.ExecutionStep) error
+	BeginFunc   func(context.Context, domain.TurnOwner, domain.ExecutionStep) (domain.StepResult, bool, error)
+	CommitFunc  func(context.Context, domain.TurnOwner, domain.ExecutionStep, domain.StepResult) error
+	AbandonFunc func(context.Context, domain.TurnOwner, domain.ExecutionStep) error
 }
 
 // Begin invokes BeginFunc when configured; the default claims the step.
-func (store *StepIdempotencyStore) Begin(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep) (domain.StepResult, bool, error) {
+func (store *StepIdempotencyStore) Begin(ctx context.Context, owner domain.TurnOwner, step domain.ExecutionStep) (domain.StepResult, bool, error) {
+	if err := owner.Check(); err != nil {
+		return domain.StepResult{}, false, err
+	}
 	if store.BeginFunc == nil {
 		return domain.StepResult{}, false, nil
 	}
-	return store.BeginFunc(ctx, tenantID, requestID, step)
+	return store.BeginFunc(ctx, owner, step)
 }
 
 // Commit invokes CommitFunc when configured.
-func (store *StepIdempotencyStore) Commit(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep, result domain.StepResult) error {
+func (store *StepIdempotencyStore) Commit(ctx context.Context, owner domain.TurnOwner, step domain.ExecutionStep, result domain.StepResult) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if store.CommitFunc == nil {
 		return nil
 	}
-	return store.CommitFunc(ctx, tenantID, requestID, step, result)
+	return store.CommitFunc(ctx, owner, step, result)
 }
 
 // Abandon invokes AbandonFunc when configured.
-func (store *StepIdempotencyStore) Abandon(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep) error {
+func (store *StepIdempotencyStore) Abandon(ctx context.Context, owner domain.TurnOwner, step domain.ExecutionStep) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if store.AbandonFunc == nil {
 		return nil
 	}
-	return store.AbandonFunc(ctx, tenantID, requestID, step)
+	return store.AbandonFunc(ctx, owner, step)
 }
 
-// SessionCoordinator contains configurable tiered session callbacks.
+// SessionCoordinator contains configurable tiered session callbacks; a missing owner fails closed.
 type SessionCoordinator struct {
 	LoadFunc       func(context.Context, int64, string) (domain.SessionSnapshot, error)
-	CheckpointFunc func(context.Context, int64, int64, domain.StepCheckpoint) error
-	CompleteFunc   func(context.Context, int64, string, int64, domain.TurnResult) error
+	CheckpointFunc func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error
+	CompleteFunc   func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error
 }
 
 // Load invokes LoadFunc.
@@ -238,19 +282,25 @@ func (coordinator *SessionCoordinator) Load(ctx context.Context, tenantID int64,
 }
 
 // Checkpoint invokes CheckpointFunc when configured.
-func (coordinator *SessionCoordinator) Checkpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
+func (coordinator *SessionCoordinator) Checkpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if coordinator.CheckpointFunc == nil {
 		return nil
 	}
-	return coordinator.CheckpointFunc(ctx, tenantID, expectedRevision, checkpoint)
+	return coordinator.CheckpointFunc(ctx, owner, expectedRevision, checkpoint)
 }
 
 // Complete invokes CompleteFunc when configured.
-func (coordinator *SessionCoordinator) Complete(ctx context.Context, tenantID int64, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+func (coordinator *SessionCoordinator) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if coordinator.CompleteFunc == nil {
 		return nil
 	}
-	return coordinator.CompleteFunc(ctx, tenantID, conversationID, expectedRevision, result)
+	return coordinator.CompleteFunc(ctx, owner, conversationID, expectedRevision, result)
 }
 
 // DefinitionResolverFunc adapts a function to contract.DefinitionResolver.

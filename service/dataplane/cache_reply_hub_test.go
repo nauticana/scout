@@ -98,14 +98,30 @@ func TestCacheReplyHubPublishIsIdempotentAndOrdered(t *testing.T) {
 	if err := hub.Publish(ctx, replyFrame(2, "gap", false)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("want ErrConflict for a gap, got %v", err)
 	}
-	// A suspended turn ends its delivery with a final frame and resumes at the same sequence.
-	if err := hub.Publish(ctx, replyFrame(1, "", true)); err != nil {
+	// A suspended turn ends its delivery with a final frame under the suspension's fence and
+	// resumes at the same sequence under the higher fence of its next owner.
+	suspended := replyFrame(1, "", true)
+	suspended.Fence = 2
+	if err := hub.Publish(ctx, suspended); err != nil {
 		t.Fatal(err)
 	}
-	if err := hub.Publish(ctx, replyFrame(1, "resumed", false)); err != nil {
+	resumed := replyFrame(1, "resumed", false)
+	resumed.Fence = 2
+	if err := hub.Publish(ctx, resumed); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("only a higher fence may supersede a final frame, got %v", err)
+	}
+	resumed.Fence = 4
+	if err := hub.Publish(ctx, resumed); err != nil {
 		t.Fatalf("a resumed turn must supersede its suspension frame, got %v", err)
 	}
-	if err := hub.Publish(ctx, replyFrame(2, "done", true)); err != nil {
+	stale := replyFrame(2, "stale", false)
+	stale.Fence = 3
+	if err := hub.Publish(ctx, stale); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("a frame below the stream's fence = %v, want ErrFenceLost", err)
+	}
+	done := replyFrame(2, "done", true)
+	done.Fence = 4
+	if err := hub.Publish(ctx, done); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -130,12 +146,21 @@ func TestCacheReplyHubNeverHidesAGapAndFallsBackToTheTurnRecord(t *testing.T) {
 	}
 
 	// The cache holds nothing for this request, but the turn already completed.
-	hub.Records = &fake.TurnRecordStore{FindFunc: func(_ context.Context, _ int64, requestID string) (int64, domain.TurnStatus, []byte, error) {
-		if requestID == "failed" {
-			return 1, domain.TurnFailed, []byte("budget_exceeded"), nil
+	hub.Records = &fake.TurnRecordStore{FindFunc: func(_ context.Context, _ int64, requestID string) (domain.TurnRecord, error) {
+		switch requestID {
+		case "failed":
+			return domain.TurnRecord{TurnNo: 1, Status: domain.TurnFailed, Payload: []byte("budget_exceeded")}, nil
+		case "held":
+			return domain.TurnRecord{TurnNo: 1, Status: domain.TurnHeld, Fence: 4}, nil
 		}
-		return 1, domain.TurnCompleted, []byte("answer"), nil
+		return domain.TurnRecord{TurnNo: 1, Status: domain.TurnCompleted, Payload: []byte("answer")}, nil
 	}}
+	// A turn held before its stream reached the cache ends the delivery on a held frame from its record.
+	held, _ := hub.Subscribe(ctx, 7, "held")
+	if frame, err := held.Receive(ctx); err != nil || !frame.Final || frame.ErrorCode != "held" || frame.Fence != 4 ||
+		len(frame.Events) != 1 || frame.Events[0].Kind != domain.TurnEventHeld {
+		t.Fatalf("held frame = %+v, %v", frame, err)
+	}
 	settled, _ := hub.Subscribe(ctx, 7, "settled")
 	if frame, err := settled.Receive(ctx); err != nil || !frame.Final || string(frame.Payload) != "answer" {
 		t.Fatalf("settled frame = %+v, %v", frame, err)
@@ -152,8 +177,8 @@ func TestCacheReplyHubNeverHidesAGapAndFallsBackToTheTurnRecord(t *testing.T) {
 	if err != nil || stored.Sequence != 10 || stored.ErrorCode != "budget_exceeded" {
 		t.Fatalf("stored failed frame = %+v, %v", stored, err)
 	}
-	hub.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
-		return 1, domain.TurnCancelled, nil, nil
+	hub.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
+		return domain.TurnRecord{TurnNo: 1, Status: domain.TurnCancelled}, nil
 	}}
 	stored, err = hub.StoredReply(ctx, 7, "cancelled", 11)
 	if err != nil || stored.ErrorCode != "canceled" {

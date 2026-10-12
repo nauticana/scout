@@ -31,6 +31,8 @@ var errorClasses = []struct {
 	{domain.ErrEffectViolated, "effect_violated"},
 	{domain.ErrEffectUnknown, "effect_unknown"},
 	{domain.ErrProposalRevised, "proposal_revised"},
+	{domain.ErrTurnHeld, "held"},
+	{domain.ErrFenceLost, "fence_lost"},
 	{domain.ErrValidation, "validation"},
 	{domain.ErrNotFound, "not_found"},
 	{domain.ErrConflict, "conflict"},

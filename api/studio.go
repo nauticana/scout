@@ -57,8 +57,9 @@ type ReleaseFeedback struct {
 	Counts  [5]int64 `json:"counts"`
 }
 
-// AgentPauseRequest disables an agent; policy finish lets its live turns complete and
-// cancel asks them to stop.
+// AgentPauseRequest disables an agent; policy finish lets its live turns complete, cancel
+// asks them to stop, and suspend holds queued and parked turns at once and running ones at
+// their next durable checkpoint.
 type AgentPauseRequest struct {
 	AgentName             string `json:"agent_name"`
 	Policy                string `json:"policy"`
@@ -66,10 +67,13 @@ type AgentPauseRequest struct {
 	ExpectedAgentRevision int64  `json:"expected_agent_revision"`
 }
 
-// AgentPauseResult is the paused agent's revision and the live turns asked to stop.
+// AgentPauseResult is the paused agent's revision and the live turns asked to stop, held at
+// once, or asked to hold at their next checkpoint.
 type AgentPauseResult struct {
 	ExpectedAgentRevision int64 `json:"expected_agent_revision"`
 	Cancelled             int   `json:"cancelled"`
+	Held                  int   `json:"held"`
+	HoldRequested         int   `json:"hold_requested"`
 }
 
 // AgentUsageLine is settled usage of one release, model, person, and work item; cost is

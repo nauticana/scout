@@ -143,7 +143,7 @@ func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
 			{Model: claude, InputTokens: 20, OutputTokens: 10, CostMinorUnits: 5},
 		}}
 	attribution := domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "agent"}, WorkRef: "task-9"}
-	if err := store.RecordUsage(context.Background(), 7, "conversation-1", 4, "agent@v1", attribution, usage); err != nil {
+	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", attribution, usage); err != nil {
 		t.Fatal(err)
 	}
 	if lock := query.firstArgs(qLedgerLock); len(lock) != 1 || lock[0] != "usage:7:conversation-1:4:model_output" {
@@ -166,7 +166,7 @@ func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
 
 	// A replay, even one whose models differ, finds the turn settled and writes nothing.
 	replay := domain.Usage{InputTokens: 30, OutputTokens: 12, ToolCalls: 2, CostMinorUnits: 9, Currency: "USD"}.AttributedTo(gpt)
-	if err := store.RecordUsage(context.Background(), 7, "conversation-1", 4, "agent@v1", attribution, replay); err != nil {
+	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", attribution, replay); err != nil {
 		t.Fatal(err)
 	}
 	if len(query.args[qLedgerInsertUsageEvent]) != len(want) {
@@ -174,7 +174,7 @@ func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
 	}
 	query.args = nil
 	usage.Models[0].InputTokens = 31
-	if err := store.RecordUsage(context.Background(), 7, "conversation-1", 4, "agent@v1", attribution, usage); !errors.Is(err, domain.ErrValidation) {
+	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", attribution, usage); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("overattributed usage = %v, want validation", err)
 	}
 	if len(query.args[qLedgerInsertUsageEvent]) != 0 {
@@ -206,7 +206,7 @@ func TestTurnRuntimeSettlesTheModelsEveryStepUsed(t *testing.T) {
 			return domain.StepResult{State: []byte("answer"), Usage: usage}, nil
 		}), nil
 	})
-	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
 		t.Fatal(err)
 	}
 	if len(recorder.usage) != 1 {

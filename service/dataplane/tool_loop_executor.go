@@ -79,6 +79,7 @@ type loopRun struct {
 	key       domain.LoopKey
 	request   domain.ModelRequest
 	tools     map[string]domain.ModelTool
+	readOnly  map[string]bool
 	journal   []domain.LoopEntry
 	cursor    int
 	usage     domain.Usage
@@ -184,7 +185,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 	if err != nil {
 		return nil, fmt.Errorf("list tools bound to %s@%s: %w", principal.ID, principal.Release, err)
 	}
-	run.tools = make(map[string]domain.ModelTool, len(bound))
+	run.tools, run.readOnly = make(map[string]domain.ModelTool, len(bound)), make(map[string]bool, len(bound))
 	request.Tools = request.Tools[:0]
 	for _, definition := range bound {
 		tool := domain.ModelTool{
@@ -194,7 +195,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 		if _, collides := run.tools[tool.Name]; collides {
 			return nil, fmt.Errorf("%w: tools of %s@%s collide on model name %q", domain.ErrConflict, principal.ID, principal.Release, tool.Name)
 		}
-		run.tools[tool.Name] = tool
+		run.tools[tool.Name], run.readOnly[tool.Name] = tool, definition.ReadOnly
 		request.Tools = append(request.Tools, tool)
 	}
 	run.request = request
@@ -245,6 +246,10 @@ func (executor *ToolLoopExecutor) iterate(ctx context.Context, run *loopRun) (do
 		}
 		if err := ctx.Err(); err != nil {
 			return domain.StepResult{}, err
+		}
+		// Every observation of the last iteration is journaled: a durable boundary to hold at.
+		if iteration > 1 && run.holdRequested() {
+			return domain.StepResult{}, fmt.Errorf("%w: before loop iteration %d", domain.ErrTurnHeld, iteration)
 		}
 		decision, err := executor.decide(ctx, run, iteration)
 		if err != nil {
@@ -395,6 +400,10 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 	if err := run.admitCall(call); err != nil {
 		return domain.ModelToolObservation{}, call, err
 	}
+	// The decision is journaled and the call has not left: a mutation is held here, before its effect.
+	if !run.readOnly[call.Name] && run.holdRequested() {
+		return domain.ModelToolObservation{}, call, fmt.Errorf("%w: before call %q", domain.ErrTurnHeld, call.CallID)
+	}
 	result, err := executor.Tools.Invoke(domain.WithDecisionScope(ctx, "iteration/", iteration, "/call/", call.CallID), proposal)
 	observation := domain.ModelToolObservation{CallID: call.CallID, Name: call.Name, Output: result.Output}
 	switch {
@@ -501,6 +510,10 @@ func (executor *ToolLoopExecutor) requireEvidence(ctx context.Context, run *loop
 	return nil
 }
 
+func (run *loopRun) holdRequested() bool {
+	return run.input.HoldRequested != nil && run.input.HoldRequested()
+}
+
 // next consumes the journal entry at the cursor when it is of the wanted kind.
 func (run *loopRun) next(kind domain.LoopEntryKind) (domain.LoopEntry, bool) {
 	if run.cursor >= len(run.journal) || run.journal[run.cursor].Kind != kind {
@@ -517,7 +530,7 @@ func (executor *ToolLoopExecutor) append(ctx context.Context, run *loopRun, entr
 	}
 	entry.EntryNo = len(run.journal) + 1
 	entry.Offset = executor.now().Sub(run.started)
-	stored, err := executor.Journal.Append(context.WithoutCancel(ctx), run.key, entry)
+	stored, err := executor.Journal.Append(context.WithoutCancel(ctx), run.input.Owner, run.key, entry)
 	if err != nil {
 		return domain.LoopEntry{}, stage.At(domain.StageCheckpoint, fmt.Errorf("append loop journal entry %d: %w", entry.EntryNo, err))
 	}

@@ -11,13 +11,16 @@ import (
 )
 
 // Turn chain categories: a turn's decision chain opens with admission and closes
-// with exactly one terminal state.
+// with exactly one terminal state. Suspension and turn control are intermediate.
 const (
-	AuditCategoryTurnAdmitted  = "turn_admitted"
-	AuditCategoryTurnSuspended = "turn_suspended"
-	AuditCategoryTurnCompleted = "turn_completed"
-	AuditCategoryTurnFailed    = "turn_failed"
-	AuditCategoryTurnCancelled = "turn_cancelled"
+	AuditCategoryTurnAdmitted      = "turn_admitted"
+	AuditCategoryTurnSuspended     = "turn_suspended"
+	AuditCategoryTurnHoldRequested = "turn_hold_requested"
+	AuditCategoryTurnHeld          = "turn_held"
+	AuditCategoryTurnReleased      = "turn_released"
+	AuditCategoryTurnCompleted     = "turn_completed"
+	AuditCategoryTurnFailed        = "turn_failed"
+	AuditCategoryTurnCancelled     = "turn_cancelled"
 )
 
 var terminalTurnCategories = []string{AuditCategoryTurnCompleted, AuditCategoryTurnFailed, AuditCategoryTurnCancelled}

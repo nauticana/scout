@@ -6,9 +6,12 @@ seeds:
     rows:
       - [turn_queue_status, Turn Queue Status]
       - [agent_run_status, Agent Run Status]
+      - [turn_hold_code, Turn Hold Reason]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
+      - [turn_hold_code, C, Held at a checkpoint on request]
+      - [turn_hold_code, A, Held because its agent was suspended]
       - [turn_queue_status, Q, Queued]
       - [turn_queue_status, L, Leased]
       - [turn_queue_status, A, Acknowledged]
@@ -21,6 +24,7 @@ seeds:
     rows:
       - [turn_queue_status, turn_queue, status_code]
       - [agent_run_status, agent_run, status_code]
+      - [turn_hold_code, conversation_turn, hold_code]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:
@@ -30,14 +34,21 @@ seeds:
     columns: [id, caption]
     rows:
       - [AGENT_CONVERSATION, Agent conversations]
+      - [AGENT_OPERATION, Live agent turn operation]
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
       - [AGENT_CONVERSATION, USE, Converse with an agent]
       - [AGENT_CONVERSATION, PIN_RELEASE, Pin a conversation to one agent release]
+      - [AGENT_OPERATION, VIEW, View an agent's live turns]
+      - [AGENT_OPERATION, OPERATE, Hold and release an agent's live turns]
   - table: authorization_role_permission
     columns: [role_id, authorization_object_id, action, low_limit]
     rows:
       - [AGENT_ADMIN, AGENT_CONVERSATION, USE, "*"]
       - [AGENT_ADMIN, AGENT_CONVERSATION, PIN_RELEASE, "*"]
       - [AGENT_OPER, AGENT_CONVERSATION, USE, "*"]
+      - [AGENT_ADMIN, AGENT_OPERATION, VIEW, "*"]
+      - [AGENT_ADMIN, AGENT_OPERATION, OPERATE, "*"]
+      - [AGENT_OPER, AGENT_OPERATION, VIEW, "*"]
+      - [AGENT_OPER, AGENT_OPERATION, OPERATE, "*"]

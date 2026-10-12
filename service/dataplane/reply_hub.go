@@ -49,10 +49,12 @@ type replyStream struct {
 	frames       []domain.TurnReply
 	minRetained  int64
 	nextSequence int64
-	trimmed      bool
-	subscribers  map[*replySubscription]struct{}
-	finalAt      time.Time
-	activeAt     time.Time
+	// fence is the highest owner fence that advanced the stream.
+	fence       int64
+	trimmed     bool
+	subscribers map[*replySubscription]struct{}
+	finalAt     time.Time
+	activeAt    time.Time
 }
 
 type replySubscription struct {
@@ -104,13 +106,15 @@ func (hub *MemoryReplyHub) Close() error {
 	return nil
 }
 
-// Publish retains and fans out a frame; matching retained duplicates are no-ops.
+// Publish retains and fans out a frame; matching retained duplicates are no-ops. The stream's
+// (fence, sequence) advances under the hub lock: a frame below the stream's fence is refused,
+// and a higher fence may replace the frame at the head, where a resumed turn continues.
 func (hub *MemoryReplyHub) Publish(ctx context.Context, reply domain.TurnReply) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if reply.TenantID <= 0 || strings.TrimSpace(reply.RequestID) == "" || reply.Sequence < 0 {
-		return fmt.Errorf("%w: tenant, request, and sequence are required", domain.ErrValidation)
+	if reply.TenantID <= 0 || strings.TrimSpace(reply.RequestID) == "" || reply.Sequence < 0 || reply.Fence < 0 {
+		return fmt.Errorf("%w: tenant, request, sequence, and a non-negative fence are required", domain.ErrValidation)
 	}
 	_, retained, _, _, maxStreams, nowFn, err := hub.defaults()
 	if err != nil {
@@ -133,29 +137,40 @@ func (hub *MemoryReplyHub) Publish(ctx context.Context, reply domain.TurnReply) 
 		}
 	}
 	stream.activeAt = now
-	if reply.Sequence < stream.nextSequence {
+	if reply.Fence < stream.fence {
+		return fmt.Errorf("%w: reply fence %d is below the stream's %d", domain.ErrFenceLost, reply.Fence, stream.fence)
+	}
+	switch {
+	case reply.Sequence < stream.nextSequence:
 		retained, found := retainedReply(stream.frames, reply.Sequence)
 		if !found {
 			return fmt.Errorf("%w: reply sequence %d is no longer retained", domain.ErrReplayExpired, reply.Sequence)
 		}
-		if !sameReply(retained, reply) {
+		if sameReply(retained, reply) {
+			return nil
+		}
+		// A higher fence takes over the stream at its head: a resumed turn continues where a final
+		// frame ended a delivery, and a new owner's frame stands over one a fenced-out worker raced in.
+		takesOver := reply.Sequence == stream.nextSequence-1 && reply.Fence > stream.fence
+		if !takesOver {
 			return fmt.Errorf("%w: reply sequence %d has different content", domain.ErrConflict, reply.Sequence)
 		}
-		return nil
-	}
-	if reply.Sequence > stream.nextSequence {
+		stream.frames[len(stream.frames)-1] = reply
+		stream.finalAt = time.Time{}
+	case reply.Sequence > stream.nextSequence:
 		return fmt.Errorf("%w: reply sequence %d, want %d", domain.ErrConflict, reply.Sequence, stream.nextSequence)
-	}
-	if !stream.finalAt.IsZero() {
+	case !stream.finalAt.IsZero():
 		return fmt.Errorf("%w: reply stream is already final", domain.ErrConflict)
+	default:
+		stream.nextSequence++
+		stream.frames = append(stream.frames, reply)
+		if len(stream.frames) > retained {
+			stream.trimmed = true
+			stream.minRetained = stream.frames[1].Sequence
+			stream.frames = append(stream.frames[:0], stream.frames[1:]...)
+		}
 	}
-	stream.nextSequence++
-	stream.frames = append(stream.frames, reply)
-	if len(stream.frames) > retained {
-		stream.trimmed = true
-		stream.minRetained = stream.frames[1].Sequence
-		stream.frames = append(stream.frames[:0], stream.frames[1:]...)
-	}
+	stream.fence = reply.Fence
 	for subscription := range stream.subscribers {
 		select {
 		case subscription.frames <- reply:
@@ -179,6 +194,7 @@ func retainedReply(frames []domain.TurnReply, sequence int64) (domain.TurnReply,
 	return domain.TurnReply{}, false
 }
 
+// sameReply compares content; the fence and emission time say who published, not what.
 func sameReply(left, right domain.TurnReply) bool {
 	return left.TenantID == right.TenantID && left.RequestID == right.RequestID &&
 		left.ConversationID == right.ConversationID && left.ReplyRoute == right.ReplyRoute &&

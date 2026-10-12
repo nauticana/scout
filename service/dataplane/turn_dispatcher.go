@@ -42,14 +42,17 @@ SELECT id, input_digest, status_code
 
 	// An acknowledged delivery returns to the queue only while its turn is live again: a
 	// suspended turn that was resumed. A settled turn's delivery stays acknowledged.
+	// Only a queued turn is requeued. A delivery still leased when its parked turn returned to the
+	// queue is taken back too: its worker found the turn parked and would ack it away, and now
+	// finds its lease gone instead.
 	qQueueRequeue: `
 UPDATE turn_queue queued
    SET status_code = ` + sqlQueueQueued + `, attempt = 0, available_at = ?, lease_token = NULL, lease_until = NULL,
        worker_id = NULL, last_error = NULL
- WHERE queued.partner_id = ? AND queued.request_id = ? AND queued.status_code = ` + sqlQueueAcked + `
+ WHERE queued.partner_id = ? AND queued.request_id = ? AND queued.status_code IN (` + sqlQueueAcked + `, ` + sqlQueueLeased + `)
    AND EXISTS (SELECT 1 FROM conversation_turn turn
                 WHERE turn.partner_id = queued.partner_id AND turn.request_id = queued.request_id
-                  AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `))
+                  AND turn.status_code = ` + sqlTurnQueued + `)
 RETURNING queued.id`,
 
 	qQueueTurnDigest: `

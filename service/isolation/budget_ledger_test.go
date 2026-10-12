@@ -463,7 +463,7 @@ func TestBudgetLedgerReserveIsIdempotentByRequest(t *testing.T) {
 	existing := storedBudget("reservation", "req", string(domain.ReservationHeld), 10, 2, 1, expires.Format(time.RFC3339), nil, nil, false)
 	query := &budgetQueryFake{rows: map[string][][]any{qFindBudget: {existing}}}
 	reservation, err := newBudgetLedger(query).Reserve(context.Background(), usd(10, 2))
-	if err != nil || reservation.ReservationID != "reservation" || reservation.Attempt != 1 || !reservation.ExpiresAt.Equal(expires.Truncate(time.Second)) {
+	if err != nil || reservation.ReservationID != "reservation" || reservation.Attempt != 1 || !reservation.ExpiresAt.Equal(expires.Truncate(time.Second)) || !reservation.Replayed {
 		t.Fatalf("replay = %+v, %v", reservation, err)
 	}
 	if query.ran(qReserveBudget) {
@@ -489,7 +489,7 @@ func TestBudgetLedgerRenewsExpiredReservation(t *testing.T) {
 		qReserveBudget:   {{"new", newExpiry}},
 	}}
 	reservation, err := newBudgetLedger(query).Reserve(context.Background(), usd(10, 2))
-	if err != nil || reservation.ReservationID != "new" || reservation.Attempt != 2 {
+	if err != nil || reservation.ReservationID != "new" || reservation.Attempt != 2 || reservation.Replayed {
 		t.Fatalf("renewed = %+v, %v", reservation, err)
 	}
 	if args := query.args[qReserveBudget]; len(args) != 19 || args[5] != int64(2) {
@@ -549,6 +549,51 @@ func TestBudgetLedgerCommitAndRelease(t *testing.T) {
 	}
 	if err := replayed.Commit(context.Background(), reservation, domain.Usage{Currency: "EUR"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("currency = %v", err)
+	}
+}
+
+// G3: a turn's settlement opens its transaction with the guarded touch of the owner's turn, so a
+// worker the turn moved past settles nothing and the resumed run still finds its hold live.
+func TestBudgetLedgerSettlesATurnOnlyForItsCurrentOwner(t *testing.T) {
+	current := storedBudget("r", "req", string(domain.ReservationHeld), 1_000, 50, 1, time.Now().Add(time.Minute), nil, nil, false)
+	owner := domain.TurnOwner{TenantID: 8, RequestID: "req", Fence: 4}
+	reservation := domain.BudgetReservation{TenantID: 8, ReservationID: "r", RequestID: "req", Currency: "USD"}
+	usage := domain.Usage{InputTokens: 10, Currency: "USD"}
+
+	owned := &budgetQueryFake{rows: map[string][][]any{qGuardTurnOwner: {{int64(3)}}, qGetBudget: {current}, qSettleBudget: {{"r"}}, qReleaseBudget: {{"r"}}}}
+	if err := newBudgetLedger(owned).CommitTurn(context.Background(), owner, reservation, usage); err != nil {
+		t.Fatal(err)
+	}
+	if owned.names[0] != qGuardTurnOwner || len(owned.args[qGuardTurnOwner]) != 3 || owned.args[qGuardTurnOwner][2] != int64(4) {
+		t.Fatalf("the guarded touch must open the settlement: %v, %v", owned.names, owned.args[qGuardTurnOwner])
+	}
+	if err := newBudgetLedger(owned).ReleaseTurn(context.Background(), owner, reservation); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, settle := range map[string]func(*BudgetLedger, domain.TurnOwner) error{
+		"commit": func(ledger *BudgetLedger, owner domain.TurnOwner) error {
+			return ledger.CommitTurn(context.Background(), owner, reservation, usage)
+		},
+		"release": func(ledger *BudgetLedger, owner domain.TurnOwner) error {
+			return ledger.ReleaseTurn(context.Background(), owner, reservation)
+		},
+	} {
+		stale := &budgetQueryFake{rows: map[string][][]any{qGetBudget: {current}, qSettleBudget: {{"r"}}, qReleaseBudget: {{"r"}}}}
+		if err := settle(newBudgetLedger(stale), owner); !errors.Is(err, domain.ErrFenceLost) {
+			t.Fatalf("%s by a stale owner = %v, want ErrFenceLost", name, err)
+		}
+		if stale.ran(qSettleBudget) || stale.ran(qReleaseBudget) || stale.ran(qLockBudget) {
+			t.Fatalf("%s by a stale owner touched the reservation: %v", name, stale.names)
+		}
+		other := owner
+		other.RequestID = "another"
+		if err := settle(newBudgetLedger(&budgetQueryFake{}), other); !errors.Is(err, domain.ErrFenceLost) {
+			t.Fatalf("%s by the owner of another turn = %v", name, err)
+		}
+		if err := settle(newBudgetLedger(&budgetQueryFake{}), domain.TurnOwner{}); !errors.Is(err, domain.ErrFenceLost) {
+			t.Fatalf("%s without an owner = %v", name, err)
+		}
 	}
 }
 

@@ -53,6 +53,13 @@ func TestCodeListsAgreeWithSeedAndSchema(t *testing.T) {
 			column: "capability_code", columnType: "CHAR(2)", check: "model_capability_code_ck",
 		},
 		{
+			constantID: "turn_hold_code",
+			codes:      codes(HoldCheckpoint, HoldAgentPaused),
+			valid:      func(code string) bool { return TurnHoldCode(code).Valid() },
+			seed:       "runtime/runtime.yml", schema: "runtime/conversation_turn.yml",
+			column: "hold_code", columnType: "CHAR(1)", check: "conversation_turn_hold_code_ck",
+		},
+		{
 			constantID: "capacity_class",
 			codes:      codes(CapacityShared, CapacityDedicated),
 			valid:      func(code string) bool { return CapacityClass(code).Valid() },

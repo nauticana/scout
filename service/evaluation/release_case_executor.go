@@ -117,7 +117,8 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("sandbox for example %q: %w", example.ExampleID, err)
 	}
-	journal := &dataplane.MemoryLoopJournal{}
+	fences := &dataplane.MemoryTurnFences{}
+	journal := &dataplane.MemoryLoopJournal{Fences: fences}
 	loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
 		Requests: decodedRequests{ToolLoopRequestBuilder: executor.Requests, decoding: decoding},
 		Router:   subjectRouter{ModelRouter: executor.Router, modelVersion: subject.Versions.Model},
@@ -135,7 +136,7 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 		}
 	}
 	replay := &caseReplay{
-		loop: loop, journal: journal, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails, principal: principal,
+		loop: loop, journal: journal, fences: fences, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails, principal: principal,
 		limits: limits, budget: budget, maxSteps: executor.MaxSteps, now: executor.Now,
 		conversationID: "evaluation/" + subject.AgentVersion + "/" + example.ExampleID,
 	}

@@ -9,8 +9,13 @@ import (
 )
 
 func TestCaseReplayShowsADecidersRevisionBeforeItsObservation(t *testing.T) {
-	journal := &dataplane.MemoryLoopJournal{}
+	fences := &dataplane.MemoryTurnFences{}
+	journal := &dataplane.MemoryLoopJournal{Fences: fences}
 	key := domain.LoopKey{TenantID: 7, RequestID: "case-1", ExecutionStepID: 3}
+	owner, err := fences.Acquire(7, "case-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	tool := domain.ToolReference{ToolID: "shop.refund"}
 	revised := []byte(`{"amount":5}`)
 	entries := []domain.LoopEntry{
@@ -22,7 +27,7 @@ func TestCaseReplayShowsADecidersRevisionBeforeItsObservation(t *testing.T) {
 	}
 	for index, entry := range entries {
 		entry.EntryNo = index + 1
-		if _, err := journal.Append(context.Background(), key, entry); err != nil {
+		if _, err := journal.Append(context.Background(), owner, key, entry); err != nil {
 			t.Fatal(err)
 		}
 	}

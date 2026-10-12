@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -25,6 +26,8 @@ const (
 	qSessionCompleteTurn     = "scout_session_complete_turn"
 	qSessionCheckpointDigest = "scout_session_checkpoint_digest"
 	qSessionResponseDigest   = "scout_session_response_digest"
+	qSessionOwnerGuard       = "scout_session_owner_guard"
+	qSessionTurnFence        = "scout_session_turn_fence"
 )
 
 var durableSessionQueries = map[string]string{
@@ -67,17 +70,22 @@ UPDATE session_snapshot
  WHERE partner_id = ? AND conversation_id = ? AND revision = ?
 RETURNING revision`,
 
-	// The oldest non-terminal turn is the executing one; later ones are queued.
+	// The oldest non-terminal turn is the executing one, whatever its state: a later turn never
+	// runs while an earlier one is suspended or held.
 	qSessionActiveTurn: `
-SELECT turn.turn_no, COALESCE(snapshot.revision, 0)
+SELECT turn.turn_no, COALESCE(snapshot.revision, 0), turn.request_id
   FROM conversation_turn turn
   LEFT JOIN session_snapshot snapshot
     ON snapshot.partner_id = turn.partner_id
    AND snapshot.conversation_id = turn.conversation_id
  WHERE turn.partner_id = ? AND turn.conversation_id = ?
-   AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
+   AND turn.status_code IN (` + sqlTurnLive + `)
  ORDER BY turn.turn_no
  LIMIT 1`,
+
+	qSessionOwnerGuard: turnOwnerGuard,
+	qSessionTurnFence: `
+SELECT fence, status_code FROM conversation_turn WHERE partner_id = ? AND request_id = ?`,
 
 	// The history row, when the turn has one, receives the result card in the same statement.
 	qSessionCompleteTurn: `
@@ -86,7 +94,7 @@ UPDATE conversation_turn turn
    SET status_code = ` + sqlTurnCompleted + `, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
  WHERE turn.partner_id = ? AND turn.conversation_id = ? AND turn.turn_no = ?
-   AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
+   AND turn.request_id = ? AND turn.fence = ? AND turn.status_code IN (` + sqlTurnOwned + `)
    AND COALESCE((SELECT snapshot.revision
                    FROM session_snapshot snapshot
                   WHERE snapshot.partner_id = turn.partner_id
@@ -176,10 +184,14 @@ func (store *DurableSessionStore) Load(ctx context.Context, tenantID int64, conv
 	return snapshot, nil
 }
 
-// Checkpoint uploads the step state, then atomically inserts the checkpoint row
-// and advances the snapshot from expectedRevision to expectedRevision+1;
+// Checkpoint uploads the step state, then atomically guards the owner's turn, inserts the
+// checkpoint row, and advances the snapshot from expectedRevision to expectedRevision+1;
 // expectedRevision 0 creates the snapshot.
-func (store *DurableSessionStore) Checkpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
+func (store *DurableSessionStore) Checkpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	tenantID := owner.TenantID
 	if err := validateCheckpoint(tenantID, expectedRevision, checkpoint); err != nil {
 		return err
 	}
@@ -194,15 +206,16 @@ func (store *DurableSessionStore) Checkpoint(ctx context.Context, tenantID, expe
 		}
 		owned = true
 	}
-	err := store.commitCheckpoint(context.WithoutCancel(ctx), tenantID, expectedRevision, checkpoint, ref)
-	if err != nil && owned {
+	err := store.commitCheckpoint(context.WithoutCancel(ctx), owner, expectedRevision, checkpoint, ref)
+	if err != nil && owned && !errors.Is(err, domain.ErrFenceLost) {
 		return store.discardUnlessReferenced(ctx, ref, err, qSessionCheckpointDigest,
 			tenantID, checkpoint.ConversationID, checkpoint.TurnNo, checkpoint.StepNo)
 	}
 	return err
 }
 
-func (store *DurableSessionStore) commitCheckpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint, ref domain.ObjectRef) error {
+func (store *DurableSessionStore) commitCheckpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint, ref domain.ObjectRef) error {
+	tenantID := owner.TenantID
 	tx, err := store.DB.BeginTx(ctx, durableSessionQueries)
 	if err != nil {
 		return fmt.Errorf("begin checkpoint: %w", err)
@@ -213,6 +226,13 @@ func (store *DurableSessionStore) commitCheckpoint(ctx context.Context, tenantID
 			_ = tx.Rollback(ctx)
 		}
 	}()
+	turnNo, err := guardOwnerTurn(ctx, tx, qSessionOwnerGuard, owner)
+	if err != nil {
+		return err
+	}
+	if turnNo != checkpoint.TurnNo {
+		return fmt.Errorf("%w: the owner of turn %d cannot checkpoint turn %d", domain.ErrFenceLost, turnNo, checkpoint.TurnNo)
+	}
 	usage := checkpoint.Usage
 	if _, err = tx.Query(ctx, qSessionInsertCheckpoint,
 		tenantID, checkpoint.ConversationID, checkpoint.TurnNo, checkpoint.StepNo, checkpoint.ExecutionStepID,
@@ -242,11 +262,15 @@ func (store *DurableSessionStore) commitCheckpoint(ctx context.Context, tenantID
 	return nil
 }
 
-// Complete stores the response and marks the conversation's executing turn
-// completed while the snapshot is still at expectedRevision.
-func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, conversationID string, expectedRevision int64, result domain.TurnResult) error {
-	if tenantID <= 0 || expectedRevision < 0 || strings.TrimSpace(conversationID) == "" {
-		return fmt.Errorf("%w: tenant, non-negative revision, and conversation are required", domain.ErrValidation)
+// Complete stores the response and marks the owner's turn completed while it is the
+// conversation's executing turn, its fence holds, and the snapshot is still at expectedRevision.
+func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	tenantID := owner.TenantID
+	if expectedRevision < 0 || strings.TrimSpace(conversationID) == "" {
+		return fmt.Errorf("%w: non-negative revision and conversation are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
 		return err
@@ -255,10 +279,13 @@ func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, 
 	if err != nil {
 		return fmt.Errorf("find active turn: %w", err)
 	}
-	if len(active.Rows) == 0 || len(active.Rows[0]) < 2 {
+	if len(active.Rows) == 0 || len(active.Rows[0]) < 3 {
 		return fmt.Errorf("%w: conversation %q has no executing turn", domain.ErrNotFound, conversationID)
 	}
 	turnNo, revision := common.AsInt64(active.Rows[0][0]), common.AsInt64(active.Rows[0][1])
+	if activeRequest := common.AsString(active.Rows[0][2]); activeRequest != owner.RequestID {
+		return fmt.Errorf("%w: turn %q is not the executing turn of conversation %q", domain.ErrFenceLost, owner.RequestID, conversationID)
+	}
 	if revision != expectedRevision {
 		return fmt.Errorf("%w: session %q is at revision %d, expected %d", domain.ErrRevisionConflict, conversationID, revision, expectedRevision)
 	}
@@ -269,16 +296,32 @@ func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, 
 	ctx = context.WithoutCancel(ctx)
 	kind, card := resultCard(result.Response, ref, positiveOr(store.MaxResultCardBytes, defaultResultCardBytes))
 	completed, err := store.queries(ctx).Query(ctx, qSessionCompleteTurn,
-		ref.URI, ref.Digest, tenantID, conversationID, turnNo, expectedRevision, kind, card)
+		ref.URI, ref.Digest, tenantID, conversationID, turnNo, owner.RequestID, owner.Fence, expectedRevision, kind, card)
 	if err != nil {
 		err = fmt.Errorf("complete turn: %w", err)
 	} else if len(completed.Rows) == 0 {
-		err = fmt.Errorf("%w: turn %d of session %q changed before completion", domain.ErrRevisionConflict, turnNo, conversationID)
+		err = store.refusedCompletion(ctx, owner, turnNo, conversationID)
+	}
+	if errors.Is(err, domain.ErrFenceLost) {
+		return err
 	}
 	if err != nil {
 		return store.discardUnlessReferenced(ctx, ref, err, qSessionResponseDigest, tenantID, conversationID, turnNo)
 	}
 	return nil
+}
+
+// refusedCompletion tells a lost fence apart from a snapshot that moved.
+func (store *DurableSessionStore) refusedCompletion(ctx context.Context, owner domain.TurnOwner, turnNo int64, conversationID string) error {
+	current, err := store.queries(ctx).Query(ctx, qSessionTurnFence, owner.TenantID, owner.RequestID)
+	if err != nil {
+		return fmt.Errorf("read turn fence: %w", err)
+	}
+	if len(current.Rows) == 0 || common.AsInt64(current.Rows[0][0]) != owner.Fence ||
+		!slices.Contains([]domain.TurnStatus{domain.TurnRunning, domain.TurnStreaming}, domain.TurnStatus(common.AsString(current.Rows[0][1]))) {
+		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+	}
+	return fmt.Errorf("%w: turn %d of session %q changed before completion", domain.ErrRevisionConflict, turnNo, conversationID)
 }
 
 const defaultResultCardBytes = 64 << 10

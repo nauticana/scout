@@ -39,6 +39,17 @@ type StudioPauseBackend interface {
 	Pause(ctx context.Context, actor domain.StudioActor, request domain.AgentPauseRequest) (domain.AgentPauseResult, error)
 }
 
+// StudioTurnControlBackend lets an operator see an agent's live turns and hold and release
+// them. Reading needs AGENT_OPERATION VIEW and changing OPERATE on the agent; an agent the
+// actor cannot view in Studio, and a turn of another agent, read as not found.
+type StudioTurnControlBackend interface {
+	LiveTurns(ctx context.Context, actor domain.StudioActor, filter domain.LiveTurnFilter) (domain.LiveTurnPage, error)
+	Turn(ctx context.Context, actor domain.StudioActor, agentID, requestID string) (domain.LiveTurn, error)
+	Hold(ctx context.Context, actor domain.StudioActor, request domain.TurnHoldRequest) (domain.TurnHoldOutcome, error)
+	// Release re-admits the held turn's budget, then requeues it; a stale fence is domain.ErrConflict.
+	Release(ctx context.Context, actor domain.StudioActor, request domain.TurnReleaseRequest) (domain.LiveTurn, error)
+}
+
 // StudioFeedbackBackend reports the ratings an agent's releases received over a bounded window.
 type StudioFeedbackBackend interface {
 	Feedback(ctx context.Context, actor domain.StudioActor, agentID string, from, to time.Time) ([]domain.FeedbackSummary, error)

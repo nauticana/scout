@@ -46,7 +46,7 @@ func budgetedRuntime(t *testing.T, recorder *runtimeRecorder, budget domain.Rele
 
 func TestTurnRuntimeNarrowsTheGovernorByAPerTurnBudget(t *testing.T) {
 	runtime, started, spends := budgetedRuntime(t, &runtimeRecorder{}, perTurnBudget(400, 30, "USD"))
-	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
 		t.Fatalf("HandleTurn: %v", err)
 	}
 	if started.MaxTokens != 400 || started.MaxCostMinorUnits != 30 {
@@ -61,7 +61,7 @@ func TestTurnRuntimeNarrowsTheGovernorByAPerTurnBudget(t *testing.T) {
 		t.Fatalf("spends = %+v", *spends)
 	}
 	runtime, started, _ = budgetedRuntime(t, &runtimeRecorder{}, perTurnBudget(5_000, 0, ""))
-	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
 		t.Fatalf("HandleTurn: %v", err)
 	}
 	if started.MaxTokens != 1000 || started.MaxCostMinorUnits != 100 {
@@ -72,7 +72,7 @@ func TestTurnRuntimeNarrowsTheGovernorByAPerTurnBudget(t *testing.T) {
 func TestTurnRuntimeRefusesAPerTurnBudgetInAnotherCurrency(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime, started, spends := budgetedRuntime(t, recorder, perTurnBudget(0, 30, "EUR"))
-	_, err := runtime.HandleTurn(context.Background(), runtimeDispatch())
+	_, err := runtime.HandleTurn(context.Background(), runtimeClaim())
 	var unenforceable *domain.BudgetUnenforceableError
 	if !errors.As(err, &unenforceable) || unenforceable.Problem != domain.BudgetCurrencyMismatch {
 		t.Fatalf("error = %v, want a currency mismatch", err)
@@ -85,7 +85,7 @@ func TestTurnRuntimeRefusesAPerTurnBudgetInAnotherCurrency(t *testing.T) {
 func TestTurnRuntimeStopsAStepOnceThePerTurnBudgetIsSpent(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime, _, spends := budgetedRuntime(t, recorder, perTurnBudget(5, 0, ""))
-	_, err := runtime.HandleTurn(context.Background(), runtimeDispatch())
+	_, err := runtime.HandleTurn(context.Background(), runtimeClaim())
 	if !errors.Is(err, domain.ErrBudgetExceeded) {
 		t.Fatalf("error = %v, want the spent budget to stop step 2", err)
 	}
@@ -95,13 +95,13 @@ func TestTurnRuntimeStopsAStepOnceThePerTurnBudgetIsSpent(t *testing.T) {
 	// A step already committed replays even though the budget is now spent.
 	replay := &runtimeRecorder{}
 	runtime, _, spends = budgetedRuntime(t, replay, perTurnBudget(5, 0, ""))
-	runtime.Idempotency = &fake.StepIdempotencyStore{BeginFunc: func(_ context.Context, _ int64, _ string, step domain.ExecutionStep) (domain.StepResult, bool, error) {
+	runtime.Idempotency = &fake.StepIdempotencyStore{BeginFunc: func(_ context.Context, _ domain.TurnOwner, step domain.ExecutionStep) (domain.StepResult, bool, error) {
 		if step.StepID == "step-2" {
 			return domain.StepResult{State: []byte("step-2-state"), Usage: domain.Usage{OutputTokens: 5, Currency: "USD"}}, true, nil
 		}
 		return domain.StepResult{}, false, nil
 	}}
-	if result, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil || string(result.Response) != "step-2-state" {
+	if result, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil || string(result.Response) != "step-2-state" {
 		t.Fatalf("replayed turn = %q, %v", result.Response, err)
 	}
 	if len(*spends) != 1 {

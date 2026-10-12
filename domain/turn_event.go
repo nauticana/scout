@@ -14,12 +14,14 @@ const (
 	TurnEventToolResult       TurnEventKind = "tool_result"
 	TurnEventApprovalPending  TurnEventKind = "approval_pending"
 	TurnEventApprovalResolved TurnEventKind = "approval_resolved"
-	TurnEventEvidence         TurnEventKind = "evidence"
-	TurnEventEffect           TurnEventKind = "effect"
-	TurnEventProgress         TurnEventKind = "progress"
-	TurnEventResult           TurnEventKind = "result"
-	TurnEventCitations        TurnEventKind = "citations"
-	TurnEventExtension        TurnEventKind = "extension"
+	// TurnEventHeld ends a delivery whose turn was held; a released turn continues the stream.
+	TurnEventHeld      TurnEventKind = "held"
+	TurnEventEvidence  TurnEventKind = "evidence"
+	TurnEventEffect    TurnEventKind = "effect"
+	TurnEventProgress  TurnEventKind = "progress"
+	TurnEventResult    TurnEventKind = "result"
+	TurnEventCitations TurnEventKind = "citations"
+	TurnEventExtension TurnEventKind = "extension"
 )
 
 // TurnEvent is one typed, versioned event. Exactly the field its Kind names is

@@ -27,6 +27,7 @@ seeds:
       - [R, false, Executing]
       - [S, false, Emitting a partial response]
       - [U, false, Parked awaiting a human decision]
+      - [H, false, Held under a new fence]
       - [C, true, Finished successfully]
       - [F, true, Finished with an error]
       - [X, true, Abandoned before completion]

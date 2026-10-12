@@ -45,7 +45,7 @@ type loopHarness struct {
 
 func newLoopHarness(t *testing.T, script ...domain.ModelResult) *loopHarness {
 	return &loopHarness{
-		t: t, script: script, effects: map[string]int{}, journal: &MemoryLoopJournal{},
+		t: t, script: script, effects: map[string]int{}, journal: newTestLoopJournal(),
 		limits: domain.ToolLoopLimits{MaxIterations: 6, MaxToolCalls: 8, MaxTokens: 10_000, MaxRepeatedCalls: 2, Deadline: time.Minute},
 	}
 }
@@ -69,7 +69,7 @@ func (harness *loopHarness) executor() *ToolLoopExecutor {
 				harness.t.Fatalf("tools listed for %d %s@%s", tenantID, agentID, release)
 			}
 			return []domain.ToolDefinition{
-				{ToolID: "search", Version: "1", InputSchema: []byte(`{"type":"object"}`)},
+				{ToolID: "search", Version: "1", InputSchema: []byte(`{"type":"object"}`), ReadOnly: true},
 				{ToolID: "shop.write", Version: "2", InputSchema: []byte(`{"type":"object"}`)},
 			}, nil
 		}},
@@ -94,11 +94,24 @@ func (harness *loopHarness) executor() *ToolLoopExecutor {
 	return executor
 }
 
+// loopOwner is the owner newTestLoopJournal grants turn request-1 of tenant 7.
+var loopOwner = domain.TurnOwner{TenantID: 7, RequestID: "request-1", Fence: 1}
+
+// newTestLoopJournal is a memory journal whose turn request-1 is owned by loopOwner.
+func newTestLoopJournal() *MemoryLoopJournal {
+	fences := &MemoryTurnFences{}
+	if _, err := fences.Acquire(loopOwner.TenantID, loopOwner.RequestID); err != nil {
+		panic(err)
+	}
+	return &MemoryLoopJournal{Fences: fences}
+}
+
 func loopInput() domain.StepInput {
 	return domain.StepInput{
 		Step:      domain.ExecutionStep{ExecutionStepID: 11, StepID: "work", Kind: domain.StepKindToolLoop},
 		Principal: loopPrincipal, RequestID: "request-1",
 		OnBehalfOf: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"},
+		Owner:      loopOwner,
 	}
 }
 
@@ -188,17 +201,17 @@ func TestToolLoopMergesTheCitationsOfEveryGroundedCall(t *testing.T) {
 }
 
 func TestToolLoopRejectsDifferentContentThatLostAJournalRace(t *testing.T) {
-	journal := &MemoryLoopJournal{}
+	journal := newTestLoopJournal()
 	key := domain.LoopKey{TenantID: 7, RequestID: "request-1", ExecutionStepID: 11}
 	winner := domain.LoopEntry{EntryNo: 1, Kind: domain.LoopEntryModel, Iteration: 1, Model: &domain.ModelResult{Output: []byte("winner")}}
-	if _, err := journal.Append(context.Background(), key, winner); err != nil {
+	if _, err := journal.Append(context.Background(), loopOwner, key, winner); err != nil {
 		t.Fatalf("seed journal: %v", err)
 	}
 	harness := newLoopHarness(t, answers("loser"))
 	harness.journal = journal
 	// Loading replays the winner. Exercise append contention directly because a
 	// valid loaded journal never asks the model for this already-written slot.
-	run := &loopRun{key: key, journal: nil}
+	run := &loopRun{key: key, journal: nil, input: loopInput()}
 	_, err := harness.executor().append(context.Background(), run, domain.LoopEntry{
 		Kind: domain.LoopEntryModel, Iteration: 1, Model: &domain.ModelResult{Output: []byte("loser")},
 	})
@@ -271,17 +284,17 @@ type crashingJournal struct {
 	crashed     bool
 }
 
-func (journal *crashingJournal) Append(ctx context.Context, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error) {
+func (journal *crashingJournal) Append(ctx context.Context, owner domain.TurnOwner, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error) {
 	if entry.EntryNo == journal.crashAt && !journal.crashed {
 		journal.crashed = true
 		if journal.afterCommit {
-			if _, err := journal.MemoryLoopJournal.Append(ctx, key, entry); err != nil {
+			if _, err := journal.MemoryLoopJournal.Append(ctx, owner, key, entry); err != nil {
 				return domain.LoopEntry{}, err
 			}
 		}
 		return domain.LoopEntry{}, errors.New("worker crashed")
 	}
-	return journal.MemoryLoopJournal.Append(ctx, key, entry)
+	return journal.MemoryLoopJournal.Append(ctx, owner, key, entry)
 }
 
 func TestToolLoopRedeliveryAfterEachDurableBoundaryNeverRepeatsACommittedEffect(t *testing.T) {
@@ -289,7 +302,7 @@ func TestToolLoopRedeliveryAfterEachDurableBoundaryNeverRepeatsACommittedEffect(
 		harness := newLoopHarness(t,
 			proposes(10, toolCall("a", "search", `{"q":"x"}`), toolCall("b", "shop_write", `{"sku":"1"}`)),
 			answers("done"))
-		harness.journal = &crashingJournal{MemoryLoopJournal: &MemoryLoopJournal{}, crashAt: entryNo, afterCommit: true}
+		harness.journal = &crashingJournal{MemoryLoopJournal: newTestLoopJournal(), crashAt: entryNo, afterCommit: true}
 		if _, err := harness.executor().Execute(context.Background(), loopInput()); err == nil {
 			t.Fatalf("entry %d: want the crash", entryNo)
 		}

@@ -97,7 +97,7 @@ checks:
   - name: human_review_item_status_ck
     expression: status_code IN ('P', 'G', 'D', 'M')
   - name: human_review_item_verdict_ck
-    expression: verdict_code IS NULL OR verdict_code IN ('P', 'F')
+    expression: verdict_code IN ('P', 'F')
   - name: human_review_item_score_ck
     expression: score IS NULL OR score BETWEEN 1 AND 5
   - name: human_review_item_review_ck

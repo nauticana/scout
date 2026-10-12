@@ -33,17 +33,17 @@ func newTestIngress(t *testing.T, recorder *ingressRecorder, enqueueErr error) *
 			return nil
 		}},
 		Records: &fake.TurnRecordStore{
-			FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
+			FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
 				recorder.calls = append(recorder.calls, "find")
-				return 0, "", nil, domain.ErrNotFound
+				return domain.TurnRecord{}, domain.ErrNotFound
 			},
 			OpenFunc: func(context.Context, domain.TurnRequest, domain.ObjectRef) (int64, error) {
 				recorder.calls = append(recorder.calls, "open")
 				return 1, nil
 			},
-			FailFunc: func(_ context.Context, _ int64, _ string, status domain.TurnStatus, errorCode string) error {
+			FailParkedFunc: func(_ context.Context, _ int64, _ string, errorCode string) error {
 				recorder.calls = append(recorder.calls, "fail")
-				recorder.failed = append(recorder.failed, string(status)+":"+errorCode)
+				recorder.failed = append(recorder.failed, string(domain.TurnFailed)+":"+errorCode)
 				return nil
 			},
 		},
@@ -122,9 +122,9 @@ func TestTurnIngressRefundsAndClosesOnDispatchFailure(t *testing.T) {
 func TestTurnIngressResubscribesTerminalRequest(t *testing.T) {
 	recorder := &ingressRecorder{}
 	ingress := newTestIngress(t, recorder, nil)
-	ingress.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
+	ingress.Records = &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
 		recorder.calls = append(recorder.calls, "find")
-		return 1, domain.TurnCompleted, []byte("response"), nil
+		return domain.TurnRecord{TurnNo: 1, Status: domain.TurnCompleted, Payload: []byte("response")}, nil
 	}}
 	if _, err := ingress.OpenTurn(context.Background(), ingressRequest()); err != nil {
 		t.Fatal(err)

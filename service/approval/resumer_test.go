@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/nauticana/scout/domain"
@@ -22,8 +23,8 @@ func resumerFor(store *stubStore, resumed, failed, dispatched *int) *Resumer {
 			return nil
 		}),
 		Records: &fake.TurnRecordStore{
-			ResumeFunc: func(context.Context, int64, string) error { *resumed++; return nil },
-			FailFunc:   func(context.Context, int64, string, domain.TurnStatus, string) error { *failed++; return nil },
+			ResumeFunc:     func(context.Context, int64, string) error { *resumed++; return nil },
+			FailParkedFunc: func(context.Context, int64, string, string) error { *failed++; return nil },
 		},
 		Queue: requeueFunc(func(context.Context, int64, string) error { *dispatched++; return nil }),
 	}
@@ -56,6 +57,34 @@ func TestResolveResumesAndRedispatchesAnApprovedTurn(t *testing.T) {
 	}
 }
 
+// Decision 11: a verdict on a held turn is persisted and the turn stays held, unqueued, for the
+// operator who releases it; neither an approval nor a rejection moves it.
+func TestResolveRecordsAVerdictOnAHeldTurnAndLeavesItHeld(t *testing.T) {
+	for _, status := range []domain.ApprovalStatus{domain.ApprovalStatusApproved, domain.ApprovalStatusRejected} {
+		store, verdict := openRequest(t)
+		verdict.Status = status
+		var resumed, failed, dispatched int
+		resumer := resumerFor(store, &resumed, &failed, &dispatched)
+		resumer.Records = &fake.TurnRecordStore{
+			ResumeFunc: func(context.Context, int64, string) error {
+				resumed++
+				return fmt.Errorf("%w: turn request", domain.ErrTurnHeld)
+			},
+			FailParkedFunc: func(context.Context, int64, string, string) error {
+				failed++
+				return fmt.Errorf("%w: turn request", domain.ErrTurnHeld)
+			},
+		}
+		request, err := resumer.Resolve(context.Background(), verdict)
+		if err != nil || request.Status != status {
+			t.Fatalf("%s: verdict = %+v, %v", status, request, err)
+		}
+		if dispatched != 0 {
+			t.Fatalf("%s: a held turn was requeued", status)
+		}
+	}
+}
+
 func TestResolveFailsTheTurnOnARejection(t *testing.T) {
 	store, verdict := openRequest(t)
 	verdict.Status = domain.ApprovalStatusRejected
@@ -72,9 +101,9 @@ func TestResolveReplaysARecordedRejection(t *testing.T) {
 	store, verdict := openRequest(t)
 	verdict.Status = domain.ApprovalStatusRejected
 	records := &fake.TurnRecordStore{
-		FailFunc: func(context.Context, int64, string, domain.TurnStatus, string) error { return domain.ErrConflict },
-		FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
-			return 1, domain.TurnFailed, []byte(domain.ApprovalStatusRejected), nil
+		FailParkedFunc: func(context.Context, int64, string, string) error { return domain.ErrConflict },
+		FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
+			return domain.TurnRecord{TurnNo: 1, Status: domain.TurnFailed, Payload: []byte(domain.ApprovalStatusRejected)}, nil
 		},
 	}
 	resumer := resumerFor(store, new(int), new(int), new(int))
@@ -82,8 +111,8 @@ func TestResolveReplaysARecordedRejection(t *testing.T) {
 	if _, err := resumer.Resolve(context.Background(), verdict); err != nil {
 		t.Fatalf("replayed rejection = %v", err)
 	}
-	records.FindFunc = func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
-		return 1, domain.TurnFailed, []byte(domain.ApprovalStatusEdited), nil
+	records.FindFunc = func(context.Context, int64, string) (domain.TurnRecord, error) {
+		return domain.TurnRecord{TurnNo: 1, Status: domain.TurnFailed, Payload: []byte(domain.ApprovalStatusEdited)}, nil
 	}
 	if _, err := resumer.Resolve(context.Background(), verdict); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("different terminal result = %v, want conflict", err)

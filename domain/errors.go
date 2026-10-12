@@ -71,6 +71,11 @@ var (
 	ErrUnsupportedClaim = errors.New("unsupported claim")
 	// ErrEffectViolated indicates a mutation was accepted but its observed effect does not hold.
 	ErrEffectViolated = errors.New("effect violated")
+	// ErrFenceLost indicates the writer no longer owns the turn: its fence moved on, so the
+	// write is refused and the stale worker leaves the turn to its current owner.
+	ErrFenceLost = errors.New("turn fence lost")
+	// ErrTurnHeld indicates the turn is held; nothing runs it until it is released.
+	ErrTurnHeld = errors.New("turn held")
 	// ErrEffectUnknown indicates a mutation's effect could not be observed; the outcome is
 	// unknown, never success, and the mutation is not invoked again until it can be.
 	ErrEffectUnknown = errors.New("effect unknown")

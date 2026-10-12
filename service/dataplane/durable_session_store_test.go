@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -71,7 +72,16 @@ func (db persistenceDBFake) BeginTx(context.Context, map[string]string) (keelpor
 
 const testFingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// sessionOwner owns turn 4 of conversation conv; the guard rows below say it still does.
+var sessionOwner = domain.TurnOwner{TenantID: 7, RequestID: "req-1", Fence: 3}
+
 func newDurableSessionStore(query *persistenceQueryFake, storage *fake.ObjectStorage) *DurableSessionStore {
+	if query.rows == nil {
+		query.rows = map[string][][]any{}
+	}
+	if _, set := query.rows[qSessionOwnerGuard]; !set {
+		query.rows[qSessionOwnerGuard] = [][]any{{int64(4)}}
+	}
 	return &DurableSessionStore{DB: persistenceDBFake{query: query}, Objects: newObjectStateStore(storage)}
 }
 
@@ -142,10 +152,13 @@ func TestDurableSessionStoreCheckpointCreatesThenAdvances(t *testing.T) {
 	}}
 	store := newDurableSessionStore(query, storage)
 	checkpoint := validCheckpoint(`{"s":1}`)
-	if err := store.Checkpoint(context.Background(), 7, 0, checkpoint); err != nil {
+	if err := store.Checkpoint(context.Background(), sessionOwner, 0, checkpoint); err != nil {
 		t.Fatal(err)
 	}
 	digest := DigestBytes(checkpoint.State)
+	if args := query.lastArgs(qSessionOwnerGuard); !reflect.DeepEqual(args, []any{int64(7), "req-1", int64(3)}) {
+		t.Fatalf("guard args = %v", args)
+	}
 	uri := "scout://sessions/scout/checkpoint/7/conv/4/2/" + digest
 	wantInsert := []any{int64(7), "conv", int64(4), 2, int64(91), "req-1:91", uri, digest, testFingerprint,
 		int64(10), int64(5), 1, int64(3), "USD"}
@@ -155,14 +168,15 @@ func TestDurableSessionStoreCheckpointCreatesThenAdvances(t *testing.T) {
 	if args := query.lastArgs(qSessionCreateSnapshot); !reflect.DeepEqual(args, []any{int64(7), "conv", int64(4), 2, uri, digest}) {
 		t.Fatalf("create args = %v", args)
 	}
-	if !reflect.DeepEqual(query.calls, []string{qSessionInsertCheckpoint, qSessionCreateSnapshot}) || query.commits != 1 || query.rollbacks != 0 {
+	// The guarded touch of the owner's turn opens the transaction.
+	if !reflect.DeepEqual(query.calls, []string{qSessionOwnerGuard, qSessionInsertCheckpoint, qSessionCreateSnapshot}) || query.commits != 1 || query.rollbacks != 0 {
 		t.Fatalf("calls = %v, commits = %d, rollbacks = %d", query.calls, query.commits, query.rollbacks)
 	}
 	if _, ok := storage.Payload("scout/checkpoint/7/conv/4/2/" + digest); !ok {
 		t.Fatal("state object missing")
 	}
 
-	if err := store.Checkpoint(context.Background(), 7, 5, checkpoint); err != nil {
+	if err := store.Checkpoint(context.Background(), sessionOwner, 5, checkpoint); err != nil {
 		t.Fatal(err)
 	}
 	if args := query.lastArgs(qSessionAdvanceSnapshot); !reflect.DeepEqual(args, []any{int64(4), 2, uri, digest, int64(7), "conv", int64(5)}) {
@@ -179,7 +193,7 @@ func TestDurableSessionStoreCheckpointRevisionConflictKeepsSharedObject(t *testi
 	digest := DigestBytes(checkpoint.State)
 	// The winning writer committed identical content: the object stays.
 	query := &persistenceQueryFake{rows: map[string][][]any{qSessionCheckpointDigest: {{digest}}}}
-	err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), 7, 5, checkpoint)
+	err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), sessionOwner, 5, checkpoint)
 	if !errors.Is(err, domain.ErrRevisionConflict) || query.rollbacks != 1 || query.commits != 0 {
 		t.Fatalf("conflict = %v, rollbacks = %d, commits = %d", err, query.rollbacks, query.commits)
 	}
@@ -189,9 +203,31 @@ func TestDurableSessionStoreCheckpointRevisionConflictKeepsSharedObject(t *testi
 	// The winning writer committed different content: our upload is an orphan and goes.
 	other := &fake.ObjectStorage{}
 	query = &persistenceQueryFake{rows: map[string][][]any{qSessionCheckpointDigest: {{strings.Repeat("f", 64)}}}}
-	err = newDurableSessionStore(query, other).Checkpoint(context.Background(), 7, 5, checkpoint)
+	err = newDurableSessionStore(query, other).Checkpoint(context.Background(), sessionOwner, 5, checkpoint)
 	if !errors.Is(err, domain.ErrRevisionConflict) || len(other.Deletes) != 1 || len(other.Objects) != 0 {
 		t.Fatalf("conflict = %v, deletes = %v", err, other.Deletes)
+	}
+}
+
+// A checkpoint by an owner the turn moved past writes nothing, and keeps its upload, which the
+// current owner may share; the reconciliation sweep reclaims an orphan.
+func TestDurableSessionStoreCheckpointRefusesAFencedOutOwner(t *testing.T) {
+	storage := &fake.ObjectStorage{}
+	query := &persistenceQueryFake{rows: map[string][][]any{qSessionOwnerGuard: nil}}
+	err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), sessionOwner, 5, validCheckpoint("x"))
+	if !errors.Is(err, domain.ErrFenceLost) || query.rollbacks != 1 || query.commits != 0 || len(storage.Deletes) != 0 {
+		t.Fatalf("stale = %v, rollbacks = %d, deletes = %v", err, query.rollbacks, storage.Deletes)
+	}
+	if !reflect.DeepEqual(query.calls, []string{qSessionOwnerGuard}) {
+		t.Fatalf("a fenced-out owner wrote: %v", query.calls)
+	}
+	// An owner of another turn of the conversation cannot checkpoint this one.
+	query = &persistenceQueryFake{rows: map[string][][]any{qSessionOwnerGuard: {{int64(5)}}}}
+	if err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), sessionOwner, 5, validCheckpoint("x")); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("other turn = %v", err)
+	}
+	if err := newDurableSessionStore(&persistenceQueryFake{}, storage).Checkpoint(context.Background(), domain.TurnOwner{}, 5, validCheckpoint("x")); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("missing owner = %v", err)
 	}
 }
 
@@ -200,14 +236,14 @@ func TestDurableSessionStoreCheckpointFailureDeletesUploadAndJoinsErrors(t *test
 	deleteErr := errors.New("bucket unreachable")
 	storage := &fake.ObjectStorage{DeleteFunc: func(context.Context, string) error { return deleteErr }}
 	query := &persistenceQueryFake{errs: map[string]error{qSessionInsertCheckpoint: dbErr}}
-	err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), 7, 5, validCheckpoint("x"))
+	err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), sessionOwner, 5, validCheckpoint("x"))
 	if !errors.Is(err, dbErr) || !errors.Is(err, deleteErr) || query.rollbacks != 1 {
 		t.Fatalf("error = %v, rollbacks = %d", err, query.rollbacks)
 	}
 	// Commit failure without a reference check row: object removed best effort.
 	clean := &fake.ObjectStorage{}
 	query = &persistenceQueryFake{rows: map[string][][]any{qSessionAdvanceSnapshot: {{int64(6)}}}, commitErr: dbErr}
-	err = newDurableSessionStore(query, clean).Checkpoint(context.Background(), 7, 5, validCheckpoint("x"))
+	err = newDurableSessionStore(query, clean).Checkpoint(context.Background(), sessionOwner, 5, validCheckpoint("x"))
 	if !errors.Is(err, dbErr) || len(clean.Deletes) != 1 || len(clean.Objects) != 0 {
 		t.Fatalf("commit failure = %v, deletes = %v", err, clean.Deletes)
 	}
@@ -226,11 +262,11 @@ func TestDurableSessionStoreCheckpointNeverInventsFingerprintOrCurrency(t *testi
 	for name, mutate := range cases {
 		checkpoint := validCheckpoint("x")
 		mutate(&checkpoint)
-		if err := store.Checkpoint(context.Background(), 7, 1, checkpoint); !errors.Is(err, domain.ErrValidation) {
+		if err := store.Checkpoint(context.Background(), sessionOwner, 1, checkpoint); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	if err := store.Checkpoint(context.Background(), 7, -1, validCheckpoint("x")); !errors.Is(err, domain.ErrValidation) {
+	if err := store.Checkpoint(context.Background(), sessionOwner, -1, validCheckpoint("x")); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("negative revision: %v", err)
 	}
 }
@@ -241,7 +277,7 @@ func TestDurableSessionStoreCheckpointAcceptsDehydratedReference(t *testing.T) {
 	checkpoint := validCheckpoint("")
 	checkpoint.State = nil
 	checkpoint.StateRef = domain.ObjectRef{URI: "scout://sessions/elsewhere", Digest: testFingerprint}
-	if err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), 7, 1, checkpoint); err != nil {
+	if err := newDurableSessionStore(query, storage).Checkpoint(context.Background(), sessionOwner, 1, checkpoint); err != nil {
 		t.Fatal(err)
 	}
 	if len(storage.Uploads) != 0 || query.lastArgs(qSessionInsertCheckpoint)[6] != "scout://sessions/elsewhere" {
@@ -252,12 +288,12 @@ func TestDurableSessionStoreCheckpointAcceptsDehydratedReference(t *testing.T) {
 func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	storage := &fake.ObjectStorage{}
 	query := &persistenceQueryFake{rows: map[string][][]any{
-		qSessionActiveTurn:   {{int64(4), int64(6)}},
+		qSessionActiveTurn:   {{int64(4), int64(6), "req-1"}},
 		qSessionCompleteTurn: {{int64(4)}},
 	}}
 	store := newDurableSessionStore(query, storage)
 	response := []byte(`{"text":"done"}`)
-	if err := store.Complete(context.Background(), 7, "conv", 6, domain.TurnResult{Response: response}); err != nil {
+	if err := store.Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}); err != nil {
 		t.Fatal(err)
 	}
 	digest := DigestBytes(response)
@@ -265,28 +301,53 @@ func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	if args := query.lastArgs(qSessionActiveTurn); !reflect.DeepEqual(args, []any{int64(7), "conv"}) {
 		t.Fatalf("active turn args = %v", args)
 	}
-	if args := query.lastArgs(qSessionCompleteTurn); !reflect.DeepEqual(args, []any{uri, digest, int64(7), "conv", int64(4), int64(6), "json", string(response)}) {
+	want := []any{uri, digest, int64(7), "conv", int64(4), "req-1", int64(3), int64(6), "json", string(response)}
+	if args := query.lastArgs(qSessionCompleteTurn); !reflect.DeepEqual(args, want) {
 		t.Fatalf("complete args = %v", args)
 	}
 
 	// Snapshot moved on before the upload: conflict, nothing uploaded.
 	stale := &fake.ObjectStorage{}
-	err := newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{qSessionActiveTurn: {{int64(4), int64(7)}}}}, stale).
-		Complete(context.Background(), 7, "conv", 6, domain.TurnResult{Response: response})
+	err := newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{qSessionActiveTurn: {{int64(4), int64(7), "req-1"}}}}, stale).
+		Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
 	if !errors.Is(err, domain.ErrRevisionConflict) || len(stale.Uploads) != 0 {
 		t.Fatalf("stale = %v, uploads = %v", err, stale.Uploads)
 	}
-	// Turn changed between upload and update: conflict, orphan removed.
+	// Turn changed between upload and update while its fence held: conflict, orphan removed.
 	raced := &fake.ObjectStorage{}
-	err = newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{qSessionActiveTurn: {{int64(4), int64(6)}}}}, raced).
-		Complete(context.Background(), 7, "conv", 6, domain.TurnResult{Response: response})
+	err = newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{
+		qSessionActiveTurn: {{int64(4), int64(6), "req-1"}}, qSessionTurnFence: {{int64(3), string(domain.TurnRunning)}},
+	}}, raced).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
 	if !errors.Is(err, domain.ErrRevisionConflict) || len(raced.Deletes) != 1 {
 		t.Fatalf("raced = %v, deletes = %v", err, raced.Deletes)
 	}
 	// No executing turn.
-	err = newDurableSessionStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Complete(context.Background(), 7, "conv", 0, domain.TurnResult{})
+	err = newDurableSessionStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Complete(context.Background(), sessionOwner, "conv", 0, domain.TurnResult{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("no turn = %v", err)
+	}
+}
+
+// Completion is refused to an owner the turn moved past, and to one whose turn is not the
+// conversation's executing turn, without touching the upload the current owner may share.
+func TestDurableSessionStoreCompleteRefusesAFencedOutOwner(t *testing.T) {
+	response := []byte(`{"text":"done"}`)
+	held := &fake.ObjectStorage{}
+	query := &persistenceQueryFake{rows: map[string][][]any{
+		qSessionActiveTurn: {{int64(4), int64(6), "req-1"}}, qSessionTurnFence: {{int64(4), string(domain.TurnHeld)}},
+	}}
+	err := newDurableSessionStore(query, held).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+	if !errors.Is(err, domain.ErrFenceLost) || len(held.Deletes) != 0 {
+		t.Fatalf("held = %v, deletes = %v", err, held.Deletes)
+	}
+	// An earlier turn still live, parked or held, is the executing turn: a later one cannot complete.
+	query = &persistenceQueryFake{rows: map[string][][]any{qSessionActiveTurn: {{int64(3), int64(6), "req-0"}}}}
+	err = newDurableSessionStore(query, &fake.ObjectStorage{}).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+	if !errors.Is(err, domain.ErrFenceLost) || slices.Contains(query.calls, qSessionCompleteTurn) {
+		t.Fatalf("out of order = %v, calls = %v", err, query.calls)
+	}
+	if !strings.Contains(durableSessionQueries[qSessionActiveTurn], sqlTurnHeld) || !strings.Contains(durableSessionQueries[qSessionActiveTurn], sqlTurnSuspended) {
+		t.Fatal("the executing turn must be chosen among every live turn, suspended and held included")
 	}
 }
 
@@ -310,13 +371,13 @@ func TestDurableSessionStoreResultCardLimitIsConfigurable(t *testing.T) {
 	response := []byte(`{"text":"done"}`)
 	complete := func(maxBytes int) (string, error) {
 		query := &persistenceQueryFake{rows: map[string][][]any{
-			qSessionActiveTurn: {{int64(4), int64(6)}}, qSessionCompleteTurn: {{int64(4)}},
+			qSessionActiveTurn: {{int64(4), int64(6), "req-1"}}, qSessionCompleteTurn: {{int64(4)}},
 		}}
 		store := newDurableSessionStore(query, &fake.ObjectStorage{})
 		store.MaxResultCardBytes = maxBytes
-		err := store.Complete(context.Background(), 7, "conv", 6, domain.TurnResult{Response: response})
-		if args := query.lastArgs(qSessionCompleteTurn); len(args) > 6 {
-			return args[6].(string), err
+		err := store.Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+		if args := query.lastArgs(qSessionCompleteTurn); len(args) > 8 {
+			return args[8].(string), err
 		}
 		return "", err
 	}

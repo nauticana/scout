@@ -109,6 +109,10 @@ func TestTurnAgentInvokerSurfacesTheDelegatesOutcome(t *testing.T) {
 	if err := outcome(pending); !errors.Is(err, domain.ErrApprovalPending) {
 		t.Fatalf("a parked delegate parks its delegator, got %v", err)
 	}
+	held := domain.TurnReply{Final: true, ErrorCode: "held", Events: []domain.TurnEvent{{Kind: domain.TurnEventHeld}}}
+	if err := outcome(held); !errors.Is(err, domain.ErrTurnHeld) {
+		t.Fatalf("a held delegate holds its delegator, got %v", err)
+	}
 	if err := outcome(domain.TurnReply{Final: true, ErrorCode: "canceled"}); !errors.Is(err, domain.ErrTurnCanceled) {
 		t.Fatalf("want ErrTurnCanceled, got %v", err)
 	}

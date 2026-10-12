@@ -15,3 +15,7 @@ seeds:
     columns: [constant_id, table_name, column_name]
     rows:
       - [config_merge_mode, config_scope_binding, merge_mode_code]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [outcome_audit_events, D, description]

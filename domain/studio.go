@@ -365,12 +365,15 @@ type AgentSetEnabledRequest struct {
 }
 
 // PausePolicy says what happens to an agent's live turns when it is paused: they
-// finish, or they are asked to stop. Either way no turn starts after the pause.
+// finish, they are asked to stop, or they hold. Either way no turn starts after the pause.
 type PausePolicy string
 
 const (
 	PauseFinish PausePolicy = "finish"
 	PauseCancel PausePolicy = "cancel"
+	// PauseSuspend holds queued and parked turns at once and asks running ones to hold at their
+	// next durable checkpoint; unpausing releases none of them.
+	PauseSuspend PausePolicy = "suspend"
 )
 
 // AgentPauseRequest disables an agent and applies Policy to its live turns.
@@ -381,10 +384,13 @@ type AgentPauseRequest struct {
 	ExpectedDraftRevision int64
 }
 
-// AgentPauseResult is the disabled agent's revision and the live turns asked to stop.
+// AgentPauseResult is the disabled agent's revision and what its policy did to the live
+// turns: asked to stop, held at once, or asked to hold at their next checkpoint.
 type AgentPauseResult struct {
 	DraftRevision int64
 	Cancelled     int
+	Held          int
+	HoldRequested int
 }
 
 // AgentEnabledState is the revision returned by a kill-switch update.

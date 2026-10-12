@@ -67,6 +67,8 @@ type TurnReply struct {
 	ErrorCode    string
 	AgentVersion string
 	EmittedAt    time.Time
+	// Fence is the publishing owner's turn fence; a hub refuses a frame below the stream's fence.
+	Fence int64
 }
 
 // SessionSnapshot contains the latest durable conversation state. State is

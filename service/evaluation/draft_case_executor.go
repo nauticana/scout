@@ -112,7 +112,8 @@ func (executor *DraftCaseExecutor) ExecuteDraft(ctx context.Context, tenantID in
 	if executor.Skills != nil {
 		skills = frozenSkills{SkillRegistry: executor.Skills, draft: frozen}
 	}
-	journal := &dataplane.MemoryLoopJournal{}
+	fences := &dataplane.MemoryTurnFences{}
+	journal := &dataplane.MemoryLoopJournal{Fences: fences}
 	loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
 		Requests: executor.Requests(frozenDefinition{draft: frozen}, skills),
 		Router:   executor.Router, Models: executor.Models, Registry: frozenTools{ToolRegistry: executor.Registry, draft: frozen},
@@ -122,7 +123,7 @@ func (executor *DraftCaseExecutor) ExecuteDraft(ctx context.Context, tenantID in
 		return domain.EvaluationCase{}, err
 	}
 	replay := &caseReplay{
-		loop: loop, journal: journal, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails,
+		loop: loop, journal: journal, fences: fences, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails,
 		limits: limits, budget: budget, maxSteps: executor.MaxSteps, now: executor.Now,
 		principal:      domain.Principal{Kind: domain.PrincipalAgent, ID: draft.AgentID, TenantID: tenantID, Release: frozen.Version},
 		conversationID: "evaluation/" + frozen.Version + "/" + example.ExampleID,

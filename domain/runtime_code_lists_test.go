@@ -19,7 +19,7 @@ func TestRuntimeCatalogCodesAgreeWithSeedAndSchema(t *testing.T) {
 	lists := []runtimeCatalogList{
 		{
 			table: "turn_status",
-			codes: codes(TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnCompleted, TurnFailed, TurnCancelled),
+			codes: codes(TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnHeld, TurnCompleted, TurnFailed, TurnCancelled),
 			valid: func(code string) bool { return TurnStatus(code).Valid() },
 			columns: [][2]string{{"runtime/conversation_turn.yml", "status_code"}, {"runtime/agent_work_item.yml", "status_code"},
 				{"runtime/agent_run.yml", "status_code"}},

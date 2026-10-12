@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/stage"
 )
 
 const (
@@ -53,9 +54,11 @@ var (
 	_ contract.StoredTurnReplyReader     = (*CacheReplyHub)(nil)
 )
 
+// replyHead is the stream's newest (fence, sequence); it advances only by compare-and-set.
 type replyHead struct {
 	Sequence int64 `json:"seq"`
 	Final    bool  `json:"final"`
+	Fence    int64 `json:"fence"`
 }
 
 func replyStreamKey(tenantID int64, requestID string) string {
@@ -90,18 +93,24 @@ func (hub *CacheReplyHub) Close() error {
 
 // head returns the newest published sequence; found is false for a stream the cache does not hold.
 func (hub *CacheReplyHub) head(ctx context.Context, stream string) (replyHead, bool, error) {
+	head, raw, err := hub.rawHead(ctx, stream)
+	return head, raw != "", err
+}
+
+// rawHead also returns the stored encoding, which a compare-and-set expects; "" is no head.
+func (hub *CacheReplyHub) rawHead(ctx context.Context, stream string) (replyHead, string, error) {
 	raw, err := hub.Cache.Get(ctx, stream+":"+replyHeadSuffix)
 	if errors.Is(err, cache.ErrCacheMiss) {
-		return replyHead{}, false, nil
+		return replyHead{}, "", nil
 	}
 	if err != nil {
-		return replyHead{}, false, fmt.Errorf("read reply head: %w", err)
+		return replyHead{}, "", fmt.Errorf("read reply head: %w", err)
 	}
 	var head replyHead
 	if err = json.Unmarshal([]byte(raw), &head); err != nil {
-		return replyHead{}, false, fmt.Errorf("decode reply head: %w", err)
+		return replyHead{}, "", fmt.Errorf("decode reply head: %w", err)
 	}
-	return head, true, nil
+	return head, raw, nil
 }
 
 func (hub *CacheReplyHub) frame(ctx context.Context, stream string, sequence int64) (domain.TurnReply, bool, error) {
@@ -119,55 +128,116 @@ func (hub *CacheReplyHub) frame(ctx context.Context, stream string, sequence int
 	return reply, true, nil
 }
 
-// Publish stores the frame, advances the head, and wakes subscribers. One leased
-// worker publishes a request's frames, so the head needs no compare-and-set.
+// Publish advances the head by compare-and-set, then stores the frame and wakes subscribers.
+// The head is the linearization point: a frame below its fence is ErrFenceLost, so a fenced-out
+// worker can neither write a frame nor move the head, and only a higher fence may replace the
+// frame at the head, where a resumed turn continues.
 func (hub *CacheReplyHub) Publish(ctx context.Context, reply domain.TurnReply) error {
 	if err := hub.check(); err != nil {
 		return err
 	}
-	if reply.TenantID <= 0 || strings.TrimSpace(reply.RequestID) == "" || reply.Sequence < 0 {
-		return fmt.Errorf("%w: tenant, request, and sequence are required", domain.ErrValidation)
+	if reply.TenantID <= 0 || strings.TrimSpace(reply.RequestID) == "" || reply.Sequence < 0 || reply.Fence < 0 {
+		return fmt.Errorf("%w: tenant, request, sequence, and a non-negative fence are required", domain.ErrValidation)
 	}
 	stream := replyStreamKey(reply.TenantID, reply.RequestID)
-	head, started, err := hub.head(ctx, stream)
-	if err != nil {
-		return err
-	}
-	switch {
-	case started && reply.Sequence <= head.Sequence:
-		retained, found, err := hub.frame(ctx, stream, reply.Sequence)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return fmt.Errorf("%w: reply sequence %d is no longer retained", domain.ErrReplayExpired, reply.Sequence)
-		}
-		if sameReply(retained, reply) {
-			return nil
-		}
-		// A final frame ends one delivery, not the stream: a suspended turn resumes at its sequence.
-		if !head.Final || reply.Sequence != head.Sequence {
-			return fmt.Errorf("%w: reply sequence %d has different content", domain.ErrConflict, reply.Sequence)
-		}
-	// A stream the cache no longer holds restarts at any sequence; a live one admits no gap.
-	case started && reply.Sequence > head.Sequence+1:
-		return fmt.Errorf("%w: reply sequence %d, want %d", domain.ErrConflict, reply.Sequence, head.Sequence+1)
-	}
 	encoded, err := json.Marshal(reply)
 	if err != nil {
 		return fmt.Errorf("encode reply frame: %w", err)
 	}
-	encodedHead, _ := json.Marshal(replyHead{Sequence: reply.Sequence, Final: reply.Final})
-	if err = hub.Cache.Set(ctx, fmt.Sprintf("%s:%d", stream, reply.Sequence), string(encoded), hub.retention()); err != nil {
-		return fmt.Errorf("store reply frame: %w", err)
+	// A lost compare-and-set means another publisher moved the head; deciding once more against
+	// the new head either finds this frame published, refuses it, or advances past it.
+	advanced := false
+	for attempt := 0; attempt < 2 && !advanced; attempt++ {
+		head, raw, err := hub.rawHead(ctx, stream)
+		if err != nil {
+			return err
+		}
+		publish, err := hub.admit(ctx, stream, head, raw != "", reply)
+		if err != nil || !publish {
+			return err
+		}
+		encodedHead, _ := json.Marshal(replyHead{Sequence: reply.Sequence, Final: reply.Final, Fence: reply.Fence})
+		if advanced, err = hub.Cache.CompareAndSet(ctx, stream+":"+replyHeadSuffix, raw, string(encodedHead), hub.retention()); err != nil {
+			return fmt.Errorf("advance reply head: %w", err)
+		}
 	}
-	if err = hub.Cache.Set(ctx, stream+":"+replyHeadSuffix, string(encodedHead), hub.retention()); err != nil {
-		return fmt.Errorf("store reply head: %w", err)
+	if !advanced {
+		return fmt.Errorf("%w: reply head of request %q moved concurrently", domain.ErrConflict, reply.RequestID)
+	}
+	if err = hub.storeFrame(ctx, fmt.Sprintf("%s:%d", stream, reply.Sequence), string(encoded), reply.Fence); err != nil {
+		return err
 	}
 	if err = hub.relay().notify(ctx, stream); err != nil {
 		return fmt.Errorf("wake reply subscribers: %w", err)
 	}
 	return nil
+}
+
+// storeFrame writes the frame by compare-and-set too: a publisher whose head advance was
+// overtaken by a higher fence before its frame landed finds that fence's frame and stores nothing.
+func (hub *CacheReplyHub) storeFrame(ctx context.Context, key, encoded string, fence int64) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		raw, err := hub.Cache.Get(ctx, key)
+		if errors.Is(err, cache.ErrCacheMiss) {
+			raw, err = "", nil
+		}
+		if err != nil {
+			return fmt.Errorf("read reply frame: %w", err)
+		}
+		if raw != "" {
+			var stored domain.TurnReply
+			if err = json.Unmarshal([]byte(raw), &stored); err != nil {
+				return fmt.Errorf("decode reply frame: %w", err)
+			}
+			if stored.Fence > fence {
+				return fmt.Errorf("%w: reply fence %d was overtaken by %d", domain.ErrFenceLost, fence, stored.Fence)
+			}
+		}
+		stored, err := hub.Cache.CompareAndSet(ctx, key, raw, encoded, hub.retention())
+		if err != nil {
+			return fmt.Errorf("store reply frame: %w", err)
+		}
+		if stored {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: reply frame %s was written concurrently", domain.ErrConflict, key)
+}
+
+// admit decides a frame against the head: publish it, accept it as an already published
+// duplicate, or refuse it.
+func (hub *CacheReplyHub) admit(ctx context.Context, stream string, head replyHead, started bool, reply domain.TurnReply) (bool, error) {
+	switch {
+	// A stream the cache no longer holds restarts at any sequence.
+	case !started:
+		return true, nil
+	case reply.Fence < head.Fence:
+		return false, fmt.Errorf("%w: reply fence %d is below the stream's %d", domain.ErrFenceLost, reply.Fence, head.Fence)
+	// A higher fence takes over the stream at its head: a resumed turn continues where a final
+	// frame ended a delivery, and a new owner's frame stands over one a fenced-out worker raced in,
+	// whose frame may not even be stored yet.
+	case reply.Sequence == head.Sequence && reply.Fence > head.Fence:
+		return true, nil
+	case reply.Sequence <= head.Sequence:
+		retained, found, err := hub.frame(ctx, stream, reply.Sequence)
+		switch {
+		case err != nil:
+			return false, err
+		// The head's frame is absent: its publisher is still storing it, or died first. The same
+		// fence, a redelivery's terminal replay among others, stores it again; a lower fence was
+		// refused above and a higher one took the head over.
+		case !found && reply.Sequence == head.Sequence:
+			return true, nil
+		case !found:
+			return false, fmt.Errorf("%w: reply sequence %d is no longer retained", domain.ErrReplayExpired, reply.Sequence)
+		case sameReply(retained, reply):
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: reply sequence %d has different content", domain.ErrConflict, reply.Sequence)
+	case reply.Sequence > head.Sequence+1:
+		return false, fmt.Errorf("%w: reply sequence %d, want %d", domain.ErrConflict, reply.Sequence, head.Sequence+1)
+	}
+	return true, nil
 }
 
 // Subscribe opens one reply stream without a replay cursor.
@@ -205,23 +275,36 @@ func (hub *CacheReplyHub) StoredReply(ctx context.Context, tenantID int64, reque
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || sequence < 0 {
 		return domain.TurnReply{}, fmt.Errorf("%w: tenant, request, and cursor are required", domain.ErrValidation)
 	}
-	_, status, payload, err := hub.Records.Find(ctx, tenantID, requestID)
+	record, err := hub.Records.Find(ctx, tenantID, requestID)
 	if err != nil {
 		return domain.TurnReply{}, err
 	}
-	if !status.Terminal() {
+	if !record.Status.Terminal() && record.Status != domain.TurnHeld {
 		return domain.TurnReply{}, fmt.Errorf("%w: turn %q is not terminal", domain.ErrConflict, requestID)
 	}
+	return storedReply(tenantID, requestID, sequence, record), nil
+}
+
+// storedReply rebuilds the final frame of a terminal or held turn from its durable record.
+func storedReply(tenantID int64, requestID string, sequence int64, record domain.TurnRecord) domain.TurnReply {
 	reply := domain.TurnReply{
 		TenantID: tenantID, RequestID: requestID, ReplyRoute: replyTerminalRouteLabel,
-		Sequence: sequence, Final: true,
+		Sequence: sequence, Final: true, Fence: record.Fence,
 	}
-	if status == domain.TurnCompleted {
-		reply.Payload = payload
-	} else {
-		reply.ErrorCode = terminalTurnErrorCode(status, payload)
+	switch record.Status {
+	case domain.TurnCompleted:
+		reply.Payload = record.Payload
+	case domain.TurnHeld:
+		reply.ErrorCode, reply.Events = heldFrame()
+	default:
+		reply.ErrorCode = terminalTurnErrorCode(record.Status, record.Payload)
 	}
-	return reply, nil
+	return reply
+}
+
+// heldFrame is the error code and event of the frame a held delivery ends on.
+func heldFrame() (string, []domain.TurnEvent) {
+	return stage.ErrorClass(domain.ErrTurnHeld), []domain.TurnEvent{{Version: domain.TurnEventVersion, Kind: domain.TurnEventHeld}}
 }
 
 type cacheReplySubscription struct {
@@ -289,6 +372,10 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 		if reply, found, err := hub.frame(ctx, subscription.stream, subscription.next); err != nil || found {
 			return reply, found, err
 		}
+		// The head's own frame is stored right after the head advances.
+		if head.Sequence == subscription.next {
+			return domain.TurnReply{}, false, nil
+		}
 		return domain.TurnReply{}, false, fmt.Errorf("%w: reply sequence %d is no longer retained", domain.ErrReplayExpired, subscription.next)
 	}
 	// A running stream is answered by the cache alone; the record is read for one that is absent or final.
@@ -296,28 +383,24 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 		return domain.TurnReply{}, false, nil
 	}
 	subscription.recordReadAt = time.Now()
-	_, status, payload, err := hub.Records.Find(ctx, subscription.tenantID, subscription.requestID)
-	if errors.Is(err, domain.ErrNotFound) || err == nil && !status.Terminal() {
+	record, err := hub.Records.Find(ctx, subscription.tenantID, subscription.requestID)
+	if errors.Is(err, domain.ErrNotFound) {
 		return domain.TurnReply{}, false, nil
 	}
 	if err != nil {
 		return domain.TurnReply{}, false, err
+	}
+	// A turn held while the cache holds none of its stream ends this delivery on a held frame
+	// rebuilt from the record; a held turn whose final frame was published already said so.
+	if !record.Status.Terminal() && (record.Status != domain.TurnHeld || started) {
+		return domain.TurnReply{}, false, nil
 	}
 	// Past the final frame of a settled turn there is nothing left; a suspended turn's stream continues.
 	if started && head.Final {
 		subscription.done = true
 		return domain.TurnReply{}, false, nil
 	}
-	reply := domain.TurnReply{
-		TenantID: subscription.tenantID, RequestID: subscription.requestID, ReplyRoute: replyTerminalRouteLabel,
-		Sequence: subscription.next, Final: true,
-	}
-	if status == domain.TurnCompleted {
-		reply.Payload = payload
-	} else {
-		reply.ErrorCode = terminalTurnErrorCode(status, payload)
-	}
-	return reply, true, nil
+	return storedReply(subscription.tenantID, subscription.requestID, subscription.next, record), true, nil
 }
 
 func terminalTurnErrorCode(status domain.TurnStatus, payload []byte) string {

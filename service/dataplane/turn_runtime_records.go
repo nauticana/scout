@@ -19,24 +19,52 @@ const (
 	qRecordLock         = "scout_turn_record_lock"
 	qRecordFind         = "scout_turn_record_find"
 	qRecordOpen         = "scout_turn_record_open"
-	qRecordStart        = "scout_turn_record_start"
+	qRecordAcquire      = "scout_turn_record_acquire"
+	qRecordAcquireProbe = "scout_turn_record_acquire_probe"
 	qRecordConversation = "scout_turn_record_ensure_conversation"
 	qRecordPinnedAgent  = "scout_turn_record_pinned_agent"
 	qRecordDetail       = "scout_turn_record_detail"
 	qRecordFail         = "scout_turn_record_fail"
+	qRecordFailParked   = "scout_turn_record_fail_parked"
+	qRecordHold         = "scout_turn_record_hold"
 	qRecordSuspend      = "scout_turn_record_suspend"
 	qRecordResume       = "scout_turn_record_resume"
+	qRecordOwnerGuard   = "scout_turn_record_owner_guard"
+	qRecordOwnerState   = "scout_turn_record_owner_state"
 	qRecordAddress      = "scout_turn_record_address"
 	qRecordAdmits       = "scout_turn_record_admits"
 	qRecordRelease      = "scout_turn_record_release"
 	qRecordSelectable   = "scout_turn_record_selectable"
 )
 
+// currentLease matches the claim's queue row only while that claim is its live lease, by the store clock.
+const currentLease = `
+SELECT 1 FROM turn_queue q
+ WHERE q.id = ? AND q.partner_id = turn.partner_id AND q.request_id = turn.request_id
+   AND q.lease_token = ? AND q.worker_id = ? AND q.status_code = ` + sqlQueueLeased + `
+   AND q.lease_until > CURRENT_TIMESTAMP`
+
+// failedTurn mirrors a failure onto the turn's history row in the statement that records it.
+const failedTurn = `
+mirrored AS (
+UPDATE conversation_turn_detail detail
+   SET error_text = ?
+  FROM failed
+ WHERE detail.partner_id = failed.partner_id AND detail.conversation_id = failed.conversation_id AND detail.turn_no = failed.turn_no
+RETURNING detail.turn_no)
+SELECT turn_no FROM failed`
+
 var turnRecordQueries = map[string]string{
 	qRecordLock: `SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`,
 
 	qRecordFind: `
-SELECT turn_no, conversation_id, status_code, input_digest, response_uri, response_digest
+SELECT turn_no, conversation_id, status_code, input_digest, response_uri, response_digest, fence
+  FROM conversation_turn
+ WHERE partner_id = ? AND request_id = ?`,
+
+	qRecordOwnerGuard: turnOwnerGuard,
+	qRecordOwnerState: `
+SELECT fence, status_code, cancel_requested_at IS NOT NULL, COALESCE(cancel_reason, '')
   FROM conversation_turn
  WHERE partner_id = ? AND request_id = ?`,
 
@@ -104,24 +132,44 @@ SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, ` + sqlTurnQueued + `, ?, ?
 ON CONFLICT DO NOTHING
 RETURNING turn_no`,
 
-	qRecordStart: `
+	// The claim is checked in the statement that moves the fence: a delayed or forged delivery
+	// matches no current lease, so it can neither acquire the turn nor evict its owner.
+	qRecordAcquire: `
+UPDATE conversation_turn turn
+   SET status_code = ` + sqlTurnRunning + `, fence = turn.fence + 1, started_at = COALESCE(turn.started_at, CURRENT_TIMESTAMP)
+ WHERE turn.partner_id = ? AND turn.request_id = ?
+   AND turn.status_code IN (` + sqlTurnQueued + `, ` + sqlTurnOwned + `)
+   AND EXISTS (` + currentLease + `)
+RETURNING turn.turn_no, turn.fence`,
+	qRecordAcquireProbe: `
+SELECT turn.status_code, EXISTS (` + currentLease + `)
+  FROM conversation_turn turn
+ WHERE turn.partner_id = ? AND turn.request_id = ?`,
+
+	// The worker honors a hold request at a checkpoint: the request is cleared as the hold is taken.
+	// A hold or suspension yields to a cancellation requested before it, which nothing could wake
+	// out of a parked turn; the worker ends the turn instead.
+	qRecordHold: `
 UPDATE conversation_turn
-   SET status_code = ` + sqlTurnRunning + `, started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
- WHERE partner_id = ? AND request_id = ? AND status_code = ` + sqlTurnQueued + `
-RETURNING turn_no`,
+   SET status_code = ` + sqlTurnHeld + `, fence = fence + 1, hold_code = ` + sqlHoldCheckpoint + `,
+       held_at = CURRENT_TIMESTAMP, hold_requested_at = NULL, hold_reason = NULL
+ WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
+   AND cancel_requested_at IS NULL
+RETURNING fence`,
 
 	// Suspend and Resume move only between live states, so a terminal turn is
 	// never revived and a settled reservation is never re-held.
 	qRecordSuspend: `
 UPDATE conversation_turn
-   SET status_code = ` + sqlTurnSuspended + `
- WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `)
-RETURNING turn_no`,
+   SET status_code = ` + sqlTurnSuspended + `, fence = fence + 1
+ WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
+   AND cancel_requested_at IS NULL
+RETURNING fence`,
 
 	qRecordResume: `
 UPDATE conversation_turn
-   SET status_code = ` + sqlTurnQueued + `
- WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnSuspended + `, ` + sqlTurnQueued + `)
+   SET status_code = ` + sqlTurnQueued + `, fence = fence + 1
+ WHERE partner_id = ? AND request_id = ? AND status_code = ` + sqlTurnSuspended + `
 RETURNING turn_no`,
 
 	// The history row, when the turn has one, carries the same error in the same statement.
@@ -130,15 +178,16 @@ WITH failed AS (
 UPDATE conversation_turn
    SET status_code = ?, response_uri = ?, response_digest = ?,
        started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
- WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnRunning + `, ` + sqlTurnStreaming + `, ` + sqlTurnSuspended + `)
-RETURNING partner_id, conversation_id, turn_no),
-mirrored AS (
-UPDATE conversation_turn_detail detail
-   SET error_text = ?
-  FROM failed
- WHERE detail.partner_id = failed.partner_id AND detail.conversation_id = failed.conversation_id AND detail.turn_no = failed.turn_no
-RETURNING detail.turn_no)
-SELECT turn_no FROM failed`,
+ WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
+RETURNING partner_id, conversation_id, turn_no),` + failedTurn,
+
+	qRecordFailParked: `
+WITH failed AS (
+UPDATE conversation_turn
+   SET status_code = ` + sqlTurnFailed + `, response_uri = ?, response_digest = ?,
+       started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `)
+RETURNING partner_id, conversation_id, turn_no),` + failedTurn,
 }
 
 // TableTurnRecordStore is the TurnRecordStore over conversation_turn: the
@@ -184,6 +233,7 @@ type turnRecordRow struct {
 	status         domain.TurnStatus
 	inputDigest    string
 	response       domain.ObjectRef
+	fence          int64
 }
 
 func (store *TableTurnRecordStore) find(ctx context.Context, tenantID int64, requestID string) (turnRecordRow, bool, error) {
@@ -195,13 +245,14 @@ func (store *TableTurnRecordStore) find(ctx context.Context, tenantID int64, req
 		return turnRecordRow{}, false, nil
 	}
 	row := result.Rows[0]
-	if len(row) < 6 {
-		return turnRecordRow{}, false, fmt.Errorf("decode turn record: expected 6 columns, got %d", len(row))
+	if len(row) < 7 {
+		return turnRecordRow{}, false, fmt.Errorf("decode turn record: expected 7 columns, got %d", len(row))
 	}
 	return turnRecordRow{
 		turnNo: common.AsInt64(row[0]), conversationID: common.AsString(row[1]),
 		status: domain.TurnStatus(common.AsString(row[2])), inputDigest: common.AsString(row[3]),
 		response: domain.ObjectRef{URI: common.AsString(row[4]), Digest: common.AsString(row[5])},
+		fence:    common.AsInt64(row[6]),
 	}, true, nil
 }
 
@@ -395,53 +446,109 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 }
 
 // Find resolves the request; terminal payloads are hydrated and digest-verified.
-func (store *TableTurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (int64, domain.TurnStatus, []byte, error) {
+func (store *TableTurnRecordStore) Find(ctx context.Context, tenantID int64, requestID string) (domain.TurnRecord, error) {
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
-		return 0, "", nil, fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
+		return domain.TurnRecord{}, fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
-		return 0, "", nil, err
+		return domain.TurnRecord{}, err
 	}
 	row, found, err := store.find(ctx, tenantID, requestID)
 	if err != nil {
-		return 0, "", nil, err
+		return domain.TurnRecord{}, err
 	}
 	if !found {
-		return 0, "", nil, fmt.Errorf("%w: turn request %q", domain.ErrNotFound, requestID)
+		return domain.TurnRecord{}, fmt.Errorf("%w: turn request %q", domain.ErrNotFound, requestID)
 	}
+	record := domain.TurnRecord{TurnNo: row.turnNo, Status: row.status, Fence: row.fence}
 	if row.response.URI == "" {
-		return row.turnNo, row.status, nil, nil
+		return record, nil
 	}
-	payload, err := store.Objects.Hydrate(ctx, row.response)
-	if err != nil {
-		return 0, "", nil, fmt.Errorf("hydrate turn %q payload: %w", requestID, err)
+	if record.Payload, err = store.Objects.Hydrate(ctx, row.response); err != nil {
+		return domain.TurnRecord{}, fmt.Errorf("hydrate turn %q payload: %w", requestID, err)
 	}
-	return row.turnNo, row.status, payload, nil
+	return record, nil
 }
 
-// Start moves a queued turn to running.
-func (store *TableTurnRecordStore) Start(ctx context.Context, tenantID int64, requestID string) error {
+// Acquire takes the turn for the claim's delivery with its fence incremented; see the contract
+// for how a refused acquisition reads.
+func (store *TableTurnRecordStore) Acquire(ctx context.Context, claim domain.TurnClaim) (domain.TurnOwner, error) {
+	turn := claim.Dispatch.Turn
+	tenantID, requestID := turn.TenantContext.TenantID, turn.RequestID
+	if err := claim.Validate(); err != nil {
+		return domain.TurnOwner{}, err
+	}
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
-		return fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
+		return domain.TurnOwner{}, fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
+	}
+	if err := store.validate(); err != nil {
+		return domain.TurnOwner{}, err
+	}
+	ctx = context.WithoutCancel(ctx)
+	acquired, err := store.queries(ctx).Query(ctx, qRecordAcquire, tenantID, requestID, claim.QueueID, claim.LeaseToken, claim.WorkerID)
+	if err != nil {
+		return domain.TurnOwner{}, fmt.Errorf("acquire turn: %w", err)
+	}
+	if len(acquired.Rows) > 0 {
+		return domain.TurnOwner{TenantID: tenantID, RequestID: requestID, Fence: common.AsInt64(acquired.Rows[0][1])}, nil
+	}
+	probe, err := store.queries(ctx).Query(ctx, qRecordAcquireProbe, claim.QueueID, claim.LeaseToken, claim.WorkerID, tenantID, requestID)
+	if err != nil {
+		return domain.TurnOwner{}, fmt.Errorf("acquire turn: read refusal: %w", err)
+	}
+	if len(probe.Rows) == 0 {
+		return domain.TurnOwner{}, fmt.Errorf("%w: turn request %q", domain.ErrNotFound, requestID)
+	}
+	return domain.TurnOwner{}, refusedAcquisition(requestID, domain.TurnStatus(common.AsString(probe.Rows[0][0])), common.AsBool(probe.Rows[0][1]))
+}
+
+// refusedAcquisition explains why a claim did not acquire its turn.
+func refusedAcquisition(requestID string, status domain.TurnStatus, currentLease bool) error {
+	switch {
+	case !currentLease:
+		return fmt.Errorf("%w: delivery of turn %q is not the current lease of its queue row", domain.ErrFenceLost, requestID)
+	case status == domain.TurnHeld || status == domain.TurnSuspended:
+		return fmt.Errorf("%w: turn %q is %s", domain.ErrTurnHeld, requestID, status)
+	}
+	return fmt.Errorf("%w: turn %q is %s", domain.ErrConflict, requestID, status)
+}
+
+// Hold takes the owner's running turn to held at a checkpoint and returns the held fence; a
+// cancellation requested before it is domain.ErrTurnCanceled, for the owner to end the turn.
+func (store *TableTurnRecordStore) Hold(ctx context.Context, owner domain.TurnOwner) (int64, error) {
+	return store.ownerTransition(ctx, owner, qRecordHold, "hold turn")
+}
+
+// Fail stores the error code as the owner's turn's terminal payload.
+func (store *TableTurnRecordStore) Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if (status != domain.TurnFailed && status != domain.TurnCancelled) || strings.TrimSpace(errorCode) == "" {
+		return fmt.Errorf("%w: a failed or cancelled status and an error code are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
 		return err
 	}
-	started, err := store.queries(ctx).Query(context.WithoutCancel(ctx), qRecordStart, tenantID, requestID)
+	ref, err := store.Objects.Dehydrate(ctx, turnFailureName(owner.TenantID, owner.RequestID, errorCode), []byte(errorCode))
 	if err != nil {
-		return fmt.Errorf("start turn: %w", err)
+		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
-	if len(started.Rows) == 0 {
-		return fmt.Errorf("%w: turn %q is not queued", domain.ErrConflict, requestID)
+	ctx = context.WithoutCancel(ctx)
+	failed, err := store.queries(ctx).Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, owner.TenantID, owner.RequestID, owner.Fence, errorCode)
+	if err != nil {
+		return fmt.Errorf("fail turn: %w", err)
+	}
+	if len(failed.Rows) == 0 {
+		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
 	}
 	return nil
 }
 
-// Fail stores the error code as the turn's terminal payload; an already
-// terminal turn is left untouched.
-func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, requestID string, status domain.TurnStatus, errorCode string) error {
-	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || (status != domain.TurnFailed && status != domain.TurnCancelled) || strings.TrimSpace(errorCode) == "" {
-		return fmt.Errorf("%w: tenant, request, failed or cancelled status, and error code are required", domain.ErrValidation)
+// FailParked fails a queued or suspended turn no worker runs.
+func (store *TableTurnRecordStore) FailParked(ctx context.Context, tenantID int64, requestID, errorCode string) error {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(errorCode) == "" {
+		return fmt.Errorf("%w: tenant, request, and error code are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
 		return err
@@ -451,34 +558,76 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, tenantID int64, req
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	failed, err := store.queries(ctx).Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, tenantID, requestID, errorCode)
+	failed, err := store.queries(ctx).Query(ctx, qRecordFailParked, ref.URI, ref.Digest, tenantID, requestID, errorCode)
 	if err != nil {
 		return fmt.Errorf("fail turn: %w", err)
 	}
-	if len(failed.Rows) == 0 {
-		return fmt.Errorf("%w: turn %q is not live", domain.ErrConflict, requestID)
+	if len(failed.Rows) > 0 {
+		return nil
 	}
-	return nil
+	return store.refusedParked(ctx, tenantID, requestID, "")
 }
 
-// Suspend parks a live turn awaiting a human decision. The budget reservation is
-// deliberately left held: settling it here would let the turn resume with no
-// budget, and releasing it would let a tenant park work to dodge its ceiling.
-func (store *TableTurnRecordStore) Suspend(ctx context.Context, tenantID int64, requestID, reason string) error {
-	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || strings.TrimSpace(reason) == "" {
-		return fmt.Errorf("%w: tenant, request, and a suspension reason are required", domain.ErrValidation)
+// refusedParked reads why a transition of a turn no worker runs did not apply; a turn already
+// in done, the status the transition leads to, is a repeat and succeeds.
+func (store *TableTurnRecordStore) refusedParked(ctx context.Context, tenantID int64, requestID string, done domain.TurnStatus) error {
+	row, found, err := store.find(ctx, tenantID, requestID)
+	switch {
+	case err != nil:
+		return err
+	case !found:
+		return fmt.Errorf("%w: turn request %q", domain.ErrNotFound, requestID)
+	case row.status == domain.TurnHeld:
+		return fmt.Errorf("%w: turn %q", domain.ErrTurnHeld, requestID)
+	case done != "" && row.status == done:
+		return nil
+	}
+	return fmt.Errorf("%w: turn %q is %s", domain.ErrConflict, requestID, row.status)
+}
+
+// Suspend parks the owner's turn awaiting a human decision; a cancellation requested before it
+// is domain.ErrTurnCanceled. The budget reservation is deliberately left held: settling it here
+// would let the turn resume with no budget, and releasing it would let a tenant park work to
+// dodge its ceiling.
+func (store *TableTurnRecordStore) Suspend(ctx context.Context, owner domain.TurnOwner, reason string) (int64, error) {
+	if strings.TrimSpace(reason) == "" {
+		return 0, fmt.Errorf("%w: a suspension reason is required", domain.ErrValidation)
+	}
+	return store.ownerTransition(ctx, owner, qRecordSuspend, "suspend turn")
+}
+
+// ownerTransition applies one fenced transition of the owner's running turn and returns the new fence.
+func (store *TableTurnRecordStore) ownerTransition(ctx context.Context, owner domain.TurnOwner, query, operation string) (int64, error) {
+	if err := owner.Check(); err != nil {
+		return 0, err
 	}
 	if err := store.validate(); err != nil {
-		return err
+		return 0, err
 	}
-	suspended, err := store.queries(ctx).Query(context.WithoutCancel(ctx), qRecordSuspend, tenantID, requestID)
+	ctx = context.WithoutCancel(ctx)
+	moved, err := store.queries(ctx).Query(ctx, query, owner.TenantID, owner.RequestID, owner.Fence)
 	if err != nil {
-		return fmt.Errorf("suspend turn: %w", err)
+		return 0, fmt.Errorf("%s: %w", operation, err)
 	}
-	if len(suspended.Rows) == 0 {
-		return fmt.Errorf("%w: turn %q is not live", domain.ErrConflict, requestID)
+	if len(moved.Rows) == 0 {
+		return 0, store.refusedOwnerTransition(ctx, owner)
 	}
-	return nil
+	return common.AsInt64(moved.Rows[0][0]), nil
+}
+
+// refusedOwnerTransition tells a pending cancellation of the owner's own turn apart from a
+// fence that moved on.
+func (store *TableTurnRecordStore) refusedOwnerTransition(ctx context.Context, owner domain.TurnOwner) error {
+	state, err := store.queries(ctx).Query(ctx, qRecordOwnerState, owner.TenantID, owner.RequestID)
+	if err != nil {
+		return fmt.Errorf("read turn state: %w", err)
+	}
+	if len(state.Rows) > 0 && len(state.Rows[0]) >= 4 && common.AsInt64(state.Rows[0][0]) == owner.Fence && common.AsBool(state.Rows[0][2]) {
+		if status := domain.TurnStatus(common.AsString(state.Rows[0][1])); status == domain.TurnRunning || status == domain.TurnStreaming {
+			return fmt.Errorf("%w: %s", domain.ErrTurnCanceled, common.AsString(state.Rows[0][3]))
+		}
+	}
+	return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
 }
 
 // Resume returns a suspended turn to the queue so a worker replays it from its
@@ -495,16 +644,20 @@ func (store *TableTurnRecordStore) Resume(ctx context.Context, tenantID int64, r
 	if err != nil {
 		return fmt.Errorf("resume turn: %w", err)
 	}
-	if len(resumed.Rows) == 0 {
-		return fmt.Errorf("%w: turn %q is not suspended", domain.ErrConflict, requestID)
+	if len(resumed.Rows) > 0 {
+		return nil
 	}
-	return nil
+	return store.refusedParked(ctx, tenantID, requestID, domain.TurnQueued)
 }
 
 // RecordUsage writes the turn's settled usage events, one per model and one for the
-// part no model performed, in one transaction; a replay writes nothing.
-func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
-	if tenantID <= 0 || strings.TrimSpace(conversationID) == "" || turnNo <= 0 || len(usage.Currency) != 3 ||
+// part no model performed, in one transaction with the owner's guarded touch; a replay writes nothing.
+func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, owner domain.TurnOwner, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	tenantID := owner.TenantID
+	if strings.TrimSpace(conversationID) == "" || turnNo <= 0 || len(usage.Currency) != 3 ||
 		usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: turn identity and non-negative priced usage are required", domain.ErrValidation)
 	}
@@ -527,6 +680,9 @@ func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, tenantID int
 			_ = tx.Rollback(ctx)
 		}
 	}()
+	if err = guardOwner(ctx, tx, qRecordOwnerGuard, owner); err != nil {
+		return err
+	}
 	if _, err = ledger.insertUsageLines(ctx, tx, tenantID, conversationID, turnNo, subjectRef, attribution, lines); err != nil {
 		return err
 	}

@@ -53,11 +53,11 @@ func (cache *ExecutionGraphCache) Invalidate(ctx context.Context, tenantID int64
 	return cache.InvalidateFunc(ctx, tenantID, agentID, version)
 }
 
-// DurableSessionStore contains configurable durable session operations.
+// DurableSessionStore contains configurable durable session operations; a missing owner fails closed.
 type DurableSessionStore struct {
 	LoadFunc       func(context.Context, int64, string) (domain.SessionSnapshot, error)
-	CheckpointFunc func(context.Context, int64, int64, domain.StepCheckpoint) error
-	CompleteFunc   func(context.Context, int64, string, int64, domain.TurnResult) error
+	CheckpointFunc func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error
+	CompleteFunc   func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error
 }
 
 // Load invokes LoadFunc.
@@ -66,13 +66,19 @@ func (store *DurableSessionStore) Load(ctx context.Context, tenantID int64, conv
 }
 
 // Checkpoint invokes CheckpointFunc.
-func (store *DurableSessionStore) Checkpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
-	return store.CheckpointFunc(ctx, tenantID, expectedRevision, checkpoint)
+func (store *DurableSessionStore) Checkpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	return store.CheckpointFunc(ctx, owner, expectedRevision, checkpoint)
 }
 
 // Complete invokes CompleteFunc.
-func (store *DurableSessionStore) Complete(ctx context.Context, tenantID int64, conversationID string, expectedRevision int64, result domain.TurnResult) error {
-	return store.CompleteFunc(ctx, tenantID, conversationID, expectedRevision, result)
+func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	return store.CompleteFunc(ctx, owner, conversationID, expectedRevision, result)
 }
 
 // HotSessionCache contains configurable session cache operations.

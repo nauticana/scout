@@ -75,8 +75,8 @@ func newRevisionFixture(t *testing.T) *revisionFixture {
 	f.resumer = &Resumer{
 		Store: f.store, Authorizer: authorizer, Archive: f.archive, Audit: audit, Now: now,
 		Records: &fake.TurnRecordStore{
-			ResumeFunc: func(context.Context, int64, string) error { f.resumed++; return nil },
-			FailFunc:   func(context.Context, int64, string, domain.TurnStatus, string) error { f.failed++; return nil },
+			ResumeFunc:     func(context.Context, int64, string) error { f.resumed++; return nil },
+			FailParkedFunc: func(context.Context, int64, string, string) error { f.failed++; return nil },
 		},
 		Queue: requeueFunc(func(context.Context, int64, string) error { f.requeued++; return nil }),
 	}

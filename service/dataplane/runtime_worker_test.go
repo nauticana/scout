@@ -3,6 +3,8 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +17,10 @@ import (
 	"github.com/nauticana/scout/fake"
 )
 
-type workerRuntimeFunc func(context.Context, domain.TurnDispatch) (domain.TurnResult, error)
+type workerRuntimeFunc func(context.Context, domain.TurnClaim) (domain.TurnResult, error)
 
-func (function workerRuntimeFunc) HandleTurn(ctx context.Context, dispatch domain.TurnDispatch) (domain.TurnResult, error) {
-	return function(ctx, dispatch)
+func (function workerRuntimeFunc) HandleTurn(ctx context.Context, claim domain.TurnClaim) (domain.TurnResult, error) {
+	return function(ctx, claim)
 }
 
 type workerPlane struct {
@@ -50,10 +52,11 @@ func TestComposingRuntimeWorkerComposesOnceOnFirstJob(t *testing.T) {
 		MaxAttempts: 3, PartitionTo: 7, Now: func() time.Time { return now },
 	}
 	var composeCalls, runtimeCalls int
-	plane := &workerPlane{scheduler: scheduler, runtime: workerRuntimeFunc(func(_ context.Context, dispatch domain.TurnDispatch) (domain.TurnResult, error) {
+	plane := &workerPlane{scheduler: scheduler, runtime: workerRuntimeFunc(func(_ context.Context, claim domain.TurnClaim) (domain.TurnResult, error) {
 		runtimeCalls++
-		if dispatch.Turn.RequestID != "request-1" {
-			t.Fatalf("dispatch = %+v", dispatch)
+		// The leased row is the claim: its queue id, its lease token, and this worker.
+		if claim.Dispatch.Turn.RequestID != "request-1" || claim.QueueID != 11 || claim.LeaseToken != 99 || claim.WorkerID != "runtime-1" {
+			t.Fatalf("claim = %+v", claim)
 		}
 		return domain.TurnResult{}, nil
 	})}
@@ -211,5 +214,40 @@ func TestComposingRuntimeWorkerRefusesALeaseUnderThePlaneLoopDeadline(t *testing
 	err = worker.HandleJob(context.Background(), nil, nil, nil, nil, 1, nil)
 	if !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "loop deadline") || plane.closed != 1 {
 		t.Fatalf("HandleJob = %v, plane closed = %d", err, plane.closed)
+	}
+}
+
+// A delivery that no longer owns its turn, or finds it held, is acknowledged while its lease
+// stands and dropped once it is gone; it is never nacked into a retry or a dead letter.
+func TestRuntimeWorkerAcknowledgesOrDropsAStaleOrHeldDelivery(t *testing.T) {
+	codec, ref := newSchedulerCodec(t)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	row := queueRow(11, 7, "request-1", "conversation-1", ref, 1, 99, now, now.Add(time.Minute))
+	for name, tc := range map[string]struct {
+		outcome error
+		acked   [][]any
+	}{
+		"held, lease current":       {outcome: domain.ErrTurnHeld, acked: [][]any{{int64(11)}}},
+		"held, lease gone":          {outcome: domain.ErrTurnHeld},
+		"fenced out, lease current": {outcome: domain.ErrFenceLost, acked: [][]any{{int64(11)}}},
+		"fenced out, lease gone":    {outcome: domain.ErrFenceLost},
+	} {
+		query := &queueQueryFake{rows: map[string][][]any{qSchedAck: tc.acked}}
+		scheduler := &QueueTurnScheduler{
+			DB: queueDBFake{query: query}, Objects: codec, DeadLetters: &fake.DeadLetterQueue{},
+			MaxAttempts: 3, PartitionTo: 7, Now: func() time.Time { return now },
+		}
+		worker, err := NewRuntimeWorker(scheduler, workerRuntimeFunc(func(context.Context, domain.TurnClaim) (domain.TurnResult, error) {
+			return domain.TurnResult{}, fmt.Errorf("%w: turn request-1", tc.outcome)
+		}), "runtime-1", time.Minute, 1, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = worker.HandleJob(context.Background(), nil, nil, nil, nil, 11, row); err != nil {
+			t.Fatalf("%s: HandleJob = %v", name, err)
+		}
+		if !slices.Contains(query.calls, qSchedAck) || slices.Contains(query.calls, qSchedLockLeased) || slices.Contains(query.calls, qSchedRetry) {
+			t.Fatalf("%s: calls = %v, want an ack and no nack", name, query.calls)
+		}
 	}
 }

@@ -103,8 +103,8 @@ value outside these bounds.
 | `agent_reply_retention` | int | 600 | 0 | — | Seconds each reply frame stays in the delivery cache for streaming and reconnects; after that a client reads the durable turn record; 0 uses the default 600. |
 | `agent_reply_poll_ms` | int | 500 | 0 | — | Milliseconds a reply subscriber waits before re-reading the cache after a lost wake-up, which bounds delivery latency; 0 uses the default 500. |
 | `agent_reply_record_read` | int | 5 | 0 | — | Seconds between a reply subscriber's durable turn-record reads, which throttles database load from waiting clients; 0 uses the default 5. |
-| `agent_cancel_poll_ms` | int | 1000 | 0 | — | Milliseconds between a running turn's cancellation reads, which bounds how long a turn outlives its cancellation; 0 uses the default 1000. |
-| `agent_cancel_max_read_failures` | int | 3 | 0 | — | Consecutive failed cancellation reads after which a running turn is stopped; 0 uses the default 3. |
+| `agent_cancel_poll_ms` | int | 1000 | 0 | — | Milliseconds between a running turn's control reads (cancellation, hold request, fence), which bounds how long a turn outlives its cancellation or a moved fence and how late it sees a hold request; 0 uses the default 1000. |
+| `agent_cancel_max_read_failures` | int | 3 | 0 | — | Consecutive failed control reads after which a running turn is stopped; 0 uses the default 3. |
 
 ### Authority, guardrails, and restrictions
 
@@ -162,7 +162,9 @@ tighten the structural bounds shown as Max.
 | `agent_run_trace_max_events` | int | 500 | 0, else 1 | 5000 | Events one Studio run trace returns (`TableRunTrace.Limits.MaxEvents`); past it the trace is cut and marked truncated; 0 uses the default 500. |
 | `agent_run_trace_max_journal_entries` | int | 1000 | 0, else 1 | 10000 | Loop journal entries one run trace reads to classify events (`TableRunTrace.Limits.MaxJournalEntries`); a longer journal truncates the trace; 0 uses the default 1000. |
 | `agent_run_trace_max_journal_bytes` | int | 4194304 | 0, else 1024 | 67108864 | Cumulative loop journal payload bytes one run trace classifies (`TableRunTrace.Limits.MaxJournalBytes`); past them the trace is truncated; 0 uses the default 4194304. |
-| `agent_pause_batch` | int | 200 | 0 | — | Live turns one Studio pause listing asks to stop per round when an agent is paused with the cancel policy; 0 uses the default 200. |
+| `agent_live_turn_page_size` | int | 50 | 0 | 1000, ≤ `agent_live_turn_max_page_size` | Live turns one Studio `turns/live` page returns when the caller names no limit (`StudioTurnControl.Limits.PageSize`); 0 uses the default 50. |
+| `agent_live_turn_max_page_size` | int | 200 | 0, else ≥ `agent_live_turn_page_size` | 1000 | Largest live turn page a Studio caller may ask for (`StudioTurnControl.Limits.MaxPageSize`); a larger limit is refused; 0 uses the default 200. |
+| `agent_pause_batch` | int | 200 | 0 | — | Live turns one Studio pause listing applies its policy to per round when an agent is paused with the cancel or suspend policy; 0 uses the default 200. |
 | `agent_pilot_max_members` | int | 200 | 0 | — | Open pilot memberships one agent may hold, which bounds what starting a conversation reads (`release.StudioPilots.MaxMembers`); 0 refuses every pilot add. |
 | `agent_pilot_position_timeout` | int | 2 | — | — | Seconds one product position lookup may take while a new conversation chooses its release (`release.TablePilotResolver.PositionTimeout`); a late answer fails the resolution; 0 or less uses the default 2. |
 | `agent_governance_required_fields` | string | `""` | — | — | Comma-separated Charter governance fields every release must carry, from `purpose`, `accountable`, `responsibilityIds`, `triggers`, `requiredInputs`, `expectedOutcomes`, `capabilityIds`, `policies`, `confidenceBoundaries`, `escalationConditions`; empty requires every field Charter's AgentDefinition requires, `none` requires none, and an unknown or repeated name fails the load. |
@@ -301,7 +303,8 @@ A release's `budget` setting is data, not a flag: `period` is `turn`, `rolling` 
 | `dataplane.MemoryReplyHub.{SubscriberBuffer,RetainedFrames,MaxStreams}` | `--reply_{subscriber_buffer,retained_frames,max_streams}` | non-negative; zero takes 16 / 64 / 4096 |
 | `dataplane.MemoryReplyHub.{Linger,IdleTTL}` | `--reply_linger`, `--reply_idle_ttl` | non-negative; zero takes 30s / 10m |
 | `dataplane.CacheReplyHub.{Retention,PollInterval,RecordReadInterval}` | `agent_reply_retention`, `agent_reply_poll_ms`, `agent_reply_record_read` | negative refused; zero takes 10m / 500ms / 5s |
-| `dataplane.TableTurnCanceller.{PollInterval,MaxReadFailures}` | `agent_cancel_poll_ms`, `agent_cancel_max_read_failures` | non-positive takes 1s / 3 |
+| `dataplane.TableTurnControl.{PollInterval,MaxReadFailures}` | `agent_cancel_poll_ms`, `agent_cancel_max_read_failures` | negative refused; zero takes 1s / 3 |
+| `dataplane.BaseDataPlane.{Budget,Control}` | — | `Budget` is a `contract.TurnBudgetManager` (`isolation.BudgetLedger`), whose `CommitTurn` and `ReleaseTurn` settle a turn only for its current fence; `Control` defaults to a `TableTurnControl` over the plane's database and cache, which `Canceller()` returns and `TurnRuntime.Control` watches |
 
 ## Principals and scoped configuration (`service/scope`, `service/principal`)
 
@@ -351,11 +354,13 @@ truncation.
 | `evaluation.ReleaseCaseExecutor.ReleaseLimits` | — | required: the data plane's `PrincipalLimits`; the replayed release's frozen `limits` only narrow the executor's tool-call, step, and deadline ceilings |
 | `controlplane.StudioService.TemplateLimits.{MaxPerType,MaxVersions}` | `agent_studio_max_templates_per_type`, `agent_studio_max_template_versions` | non-negative; a zero `MaxPerType` refuses every new template and a zero `MaxVersions` every save |
 | `runtime.StudioRuns.Traces` as `dataplane.TableRunTrace.{Limits,Charter}` | `agent_run_trace_*` through `ScoutConfig.RunTraceLimits()` | optional: without `Traces` the `runs/trace` route is `503`; `DB` and `Objects` (the archive holding the loop journal) are required; limits use the flag ranges above and zero takes 500 / 1000 / 4 MiB; `Charter` (`charter.RunActions`) is optional and adds Charter dispositions as decisions |
+| `dataplane.StudioTurnControl.{Limits,Control,Budget,Estimator,Audit}` | `agent_live_turn_page_size`, `agent_live_turn_max_page_size` through `ScoutConfig.LiveTurnLimits()` | non-negative, the page size within the largest page, the largest at most 1000; zero takes 50 / 200. `Control` is the data plane's `TableTurnControl`, `Budget` and `Estimator` the data plane's budget ledger and turn estimator, so a release re-admits the turn as admission did; `Audit` is optional |
+| `dataplane.StudioPause.{Control,Audit}` | — | `Control` (the data plane's `TableTurnControl`) is required by the `suspend` policy, which is `503` without it; `Audit` records each hold and is optional |
 | `dataplane.AgentHealth.Settings`, `dataplane.NewAgentHealthWorker(caption, compose, settings, loadConfig)` | `agent_health_*`, `agent_alert_*` through `ScoutConfig.AgentHealthSettings()` | non-negative, the window at most 10080 minutes; zero takes each default; the worker's period at least 1s |
 | `controlplane.ReleaseActivationWorker.Settings` | `agent_activation_batch`, `agent_activation_poll`, `agent_activation_max_attempts` through `ScoutConfig.ReleaseActivationSettings()` | all positive; poll at least 1s; a transient failure retries after attempts × poll |
 | `domain.ReleaseActivationSettings.Timeout` | `agent_activation_timeout` through `ScoutConfig.ReleaseActivationSettings()` | negative refused; zero takes 2m; bounds one activation's checks and swap |
 
-Every service owning timers or goroutines (`BatchingEmbedder`, `MemoryReplyHub`, `CacheReplyHub`, `TableTurnCanceller`,
+Every service owning timers or goroutines (`BatchingEmbedder`, `MemoryReplyHub`, `CacheReplyHub`, `TableTurnControl`,
 `DistributedTenantRateLimiter`) exposes an idempotent `Close`; the composing binary owns the call
 during shutdown. Clocks are injected as `Now func() time.Time` (nil takes `time.Now`), so a
 downstream test can drive every window, TTL, and budget deterministically.

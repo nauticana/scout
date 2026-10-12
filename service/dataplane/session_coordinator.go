@@ -88,28 +88,34 @@ func (coordinator *SessionCoordinator) Load(ctx context.Context, tenantID int64,
 }
 
 // Checkpoint writes durable state before invalidating the cached snapshot.
-func (coordinator *SessionCoordinator) Checkpoint(ctx context.Context, tenantID, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
-	if tenantID <= 0 || expectedRevision < 0 || strings.TrimSpace(checkpoint.ConversationID) == "" {
-		return fmt.Errorf("%w: tenant, non-negative revision, and conversation are required", domain.ErrValidation)
+func (coordinator *SessionCoordinator) Checkpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if expectedRevision < 0 || strings.TrimSpace(checkpoint.ConversationID) == "" {
+		return fmt.Errorf("%w: non-negative revision and conversation are required", domain.ErrValidation)
 	}
 	if err := coordinator.validate(); err != nil {
 		return err
 	}
-	return coordinator.write(ctx, tenantID, checkpoint.ConversationID, expectedRevision+1, "checkpoint", func() error {
-		return coordinator.Store.Checkpoint(ctx, tenantID, expectedRevision, checkpoint)
+	return coordinator.write(ctx, owner.TenantID, checkpoint.ConversationID, expectedRevision+1, "checkpoint", func() error {
+		return coordinator.Store.Checkpoint(ctx, owner, expectedRevision, checkpoint)
 	})
 }
 
 // Complete writes the terminal result before invalidating the cached snapshot.
-func (coordinator *SessionCoordinator) Complete(ctx context.Context, tenantID int64, conversationID string, expectedRevision int64, result domain.TurnResult) error {
-	if tenantID <= 0 || expectedRevision < 0 || strings.TrimSpace(conversationID) == "" {
-		return fmt.Errorf("%w: tenant, non-negative revision, and conversation are required", domain.ErrValidation)
+func (coordinator *SessionCoordinator) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if expectedRevision < 0 || strings.TrimSpace(conversationID) == "" {
+		return fmt.Errorf("%w: non-negative revision and conversation are required", domain.ErrValidation)
 	}
 	if err := coordinator.validate(); err != nil {
 		return err
 	}
-	return coordinator.write(ctx, tenantID, conversationID, expectedRevision, "complete", func() error {
-		return coordinator.Store.Complete(ctx, tenantID, conversationID, expectedRevision, result)
+	return coordinator.write(ctx, owner.TenantID, conversationID, expectedRevision, "complete", func() error {
+		return coordinator.Store.Complete(ctx, owner, conversationID, expectedRevision, result)
 	})
 }
 

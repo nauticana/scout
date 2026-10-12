@@ -113,7 +113,12 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 	if verdict.Status == domain.ApprovalStatusRejected {
 		return request, failTurn(ctx, r.Records, key, verdict.Status)
 	}
-	if err := r.Records.Resume(ctx, key.TenantID, key.RequestID); err != nil {
+	err = r.Records.Resume(ctx, key.TenantID, key.RequestID)
+	// A held turn keeps the verdict for whoever releases it; nothing queues it now.
+	if errors.Is(err, domain.ErrTurnHeld) {
+		return request, nil
+	}
+	if err != nil {
 		return request, err
 	}
 	if err := r.Queue.Requeue(ctx, key.TenantID, key.RequestID); err != nil {
@@ -123,14 +128,18 @@ func (r *Resumer) Resolve(ctx context.Context, verdict domain.ApprovalVerdict) (
 }
 
 // failTurn fails the turn parked on a refused or expired request; a replay that finds the turn
-// already failed with the same code succeeds.
+// already failed with the same code succeeds, and a held turn keeps the verdict for whoever
+// releases it.
 func failTurn(ctx context.Context, records contract.TurnRecordStore, key domain.ApprovalKey, status domain.ApprovalStatus) error {
-	err := records.Fail(ctx, key.TenantID, key.RequestID, domain.TurnFailed, string(status))
+	err := records.FailParked(ctx, key.TenantID, key.RequestID, string(status))
+	if errors.Is(err, domain.ErrTurnHeld) {
+		return nil
+	}
 	if !errors.Is(err, domain.ErrConflict) {
 		return err
 	}
-	_, turnStatus, payload, findErr := records.Find(ctx, key.TenantID, key.RequestID)
-	if findErr == nil && turnStatus == domain.TurnFailed && string(payload) == string(status) {
+	record, findErr := records.Find(ctx, key.TenantID, key.RequestID)
+	if findErr == nil && record.Status == domain.TurnFailed && string(record.Payload) == string(status) {
 		return nil
 	}
 	return errors.Join(err, findErr)

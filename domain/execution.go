@@ -75,6 +75,11 @@ type StepInput struct {
 	Limits ExecutionLimits
 	// Spend is what the step may still spend of the release's per-turn budget.
 	Spend StepSpend
+	// Owner is the turn's acquired fence; every durable write the step makes presents it.
+	Owner TurnOwner
+	// HoldRequested reports a pending hold request; a step that can stop at a durable boundary
+	// returns ErrTurnHeld there. Nil means no hold is ever requested.
+	HoldRequested func() bool `json:"-"`
 }
 
 // StepResult contains state, routing, and usage produced by a step.

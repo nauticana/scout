@@ -191,10 +191,10 @@ func TestTurnQueueWorkerQueriesBindTokenFirst(t *testing.T) {
 	if len(queries) != 3 || queries[pending] == "" || queries[reclaim] == "" {
 		t.Fatalf("queries = %v", queries)
 	}
-	if !strings.Contains(queries[claim], "lease_token = ?") || !strings.Contains(queries[claim], "WHERE id = ?") {
+	if !strings.Contains(queries[claim], "lease_token = ?") || !strings.Contains(queries[claim], "WHERE q.id = ?") {
 		t.Fatalf("claim query = %s", queries[claim])
 	}
-	if strings.Index(queries[claim], "lease_token = ?") > strings.Index(queries[claim], "WHERE id = ?") {
+	if strings.Index(queries[claim], "lease_token = ?") > strings.Index(queries[claim], "WHERE q.id = ?") {
 		t.Fatal("claim query must bind the lease token before the id")
 	}
 	if !strings.Contains(queries[claim], "INTERVAL '90 seconds'") || !strings.Contains(queries[claim], "worker_id = 'runtime-1'") {

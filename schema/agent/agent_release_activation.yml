@@ -98,7 +98,7 @@ checks:
   - name: agent_release_activation_attempts_ck
     expression: attempts >= 0
   - name: agent_release_activation_reason_code_ck
-    expression: reason_code IS NULL OR reason_code IN ('VM', 'DM', 'NA', 'AA', 'GR', 'DC', 'AE')
+    expression: reason_code IN ('VM', 'DM', 'NA', 'AA', 'GR', 'DC', 'AE')
   - name: agent_release_activation_reason_ck
     expression: (state_code = 'R') = (reason_code IS NOT NULL)
   - name: agent_release_activation_decider_ck

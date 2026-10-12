@@ -13,6 +13,8 @@ import (
 	"github.com/nauticana/scout/internal/memcache"
 )
 
+var coordinatorOwner = domain.TurnOwner{TenantID: 7, RequestID: "request-1", Fence: 1}
+
 func TestSessionCoordinatorReturnsCacheHit(t *testing.T) {
 	want := domain.SessionSnapshot{ConversationID: "conversation", Revision: 3}
 	coordinator := &SessionCoordinator{
@@ -66,11 +68,11 @@ func TestSessionCoordinatorPersistsBeforeInvalidation(t *testing.T) {
 	var calls []string
 	coordinator := &SessionCoordinator{
 		Store: &fake.DurableSessionStore{
-			CheckpointFunc: func(context.Context, int64, int64, domain.StepCheckpoint) error {
+			CheckpointFunc: func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error {
 				calls = append(calls, "checkpoint")
 				return nil
 			},
-			CompleteFunc: func(context.Context, int64, string, int64, domain.TurnResult) error {
+			CompleteFunc: func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error {
 				calls = append(calls, "complete")
 				return nil
 			},
@@ -82,10 +84,10 @@ func TestSessionCoordinatorPersistsBeforeInvalidation(t *testing.T) {
 		Metrics: &fake.RuntimeMetrics{},
 	}
 	checkpoint := domain.StepCheckpoint{ConversationID: "conversation"}
-	if err := coordinator.Checkpoint(context.Background(), 7, 0, checkpoint); err != nil {
+	if err := coordinator.Checkpoint(context.Background(), coordinatorOwner, 0, checkpoint); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if err := coordinator.Complete(context.Background(), 7, "conversation", 1, domain.TurnResult{}); err != nil {
+	if err := coordinator.Complete(context.Background(), coordinatorOwner, "conversation", 1, domain.TurnResult{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	want := []string{"checkpoint", "invalidate", "complete", "invalidate"}
@@ -99,8 +101,8 @@ func TestSessionCoordinatorInvalidatesAfterStoreFailure(t *testing.T) {
 	invalidated := false
 	coordinator := &SessionCoordinator{
 		Store: &fake.DurableSessionStore{
-			CheckpointFunc: func(context.Context, int64, int64, domain.StepCheckpoint) error { return want },
-			CompleteFunc:   func(context.Context, int64, string, int64, domain.TurnResult) error { return want },
+			CheckpointFunc: func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error { return want },
+			CompleteFunc:   func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error { return want },
 		},
 		Cache: &fake.HotSessionCache{InvalidateFunc: func(context.Context, int64, string) error {
 			invalidated = true
@@ -108,12 +110,12 @@ func TestSessionCoordinatorInvalidatesAfterStoreFailure(t *testing.T) {
 		}},
 		Metrics: &fake.RuntimeMetrics{},
 	}
-	err := coordinator.Checkpoint(context.Background(), 7, 2, domain.StepCheckpoint{ConversationID: "conversation"})
+	err := coordinator.Checkpoint(context.Background(), coordinatorOwner, 2, domain.StepCheckpoint{ConversationID: "conversation"})
 	if !errors.Is(err, want) || !invalidated {
 		t.Fatalf("checkpoint error = %v, invalidated = %v", err, invalidated)
 	}
 	invalidated = false
-	err = coordinator.Complete(context.Background(), 7, "conversation", 2, domain.TurnResult{})
+	err = coordinator.Complete(context.Background(), coordinatorOwner, "conversation", 2, domain.TurnResult{})
 	if !errors.Is(err, want) || !invalidated {
 		t.Fatalf("complete error = %v, invalidated = %v", err, invalidated)
 	}
@@ -122,7 +124,7 @@ func TestSessionCoordinatorInvalidatesAfterStoreFailure(t *testing.T) {
 func TestSessionCoordinatorInvalidatesAfterWriteCancelsRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	coordinator := &SessionCoordinator{
-		Store: &fake.DurableSessionStore{CheckpointFunc: func(context.Context, int64, int64, domain.StepCheckpoint) error {
+		Store: &fake.DurableSessionStore{CheckpointFunc: func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error {
 			cancel()
 			return nil
 		}},
@@ -134,7 +136,7 @@ func TestSessionCoordinatorInvalidatesAfterWriteCancelsRequest(t *testing.T) {
 		}},
 		Metrics: &fake.RuntimeMetrics{},
 	}
-	if err := coordinator.Checkpoint(ctx, 7, 2, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 2, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -142,7 +144,7 @@ func TestSessionCoordinatorInvalidatesAfterWriteCancelsRequest(t *testing.T) {
 func TestSessionCoordinatorSurfacesPostCommitInvalidationFailure(t *testing.T) {
 	cacheErr := errors.New("cache unavailable")
 	coordinator := &SessionCoordinator{
-		Store: &fake.DurableSessionStore{CheckpointFunc: func(context.Context, int64, int64, domain.StepCheckpoint) error {
+		Store: &fake.DurableSessionStore{CheckpointFunc: func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error {
 			return nil
 		}},
 		Cache: &fake.HotSessionCache{InvalidateFunc: func(context.Context, int64, string) error {
@@ -150,7 +152,7 @@ func TestSessionCoordinatorSurfacesPostCommitInvalidationFailure(t *testing.T) {
 		}},
 		Metrics: &fake.RuntimeMetrics{},
 	}
-	err := coordinator.Checkpoint(context.Background(), 7, 2, domain.StepCheckpoint{ConversationID: "conversation"})
+	err := coordinator.Checkpoint(context.Background(), coordinatorOwner, 2, domain.StepCheckpoint{ConversationID: "conversation"})
 	if !errors.Is(err, cacheErr) {
 		t.Fatalf("error = %v", err)
 	}
@@ -178,7 +180,7 @@ func (store *durableFake) Load(context.Context, int64, string) (domain.SessionSn
 	return domain.SessionSnapshot{ConversationID: "conversation", Revision: store.revision}, nil
 }
 
-func (store *durableFake) Checkpoint(_ context.Context, _ int64, expected int64, _ domain.StepCheckpoint) error {
+func (store *durableFake) Checkpoint(_ context.Context, _ domain.TurnOwner, expected int64, _ domain.StepCheckpoint) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.revision != expected {
@@ -188,7 +190,7 @@ func (store *durableFake) Checkpoint(_ context.Context, _ int64, expected int64,
 	return nil
 }
 
-func (store *durableFake) Complete(_ context.Context, _ int64, _ string, expected int64, _ domain.TurnResult) error {
+func (store *durableFake) Complete(_ context.Context, _ domain.TurnOwner, _ string, expected int64, _ domain.TurnResult) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.revision != expected {
@@ -211,7 +213,7 @@ func TestSessionCoordinatorReadAfterWriteSeesNewRevision(t *testing.T) {
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 5 {
 		t.Fatalf("warm = %+v, %v", snapshot, err)
 	}
-	if err := coordinator.Checkpoint(ctx, 7, 5, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 5, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := cache.Get(ctx, 7, "conversation"); found {
@@ -220,7 +222,7 @@ func TestSessionCoordinatorReadAfterWriteSeesNewRevision(t *testing.T) {
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 6 {
 		t.Fatalf("read after write = %+v, %v", snapshot, err)
 	}
-	if err := coordinator.Complete(ctx, 7, "conversation", 6, domain.TurnResult{}); err != nil {
+	if err := coordinator.Complete(ctx, coordinatorOwner, "conversation", 6, domain.TurnResult{}); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 6 {
@@ -242,7 +244,7 @@ func TestSessionCoordinatorConcurrentCheckpointNeverRepopulatesSupersededRead(t 
 		loaded <- snapshot
 	}()
 	<-store.loading // the slow read has started against revision 5
-	if err := coordinator.Checkpoint(ctx, 7, 5, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 5, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
 		t.Fatal(err)
 	}
 	close(store.release)
@@ -262,7 +264,7 @@ func TestSessionCoordinatorRejectsStaleCachedRevision(t *testing.T) {
 	store := &durableFake{revision: 6}
 	coordinator, cache := newCachedCoordinator(t, store)
 	ctx := context.Background()
-	if err := coordinator.Checkpoint(ctx, 7, 6, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 6, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
 		t.Fatal(err)
 	}
 	// Another tier repopulates an older revision behind the coordinator's back.
@@ -292,7 +294,7 @@ func TestSessionCoordinatorRecoversFromCacheLoss(t *testing.T) {
 	if _, err := coordinator.Load(ctx, 7, "conversation"); err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.Checkpoint(ctx, 7, 2, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 2, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
 		t.Fatal(err)
 	}
 	// The whole cache tier is lost and replaced empty.
@@ -303,7 +305,7 @@ func TestSessionCoordinatorRecoversFromCacheLoss(t *testing.T) {
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 3 {
 		t.Fatalf("after cache loss = %+v, %v", snapshot, err)
 	}
-	if err := coordinator.Checkpoint(ctx, 7, 3, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 3, domain.StepCheckpoint{ConversationID: "conversation"}); err != nil {
 		t.Fatal(err)
 	}
 	// Cache errors on every operation still leave durable reads and writes correct.
@@ -318,7 +320,7 @@ func TestSessionCoordinatorRecoversFromCacheLoss(t *testing.T) {
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 4 {
 		t.Fatalf("with broken cache = %+v, %v", snapshot, err)
 	}
-	if err := coordinator.Checkpoint(ctx, 7, 4, domain.StepCheckpoint{ConversationID: "conversation"}); !errors.Is(err, broken) || store.revision != 5 {
+	if err := coordinator.Checkpoint(ctx, coordinatorOwner, 4, domain.StepCheckpoint{ConversationID: "conversation"}); !errors.Is(err, broken) || store.revision != 5 {
 		t.Fatalf("checkpoint with broken cache = %v, revision = %d", err, store.revision)
 	}
 }

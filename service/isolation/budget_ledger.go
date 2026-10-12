@@ -29,6 +29,7 @@ const (
 	qReleaseBudget   = "scout_isolation_release_budget"
 	qExpireOneBudget = "scout_isolation_expire_one_budget"
 	qExpireBudget    = "scout_isolation_expire_budget"
+	qGuardTurnOwner  = "scout_isolation_guard_turn_owner"
 )
 
 // Window accounting: held reservations count at their grant until they expire,
@@ -36,6 +37,12 @@ const (
 // counted against its release budget's period the same way; both must hold.
 var budgetQueries = common.MergeMaps(scope.CurrencyQueries, agentBudgetQueries, map[string]string{
 	qLockBudget: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+	// The guarded touch of the settling owner's turn row: it matches only while the owner's fence
+	// holds, and its row lock orders the settlement before or after a hold of the turn.
+	qGuardTurnOwner: `
+UPDATE conversation_turn SET fence = fence
+ WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
+RETURNING turn_no`,
 	qGetTurnState: `
 SELECT status.is_terminal, CURRENT_TIMESTAMP
   FROM conversation_turn turn_row
@@ -118,7 +125,10 @@ type BudgetLedger struct {
 	qs   keelport.QueryService
 }
 
-var _ contract.TenantBudgetManager = (*BudgetLedger)(nil)
+var (
+	_ contract.TenantBudgetManager = (*BudgetLedger)(nil)
+	_ contract.TurnBudgetManager   = (*BudgetLedger)(nil)
+)
 
 func (ledger *BudgetLedger) init(ctx context.Context) error {
 	if ledger.DB == nil {
@@ -226,6 +236,7 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 				return domain.BudgetReservation{}, fmt.Errorf("reserve budget: commit replay: %w", err)
 			}
 			committed = true
+			reservation.Replayed = true
 			return reservation, nil
 		}
 		if row.status == domain.ReservationSettled {
@@ -310,6 +321,15 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 
 // Commit settles actual usage, including an overrun, into the budget window.
 func (ledger *BudgetLedger) Commit(ctx context.Context, reservation domain.BudgetReservation, usage domain.Usage) error {
+	return ledger.commit(ctx, nil, reservation, usage)
+}
+
+// CommitTurn settles the owner's turn reservation; a stale owner settles nothing.
+func (ledger *BudgetLedger) CommitTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation, usage domain.Usage) error {
+	return ledger.commit(ctx, &owner, reservation, usage)
+}
+
+func (ledger *BudgetLedger) commit(ctx context.Context, owner *domain.TurnOwner, reservation domain.BudgetReservation, usage domain.Usage) error {
 	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: usage cannot be negative", domain.ErrValidation)
 	}
@@ -320,17 +340,32 @@ func (ledger *BudgetLedger) Commit(ctx context.Context, reservation domain.Budge
 	if settledTokens < usage.InputTokens {
 		return fmt.Errorf("%w: token usage overflow", domain.ErrValidation)
 	}
-	return ledger.transition(ctx, qSettleBudget, reservation, settledTokens, usage.CostMinorUnits)
+	return ledger.transition(ctx, owner, qSettleBudget, reservation, settledTokens, usage.CostMinorUnits)
 }
 
 // Release returns an unused hold to the tenant budget.
 func (ledger *BudgetLedger) Release(ctx context.Context, reservation domain.BudgetReservation) error {
-	return ledger.transition(ctx, qReleaseBudget, reservation)
+	return ledger.transition(ctx, nil, qReleaseBudget, reservation)
 }
 
-func (ledger *BudgetLedger) transition(ctx context.Context, query string, reservation domain.BudgetReservation, extra ...any) error {
+// ReleaseTurn returns the owner's unused turn reservation; a stale owner releases nothing.
+func (ledger *BudgetLedger) ReleaseTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation) error {
+	return ledger.transition(ctx, &owner, qReleaseBudget, reservation)
+}
+
+// transition settles or releases one reservation; with an owner, the guarded touch of the
+// owner's turn is the transaction's first statement.
+func (ledger *BudgetLedger) transition(ctx context.Context, owner *domain.TurnOwner, query string, reservation domain.BudgetReservation, extra ...any) error {
 	if reservation.TenantID <= 0 || strings.TrimSpace(reservation.ReservationID) == "" {
 		return fmt.Errorf("%w: reservation identity is required", domain.ErrValidation)
+	}
+	if owner != nil {
+		if err := owner.Check(); err != nil {
+			return err
+		}
+		if !owner.Owns(reservation.TenantID, reservation.RequestID) {
+			return fmt.Errorf("%w: the owner of turn %q cannot settle the reservation of %q", domain.ErrFenceLost, owner.RequestID, reservation.RequestID)
+		}
 	}
 	if ledger.DB == nil {
 		return fmt.Errorf("budget ledger: database is required")
@@ -345,6 +380,15 @@ func (ledger *BudgetLedger) transition(ctx context.Context, query string, reserv
 			_ = keeldata.RollbackDetached(tx)
 		}
 	}()
+	if owner != nil {
+		touched, err := tx.Query(ctx, qGuardTurnOwner, owner.TenantID, owner.RequestID, owner.Fence)
+		if err != nil {
+			return fmt.Errorf("budget reservation transition: guard turn owner: %w", err)
+		}
+		if len(touched.Rows) == 0 {
+			return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+		}
+	}
 	if _, err = tx.Query(ctx, qLockBudget, strconv.FormatInt(reservation.TenantID, 10)); err != nil {
 		return fmt.Errorf("budget reservation transition: lock tenant: %w", err)
 	}

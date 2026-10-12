@@ -141,6 +141,8 @@ type BudgetReservation struct {
 	GrantedCostMinorUnits int64
 	Currency              string
 	ExpiresAt             time.Time
+	// Replayed is set when Reserve returned a hold already live for the request, not a new attempt.
+	Replayed bool
 }
 
 // BudgetLimits is one tenant's rolling-window token and cost budget.

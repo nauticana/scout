@@ -29,8 +29,8 @@ func newSweepFixture(t *testing.T, policy func(domain.ApprovalRequest) (domain.E
 		Policy: fake.EscalationPolicyFunc(func(_ context.Context, request domain.ApprovalRequest) (domain.EscalationStep, error) {
 			return policy(request)
 		}),
-		Records: &fake.TurnRecordStore{FailFunc: func(_ context.Context, tenantID int64, requestID string, status domain.TurnStatus, code string) error {
-			f.failed = append(f.failed, requestID+"/"+string(status)+"/"+code)
+		Records: &fake.TurnRecordStore{FailParkedFunc: func(_ context.Context, tenantID int64, requestID, code string) error {
+			f.failed = append(f.failed, requestID+"/"+string(domain.TurnFailed)+"/"+code)
 			return nil
 		}},
 		Audit: &fake.AuditSink{RecordFunc: func(_ context.Context, record domain.DecisionRecord) error {
@@ -170,12 +170,12 @@ func TestALaterSweepFailsATurnTheExpiryLeftParked(t *testing.T) {
 	down := errors.New("turn store down")
 	// The expiry commits and failing the turn does not, both at once and in the same sweep's retry.
 	failures := 2
-	f.sweeper.Records = &fake.TurnRecordStore{FailFunc: func(_ context.Context, _ int64, requestID string, status domain.TurnStatus, code string) error {
+	f.sweeper.Records = &fake.TurnRecordStore{FailParkedFunc: func(_ context.Context, _ int64, requestID, code string) error {
 		if failures > 0 {
 			failures--
 			return down
 		}
-		f.failed = append(f.failed, requestID+"/"+string(status)+"/"+code)
+		f.failed = append(f.failed, requestID+"/"+string(domain.TurnFailed)+"/"+code)
 		return nil
 	}}
 	opened := f.open(t, dueAt(routedOwed("late", "77", 1), gateNow.Add(-time.Minute)))
@@ -201,9 +201,9 @@ func TestASweepSettlesATurnThatEndedAnotherWay(t *testing.T) {
 		return domain.EscalationStep{Action: domain.EscalationExpire, Reason: "deadline passed"}, nil
 	})
 	f.sweeper.Records = &fake.TurnRecordStore{
-		FailFunc: func(context.Context, int64, string, domain.TurnStatus, string) error { return domain.ErrConflict },
-		FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
-			return 1, domain.TurnCancelled, nil, nil
+		FailParkedFunc: func(context.Context, int64, string, string) error { return domain.ErrConflict },
+		FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
+			return domain.TurnRecord{TurnNo: 1, Status: domain.TurnCancelled}, nil
 		},
 	}
 	opened := f.open(t, dueAt(owed("gone", "77"), gateNow.Add(-time.Minute)))

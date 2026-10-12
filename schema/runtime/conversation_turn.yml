@@ -39,6 +39,21 @@ columns:
   - name: cancel_reason
     type: VARCHAR(200)
     nullable: true
+  - name: fence
+    type: BIGINT
+    default: "0"
+  - name: hold_requested_at
+    type: TIMESTAMP
+    nullable: true
+  - name: hold_reason
+    type: VARCHAR(200)
+    nullable: true
+  - name: hold_code
+    type: CHAR(1)
+    nullable: true
+  - name: held_at
+    type: TIMESTAMP
+    nullable: true
 primary_key: [partner_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turns
@@ -74,3 +89,13 @@ checks:
     expression: first_response_at IS NULL OR (started_at IS NOT NULL AND first_response_at >= started_at)
   - name: conversation_turn_completed_ck
     expression: completed_at IS NULL OR (started_at IS NOT NULL AND completed_at >= started_at)
+  - name: conversation_turn_fence_ck
+    expression: fence >= 0
+  - name: conversation_turn_hold_request_ck
+    expression: (hold_requested_at IS NULL) = (hold_reason IS NULL)
+  - name: conversation_turn_hold_code_ck
+    expression: hold_code IN ('C', 'A')
+  - name: conversation_turn_held_code_ck
+    expression: (status_code = 'H') = (hold_code IS NOT NULL)
+  - name: conversation_turn_held_at_ck
+    expression: (status_code = 'H') = (held_at IS NOT NULL)

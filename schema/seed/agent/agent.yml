@@ -216,6 +216,8 @@ seeds:
       - [agent_run_trace_max_events, int, true, "500", "Events one Studio run trace returns; reading stops there and the trace is marked truncated (1..5000); 0 takes 500"]
       - [agent_run_trace_max_journal_entries, int, true, "1000", "Loop journal entries one Studio run trace reads to classify events; a longer journal truncates the trace (1..10000); 0 takes 1000"]
       - [agent_run_trace_max_journal_bytes, int, true, "4194304", "Cumulative loop journal payload bytes one Studio run trace classifies; past them the trace is truncated (1024..67108864); 0 takes 4194304"]
+      - [agent_live_turn_page_size, int, true, "50", "Live turns one Studio turn control page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50"]
+      - [agent_live_turn_max_page_size, int, true, "200", "Largest live turn page a Studio turn control caller may ask for (1..1000); 0 takes 200"]
   - table: authorization_object
     columns: [id, caption]
     rows:
@@ -261,6 +263,7 @@ seeds:
       - [agent_studio_events, S, "*"]
       - [agent_publish_reviews, S, "*"]
       - [agent_draft_comments, S, "*"]
+      - [state_release_activations, D, description]
   - table: rest_api_header
     columns: [id, master_table]
     rows:

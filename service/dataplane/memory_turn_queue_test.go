@@ -67,7 +67,12 @@ func TestMemoryReplyHubConformance(t *testing.T) {
 
 func TestMemoryStepIdempotencyConformance(t *testing.T) {
 	dataplanetest.RunIdempotencySuite(t, func(t *testing.T) dataplanetest.IdempotencyHarness {
-		return dataplanetest.IdempotencyHarness{Store: newMemoryIdempotency()}
+		store := newMemoryIdempotency()
+		owner, err := store.fences.Acquire(1, "request-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dataplanetest.IdempotencyHarness{Store: store, Owner: owner}
 	})
 }
 
@@ -202,8 +207,9 @@ func (policy *weightPolicy) SchedulingWeight(_ context.Context, tenantID int64) 
 
 var _ contract.TenantWeightPolicy = (*weightPolicy)(nil)
 
-// memoryIdempotency is a test-only reference for the idempotency conformance suite.
+// memoryIdempotency is a test-only reference for the idempotency and fence conformance suites.
 type memoryIdempotency struct {
+	fences  *MemoryTurnFences
 	mu      sync.Mutex
 	entries map[string]*memoryIdempotencyEntry
 }
@@ -214,17 +220,20 @@ type memoryIdempotencyEntry struct {
 }
 
 func newMemoryIdempotency() *memoryIdempotency {
-	return &memoryIdempotency{entries: make(map[string]*memoryIdempotencyEntry)}
+	return &memoryIdempotency{fences: &MemoryTurnFences{}, entries: make(map[string]*memoryIdempotencyEntry)}
 }
 
-func (store *memoryIdempotency) key(tenantID int64, requestID string, step domain.ExecutionStep) string {
-	return checkpointIdentity(requestID, tenantID, int(step.ExecutionStepID))
+func (store *memoryIdempotency) key(owner domain.TurnOwner, step domain.ExecutionStep) string {
+	return checkpointIdentity(owner.RequestID, owner.TenantID, int(step.ExecutionStepID))
 }
 
-func (store *memoryIdempotency) Begin(_ context.Context, tenantID int64, requestID string, step domain.ExecutionStep) (domain.StepResult, bool, error) {
+func (store *memoryIdempotency) Begin(_ context.Context, owner domain.TurnOwner, step domain.ExecutionStep) (domain.StepResult, bool, error) {
+	if err := store.fences.Check(owner); err != nil {
+		return domain.StepResult{}, false, err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := store.key(tenantID, requestID, step)
+	key := store.key(owner, step)
 	entry := store.entries[key]
 	switch {
 	case entry == nil:
@@ -240,10 +249,13 @@ func (store *memoryIdempotency) Begin(_ context.Context, tenantID int64, request
 	}
 }
 
-func (store *memoryIdempotency) Commit(_ context.Context, tenantID int64, requestID string, step domain.ExecutionStep, result domain.StepResult) error {
+func (store *memoryIdempotency) Commit(_ context.Context, owner domain.TurnOwner, step domain.ExecutionStep, result domain.StepResult) error {
+	if err := store.fences.Check(owner); err != nil {
+		return err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	entry := store.entries[store.key(tenantID, requestID, step)]
+	entry := store.entries[store.key(owner, step)]
 	if entry == nil || entry.status != "claimed" {
 		return fmt.Errorf("%w: step is not claimed", domain.ErrConflict)
 	}
@@ -251,10 +263,13 @@ func (store *memoryIdempotency) Commit(_ context.Context, tenantID int64, reques
 	return nil
 }
 
-func (store *memoryIdempotency) Abandon(_ context.Context, tenantID int64, requestID string, step domain.ExecutionStep) error {
+func (store *memoryIdempotency) Abandon(_ context.Context, owner domain.TurnOwner, step domain.ExecutionStep) error {
+	if err := store.fences.Check(owner); err != nil {
+		return err
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	entry := store.entries[store.key(tenantID, requestID, step)]
+	entry := store.entries[store.key(owner, step)]
 	if entry == nil {
 		return fmt.Errorf("%w: step was never claimed", domain.ErrNotFound)
 	}

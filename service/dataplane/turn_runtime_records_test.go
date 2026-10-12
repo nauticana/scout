@@ -3,13 +3,20 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
 )
 
+// recordOwner owns turn 4 of conversation-1; the default guard row says it still does.
+var recordOwner = domain.TurnOwner{TenantID: 7, RequestID: "request-1", Fence: 3}
+
 func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
+	if _, set := query.rows[qRecordOwnerGuard]; !set {
+		query.rows[qRecordOwnerGuard] = [][]any{{int64(4)}}
+	}
 	if _, set := query.rows[qRecordAdmits]; !set {
 		query.rows[qRecordAdmits] = [][]any{{true}}
 	}
@@ -60,7 +67,7 @@ func TestTableTurnRecordStoreDetectsReusedRequestID(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
 		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
 		qRecordOpen:        nil,
-		qRecordFind:        {{int64(4), "conversation-1", string(domain.TurnQueued), testDigest("other"), nil, nil}},
+		qRecordFind:        {{int64(4), "conversation-1", string(domain.TurnQueued), testDigest("other"), nil, nil, int64(0)}},
 	}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
@@ -77,16 +84,16 @@ func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordFind: {{int64(4), "conversation-1", string(domain.TurnCompleted), testDigest("input"), ref.URI, ref.Digest}},
+		qRecordFind: {{int64(4), "conversation-1", string(domain.TurnCompleted), testDigest("input"), ref.URI, ref.Digest, int64(6)}},
 	}}
 	store := newTestRecordStore(query)
 	store.Objects = codec
-	turnNo, status, payload, err := store.Find(context.Background(), 7, "request-1")
-	if err != nil || turnNo != 4 || status != domain.TurnCompleted || string(payload) != "answer" {
-		t.Fatalf("turn = %d, status = %q, payload = %q, error = %v", turnNo, status, payload, err)
+	record, err := store.Find(context.Background(), 7, "request-1")
+	if err != nil || record.TurnNo != 4 || record.Status != domain.TurnCompleted || record.Fence != 6 || string(record.Payload) != "answer" {
+		t.Fatalf("record = %+v, error = %v", record, err)
 	}
 	query.rows[qRecordFind] = nil
-	if _, _, _, err := store.Find(context.Background(), 7, "request-1"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := store.Find(context.Background(), 7, "request-1"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("error = %v, want not found", err)
 	}
 }
@@ -94,18 +101,22 @@ func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
 func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{qRecordFail: {{int64(4)}}, qLedgerInsertUsageEvent: {{int64(1)}}}}
 	store := newTestRecordStore(query)
-	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnFailed, "dispatch_failed"); err != nil {
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error"); err != nil {
 		t.Fatal(err)
 	}
 	failArgs := query.firstArgs(qRecordFail)
-	if len(failArgs) != 6 || failArgs[0] != string(domain.TurnFailed) || failArgs[3] != int64(7) || failArgs[4] != "request-1" || failArgs[5] != "dispatch_failed" {
+	if len(failArgs) != 7 || failArgs[0] != string(domain.TurnFailed) || failArgs[3] != int64(7) || failArgs[4] != "request-1" ||
+		failArgs[5] != int64(3) || failArgs[6] != "model_error" {
 		t.Fatalf("fail args = %v", failArgs)
 	}
-	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnCompleted, "x"); !errors.Is(err, domain.ErrValidation) {
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnCompleted, "x"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}
+	if err := store.Fail(context.Background(), domain.TurnOwner{}, domain.TurnFailed, "x"); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("missing owner = %v, want ErrFenceLost", err)
+	}
 	usage := domain.Usage{InputTokens: 3, OutputTokens: 5, ToolCalls: 1, SearchQueries: 6, CostMinorUnits: 2, Currency: "USD"}
-	if err := store.RecordUsage(context.Background(), 7, "conversation-1", 4, "agent@v1", domain.UsageAttribution{
+	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", domain.UsageAttribution{
 		Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "agent"}, ScopeID: "unit",
 		OnBehalfOf: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, WorkRef: "task-9",
 	}, usage); err != nil {
@@ -286,20 +297,75 @@ func (function explainerFunc) ExplainVersion(ctx context.Context, request domain
 	return function(ctx, request)
 }
 
+// A late Fail, of a turn that ended or moved to another owner, is refused as a lost fence and
+// writes its payload to an object of its own, never over the one the turn's digest names.
 func TestTableTurnRecordStoreLateFailKeepsTheTerminalPayload(t *testing.T) {
 	storage := &fake.ObjectStorage{Name: "turns"}
 	query := &queueQueryFake{rows: map[string][][]any{}}
 	store := newTestRecordStore(query)
 	store.Objects = &ObjectStateStore{Storage: storage, MaxBytes: 1 << 20}
-	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnFailed, "model_error"); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("late fail = %v, want conflict", err)
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error"); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("late fail = %v, want ErrFenceLost", err)
 	}
 	first := query.firstArgs(qRecordFail)
-	if err := store.Fail(context.Background(), 7, "request-1", domain.TurnFailed, "rejected"); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("second late fail = %v, want conflict", err)
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "rejected"); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("second late fail = %v, want ErrFenceLost", err)
 	}
 	second := query.args[qRecordFail][1]
 	if first[1] == second[1] {
 		t.Fatalf("two failure codes share object %v", first[1])
+	}
+}
+
+// A turn no worker runs, queued or suspended, is failed without an owner; a held one keeps its
+// hold and an ended one conflicts.
+func TestTableTurnRecordStoreFailsAParkedTurn(t *testing.T) {
+	query := &queueQueryFake{rows: map[string][][]any{qRecordFailParked: {{int64(4)}}}}
+	store := newTestRecordStore(query)
+	if err := store.FailParked(context.Background(), 7, "request-1", "dispatch_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if args := query.firstArgs(qRecordFailParked); len(args) != 5 || args[2] != int64(7) || args[3] != "request-1" || args[4] != "dispatch_failed" {
+		t.Fatalf("args = %v", args)
+	}
+	for status, want := range map[domain.TurnStatus]error{domain.TurnHeld: domain.ErrTurnHeld, domain.TurnRunning: domain.ErrConflict} {
+		query := &queueQueryFake{rows: map[string][][]any{
+			qRecordFind: {{int64(4), "conversation-1", string(status), testDigest("input"), nil, nil, int64(2)}},
+		}}
+		if err := newTestRecordStore(query).FailParked(context.Background(), 7, "request-1", "rejected"); !errors.Is(err, want) {
+			t.Fatalf("%s: %v, want %v", status, err, want)
+		}
+	}
+	if !strings.Contains(turnRecordQueries[qRecordFailParked], sqlTurnQueued+", "+sqlTurnSuspended+")") {
+		t.Fatal("only a queued or suspended turn may be failed without an owner")
+	}
+}
+
+// A hold or suspension yields to a cancellation requested before it: the owner is told its turn
+// is cancelled and ends it, so a cancelled turn is never parked out of the canceller's reach.
+func TestTableTurnRecordStoreHoldAndSuspendYieldToAPendingCancellation(t *testing.T) {
+	for name, transition := range map[string]func(*TableTurnRecordStore) error{
+		"hold": func(store *TableTurnRecordStore) error {
+			_, err := store.Hold(context.Background(), recordOwner)
+			return err
+		},
+		"suspend": func(store *TableTurnRecordStore) error {
+			_, err := store.Suspend(context.Background(), recordOwner, "approval_pending")
+			return err
+		},
+	} {
+		cancelled := &queueQueryFake{rows: map[string][][]any{qRecordOwnerState: {{recordOwner.Fence, "R", true, "operator asked"}}}}
+		if err := transition(newTestRecordStore(cancelled)); !errors.Is(err, domain.ErrTurnCanceled) || !strings.Contains(err.Error(), "operator asked") {
+			t.Fatalf("%s with a pending cancellation = %v, want ErrTurnCanceled", name, err)
+		}
+		moved := &queueQueryFake{rows: map[string][][]any{qRecordOwnerState: {{recordOwner.Fence + 1, "H", false, ""}}}}
+		if err := transition(newTestRecordStore(moved)); !errors.Is(err, domain.ErrFenceLost) {
+			t.Fatalf("%s past its fence = %v, want ErrFenceLost", name, err)
+		}
+	}
+	for name, query := range map[string]string{"hold": turnRecordQueries[qRecordHold], "suspend": turnRecordQueries[qRecordSuspend]} {
+		if !strings.Contains(query, "cancel_requested_at IS NULL") {
+			t.Errorf("%s does not yield to a pending cancellation:\n%s", name, query)
+		}
 	}
 }

@@ -38,6 +38,17 @@ type TenantBudgetManager interface {
 	Release(ctx context.Context, reservation domain.BudgetReservation) error
 }
 
+// TurnBudgetManager is the budget a turn runtime settles: its settlements are made by the
+// turn's owner, checked in the settling transaction, and refused with domain.ErrFenceLost once
+// the fence moved on, so a stale worker cannot settle a reservation the resumed turn runs on.
+type TurnBudgetManager interface {
+	TenantBudgetManager
+	// CommitTurn settles the reservation of the owner's turn against actual usage.
+	CommitTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation, usage domain.Usage) error
+	// ReleaseTurn returns the unused reservation of the owner's turn.
+	ReleaseTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation) error
+}
+
 // ExecutionGovernor creates hard limits for one agent turn.
 type ExecutionGovernor interface {
 	// Start initializes hard limits for one tenant turn.

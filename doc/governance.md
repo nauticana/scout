@@ -121,7 +121,7 @@ The turn lifecycle includes `U` (suspended):
 | Pending approval | `guardrail.ErrApprovalPending` wraps `domain.ErrApprovalPending`, not `ErrForbidden` |
 | `TurnRuntime.suspend` | Records the suspension, publishes a final frame, acks the delivery |
 | Budget | The reservation stays **held** — settling would resume with no budget, releasing would let a tenant park work to dodge its ceiling |
-| Verdict | `approval.Resumer` records it; `A` (approved) and `E` (edited) return the turn to `Q` (queued) and requeue its delivery, `X` (rejected) fails it |
+| Verdict | `approval.Resumer` records it; `A` (approved) and `E` (edited) return the turn to `Q` (queued) and requeue its delivery, `X` (rejected) fails it. A turn held meanwhile keeps the verdict and stays `H` (held): neither the verdict nor an escalation expiry requeues or fails it, and the released turn meets the verdict at the gate |
 | Replay | The worker resumes from the last checkpoint through `StepIdempotencyStore`; committed steps do not re-execute |
 
 Resolving without requeueing would leave the turn parked forever, so `Resumer` owns all three
@@ -215,6 +215,24 @@ no routing. With `Fallback` set, mirroring a runtime `ReleaseRouter.Fallback`, a
 no routing passes, as the fallback routes its asks. Compose it with the runtime router's resolver and the enforcer's `Baseline` and
 `Restrictions`. Its Studio view, `approval-routing`, lists the effective routes with the scope
 declaring each, every ask with the route serving it, and what publication would refuse.
+
+## Live turn operation
+
+Operating a live turn is its own authority, apart from authoring. `AGENT_OPERATION` is checked at `agent:<id>`:
+`VIEW` lists an agent's live turns and reads one, and `OPERATE` holds and releases them. No authoring action
+(`EDIT`, `PUBLISH`) implies either, and every call also needs `AGENT_STUDIO` `VIEW`, so an agent the actor cannot
+view reads as not found. `AGENT_ADMIN` and `AGENT_OPER` hold both at `*`.
+
+A hold stops a turn at a durable point under a new [fence](persistence.md#turn-fence): a queued or parked turn
+at once, a running one at its next checkpoint. Stopping is always allowed. A release names the fence the operator
+saw, re-admits the turn's budget, and only then requeues it; a refused re-admission leaves the turn held, and a
+stale fence is refused. Pausing an agent with policy `suspend` holds its live turns the same way, and unpausing
+releases none.
+
+Each change is a decision record keyed by the fence it left the turn at, so a retried request records once:
+`turn_hold_requested` (a running turn asked to hold), `turn_held` (held at once, or by its worker at a
+checkpoint), and `turn_released`. [Turn takeover](turn_takeover.md) is the design for preempting, taking over, and
+handing back a turn.
 
 ## Two-person publish and restore
 
@@ -382,8 +400,8 @@ Evidence is deliberately not telemetry. Metrics are sampled and lossy; a decisio
 never derives from one.
 
 Records are emitted at turn admission, model routing, every governed tool invocation, guardrail
-hits, credential resolution, approval verdicts, rollout transitions, version resolution, and turn
-terminal states.
+hits, credential resolution, approval verdicts, rollout transitions, version resolution, turn
+suspension, holds, and releases, and turn terminal states.
 
 A decision is recorded once. `domain.WithDecisionScope` marks the replay-stable position a decision
 is made at — the turn, the step, the loop iteration, the tool call by its idempotency key — and
@@ -392,8 +410,11 @@ category, action, and resource; the nth identical decision in one scope gets the
 keeps the first record of a key, so a redelivered turn re-makes a decision without writing it twice.
 A decision made outside any scope has no key and stays append-only.
 
-A turn's chain is gap-free: it opens with `turn_admitted`, written before dispatch, and closes with
-exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`. An audit write that fails fails
+A turn's chain is gap-free: it opens with `turn_admitted`, written before dispatch, may carry the
+intermediate `turn_suspended`, `turn_hold_requested`, `turn_held`, and `turn_released`, and closes with
+exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`; the suspension, hold,
+release, and terminal records carry the turn's `fence` in their payload, and a worker whose fence
+moved writes no terminal record. An audit write that fails fails
 the delivery rather than passing silently, and the terminal replay offers the terminal record again,
 which the key makes a no-op unless the first write was lost. `observability.VerifyTurnChain` asserts
 all of this over one request's records.

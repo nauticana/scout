@@ -38,7 +38,7 @@ func TestStudioCodesAgreeWithSeedsAndChecks(t *testing.T) {
 			name: "draft_comment_status", width: 1,
 			codes: studioCodesOf(DraftCommentOpen, DraftCommentResolved),
 			seed:  "agent/agent.yml", schema: "agent/agent_draft_comment.yml",
-			check: "agent_draft_comment_status_ck", column: "status_code",
+			check: "agent_draft_comment_status_code_ck", column: "status_code",
 		},
 		{
 			name: "release_activation_reason", width: 2,

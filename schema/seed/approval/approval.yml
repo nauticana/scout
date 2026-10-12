@@ -25,3 +25,8 @@ seeds:
       - [approval_rule_source, turn_approval_request, rule_source_code]
       - [approval_approver_kind, turn_approval_request, approver_reference_kind]
       - [agent_output_class, turn_approval_request, output_class_code]
+  - table: foreign_key_lookup
+    columns: [constraint_name, lookup_style, display_column]
+    rows:
+      - [status_turn_approval_requests, D, description]
+      - [status_turn_approval_decisions, D, description]

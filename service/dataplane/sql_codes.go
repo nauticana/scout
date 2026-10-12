@@ -8,8 +8,15 @@ const (
 	sqlTurnRunning   = "'" + string(domain.TurnRunning) + "'"
 	sqlTurnStreaming = "'" + string(domain.TurnStreaming) + "'"
 	sqlTurnSuspended = "'" + string(domain.TurnSuspended) + "'"
+	sqlTurnHeld      = "'" + string(domain.TurnHeld) + "'"
 	sqlTurnCompleted = "'" + string(domain.TurnCompleted) + "'"
 	sqlTurnFailed    = "'" + string(domain.TurnFailed) + "'"
+
+	// sqlTurnOwned lists the statuses a worker owns a turn in; sqlTurnLive every non-terminal one.
+	sqlTurnOwned = sqlTurnRunning + ", " + sqlTurnStreaming
+	sqlTurnLive  = sqlTurnQueued + ", " + sqlTurnRunning + ", " + sqlTurnStreaming + ", " + sqlTurnSuspended + ", " + sqlTurnHeld
+
+	sqlHoldCheckpoint = "'" + string(domain.HoldCheckpoint) + "'"
 
 	sqlQueueQueued = "'" + string(domain.QueueQueued) + "'"
 	sqlQueueLeased = "'" + string(domain.QueueLeased) + "'"

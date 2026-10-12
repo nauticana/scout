@@ -396,7 +396,8 @@ func mapServiceError(result any, err error) (any, error) {
 		return nil, keelhandler.NewAPIError(http.StatusForbidden, err.Error())
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, keelhandler.NewAPIError(http.StatusNotFound, err.Error())
-	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict), errors.Is(err, domain.ErrSealed):
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict), errors.Is(err, domain.ErrSealed),
+		errors.Is(err, domain.ErrFenceLost), errors.Is(err, domain.ErrTurnHeld):
 		return nil, keelhandler.NewAPIError(http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrRateLimited), errors.Is(err, domain.ErrBudgetExceeded):
 		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error()), err)

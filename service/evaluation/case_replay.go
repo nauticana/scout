@@ -39,7 +39,9 @@ var errReplayDuration = errors.New("replay duration elapsed")
 type caseReplay struct {
 	loop    *dataplane.ToolLoopExecutor
 	journal contract.LoopJournal
-	graph   domain.ExecutionGraph
+	// fences grants each replayed turn the owner its journal writes present.
+	fences *dataplane.MemoryTurnFences
+	graph  domain.ExecutionGraph
 	// enforcer applies guardrails to every step's output; nil applies none.
 	enforcer       contract.GuardrailEnforcer
 	guardrails     domain.GuardrailConfig
@@ -110,6 +112,10 @@ func (replay *caseReplay) turn(ctx context.Context, turnNo int64, input []byte, 
 		defer cancel()
 	}
 	requestID := replay.requestID(turnNo)
+	owner, err := replay.fences.Acquire(replay.principal.TenantID, requestID)
+	if err != nil {
+		return false, err
+	}
 	replay.output = nil
 	var turnUsage domain.Usage
 	stepID := replay.graph.EntryStepID
@@ -134,7 +140,7 @@ func (replay *caseReplay) turn(ctx context.Context, turnNo int64, input []byte, 
 		}
 		result, err := replay.loop.Execute(walkCtx, domain.StepInput{
 			Step: step, Snapshot: *snapshot, Principal: replay.principal, RequestID: requestID, Input: input,
-			Limits: replay.limits, Spend: spend,
+			Limits: replay.limits, Spend: spend, Owner: owner,
 		})
 		if recordErr := replay.record(ctx, requestID, step); recordErr != nil {
 			return false, errors.Join(err, recordErr)

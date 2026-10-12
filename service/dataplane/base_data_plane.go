@@ -42,7 +42,7 @@ type BaseDataPlane struct {
 	Storage     storage.ObjectStorage
 	Providers   contract.AgentProviderFactory
 	Transport   contract.ToolTransport
-	Budget      contract.TenantBudgetManager
+	Budget      contract.TurnBudgetManager
 	Pricer      contract.ModelPricer
 	RateLimiter contract.TenantRateLimiter
 	Capacity    contract.CapacityScheduler
@@ -95,7 +95,7 @@ type BaseDataPlane struct {
 	Guardrails       contract.GuardrailEnforcer
 	Estimator        contract.TurnBudgetEstimator
 	ReplyHub         *CacheReplyHub
-	Cancels          *TableTurnCanceller
+	Control          *TableTurnControl
 	DeadLetters      contract.DeadLetterQueue
 	TurnScheduler    *QueueTurnScheduler
 	Dispatcher       contract.TurnDispatcher
@@ -128,7 +128,7 @@ func (plane *BaseDataPlane) Runtime() contract.ConversationRuntime       { retur
 func (plane *BaseDataPlane) Scheduler() contract.FairTurnScheduler       { return plane.TurnScheduler }
 func (plane *BaseDataPlane) Ingress() contract.ConversationIngress       { return plane.TurnIngress }
 func (plane *BaseDataPlane) Replies() contract.ReplayTurnReplySubscriber { return plane.ReplyHub }
-func (plane *BaseDataPlane) Canceller() contract.TurnCanceller           { return plane.Cancels }
+func (plane *BaseDataPlane) Canceller() contract.TurnCanceller           { return plane.Control }
 
 // LoopDeadline is the longest one step may run; a queue lease must outlast it.
 func (plane *BaseDataPlane) LoopDeadline() time.Duration { return plane.Limits.Deadline }
@@ -317,10 +317,10 @@ func (plane *BaseDataPlane) composeDelivery() error {
 			PollInterval: settings.ReplyPollInterval, RecordReadInterval: settings.ReplyRecordReadInterval}
 		plane.closers = append(plane.closers, plane.ReplyHub)
 	}
-	if plane.Cancels == nil {
-		plane.Cancels = &TableTurnCanceller{DB: plane.DB, Cache: plane.Cache, PollInterval: settings.CancelPollInterval,
+	if plane.Control == nil {
+		plane.Control = &TableTurnControl{DB: plane.DB, Cache: plane.Cache, PollInterval: settings.CancelPollInterval,
 			MaxReadFailures: settings.CancelMaxReadFailures}
-		plane.closers = append(plane.closers, plane.Cancels)
+		plane.closers = append(plane.closers, plane.Control)
 	}
 	if plane.DeadLetters == nil {
 		plane.DeadLetters = &TableDeadLetterQueue{DB: plane.DB}
@@ -458,7 +458,7 @@ func (plane *BaseDataPlane) composeRuntime() error {
 		runtime := &TurnRuntime{
 			Records: plane.Records, Sessions: plane.Sessions, Definitions: plane.Definitions, Policies: plane.Policies,
 			Governor: plane.Governor, Executors: plane.Executors, Idempotency: plane.Idempotency, Guardrails: plane.Guardrails,
-			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Limits: plane.PrincipalLimits, Cancels: plane.Cancels,
+			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Limits: plane.PrincipalLimits, Control: plane.Control,
 			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, Runs: plane.Runs, Review: plane.Review, OnSettled: plane.OnSettled,
 			MaxSteps: plane.Settings.TurnMaxSteps,
 		}

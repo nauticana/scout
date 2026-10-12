@@ -20,29 +20,47 @@ var (
 	stepNow   = time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	stepLease = time.Minute
 	testStep  = domain.ExecutionStep{ExecutionStepID: 91, StepID: "plan", Kind: domain.StepKindModel}
+	stepOwner = domain.TurnOwner{TenantID: 7, RequestID: "req", Fence: 2}
+	// Fenced write outcomes: the owner owned its turn and the write changed a row, changed none,
+	// or the owner had lost its fence.
+	wrote, wroteNothing, fenceLost = [][]any{{int64(1), int64(1)}}, [][]any{{int64(1), int64(0)}}, [][]any{{int64(0), int64(0)}}
 )
 
 func newStepStore(query *persistenceQueryFake, storage *fake.ObjectStorage) *StepIdempotencyStore {
+	if query.rows == nil {
+		query.rows = map[string][][]any{}
+	}
+	for _, name := range []string{qStepClaim, qStepReclaimExpired, qStepReplay, qStepCommit, qStepAbandon} {
+		if _, set := query.rows[name]; !set {
+			query.rows[name] = wroteNothing
+		}
+	}
 	return &StepIdempotencyStore{DB: persistenceDBFake{query: query}, Objects: newObjectStateStore(storage),
 		ClaimLease: stepLease, Now: func() time.Time { return stepNow }}
 }
 
 func TestStepIdempotencyStoreBeginClaimsUnknownStep(t *testing.T) {
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepClaim: {{string(domain.StepClaimed)}}}}
-	result, replayed, err := newStepStore(query, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep)
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepClaim: wrote}}
+	result, replayed, err := newStepStore(query, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep)
 	if err != nil || replayed || !reflect.DeepEqual(result, domain.StepResult{}) {
 		t.Fatalf("begin = %+v, %v, %v", result, replayed, err)
 	}
 	if args := query.lastArgs(qStepFind); !reflect.DeepEqual(args, []any{int64(7), "req", int64(91)}) {
 		t.Fatalf("find args = %v", args)
 	}
-	if args := query.lastArgs(qStepClaim); !reflect.DeepEqual(args, []any{int64(7), "req", int64(91), stepNow}) {
+	// The owner's guard arguments lead every fenced statement.
+	if args := query.lastArgs(qStepClaim); !reflect.DeepEqual(args, []any{int64(7), "req", int64(2), int64(7), "req", int64(91), stepNow}) {
 		t.Fatalf("claim args = %v", args)
 	}
 	// Lost the insert race.
 	raced := &persistenceQueryFake{}
-	if _, _, err := newStepStore(raced, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
+	if _, _, err := newStepStore(raced, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("raced = %v", err)
+	}
+	// Lost the fence: told apart from the race.
+	stale := &persistenceQueryFake{rows: map[string][][]any{qStepClaim: fenceLost}}
+	if _, _, err := newStepStore(stale, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("stale = %v", err)
 	}
 }
 
@@ -57,7 +75,7 @@ func TestStepIdempotencyStoreBeginReplaysCommittedResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), ref.URI, ref.Digest, stepNow.Add(-time.Hour)}}}}
-	result, replayed, err := newStepStore(query, storage).Begin(context.Background(), 7, "req", testStep)
+	result, replayed, err := newStepStore(query, storage).Begin(context.Background(), stepOwner, testStep)
 	if err != nil || !replayed || !reflect.DeepEqual(result, want) {
 		t.Fatalf("replay = %+v, %v, %v", result, replayed, err)
 	}
@@ -66,14 +84,14 @@ func TestStepIdempotencyStoreBeginReplaysCommittedResult(t *testing.T) {
 	}
 	// Digest drift fails closed instead of replaying corrupt state.
 	storage.Overwrite(objectKeyOf(ref), []byte(`{"a":2}`))
-	if _, _, err := newStepStore(query, storage).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, ErrDigestMismatch) {
+	if _, _, err := newStepStore(query, storage).Begin(context.Background(), stepOwner, testStep); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("tampered = %v", err)
 	}
 }
 
 func TestStepIdempotencyStoreBeginLeaseAndReplayTransitions(t *testing.T) {
 	fresh := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepClaimed), nil, nil, stepNow.Add(-stepLease / 2)}}}}
-	if _, _, err := newStepStore(fresh, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
+	if _, _, err := newStepStore(fresh, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("live claim = %v", err)
 	}
 	if len(fresh.calls) != 1 {
@@ -82,47 +100,47 @@ func TestStepIdempotencyStoreBeginLeaseAndReplayTransitions(t *testing.T) {
 
 	expired := &persistenceQueryFake{rows: map[string][][]any{
 		qStepFind:           {{string(domain.StepClaimed), nil, nil, stepNow.Add(-stepLease)}},
-		qStepReclaimExpired: {{string(domain.StepClaimed)}},
+		qStepReclaimExpired: wrote,
 	}}
-	if _, replayed, err := newStepStore(expired, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); err != nil || replayed {
+	if _, replayed, err := newStepStore(expired, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep); err != nil || replayed {
 		t.Fatalf("expired = %v, %v", replayed, err)
 	}
-	if args := expired.lastArgs(qStepReclaimExpired); !reflect.DeepEqual(args, []any{stepNow, int64(7), "req", int64(91), stepNow.Add(-stepLease)}) {
+	if args := expired.lastArgs(qStepReclaimExpired); !reflect.DeepEqual(args, []any{int64(7), "req", int64(2), stepNow, int64(7), "req", int64(91), stepNow.Add(-stepLease)}) {
 		t.Fatalf("reclaim args = %v", args)
 	}
 	lostReclaim := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepClaimed), nil, nil, stepNow.Add(-stepLease)}}}}
-	if _, _, err := newStepStore(lostReclaim, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
+	if _, _, err := newStepStore(lostReclaim, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("lost reclaim = %v", err)
 	}
 
 	abandoned := &persistenceQueryFake{rows: map[string][][]any{
 		qStepFind:   {{string(domain.StepAbandoned), nil, nil, stepNow.Add(-time.Second)}},
-		qStepReplay: {{string(domain.StepClaimed)}},
+		qStepReplay: wrote,
 	}}
-	if _, replayed, err := newStepStore(abandoned, &fake.ObjectStorage{}).Begin(context.Background(), 7, "req", testStep); err != nil || replayed {
+	if _, replayed, err := newStepStore(abandoned, &fake.ObjectStorage{}).Begin(context.Background(), stepOwner, testStep); err != nil || replayed {
 		t.Fatalf("abandoned = %v, %v", replayed, err)
 	}
-	if args := abandoned.lastArgs(qStepReplay); !reflect.DeepEqual(args, []any{stepNow, int64(7), "req", int64(91)}) {
+	if args := abandoned.lastArgs(qStepReplay); !reflect.DeepEqual(args, []any{int64(7), "req", int64(2), stepNow, int64(7), "req", int64(91)}) {
 		t.Fatalf("replay args = %v", args)
 	}
 }
 
 func TestStepIdempotencyStoreCommitBindsResultAndTolerantOfDuplicates(t *testing.T) {
 	storage := &fake.ObjectStorage{}
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepCommit: {{string(domain.StepCommitted)}}}}
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepCommit: wrote}}
 	result := domain.StepResult{State: []byte("s"), NextStepID: "n", Fingerprint: testFingerprint}
-	if err := newStepStore(query, storage).Commit(context.Background(), 7, "req", testStep, result); err != nil {
+	if err := newStepStore(query, storage).Commit(context.Background(), stepOwner, testStep, result); err != nil {
 		t.Fatal(err)
 	}
 	payload, _ := json.Marshal(result)
 	digest := DigestBytes(payload)
 	uri := "scout://sessions/scout/step/7/req/91/" + digest
-	if args := query.lastArgs(qStepCommit); !reflect.DeepEqual(args, []any{uri, digest, stepNow, int64(7), "req", int64(91)}) {
+	if args := query.lastArgs(qStepCommit); !reflect.DeepEqual(args, []any{int64(7), "req", int64(2), uri, digest, stepNow, int64(7), "req", int64(91)}) {
 		t.Fatalf("commit args = %v", args)
 	}
 	// Duplicate delivery of the same result is a no-op and keeps the object.
 	duplicate := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), uri, digest, stepNow}}}}
-	if err := newStepStore(duplicate, storage).Commit(context.Background(), 7, "req", testStep, result); err != nil {
+	if err := newStepStore(duplicate, storage).Commit(context.Background(), stepOwner, testStep, result); err != nil {
 		t.Fatalf("duplicate = %v", err)
 	}
 	if len(storage.Deletes) != 0 {
@@ -131,48 +149,62 @@ func TestStepIdempotencyStoreCommitBindsResultAndTolerantOfDuplicates(t *testing
 	// A lost claim (another worker committed different content) is a conflict; our orphan goes.
 	lost := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), "scout://sessions/other", testFingerprint, stepNow}}}}
 	other := &fake.ObjectStorage{}
-	if err := newStepStore(lost, other).Commit(context.Background(), 7, "req", testStep, result); !errors.Is(err, domain.ErrConflict) || len(other.Deletes) != 1 {
+	if err := newStepStore(lost, other).Commit(context.Background(), stepOwner, testStep, result); !errors.Is(err, domain.ErrConflict) || len(other.Deletes) != 1 {
 		t.Fatalf("lost = %v, deletes = %v", err, other.Deletes)
+	}
+	// A lost fence commits nothing and leaves the upload, which the current owner may share.
+	stale := &persistenceQueryFake{rows: map[string][][]any{qStepCommit: fenceLost}}
+	kept := &fake.ObjectStorage{}
+	if err := newStepStore(stale, kept).Commit(context.Background(), stepOwner, testStep, result); !errors.Is(err, domain.ErrFenceLost) || len(kept.Deletes) != 0 {
+		t.Fatalf("stale = %v, deletes = %v", err, kept.Deletes)
 	}
 }
 
 func TestStepIdempotencyStoreAbandon(t *testing.T) {
-	query := &persistenceQueryFake{rows: map[string][][]any{qStepAbandon: {{string(domain.StepAbandoned)}}}}
-	if err := newStepStore(query, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); err != nil {
+	query := &persistenceQueryFake{rows: map[string][][]any{qStepAbandon: wrote}}
+	if err := newStepStore(query, &fake.ObjectStorage{}).Abandon(context.Background(), stepOwner, testStep); err != nil {
 		t.Fatal(err)
 	}
-	if args := query.lastArgs(qStepAbandon); !reflect.DeepEqual(args, []any{stepNow, int64(7), "req", int64(91)}) {
+	if args := query.lastArgs(qStepAbandon); !reflect.DeepEqual(args, []any{int64(7), "req", int64(2), stepNow, int64(7), "req", int64(91)}) {
 		t.Fatalf("abandon args = %v", args)
 	}
 	twice := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepAbandoned), nil, nil, stepNow}}}}
-	if err := newStepStore(twice, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); err != nil {
+	if err := newStepStore(twice, &fake.ObjectStorage{}).Abandon(context.Background(), stepOwner, testStep); err != nil {
 		t.Fatalf("second abandon = %v", err)
 	}
 	committed := &persistenceQueryFake{rows: map[string][][]any{qStepFind: {{string(domain.StepCommitted), "u", testFingerprint, stepNow}}}}
-	if err := newStepStore(committed, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
+	if err := newStepStore(committed, &fake.ObjectStorage{}).Abandon(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("committed abandon = %v", err)
 	}
-	if err := newStepStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Abandon(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrNotFound) {
+	if err := newStepStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Abandon(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatal("unknown abandon must be not found")
+	}
+	stale := &persistenceQueryFake{rows: map[string][][]any{qStepAbandon: fenceLost}}
+	if err := newStepStore(stale, &fake.ObjectStorage{}).Abandon(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("stale abandon = %v", err)
 	}
 }
 
 func TestStepIdempotencyStoreValidation(t *testing.T) {
 	store := newStepStore(&persistenceQueryFake{}, &fake.ObjectStorage{})
-	if _, _, err := store.Begin(context.Background(), 7, "req", domain.ExecutionStep{StepID: "plan"}); !errors.Is(err, domain.ErrValidation) {
+	if _, _, err := store.Begin(context.Background(), stepOwner, domain.ExecutionStep{StepID: "plan"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("missing execution step id = %v", err)
 	}
+	if _, _, err := store.Begin(context.Background(), domain.TurnOwner{}, testStep); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("missing owner = %v", err)
+	}
 	unleased := &StepIdempotencyStore{DB: persistenceDBFake{query: &persistenceQueryFake{}}, Objects: newObjectStateStore(&fake.ObjectStorage{})}
-	if _, _, err := unleased.Begin(context.Background(), 7, "req", testStep); !errors.Is(err, domain.ErrValidation) {
+	if _, _, err := unleased.Begin(context.Background(), stepOwner, testStep); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("missing lease = %v", err)
 	}
 }
 
-// stepTableFake emulates the step_idempotency row transitions so a whole
-// claim → crash → replay scenario runs against real store logic.
+// stepTableFake emulates the step_idempotency row transitions, and the owner guard of the turn
+// they belong to, so a whole claim → crash → replay scenario runs against real store logic.
 type stepTableFake struct {
-	mu   sync.Mutex
-	rows map[[3]any]*stepRow
+	mu    sync.Mutex
+	rows  map[[3]any]*stepRow
+	fence int64
 }
 
 type stepRow struct {
@@ -188,39 +220,45 @@ func (table *stepTableFake) Query(_ context.Context, name string, args ...any) (
 	if table.rows == nil {
 		table.rows = make(map[[3]any]*stepRow)
 	}
-	key := func(i int) [3]any { return [3]any{args[i], args[i+1], args[i+2]} }
-	switch name {
-	case qStepFind:
-		if row := table.rows[key(0)]; row != nil {
+	if name == qStepFind {
+		if row := table.rows[[3]any{args[0], args[1], args[2]}]; row != nil {
 			return &keelmodel.QueryResult{Rows: [][]any{{row.status, row.uri, row.digest, row.updatedAt}}}, nil
 		}
+		return &keelmodel.QueryResult{}, nil
+	}
+	if args[2] != table.fence {
+		return &keelmodel.QueryResult{Rows: fenceLost}, nil
+	}
+	args = args[3:]
+	key := func(i int) [3]any { return [3]any{args[i], args[i+1], args[i+2]} }
+	switch name {
 	case qStepClaim:
 		if table.rows[key(0)] == nil {
 			table.rows[key(0)] = &stepRow{status: string(domain.StepClaimed), updatedAt: args[3].(time.Time)}
-			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepClaimed)}}}, nil
+			return &keelmodel.QueryResult{Rows: wrote}, nil
 		}
 	case qStepReclaimExpired:
 		if row := table.rows[key(1)]; row != nil && row.status == string(domain.StepClaimed) && !row.updatedAt.After(args[4].(time.Time)) {
 			row.updatedAt = args[0].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepClaimed)}}}, nil
+			return &keelmodel.QueryResult{Rows: wrote}, nil
 		}
 	case qStepReplay:
 		if row := table.rows[key(1)]; row != nil && row.status == string(domain.StepAbandoned) {
 			row.status, row.updatedAt = string(domain.StepClaimed), args[0].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepClaimed)}}}, nil
+			return &keelmodel.QueryResult{Rows: wrote}, nil
 		}
 	case qStepCommit:
 		if row := table.rows[key(3)]; row != nil && row.status == string(domain.StepClaimed) {
 			row.status, row.uri, row.digest, row.updatedAt = string(domain.StepCommitted), args[0].(string), args[1].(string), args[2].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepCommitted)}}}, nil
+			return &keelmodel.QueryResult{Rows: wrote}, nil
 		}
 	case qStepAbandon:
 		if row := table.rows[key(1)]; row != nil && row.status == string(domain.StepClaimed) {
 			row.status, row.updatedAt = string(domain.StepAbandoned), args[0].(time.Time)
-			return &keelmodel.QueryResult{Rows: [][]any{{string(domain.StepAbandoned)}}}, nil
+			return &keelmodel.QueryResult{Rows: wrote}, nil
 		}
 	}
-	return &keelmodel.QueryResult{}, nil
+	return &keelmodel.QueryResult{Rows: wroteNothing}, nil
 }
 
 func (*stepTableFake) GenID() int64                   { return 0 }
@@ -241,7 +279,7 @@ func (db stepTableDB) BeginTx(context.Context, map[string]string) (keelport.TxQu
 }
 
 func TestStepIdempotencyStoreCrashMidStepReplaysResultNotSideEffect(t *testing.T) {
-	table := &stepTableFake{}
+	table := &stepTableFake{fence: stepOwner.Fence}
 	storage := &fake.ObjectStorage{}
 	clock := stepNow
 	store := &StepIdempotencyStore{DB: stepTableDB{table: table}, Objects: newObjectStateStore(storage),
@@ -249,49 +287,57 @@ func TestStepIdempotencyStoreCrashMidStepReplaysResultNotSideEffect(t *testing.T
 	ctx := context.Background()
 	sideEffects := 0
 	execute := func() (domain.StepResult, error) {
-		if _, replayed, err := store.Begin(ctx, 7, "req", testStep); err != nil {
+		if _, replayed, err := store.Begin(ctx, stepOwner, testStep); err != nil {
 			return domain.StepResult{}, err
 		} else if replayed {
 			t.Fatal("first execution must not replay")
 		}
 		sideEffects++
 		result := domain.StepResult{State: []byte(`{"tool":"called"}`), NextStepID: "answer", Fingerprint: testFingerprint}
-		return result, store.Commit(ctx, 7, "req", testStep, result)
+		return result, store.Commit(ctx, stepOwner, testStep, result)
 	}
 	// Worker A commits, then crashes before acking. Worker B redelivers.
 	committed, err := execute()
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed, ok, err := store.Begin(ctx, 7, "req", testStep)
+	replayed, ok, err := store.Begin(ctx, stepOwner, testStep)
 	if err != nil || !ok || !reflect.DeepEqual(replayed, committed) || sideEffects != 1 {
 		t.Fatalf("redelivery = %+v, %v, %v, side effects = %d", replayed, ok, err, sideEffects)
 	}
 	// Duplicate commit of the same result is a no-op.
-	if err := store.Commit(ctx, 7, "req", testStep, committed); err != nil {
+	if err := store.Commit(ctx, stepOwner, testStep, committed); err != nil {
 		t.Fatalf("duplicate commit = %v", err)
 	}
-	if err := store.Abandon(ctx, 7, "req", testStep); !errors.Is(err, domain.ErrConflict) {
+	if err := store.Abandon(ctx, stepOwner, testStep); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("abandon after commit = %v", err)
 	}
 
 	// A different step: worker C claims and dies mid-step; the lease blocks D until it expires.
 	other := domain.ExecutionStep{ExecutionStepID: 92, StepID: "answer"}
-	if _, _, err := store.Begin(ctx, 7, "req", other); err != nil {
+	if _, _, err := store.Begin(ctx, stepOwner, other); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Begin(ctx, 7, "req", other); !errors.Is(err, domain.ErrConflict) {
+	if _, _, err := store.Begin(ctx, stepOwner, other); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("live lease = %v", err)
 	}
 	clock = clock.Add(stepLease)
-	if _, replayed, err := store.Begin(ctx, 7, "req", other); err != nil || replayed {
+	if _, replayed, err := store.Begin(ctx, stepOwner, other); err != nil || replayed {
 		t.Fatalf("expired reclaim = %v, %v", replayed, err)
 	}
 	// Explicit abandon then replay by another worker.
-	if err := store.Abandon(ctx, 7, "req", other); err != nil {
+	if err := store.Abandon(ctx, stepOwner, other); err != nil {
 		t.Fatal(err)
 	}
-	if _, replayed, err := store.Begin(ctx, 7, "req", other); err != nil || replayed {
+	if _, replayed, err := store.Begin(ctx, stepOwner, other); err != nil || replayed {
 		t.Fatalf("abandoned replay = %v, %v", replayed, err)
+	}
+	// Once a newer owner acquired the turn, the old one neither commits nor abandons.
+	table.fence++
+	if err := store.Commit(ctx, stepOwner, other, committed); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("stale commit = %v", err)
+	}
+	if err := store.Abandon(ctx, stepOwner, other); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("stale abandon = %v", err)
 	}
 }

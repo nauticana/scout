@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -26,46 +25,51 @@ const (
 )
 
 // updated_at is written from the injected clock so lease arithmetic never mixes
-// database and worker time.
+// database and worker time. Every transition carries the owner's guarded touch.
 var stepIdempotencyQueries = map[string]string{
 	qStepFind: `
 SELECT status_code, result_uri, result_digest, updated_at
   FROM step_idempotency
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?`,
 
-	qStepClaim: `
+	qStepClaim: ownedBy + `
+written AS (
 INSERT INTO step_idempotency (partner_id, request_id, execution_step_id, status_code, updated_at)
-VALUES (?, ?, ?, ` + sqlStepClaimed + `, ?)
+SELECT ?, ?, ?, ` + sqlStepClaimed + `, ? FROM owner
 ON CONFLICT DO NOTHING
-RETURNING status_code`,
+RETURNING status_code)` + fencedWrite,
 
-	qStepReclaimExpired: `
+	qStepReclaimExpired: ownedBy + `
+written AS (
 UPDATE step_idempotency
    SET updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = ` + sqlStepClaimed + ` AND updated_at <= ?
-RETURNING status_code`,
+   AND status_code = ` + sqlStepClaimed + ` AND updated_at <= ? AND EXISTS (SELECT 1 FROM owner)
+RETURNING status_code)` + fencedWrite,
 
-	qStepReplay: `
+	qStepReplay: ownedBy + `
+written AS (
 UPDATE step_idempotency
    SET status_code = ` + sqlStepClaimed + `, updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = ` + sqlStepAbandoned + `
-RETURNING status_code`,
+   AND status_code = ` + sqlStepAbandoned + ` AND EXISTS (SELECT 1 FROM owner)
+RETURNING status_code)` + fencedWrite,
 
-	qStepCommit: `
+	qStepCommit: ownedBy + `
+written AS (
 UPDATE step_idempotency
    SET status_code = ` + sqlStepCommitted + `, result_uri = ?, result_digest = ?, updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = ` + sqlStepClaimed + `
-RETURNING status_code`,
+   AND status_code = ` + sqlStepClaimed + ` AND EXISTS (SELECT 1 FROM owner)
+RETURNING status_code)` + fencedWrite,
 
-	qStepAbandon: `
+	qStepAbandon: ownedBy + `
+written AS (
 UPDATE step_idempotency
    SET status_code = ` + sqlStepAbandoned + `, updated_at = ?
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
-   AND status_code = ` + sqlStepClaimed + `
-RETURNING status_code`,
+   AND status_code = ` + sqlStepClaimed + ` AND EXISTS (SELECT 1 FROM owner)
+RETURNING status_code)` + fencedWrite,
 }
 
 // StepIdempotencyStore makes step execution replay-safe over step_idempotency:
@@ -89,12 +93,15 @@ type stepClaim struct {
 	updatedAt time.Time
 }
 
-func (store *StepIdempotencyStore) validate(tenantID int64, requestID string, step domain.ExecutionStep) error {
+func (store *StepIdempotencyStore) validate(owner domain.TurnOwner, step domain.ExecutionStep) error {
 	if store.DB == nil || store.Objects == nil || store.ClaimLease <= 0 {
 		return fmt.Errorf("%w: step idempotency store needs a database, an object codec, and a positive claim lease", domain.ErrValidation)
 	}
-	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || len([]rune(requestID)) > 120 || step.ExecutionStepID <= 0 {
-		return fmt.Errorf("%w: tenant, request id, and compiled execution step id are required", domain.ErrValidation)
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if len([]rune(owner.RequestID)) > 120 || step.ExecutionStepID <= 0 {
+		return fmt.Errorf("%w: request id and compiled execution step id are required", domain.ErrValidation)
 	}
 	return nil
 }
@@ -133,10 +140,11 @@ func (store *StepIdempotencyStore) find(ctx context.Context, tenantID int64, req
 
 // Begin claims the step for this worker, replays a committed result, or
 // re-claims an abandoned or lease-expired step; a live claim returns ErrConflict.
-func (store *StepIdempotencyStore) Begin(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep) (domain.StepResult, bool, error) {
-	if err := store.validate(tenantID, requestID, step); err != nil {
+func (store *StepIdempotencyStore) Begin(ctx context.Context, owner domain.TurnOwner, step domain.ExecutionStep) (domain.StepResult, bool, error) {
+	if err := store.validate(owner, step); err != nil {
 		return domain.StepResult{}, false, err
 	}
+	tenantID, requestID := owner.TenantID, owner.RequestID
 	now := store.now()
 	claim, found, err := store.find(ctx, tenantID, requestID, step.ExecutionStepID)
 	if err != nil {
@@ -145,7 +153,7 @@ func (store *StepIdempotencyStore) Begin(ctx context.Context, tenantID int64, re
 	var applied bool
 	switch {
 	case !found:
-		applied, err = store.transition(ctx, qStepClaim, tenantID, requestID, step.ExecutionStepID, now)
+		applied, err = store.transition(ctx, owner, qStepClaim, tenantID, requestID, step.ExecutionStepID, now)
 	case claim.status == domain.StepCommitted:
 		result, err := store.replay(ctx, claim.result)
 		if err != nil {
@@ -155,9 +163,9 @@ func (store *StepIdempotencyStore) Begin(ctx context.Context, tenantID int64, re
 	case claim.status == domain.StepClaimed && claim.updatedAt.Add(store.ClaimLease).After(now):
 		return domain.StepResult{}, false, fmt.Errorf("%w: step %d of %q is claimed until %s", domain.ErrConflict, step.ExecutionStepID, requestID, claim.updatedAt.Add(store.ClaimLease).Format(time.RFC3339))
 	case claim.status == domain.StepClaimed:
-		applied, err = store.transition(ctx, qStepReclaimExpired, now, tenantID, requestID, step.ExecutionStepID, now.Add(-store.ClaimLease))
+		applied, err = store.transition(ctx, owner, qStepReclaimExpired, now, tenantID, requestID, step.ExecutionStepID, now.Add(-store.ClaimLease))
 	case claim.status == domain.StepAbandoned:
-		applied, err = store.transition(ctx, qStepReplay, now, tenantID, requestID, step.ExecutionStepID)
+		applied, err = store.transition(ctx, owner, qStepReplay, now, tenantID, requestID, step.ExecutionStepID)
 	default:
 		return domain.StepResult{}, false, fmt.Errorf("%w: unknown idempotency status %q", domain.ErrConflict, claim.status)
 	}
@@ -172,10 +180,11 @@ func (store *StepIdempotencyStore) Begin(ctx context.Context, tenantID int64, re
 
 // Commit binds the JSON-encoded result to the claim; a repeated commit of the
 // same result is a no-op, a lost claim is ErrConflict.
-func (store *StepIdempotencyStore) Commit(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep, result domain.StepResult) error {
-	if err := store.validate(tenantID, requestID, step); err != nil {
+func (store *StepIdempotencyStore) Commit(ctx context.Context, owner domain.TurnOwner, step domain.ExecutionStep, result domain.StepResult) error {
+	if err := store.validate(owner, step); err != nil {
 		return err
 	}
+	tenantID, requestID := owner.TenantID, owner.RequestID
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("encode step result: %w", err)
@@ -185,9 +194,13 @@ func (store *StepIdempotencyStore) Commit(ctx context.Context, tenantID int64, r
 		return fmt.Errorf("dehydrate step result: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	applied, err := store.transition(ctx, qStepCommit, ref.URI, ref.Digest, store.now(), tenantID, requestID, step.ExecutionStepID)
+	applied, err := store.transition(ctx, owner, qStepCommit, ref.URI, ref.Digest, store.now(), tenantID, requestID, step.ExecutionStepID)
 	if err == nil && applied {
 		return nil
+	}
+	if errors.Is(err, domain.ErrFenceLost) {
+		// The current owner may commit the same content-addressed result; the sweep reclaims an orphan.
+		return err
 	}
 	if err == nil {
 		err = fmt.Errorf("%w: step %d of %q is no longer claimed", domain.ErrConflict, step.ExecutionStepID, requestID)
@@ -197,12 +210,13 @@ func (store *StepIdempotencyStore) Commit(ctx context.Context, tenantID int64, r
 
 // Abandon releases a claim for replay; abandoning twice is a no-op, a
 // committed step is ErrConflict, an unknown one ErrNotFound.
-func (store *StepIdempotencyStore) Abandon(ctx context.Context, tenantID int64, requestID string, step domain.ExecutionStep) error {
-	if err := store.validate(tenantID, requestID, step); err != nil {
+func (store *StepIdempotencyStore) Abandon(ctx context.Context, owner domain.TurnOwner, step domain.ExecutionStep) error {
+	if err := store.validate(owner, step); err != nil {
 		return err
 	}
+	tenantID, requestID := owner.TenantID, owner.RequestID
 	ctx = context.WithoutCancel(ctx)
-	applied, err := store.transition(ctx, qStepAbandon, store.now(), tenantID, requestID, step.ExecutionStepID)
+	applied, err := store.transition(ctx, owner, qStepAbandon, store.now(), tenantID, requestID, step.ExecutionStepID)
 	if err != nil || applied {
 		return err
 	}
@@ -219,12 +233,13 @@ func (store *StepIdempotencyStore) Abandon(ctx context.Context, tenantID int64, 
 	}
 }
 
-func (store *StepIdempotencyStore) transition(ctx context.Context, query string, args ...any) (bool, error) {
-	result, err := store.queries(ctx).Query(ctx, query, args...)
+// transition runs one fenced statement: ErrFenceLost when the owner lost its turn, else whether it changed the claim.
+func (store *StepIdempotencyStore) transition(ctx context.Context, owner domain.TurnOwner, query string, args ...any) (bool, error) {
+	result, err := store.queries(ctx).Query(ctx, query, ownerArgs(owner, args...)...)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", query, err)
 	}
-	return len(result.Rows) > 0, nil
+	return fencedOutcome(result, owner)
 }
 
 func (store *StepIdempotencyStore) replay(ctx context.Context, ref domain.ObjectRef) (domain.StepResult, error) {

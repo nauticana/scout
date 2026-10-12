@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -31,10 +32,25 @@ type QueueHarness struct {
 	Close func()
 }
 
-// IdempotencyHarness is one vendor's step idempotency store under test.
+// IdempotencyHarness is one vendor's step idempotency store under test. Owner is the current
+// owner of turn request-1 of tenant 1, which every call of the suite presents.
 type IdempotencyHarness struct {
 	Store contract.StepIdempotencyStore
+	Owner domain.TurnOwner
 	Close func()
+}
+
+// FenceHarness is one vendor's fenced turn stores under test, over one turn.
+type FenceHarness struct {
+	// Acquire grants the turn's next owner, fencing out the previous one, as a delivery under
+	// the current queue lease does.
+	Acquire func(t *testing.T) domain.TurnOwner
+	// Hold moves the turn past its owner without granting a new one, as a hold does.
+	Hold func(t *testing.T, owner domain.TurnOwner)
+	// Writes are the fenced writes under test, by name. Each must succeed for the current
+	// owner and fail with domain.ErrFenceLost for a missing, stale, or forged one.
+	Writes map[string]func(ctx context.Context, owner domain.TurnOwner) error
+	Close  func()
 }
 
 // ReplyHarness is one vendor's reply broker under test.
@@ -217,16 +233,16 @@ func RunIdempotencySuite(t *testing.T, newHarness func(*testing.T) IdempotencyHa
 		if harness.Close != nil {
 			t.Cleanup(harness.Close)
 		}
-		ctx := context.Background()
-		if _, replayed, err := harness.Store.Begin(ctx, 1, "request-1", step); err != nil || replayed {
+		ctx, owner := context.Background(), harness.Owner
+		if _, replayed, err := harness.Store.Begin(ctx, owner, step); err != nil || replayed {
 			t.Fatalf("first begin replayed = %v, error = %v", replayed, err)
 		}
 		usage := domain.Usage{OutputTokens: 3, ToolCalls: 1, Currency: "USD"}.AttributedTo(domain.ModelReference{ProviderID: "openai", ModelID: "gpt"})
 		want := domain.StepResult{State: []byte("state"), NextStepID: "", Fingerprint: "f", Usage: usage}
-		if err := harness.Store.Commit(ctx, 1, "request-1", step, want); err != nil {
+		if err := harness.Store.Commit(ctx, owner, step, want); err != nil {
 			t.Fatal(err)
 		}
-		got, replayed, err := harness.Store.Begin(ctx, 1, "request-1", step)
+		got, replayed, err := harness.Store.Begin(ctx, owner, step)
 		if err != nil || !replayed || string(got.State) != string(want.State) || !reflect.DeepEqual(got.Usage, want.Usage) {
 			t.Fatalf("replay = %+v, replayed = %v, error = %v", got, replayed, err)
 		}
@@ -238,10 +254,10 @@ func RunIdempotencySuite(t *testing.T, newHarness func(*testing.T) IdempotencyHa
 			t.Cleanup(harness.Close)
 		}
 		ctx := context.Background()
-		if _, _, err := harness.Store.Begin(ctx, 1, "request-1", step); err != nil {
+		if _, _, err := harness.Store.Begin(ctx, harness.Owner, step); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := harness.Store.Begin(ctx, 1, "request-1", step); !errors.Is(err, domain.ErrConflict) {
+		if _, _, err := harness.Store.Begin(ctx, harness.Owner, step); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("second begin = %v, want conflict", err)
 		}
 	})
@@ -252,16 +268,86 @@ func RunIdempotencySuite(t *testing.T, newHarness func(*testing.T) IdempotencyHa
 			t.Cleanup(harness.Close)
 		}
 		ctx := context.Background()
-		if _, _, err := harness.Store.Begin(ctx, 1, "request-1", step); err != nil {
+		if _, _, err := harness.Store.Begin(ctx, harness.Owner, step); err != nil {
 			t.Fatal(err)
 		}
-		if err := harness.Store.Abandon(ctx, 1, "request-1", step); err != nil {
+		if err := harness.Store.Abandon(ctx, harness.Owner, step); err != nil {
 			t.Fatal(err)
 		}
-		if _, replayed, err := harness.Store.Begin(ctx, 1, "request-1", step); err != nil || replayed {
+		if _, replayed, err := harness.Store.Begin(ctx, harness.Owner, step); err != nil || replayed {
 			t.Fatalf("reclaim replayed = %v, error = %v", replayed, err)
 		}
 	})
+}
+
+// RunFenceSuite checks that every fenced write fails closed: it is refused for a missing owner,
+// for an owner the turn moved past by a new acquisition or a hold, and for a forged owner of
+// another turn or of a fence the turn never granted, and succeeds for its current owner.
+func RunFenceSuite(t *testing.T, newHarness func(*testing.T) FenceHarness) {
+	t.Helper()
+	probe := newHarness(t)
+	if probe.Acquire == nil || probe.Hold == nil || len(probe.Writes) == 0 {
+		t.Fatal("fence harness needs Acquire, Hold, and at least one write")
+	}
+	if probe.Close != nil {
+		probe.Close()
+	}
+	names := make([]string, 0, len(probe.Writes))
+	for name := range probe.Writes {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	refused := func(t *testing.T, err error, who string) {
+		t.Helper()
+		if !errors.Is(err, domain.ErrFenceLost) {
+			t.Fatalf("write by %s = %v, want ErrFenceLost", who, err)
+		}
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fresh := func(t *testing.T) FenceHarness {
+				harness := newHarness(t)
+				if harness.Close != nil {
+					t.Cleanup(harness.Close)
+				}
+				return harness
+			}
+			t.Run("current owner writes", func(t *testing.T) {
+				harness := fresh(t)
+				if err := harness.Writes[name](ctx, harness.Acquire(t)); err != nil {
+					t.Fatalf("write by the current owner = %v", err)
+				}
+			})
+			t.Run("missing owner is refused", func(t *testing.T) {
+				harness := fresh(t)
+				harness.Acquire(t)
+				refused(t, harness.Writes[name](ctx, domain.TurnOwner{}), "a missing owner")
+			})
+			t.Run("owner fenced out by a new acquisition is refused", func(t *testing.T) {
+				harness := fresh(t)
+				stale := harness.Acquire(t)
+				harness.Acquire(t)
+				refused(t, harness.Writes[name](ctx, stale), "a superseded owner")
+			})
+			t.Run("owner fenced out by a hold is refused", func(t *testing.T) {
+				harness := fresh(t)
+				owner := harness.Acquire(t)
+				harness.Hold(t, owner)
+				refused(t, harness.Writes[name](ctx, owner), "a held turn's owner")
+			})
+			t.Run("forged owner is refused", func(t *testing.T) {
+				harness := fresh(t)
+				owner := harness.Acquire(t)
+				ahead := owner
+				ahead.Fence++
+				refused(t, harness.Writes[name](ctx, ahead), "an owner of a fence never granted")
+				other := owner
+				other.RequestID += "-other"
+				refused(t, harness.Writes[name](ctx, other), "an owner of another turn")
+			})
+		})
+	}
 }
 
 // RunReplySuite checks ordered at-least-once publication with sequence

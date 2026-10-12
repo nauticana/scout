@@ -35,6 +35,20 @@ const (
 const queueRowColumns = `id, partner_id, request_id, conversation_id, agent_id, reply_route,
        input_uri, input_digest, attempt, enqueued_at, lease_token, lease_until, acting_context`
 
+// inTurnOrder admits the queue row aliased alias only when no earlier turn of its conversation,
+// by turn number, is still live, suspended and held ones included: the durable turn number, not a
+// queue timestamp, is the conversation's order.
+func inTurnOrder(alias string) string {
+	return `
+   AND NOT EXISTS (SELECT 1
+                     FROM conversation_turn mine
+                     JOIN conversation_turn earlier
+                       ON earlier.partner_id = mine.partner_id AND earlier.conversation_id = mine.conversation_id
+                      AND earlier.turn_no < mine.turn_no
+                    WHERE mine.partner_id = ` + alias + `.partner_id AND mine.request_id = ` + alias + `.request_id
+                      AND earlier.status_code IN (` + sqlTurnLive + `))`
+}
+
 var turnSchedulerQueries = map[string]string{
 	qSchedReclaim: `
 UPDATE turn_queue
@@ -86,7 +100,7 @@ UPDATE turn_queue
                                    AND (o.status_code = ` + sqlQueueLeased + `
                                         OR (o.status_code = ` + sqlQueueQueued + `
                                             AND (o.enqueued_at < q.enqueued_at
-                                                 OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))
+                                                 OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))` + inTurnOrder("q") + `
               ORDER BY q.priority_rank, q.enqueued_at, q.id
               LIMIT 1
                 FOR UPDATE SKIP LOCKED)
@@ -531,14 +545,14 @@ SELECT q.id
                     WHERE o.partner_id = q.partner_id AND o.conversation_id = q.conversation_id AND o.id <> q.id
                       AND (o.status_code = `+sqlQueueLeased+`
                            OR (o.status_code = `+sqlQueueQueued+` AND (o.enqueued_at < q.enqueued_at
-                                                             OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))
+                                                             OR (o.enqueued_at = q.enqueued_at AND o.id < q.id)))))`+inTurnOrder("q")+`
  ORDER BY q.priority_rank, q.enqueued_at, q.id
  LIMIT %d`, maxAttempts, batch),
 		claim: fmt.Sprintf(`
-UPDATE turn_queue
+UPDATE turn_queue q
    SET status_code = `+sqlQueueLeased+`, lease_token = ?, lease_until = CURRENT_TIMESTAMP + INTERVAL '%d seconds',
        worker_id = '%s', attempt = attempt + 1
- WHERE id = ? AND status_code = `+sqlQueueQueued+`
+ WHERE q.id = ? AND q.status_code = `+sqlQueueQueued+inTurnOrder("q")+`
 RETURNING `+queueRowColumns, leaseSeconds, strings.ReplaceAll(workerID, "'", "''")),
 		reclaim: fmt.Sprintf(`
 WITH expired AS (

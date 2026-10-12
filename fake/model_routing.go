@@ -126,11 +126,36 @@ func (exporter *ServingSignalExporter) Export(_ context.Context, signal domain.S
 	return nil
 }
 
-// TenantBudgetManager contains configurable reservation callbacks.
+// TenantBudgetManager contains configurable reservation callbacks. Its turn settlements fail
+// closed on a missing owner and run CommitTurnFunc or ReleaseTurnFunc, else CommitFunc or ReleaseFunc.
 type TenantBudgetManager struct {
-	ReserveFunc func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error)
-	CommitFunc  func(context.Context, domain.BudgetReservation, domain.Usage) error
-	ReleaseFunc func(context.Context, domain.BudgetReservation) error
+	ReserveFunc     func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error)
+	CommitFunc      func(context.Context, domain.BudgetReservation, domain.Usage) error
+	ReleaseFunc     func(context.Context, domain.BudgetReservation) error
+	CommitTurnFunc  func(context.Context, domain.TurnOwner, domain.BudgetReservation, domain.Usage) error
+	ReleaseTurnFunc func(context.Context, domain.TurnOwner, domain.BudgetReservation) error
+}
+
+// CommitTurn settles the owner's reservation.
+func (manager *TenantBudgetManager) CommitTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation, usage domain.Usage) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if manager.CommitTurnFunc != nil {
+		return manager.CommitTurnFunc(ctx, owner, reservation, usage)
+	}
+	return manager.Commit(ctx, reservation, usage)
+}
+
+// ReleaseTurn releases the owner's reservation.
+func (manager *TenantBudgetManager) ReleaseTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if manager.ReleaseTurnFunc != nil {
+		return manager.ReleaseTurnFunc(ctx, owner, reservation)
+	}
+	return manager.Release(ctx, reservation)
 }
 
 // Reserve invokes ReserveFunc.
@@ -159,3 +184,4 @@ var _ contract.RouteAffinity = (*RouteAffinity)(nil)
 var _ contract.ServingSignalObserver = (*ServingSignalObserver)(nil)
 var _ contract.ServingSignalExporter = (*ServingSignalExporter)(nil)
 var _ contract.TenantBudgetManager = (*TenantBudgetManager)(nil)
+var _ contract.TurnBudgetManager = (*TenantBudgetManager)(nil)

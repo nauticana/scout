@@ -31,20 +31,27 @@ SELECT entry_no, entry_uri, entry_digest
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ?
  ORDER BY entry_no
  LIMIT ?`,
-	qLoopEntryInsert: `
+	qLoopEntryInsert: ownedBy + `
+written AS (
 INSERT INTO step_loop_entry (partner_id, request_id, execution_step_id, entry_no, entry_uri, entry_digest)
-VALUES (?, ?, ?, ?, ?, ?)
+SELECT ?, ?, ?, ?, ?, ? FROM owner
 ON CONFLICT DO NOTHING
-RETURNING entry_no`,
+RETURNING entry_no)` + fencedWrite,
 	qLoopEntryGet: `
 SELECT entry_no, entry_uri, entry_digest
   FROM step_loop_entry
  WHERE partner_id = ? AND request_id = ? AND execution_step_id = ? AND entry_no = ?`,
 }
 
-func validateLoopAppend(key domain.LoopKey, entry domain.LoopEntry) error {
+func validateLoopAppend(owner domain.TurnOwner, key domain.LoopKey, entry domain.LoopEntry) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
 	if key.TenantID <= 0 || strings.TrimSpace(key.RequestID) == "" || key.ExecutionStepID <= 0 {
 		return fmt.Errorf("%w: loop journal key needs tenant, request id, and execution step id", domain.ErrValidation)
+	}
+	if !owner.Owns(key.TenantID, key.RequestID) {
+		return fmt.Errorf("%w: the owner of turn %q cannot write the journal of turn %q", domain.ErrFenceLost, owner.RequestID, key.RequestID)
 	}
 	if entry.EntryNo <= 0 || entry.Kind == "" {
 		return fmt.Errorf("%w: loop journal entry needs a positive number and a kind", domain.ErrValidation)
@@ -96,11 +103,13 @@ func (journal *TableLoopJournal) Load(ctx context.Context, key domain.LoopKey) (
 	return entries, nil
 }
 
-func (journal *TableLoopJournal) Append(ctx context.Context, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error) {
+// Append inserts the entry under the owner's guarded touch, so a fenced-out worker never
+// journals; a key conflict reads back the first writer's entry.
+func (journal *TableLoopJournal) Append(ctx context.Context, owner domain.TurnOwner, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error) {
 	if err := journal.init(ctx); err != nil {
 		return domain.LoopEntry{}, err
 	}
-	if err := validateLoopAppend(key, entry); err != nil {
+	if err := validateLoopAppend(owner, key, entry); err != nil {
 		return domain.LoopEntry{}, err
 	}
 	payload, err := json.Marshal(entry)
@@ -112,11 +121,16 @@ func (journal *TableLoopJournal) Append(ctx context.Context, key domain.LoopKey,
 		return domain.LoopEntry{}, fmt.Errorf("dehydrate loop entry: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	inserted, err := journal.qs.Query(ctx, qLoopEntryInsert, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo, ref.URI, ref.Digest)
+	result, err := journal.qs.Query(ctx, qLoopEntryInsert, ownerArgs(owner, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo, ref.URI, ref.Digest)...)
 	if err != nil {
 		return domain.LoopEntry{}, fmt.Errorf("insert loop entry: %w", err)
 	}
-	if len(inserted.Rows) > 0 {
+	// A refused upload is left to the reconciliation sweep: the current owner may reference the same object.
+	inserted, err := fencedOutcome(result, owner)
+	if err != nil {
+		return domain.LoopEntry{}, err
+	}
+	if inserted {
 		return entry, nil
 	}
 	existing, err := journal.qs.Query(ctx, qLoopEntryGet, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo)
@@ -150,8 +164,11 @@ func loopEntryName(key domain.LoopKey, entryNo int) string {
 	return fmt.Sprintf("loop/%d/%s/%d/%d", key.TenantID, url.PathEscape(key.RequestID), key.ExecutionStepID, entryNo)
 }
 
-// MemoryLoopJournal is the single-process journal for tests and embedded runtimes.
+// MemoryLoopJournal is the single-process journal for tests and embedded runtimes. Fences is
+// its fence authority; without one every append is refused.
 type MemoryLoopJournal struct {
+	Fences *MemoryTurnFences
+
 	mu      sync.Mutex
 	entries map[domain.LoopKey][]domain.LoopEntry
 }
@@ -162,12 +179,15 @@ func (journal *MemoryLoopJournal) Load(_ context.Context, key domain.LoopKey) ([
 	return append([]domain.LoopEntry(nil), journal.entries[key]...), nil
 }
 
-func (journal *MemoryLoopJournal) Append(_ context.Context, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error) {
-	if err := validateLoopAppend(key, entry); err != nil {
+func (journal *MemoryLoopJournal) Append(_ context.Context, owner domain.TurnOwner, key domain.LoopKey, entry domain.LoopEntry) (domain.LoopEntry, error) {
+	if err := validateLoopAppend(owner, key, entry); err != nil {
 		return domain.LoopEntry{}, err
 	}
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
+	if err := journal.Fences.Check(owner); err != nil {
+		return domain.LoopEntry{}, err
+	}
 	stored := journal.entries[key]
 	switch {
 	case entry.EntryNo <= len(stored):

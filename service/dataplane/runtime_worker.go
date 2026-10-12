@@ -20,8 +20,11 @@ import (
 )
 
 // RuntimeWorker is the keel leased queue worker that drains turn_queue into a
-// ConversationRuntime. A turn that returns an error is nacked for bounded retry;
-// a turn the runtime suspended or finished is acked.
+// ConversationRuntime, handing it the leased row as the turn's claim. A turn that
+// returns an error is nacked for bounded retry; a turn the runtime suspended, held, or
+// finished is acked. A delivery that no longer owns its turn, or finds it held, is
+// acknowledged when its lease still stands and otherwise dropped, never retried or
+// dead-lettered.
 type RuntimeWorker struct {
 	worker.AbstractWorker
 	Scheduler contract.ClaimedTurnScheduler
@@ -61,10 +64,33 @@ func (w *RuntimeWorker) HandleJob(ctx context.Context, _ logger.ApplicationLogge
 	if err != nil {
 		return err
 	}
-	if _, err = w.Runtime.HandleTurn(ctx, lease.Message.Dispatch); err != nil {
+	claim, err := leaseClaim(lease, w.WorkerID)
+	if err != nil {
+		return err
+	}
+	_, err = w.Runtime.HandleTurn(ctx, claim)
+	switch {
+	case errors.Is(err, domain.ErrFenceLost), errors.Is(err, domain.ErrTurnHeld):
+		// A stale delivery or a held turn is never retried: whoever moved the fence owns the turn.
+		ackErr := w.Scheduler.Ack(context.WithoutCancel(ctx), lease.Message.MessageID, w.WorkerID)
+		if errors.Is(ackErr, domain.ErrConflict) {
+			return nil
+		}
+		return ackErr
+	case err != nil:
 		return w.Scheduler.Nack(context.WithoutCancel(ctx), lease.Message.MessageID, w.WorkerID, err.Error())
 	}
 	return w.Scheduler.Ack(context.WithoutCancel(ctx), lease.Message.MessageID, w.WorkerID)
+}
+
+// leaseClaim is the claim a leased delivery presents to acquire its turn.
+func leaseClaim(lease domain.QueueLease, workerID string) (domain.TurnClaim, error) {
+	queueID, token, err := decodeMessageID(lease.Message.MessageID)
+	if err != nil {
+		return domain.TurnClaim{}, err
+	}
+	claim := domain.TurnClaim{QueueID: queueID, LeaseToken: token, WorkerID: workerID, Dispatch: lease.Message.Dispatch}
+	return claim, claim.Validate()
 }
 
 var _ worker.LeasedQueueWorker = (*RuntimeWorker)(nil)

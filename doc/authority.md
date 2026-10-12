@@ -46,7 +46,10 @@ template with other tenants, at `template_audience:all` or `template_audience:te
 it by default. `OVERRIDE_GATE`, publishing or restoring a draft its [evaluation gate](governance.md#evaluation-gate)
 does not admit and removing or loosening that gate, is checked at `agent:<id>` and seeded to no role.
 `REVIEW`, reading, grading, and dismissing an agent's sampled and low-rated production turns, is
-checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
+checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_OPERATION` `VIEW` (an agent's live turns) and
+`OPERATE` (holding and releasing them) are checked at `agent:<id>` and seeded to `AGENT_ADMIN` and `AGENT_OPER`;
+no authoring action implies them, which keeps operating a running agent apart from changing it (see
+[live turn operation](governance.md#live-turn-operation)). `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
 layers and are checked at the tenant-wide value `tenant`. `AGENT_APPROVAL` `DECIDE` is checked at the
 request's scope.
 

@@ -37,7 +37,7 @@ func limitedRuntime(t *testing.T, recorder *runtimeRecorder, limits domain.Execu
 func TestTurnRuntimeNarrowsTheTenantPolicyByTheReleaseLimits(t *testing.T) {
 	limits := domain.ExecutionLimits{TurnsPerMinute: 30, MaxSteps: 3, MaxToolCalls: 2, MaxDuration: 10 * time.Second}
 	runtime, started, read, stepLimits := limitedRuntime(t, &runtimeRecorder{}, limits, nil)
-	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
 		t.Fatalf("HandleTurn: %v", err)
 	}
 	if started.MaxSteps != 3 || started.TurnTimeout != 10*time.Second || started.MaxTokens != 1000 || started.CostCurrency != "USD" {
@@ -54,7 +54,7 @@ func TestTurnRuntimeNarrowsTheTenantPolicyByTheReleaseLimits(t *testing.T) {
 
 func TestTurnRuntimeNeverWidensTheTenantPolicy(t *testing.T) {
 	runtime, started, _, _ := limitedRuntime(t, &runtimeRecorder{}, domain.ExecutionLimits{MaxSteps: 50, MaxDuration: time.Hour}, nil)
-	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); err != nil {
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
 		t.Fatalf("HandleTurn: %v", err)
 	}
 	if started.MaxSteps != 10 || started.TurnTimeout != time.Minute {
@@ -65,7 +65,7 @@ func TestTurnRuntimeNeverWidensTheTenantPolicy(t *testing.T) {
 func TestTurnRuntimeFailsClosedWhenTheReleaseLimitsCannotBeRead(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime, started, _, stepLimits := limitedRuntime(t, recorder, domain.ExecutionLimits{}, domain.ErrNotFound)
-	_, err := runtime.HandleTurn(context.Background(), runtimeDispatch())
+	_, err := runtime.HandleTurn(context.Background(), runtimeClaim())
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("error = %v, want the unread limits to fail the turn", err)
 	}
@@ -84,7 +84,7 @@ func TestTurnRuntimeFailsClosedWhenTheReleaseLimitsCannotBeRead(t *testing.T) {
 func TestTurnRuntimeRequiresPrincipalLimits(t *testing.T) {
 	runtime := newTestRuntime(t, &runtimeRecorder{})
 	runtime.Limits = nil
-	if _, err := runtime.HandleTurn(context.Background(), runtimeDispatch()); !errors.Is(err, domain.ErrValidation) {
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}
 }

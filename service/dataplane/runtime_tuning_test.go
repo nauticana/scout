@@ -32,8 +32,8 @@ func TestBaseDataPlaneHandsItsTuningSettingsToTheComponentsItBuilds(t *testing.T
 	if hub := plane.ReplyHub; hub.Retention != 3*time.Minute || hub.PollInterval != 50*time.Millisecond || hub.RecordReadInterval != 7*time.Second {
 		t.Fatalf("reply hub = %+v", hub)
 	}
-	if cancels := plane.Cancels; cancels.PollInterval != 250*time.Millisecond || cancels.MaxReadFailures != 5 {
-		t.Fatalf("canceller = %+v", cancels)
+	if control := plane.Control; control.PollInterval != 250*time.Millisecond || control.MaxReadFailures != 5 {
+		t.Fatalf("turn control = %+v", control)
 	}
 	sessions := plane.Sessions.(*SessionCoordinator)
 	if store := sessions.Store.(*DurableSessionStore); sessions.RevisionMemory != 99 || store.MaxResultCardBytes != 1024 {
@@ -96,9 +96,9 @@ func TestCacheReplyHubThrottlesRecordReadsByItsInterval(t *testing.T) {
 	reads := func(interval time.Duration) int64 {
 		var finds atomic.Int64
 		hub := &CacheReplyHub{Cache: cache.NewMemoryCacheService(), PollInterval: 2 * time.Millisecond, RecordReadInterval: interval,
-			Records: &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
+			Records: &fake.TurnRecordStore{FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
 				finds.Add(1)
-				return 1, domain.TurnRunning, nil, nil
+				return domain.TurnRecord{TurnNo: 1, Status: domain.TurnRunning}, nil
 			}}}
 		defer hub.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
@@ -124,48 +124,48 @@ func TestCacheReplyHubThrottlesRecordReadsByItsInterval(t *testing.T) {
 	}
 }
 
-// countingCancelTable counts the cancellation reads a watcher makes.
-type countingCancelTable struct {
-	*cancelTable
+// countingControlTable counts the control reads a watcher makes.
+type countingControlTable struct {
+	*controlTable
 	reads atomic.Int64
 }
 
-func (table *countingCancelTable) GetQueryService(context.Context, map[string]string) keelport.QueryService {
+func (table *countingControlTable) GetQueryService(context.Context, map[string]string) keelport.QueryService {
 	return table
 }
 
-func (table *countingCancelTable) Query(ctx context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
-	if name == qCancelRead {
+func (table *countingControlTable) Query(ctx context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
+	if name == qControlRead {
 		table.reads.Add(1)
 	}
-	return table.cancelTable.Query(ctx, name, args...)
+	return table.controlTable.Query(ctx, name, args...)
 }
 
-func TestTableTurnCancellerStopsAfterItsConfiguredReadFailures(t *testing.T) {
+func TestTableTurnControlStopsAfterItsConfiguredReadFailures(t *testing.T) {
 	for _, tc := range []struct{ configured, want int64 }{{0, defaultCancelReadFailures}, {5, 5}} {
-		table := &countingCancelTable{cancelTable: &cancelTable{live: true}}
-		watcher := &TableTurnCanceller{DB: table, PollInterval: 2 * time.Millisecond, MaxReadFailures: int(tc.configured)}
-		turnCtx, release, err := watcher.Watch(context.Background(), 7, "request-1")
+		table := &countingControlTable{controlTable: newControlTable(domain.TurnRunning, 1)}
+		watcher := &TableTurnControl{DB: table, PollInterval: 2 * time.Millisecond, MaxReadFailures: int(tc.configured)}
+		watch, err := watcher.Watch(context.Background(), controlOwner)
 		if err != nil {
 			t.Fatal(err)
 		}
 		table.mu.Lock()
 		table.readErr = errors.New("connection refused")
 		table.mu.Unlock()
-		if cause := awaitCause(t, turnCtx); cause == nil || errors.Is(cause, domain.ErrTurnCanceled) {
+		if cause := awaitCause(t, watch.Context()); cause == nil || errors.Is(cause, domain.ErrTurnCanceled) {
 			t.Fatalf("configured %d: cause = %v", tc.configured, cause)
 		}
-		release()
+		watch.Release()
 		// One successful read at pickup, then the failures that stopped the turn.
 		if got := table.reads.Load() - 1; got != tc.want {
 			t.Fatalf("configured %d: failed reads = %d, want %d", tc.configured, got, tc.want)
 		}
 	}
-	for name, watcher := range map[string]*TableTurnCanceller{
-		"poll":     {DB: &cancelTable{live: true}, PollInterval: -time.Second},
-		"failures": {DB: &cancelTable{live: true}, MaxReadFailures: -1},
+	for name, watcher := range map[string]*TableTurnControl{
+		"poll":     {DB: newControlTable(domain.TurnRunning, 1), PollInterval: -time.Second},
+		"failures": {DB: newControlTable(domain.TurnRunning, 1), MaxReadFailures: -1},
 	} {
-		if _, _, err := watcher.Watch(context.Background(), 7, "request-1"); err == nil {
+		if _, err := watcher.Watch(context.Background(), controlOwner); err == nil {
 			t.Errorf("%s: Watch accepted a negative setting", name)
 		}
 	}

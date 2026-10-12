@@ -171,7 +171,7 @@ checks:
   - name: turn_approval_request_rule_source_ck
     expression: rule_source_code IN ('autonomy', 'policy', 'guardrail')
   - name: turn_approval_request_approver_kind_ck
-    expression: approver_reference_kind IS NULL OR approver_reference_kind IN ('role', 'position')
+    expression: approver_reference_kind IN ('role', 'position')
   - name: turn_approval_request_output_class_ck
     expression: output_class_code IN ('A', 'D', 'R', 'C')
   - name: turn_approval_request_route_ck

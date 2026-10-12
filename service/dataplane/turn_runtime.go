@@ -18,11 +18,13 @@ import (
 	"github.com/nauticana/scout/service/observability"
 )
 
-// TurnRuntime executes one durably delivered turn. Per step the order is
-// idempotency claim or replay, execution, committed result, guardrail, durable
-// checkpoint, published frame; the turn ends with settlement and the terminal
-// record persisted before the final frame, so a crash replays the frame and
-// never the side effect.
+// TurnRuntime executes one durably delivered turn. It first acquires the turn with the
+// delivery's queue claim, which moves the turn's fence, and presents that owner on every
+// write; a write refused with domain.ErrFenceLost ends the delivery with no terminal record,
+// settlement, or final frame. Per step the order is idempotency claim or replay, execution,
+// committed result, guardrail, durable checkpoint, published frame; the turn ends with
+// settlement and the terminal record persisted before the final frame, so a crash replays
+// the frame and never the side effect. A requested hold is taken at a durable checkpoint.
 type TurnRuntime struct {
 	Records     contract.TurnRecordStore
 	Sessions    contract.SessionCoordinator
@@ -34,11 +36,12 @@ type TurnRuntime struct {
 	Guardrails  contract.GuardrailEnforcer
 	Publisher   contract.TurnReplyPublisher
 	Estimator   contract.TurnBudgetEstimator
-	Budget      contract.TenantBudgetManager
+	Budget      contract.TurnBudgetManager
 	// Limits reads the execution limits frozen into the turn's release, which narrow the tenant runtime policy.
 	Limits contract.PrincipalLimits
-	// Cancels is optional; when set a requested cancellation stops the running turn.
-	Cancels contract.TurnCancelWatcher
+	// Control is optional; when set a requested cancellation or a moved fence stops the running
+	// turn and a requested hold is taken at its next durable checkpoint.
+	Control contract.TurnControlWatcher
 	// GuardrailConfigs pins the policy version of the running agent; nil uses an empty policy.
 	GuardrailConfigs contract.GuardrailConfigRepository
 	// Audit records each turn transition once; nil skips auditing. A failed write fails the
@@ -84,26 +87,36 @@ func (runtime *TurnRuntime) now() time.Time {
 
 // turnExecution is the mutable state of one HandleTurn call.
 type turnExecution struct {
-	dispatch    domain.TurnDispatch
-	turnNo      int64
-	snapshot    domain.SessionSnapshot
-	revision    int64
-	published   int64
-	checkpoints int
-	usage       domain.Usage
-	config      domain.GuardrailConfig
-	reservation domain.BudgetReservation
-	settled     bool
-	limits      domain.ExecutionLimits
-	budget      domain.ReleaseBudget
+	dispatch domain.TurnDispatch
+	// owner is the acquired fence every write presents; a hold or suspension moves it to the
+	// fence the final frame is published under.
+	owner         domain.TurnOwner
+	holdRequested func() bool
+	turnNo        int64
+	snapshot      domain.SessionSnapshot
+	revision      int64
+	published     int64
+	checkpoints   int
+	usage         domain.Usage
+	config        domain.GuardrailConfig
+	reservation   domain.BudgetReservation
+	settled       bool
+	limits        domain.ExecutionLimits
+	budget        domain.ReleaseBudget
 	// bounds are the delegation limits this turn may pass on; the zero value
 	// means the turn acts on its own authority and delegates nothing.
 	bounds domain.DelegationBounds
 }
 
-// HandleTurn executes the delivered turn and returns once its result is
-// durable; a nil error means the delivery may be acknowledged.
-func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.TurnDispatch) (domain.TurnResult, error) {
+// HandleTurn acquires the delivered turn with its claim, executes it, and returns once its
+// result is durable; a nil error means the delivery may be acknowledged. A held or suspended
+// turn is domain.ErrTurnHeld and a claim that is not the current lease domain.ErrFenceLost,
+// both before anything runs.
+func (runtime *TurnRuntime) HandleTurn(ctx context.Context, claim domain.TurnClaim) (domain.TurnResult, error) {
+	if err := claim.Validate(); err != nil {
+		return domain.TurnResult{}, err
+	}
+	dispatch := claim.Dispatch
 	if err := validateDispatch(dispatch); err != nil {
 		return domain.TurnResult{}, err
 	}
@@ -111,39 +124,51 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.Turn
 		return domain.TurnResult{}, err
 	}
 	turn := dispatch.Turn
-	tenantID := turn.TenantContext.TenantID
 	ctx = domain.WithDecisionScope(ctx, "turn/", turn.RequestID)
-	turnNo, status, payload, err := runtime.Records.Find(ctx, tenantID, turn.RequestID)
+	record, err := runtime.Records.Find(ctx, turn.TenantContext.TenantID, turn.RequestID)
 	if err != nil {
 		return domain.TurnResult{}, err
 	}
-	execution := &turnExecution{dispatch: dispatch, turnNo: turnNo, bounds: turn.DelegationBounds}
-	if status.Terminal() {
-		return runtime.replayTerminal(ctx, execution, status, payload)
+	execution := &turnExecution{dispatch: dispatch, turnNo: record.TurnNo, bounds: turn.DelegationBounds, holdRequested: func() bool { return false }}
+	if record.Status.Terminal() {
+		return runtime.replayTerminal(ctx, execution, record)
 	}
-	turnCtx, release := ctx, func() {}
-	if runtime.Cancels != nil {
-		if turnCtx, release, err = runtime.Cancels.Watch(ctx, tenantID, turn.RequestID); err != nil {
+	if execution.owner, err = runtime.Records.Acquire(ctx, claim); err != nil {
+		return domain.TurnResult{}, err
+	}
+	turnCtx := ctx
+	if runtime.Control != nil {
+		watch, err := runtime.Control.Watch(ctx, execution.owner)
+		if err != nil {
 			return domain.TurnResult{}, err
 		}
+		defer watch.Release()
+		turnCtx, execution.holdRequested = watch.Context(), watch.HoldRequested
 	}
-	defer release()
-	if cause := context.Cause(turnCtx); errors.Is(cause, domain.ErrTurnCanceled) {
-		// Cancelled before pickup: a suspended turn still holds a reservation, which fail releases once in hand.
+	switch cause := context.Cause(turnCtx); {
+	case errors.Is(cause, domain.ErrFenceLost):
+		return domain.TurnResult{}, cause
+	case errors.Is(cause, domain.ErrTurnCanceled):
+		// Cancelled before pickup: a suspended or held turn still holds a reservation, which fail releases once in hand.
 		if err = runtime.reserve(ctx, execution); err != nil {
 			cause = errors.Join(cause, err)
 		}
 		return domain.TurnResult{}, runtime.fail(ctx, execution, cause)
 	}
 	result, err := runtime.execute(turnCtx, execution)
-	if cause := context.Cause(turnCtx); err != nil && errors.Is(cause, domain.ErrTurnCanceled) {
+	if cause := context.Cause(turnCtx); err != nil && (errors.Is(cause, domain.ErrTurnCanceled) || errors.Is(cause, domain.ErrFenceLost)) {
 		err = errors.Join(cause, err)
 	}
 	switch {
 	case err == nil:
 		return result, nil
+	case errors.Is(err, domain.ErrFenceLost):
+		// The turn has another owner now: no terminal record, settlement, or final frame from this one.
+		return domain.TurnResult{}, err
 	case errors.Is(err, domain.ErrApprovalPending):
 		return domain.TurnResult{}, runtime.suspend(ctx, execution, err)
+	case errors.Is(err, domain.ErrTurnHeld):
+		return domain.TurnResult{}, runtime.hold(ctx, execution)
 	default:
 		return domain.TurnResult{}, runtime.fail(ctx, execution, err)
 	}
@@ -153,26 +178,50 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, dispatch domain.Turn
 // held and no usage is settled, so the turn resumes with the budget it was
 // admitted on. The delivery is acked; whoever resolves the approval re-dispatches.
 func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecution, cause error) error {
-	turn := execution.dispatch.Turn
 	suspendCtx := context.WithoutCancel(ctx)
-	if err := runtime.Records.Suspend(suspendCtx, turn.TenantContext.TenantID, turn.RequestID, stage.ErrorClass(cause)); err != nil {
+	fence, err := runtime.Records.Suspend(suspendCtx, execution.owner, stage.ErrorClass(cause))
+	if errors.Is(err, domain.ErrTurnCanceled) {
+		// A cancellation requested before the turn parked wins: it ends cancelled, never parked out of reach.
+		return runtime.fail(ctx, execution, err)
+	}
+	if err != nil {
 		return err
 	}
+	execution.owner.Fence = fence
 	// A turn may suspend more than once; the frame it suspends at tells the suspensions apart.
 	if err := runtime.audit(domain.WithDecisionScope(suspendCtx, "frame/", execution.published), execution, observability.AuditCategoryTurnSuspended, stage.ErrorClass(cause)); err != nil {
 		return err
 	}
 	pending := domain.TurnEvent{Version: domain.TurnEventVersion, Kind: domain.TurnEventApprovalPending, Approval: &domain.TurnApprovalEvent{}}
-	if err := runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause), pending); err != nil {
+	return runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause), pending)
+}
+
+// hold takes the turn to held at the durable checkpoint where a hold request was honored.
+// Like a suspension it keeps the reservation and settles nothing; the held frame ends this
+// delivery, and a released turn continues its stream at that sequence.
+func (runtime *TurnRuntime) hold(ctx context.Context, execution *turnExecution) error {
+	holdCtx := context.WithoutCancel(ctx)
+	fence, err := runtime.Records.Hold(holdCtx, execution.owner)
+	if errors.Is(err, domain.ErrTurnCanceled) {
+		return runtime.fail(ctx, execution, err)
+	}
+	if err != nil {
 		return err
 	}
-	return nil
+	execution.owner.Fence = fence
+	errorCode, events := heldFrame()
+	if err := runtime.audit(domain.WithDecisionScope(holdCtx, "fence/", fence), execution, observability.AuditCategoryTurnHeld, errorCode); err != nil {
+		return err
+	}
+	return runtime.publish(holdCtx, execution, nil, true, errorCode, events...)
 }
 
 // replayTerminal re-offers the terminal record and republishes the final frame of an
-// already terminal turn; it never re-executes and never settles again.
-func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnExecution, status domain.TurnStatus, payload []byte) (domain.TurnResult, error) {
+// already terminal turn under its last fence; it never re-executes and never settles again.
+func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnExecution, record domain.TurnRecord) (domain.TurnResult, error) {
 	turn := execution.dispatch.Turn
+	status, payload := record.Status, record.Payload
+	execution.owner = domain.TurnOwner{TenantID: turn.TenantContext.TenantID, RequestID: turn.RequestID, Fence: record.Fence}
 	snapshot, err := runtime.Sessions.Load(ctx, turn.TenantContext.TenantID, turn.ConversationID)
 	if err != nil {
 		return domain.TurnResult{}, err
@@ -199,9 +248,6 @@ func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnE
 func (runtime *TurnRuntime) execute(ctx context.Context, execution *turnExecution) (domain.TurnResult, error) {
 	turn := execution.dispatch.Turn
 	tenantID := turn.TenantContext.TenantID
-	if err := runtime.Records.Start(ctx, tenantID, turn.RequestID); err != nil {
-		return domain.TurnResult{}, err
-	}
 	snapshot, err := runtime.Sessions.Load(ctx, tenantID, turn.ConversationID)
 	if err != nil {
 		return domain.TurnResult{}, err
@@ -308,19 +354,22 @@ func (runtime *TurnRuntime) runSteps(ctx context.Context, execution *turnExecuti
 				Usage:        execution.usage,
 			}, nil
 		}
+		// The step is checkpointed and its frame published: a durable boundary to hold at.
+		if execution.holdRequested != nil && execution.holdRequested() {
+			return domain.TurnResult{}, fmt.Errorf("%w: after step %d", domain.ErrTurnHeld, stepNo)
+		}
 		stepID = result.NextStepID
 	}
 }
 
 func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecution, step domain.ExecutionStep, stepNo int, policy domain.TenantRuntimePolicy, permit contract.ExecutionPermit) (domain.StepResult, error) {
 	turn := execution.dispatch.Turn
-	tenantID := turn.TenantContext.TenantID
 	started := runtime.now()
 	ctx = domain.WithDecisionScope(ctx, "step/", stepNo)
 	if err := permit.BeforeStep(ctx, step); err != nil {
 		return domain.StepResult{}, err
 	}
-	result, replayed, err := runtime.Idempotency.Begin(ctx, tenantID, turn.RequestID, step)
+	result, replayed, err := runtime.Idempotency.Begin(ctx, execution.owner, step)
 	if err != nil {
 		return domain.StepResult{}, stage.At(domain.StageCheckpoint, err)
 	}
@@ -339,19 +388,21 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 			Principal:  pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion),
 			OnBehalfOf: actingFor(execution.dispatch.Turn, execution.snapshot), Bounds: execution.bounds, Limits: execution.limits,
 			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth, Spend: spend,
+			Owner: execution.owner, HoldRequested: execution.holdRequested,
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {
 			spent := spentUsage(err)
-			if !errors.Is(err, domain.ErrApprovalPending) {
+			// A parked step is replayed from its journal, which accounts its usage again.
+			if !errors.Is(err, domain.ErrApprovalPending) && !errors.Is(err, domain.ErrTurnHeld) {
 				err = errors.Join(err, addChunkUsage(&execution.usage, spent))
 			}
 			runtime.observe(ctx, execution, step, started, spent, err)
-			if abandonErr := runtime.Idempotency.Abandon(context.WithoutCancel(ctx), tenantID, turn.RequestID, step); abandonErr != nil {
+			if abandonErr := runtime.Idempotency.Abandon(context.WithoutCancel(ctx), execution.owner, step); abandonErr != nil {
 				return domain.StepResult{}, errors.Join(err, abandonErr)
 			}
 			return domain.StepResult{}, err
 		}
-		if err = runtime.Idempotency.Commit(ctx, tenantID, turn.RequestID, step, result); err != nil {
+		if err = runtime.Idempotency.Commit(ctx, execution.owner, step, result); err != nil {
 			return domain.StepResult{}, stage.At(domain.StageCheckpoint, err)
 		}
 	}
@@ -427,7 +478,7 @@ func (runtime *TurnRuntime) checkpoint(ctx context.Context, execution *turnExecu
 		State:           result.State,
 		Usage:           usage,
 	}
-	if err := runtime.Sessions.Checkpoint(ctx, execution.dispatch.Turn.TenantContext.TenantID, execution.revision, checkpoint); err != nil {
+	if err := runtime.Sessions.Checkpoint(ctx, execution.owner, execution.revision, checkpoint); err != nil {
 		return err
 	}
 	execution.revision++
@@ -439,22 +490,21 @@ func (runtime *TurnRuntime) checkpoint(ctx context.Context, execution *turnExecu
 // then publishes the final frame.
 func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution, result *domain.TurnResult) error {
 	turn := execution.dispatch.Turn
-	tenantID := turn.TenantContext.TenantID
 	settleCtx := context.WithoutCancel(ctx)
 	if !execution.settled {
-		if err := runtime.Budget.Commit(settleCtx, execution.reservation, execution.usage); err != nil {
+		if err := runtime.Budget.CommitTurn(settleCtx, execution.owner, execution.reservation, execution.usage); err != nil {
 			return fmt.Errorf("settle turn budget: %w", err)
 		}
 		execution.settled = true
 	}
 	subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
-	if err := runtime.Records.RecordUsage(settleCtx, tenantID, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
+	if err := runtime.Records.RecordUsage(settleCtx, execution.owner, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
 		return err
 	}
 	if err := runtime.settled(settleCtx, execution); err != nil {
 		return err
 	}
-	if err := runtime.Sessions.Complete(settleCtx, tenantID, turn.ConversationID, execution.revision, *result); err != nil {
+	if err := runtime.Sessions.Complete(settleCtx, execution.owner, turn.ConversationID, execution.revision, *result); err != nil {
 		return err
 	}
 	if err := runtime.audit(settleCtx, execution, observability.AuditCategoryTurnCompleted, ""); err != nil {
@@ -470,10 +520,10 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 }
 
 // fail settles work already performed (or refunds an unused hold), records the
-// terminal failure, and publishes a payload-free final frame.
+// terminal failure, and only once that record stands writes the terminal audit and
+// publishes a payload-free final frame. A lost fence stops it before any terminal write.
 func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, cause error) error {
 	turn := execution.dispatch.Turn
-	tenantID := turn.TenantContext.TenantID
 	failCtx := context.WithoutCancel(ctx)
 	status, errorCode := domain.TurnFailed, stage.ErrorClass(cause)
 	if errors.Is(cause, domain.ErrTurnCanceled) || errors.Is(cause, context.Canceled) {
@@ -483,9 +533,12 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	if !execution.settled && execution.reservation.ReservationID != "" {
 		var settleErr error
 		if hasUsage(execution.usage) {
-			settleErr = runtime.Budget.Commit(failCtx, execution.reservation, execution.usage)
+			settleErr = runtime.Budget.CommitTurn(failCtx, execution.owner, execution.reservation, execution.usage)
 		} else {
-			settleErr = runtime.Budget.Release(failCtx, execution.reservation)
+			settleErr = runtime.Budget.ReleaseTurn(failCtx, execution.owner, execution.reservation)
+		}
+		if errors.Is(settleErr, domain.ErrFenceLost) {
+			return errors.Join(cause, settleErr)
 		}
 		if settleErr != nil {
 			errs = append(errs, fmt.Errorf("settle failed turn budget: %w", settleErr))
@@ -495,17 +548,19 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	}
 	if hasUsage(execution.usage) {
 		subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
-		if err := runtime.Records.RecordUsage(failCtx, tenantID, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
+		if err := runtime.Records.RecordUsage(failCtx, execution.owner, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); errors.Is(err, domain.ErrFenceLost) {
+			return errors.Join(cause, err)
+		} else if err != nil {
 			errs = append(errs, err)
 		} else if err := runtime.settled(failCtx, execution); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if err := runtime.Records.Fail(failCtx, tenantID, turn.RequestID, status, errorCode); err != nil {
-		errs = append(errs, err)
-	} else {
-		runtime.recordRun(failCtx, execution, domain.RunStatus(status))
+	// A refused terminal record means another writer owns the turn's end: its audit and frame are not this one's.
+	if err := runtime.Records.Fail(failCtx, execution.owner, status, errorCode); err != nil {
+		return errors.Join(append(errs, err)...)
 	}
+	runtime.recordRun(failCtx, execution, domain.RunStatus(status))
 	if err := runtime.audit(failCtx, execution, turnAuditCategory(status), errorCode); err != nil {
 		errs = append(errs, err)
 	}
@@ -515,9 +570,14 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	return errors.Join(errs...)
 }
 
-// Abandon refunds and terminates a delivery the scheduler is dead-lettering, so
-// retry exhaustion settles like any other terminal path.
-func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDispatch, reason string) error {
+// Abandon refunds and terminates a delivery the scheduler is dead-lettering, so retry
+// exhaustion settles like any other terminal path. It acquires the turn with the delivery's
+// claim first; a turn held, suspended, or owned by a newer delivery is left as it is.
+func (runtime *TurnRuntime) Abandon(ctx context.Context, claim domain.TurnClaim, reason string) error {
+	if err := claim.Validate(); err != nil {
+		return err
+	}
+	dispatch := claim.Dispatch
 	if err := validateDispatch(dispatch); err != nil {
 		return err
 	}
@@ -530,20 +590,27 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, dispatch domain.TurnDis
 	turn := dispatch.Turn
 	tenantID := turn.TenantContext.TenantID
 	ctx = domain.WithDecisionScope(ctx, "turn/", turn.RequestID)
-	turnNo, status, _, err := runtime.Records.Find(ctx, tenantID, turn.RequestID)
+	record, err := runtime.Records.Find(ctx, tenantID, turn.RequestID)
 	if err != nil {
 		return err
 	}
-	execution := &turnExecution{dispatch: dispatch, turnNo: turnNo}
-	if status.Terminal() {
+	if record.Status.Terminal() {
 		return nil
+	}
+	execution := &turnExecution{dispatch: dispatch, turnNo: record.TurnNo}
+	execution.owner, err = runtime.Records.Acquire(ctx, claim)
+	if errors.Is(err, domain.ErrTurnHeld) || errors.Is(err, domain.ErrFenceLost) {
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	snapshot, err := runtime.Sessions.Load(ctx, tenantID, turn.ConversationID)
 	if err != nil {
 		return err
 	}
 	execution.snapshot = snapshot
-	execution.published = finalFrameSequence(snapshot, turnNo)
+	execution.published = finalFrameSequence(snapshot, record.TurnNo)
 	quote, err := runtime.Estimator.Estimate(ctx, turn)
 	if err != nil {
 		return fmt.Errorf("estimate turn budget: %w", err)
@@ -630,6 +697,7 @@ func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecutio
 		ErrorCode:      errorCode,
 		AgentVersion:   execution.snapshot.AgentVersion,
 		EmittedAt:      runtime.now(),
+		Fence:          execution.owner.Fence,
 	})
 	// An older sequence outside the retained window means the stream already advanced past it.
 	if err != nil && !errors.Is(err, domain.ErrReplayExpired) {
@@ -685,6 +753,7 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 		"cost_minor_units": execution.usage.CostMinorUnits,
 		"currency":         execution.usage.Currency,
 		"error_code":       errorCode,
+		"fence":            execution.owner.Fence,
 	})
 	if err != nil {
 		return fmt.Errorf("encode turn audit: %w", err)

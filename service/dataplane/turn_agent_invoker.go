@@ -66,6 +66,10 @@ func (invoker *TurnAgentInvoker) Invoke(ctx context.Context, call domain.Delegat
 		if slices.ContainsFunc(frame.Events, func(event domain.TurnEvent) bool { return event.Kind == domain.TurnEventApprovalPending }) {
 			return domain.StepResult{}, fmt.Errorf("%w: delegated turn of %q", domain.ErrApprovalPending, call.Target.ID)
 		}
+		// A held delegate holds its delegator at this step; once both are released the step re-attaches.
+		if slices.ContainsFunc(frame.Events, func(event domain.TurnEvent) bool { return event.Kind == domain.TurnEventHeld }) {
+			return domain.StepResult{}, fmt.Errorf("%w: delegated turn of %q", domain.ErrTurnHeld, call.Target.ID)
+		}
 		if frame.ErrorCode != "" {
 			return domain.StepResult{}, delegatedFailure(call, frame.ErrorCode)
 		}

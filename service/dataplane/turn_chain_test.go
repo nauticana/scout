@@ -29,10 +29,10 @@ func newChainHarness(t *testing.T) *chainHarness {
 	harness.runtime.Audit = harness.sink
 	// The turn record is what makes a later delivery a terminal replay.
 	harness.runtime.Records = &fake.TurnRecordStore{
-		FindFunc: func(context.Context, int64, string) (int64, domain.TurnStatus, []byte, error) {
-			return 1, harness.status, nil, nil
+		FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
+			return domain.TurnRecord{TurnNo: 1, Status: harness.status, Fence: 1}, nil
 		},
-		FailFunc: func(_ context.Context, _ int64, _ string, status domain.TurnStatus, _ string) error {
+		FailFunc: func(_ context.Context, _ domain.TurnOwner, status domain.TurnStatus, _ string) error {
 			harness.status = status
 			return nil
 		},
@@ -83,12 +83,12 @@ func TestDecisionChainIsGapFreeAndRecordedOnceAcrossRedelivery(t *testing.T) {
 	failFirst := true
 	harness.runtime.Executors = harness.stepDecision(&failFirst)
 	// First delivery: the step's decision is recorded, then the worker fails and the turn ends failed.
-	if _, err := harness.runtime.HandleTurn(ctx, runtimeDispatch()); err == nil {
+	if _, err := harness.runtime.HandleTurn(ctx, runtimeClaim()); err == nil {
 		t.Fatal("the first delivery must fail")
 	}
 	// The nacked delivery comes back twice; the turn is terminal, so each is a replay.
 	for range 2 {
-		_, _ = harness.runtime.HandleTurn(ctx, runtimeDispatch())
+		_, _ = harness.runtime.HandleTurn(ctx, runtimeClaim())
 	}
 	want := []string{observability.AuditCategoryTurnAdmitted, domain.DecisionCategoryModelRoute, "turn_failed"}
 	if got := categories(harness.chain()); len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
@@ -119,13 +119,13 @@ func TestTerminalReplayClosesAGapLeftByALostAuditWrite(t *testing.T) {
 			return domain.StepResult{}, errors.New("provider failed")
 		}), nil
 	})
-	if _, err := harness.runtime.HandleTurn(ctx, runtimeDispatch()); err == nil {
+	if _, err := harness.runtime.HandleTurn(ctx, runtimeClaim()); err == nil {
 		t.Fatal("the delivery must fail")
 	}
 	if err := observability.VerifyTurnChain(harness.chain()); err == nil {
 		t.Fatal("a chain without its terminal state must not verify")
 	}
-	_, _ = harness.runtime.HandleTurn(ctx, runtimeDispatch())
+	_, _ = harness.runtime.HandleTurn(ctx, runtimeClaim())
 	if err := observability.VerifyTurnChain(harness.chain()); err != nil {
 		t.Fatalf("the replay must close the gap: %v", err)
 	}
