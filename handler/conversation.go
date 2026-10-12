@@ -45,14 +45,15 @@ type ConversationHandler struct {
 	keelhandler.AbstractHandler
 	Plane   contract.DataPlane
 	Callers CallerResolver
-	// Feedback records turn ratings; nil answers the feedback route as unavailable.
+	// Feedback records turn ratings and History lists the person's turns; nil answers its route as unavailable.
 	Feedback contract.TurnFeedbackRecorder
+	History  contract.TurnHistory
 	// BasePath defaults to /api/conversation/. Products can mount the same
 	// routes under a product surface such as /api/wingmate/.
 	BasePath string
 }
 
-// Routes returns the authenticated submit, replay stream, and cancel routes.
+// Routes returns the authenticated conversation routes.
 func (h *ConversationHandler) Routes() map[string]http.HandlerFunc {
 	base := h.BasePath
 	if strings.TrimSpace(base) == "" {
@@ -65,6 +66,7 @@ func (h *ConversationHandler) Routes() map[string]http.HandlerFunc {
 		base + api.ConversationCancelPath:   h.cancel,
 		base + api.ConversationAgentsPath:   h.agents,
 		base + api.ConversationFeedbackPath: h.feedback,
+		base + api.ConversationTurnsPath:    h.turns,
 	}
 }
 
@@ -270,6 +272,59 @@ func (h *ConversationHandler) feedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	common.WriteJSON(w, http.StatusAccepted, api.ConversationTurnAccepted{RequestID: request.RequestID})
+}
+
+// turns pages the signed-in person's turns, ?work_ref=&before=&limit=, newest first.
+func (h *ConversationHandler) turns(w http.ResponseWriter, r *http.Request) {
+	if !h.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	session, ok := h.RequireSession(w, r)
+	if !ok {
+		return
+	}
+	if err := h.validate(); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	if h.History == nil {
+		h.writeError(w, r, fmt.Errorf("%w: turn history is not composed", domain.ErrNotReady))
+		return
+	}
+	query := r.URL.Query()
+	limit, err := optionalInt(query.Get("limit"), 0)
+	if err != nil {
+		h.writeError(w, r, fmt.Errorf("%w: limit must be an integer", domain.ErrValidation))
+		return
+	}
+	tenant, person, err := h.caller(r.Context(), session)
+	var page domain.TurnHistoryPage
+	if err == nil {
+		page, err = h.History.Turns(r.Context(), tenant, person, domain.TurnHistoryFilter{
+			WorkRef: query.Get("work_ref"), Before: query.Get("before"), Limit: int(limit),
+		})
+	}
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	items := api.ConversationTurnPage{Turns: make([]api.ConversationTurn, 0, len(page.Turns)), NextBefore: page.NextBefore}
+	for _, turn := range page.Turns {
+		items.Turns = append(items.Turns, conversationTurn(turn))
+	}
+	common.WriteJSON(w, http.StatusOK, items)
+}
+
+func conversationTurn(turn domain.TurnSummary) api.ConversationTurn {
+	item := api.ConversationTurn{
+		RequestID: turn.RequestID, ConversationID: turn.ConversationID, AgentName: turn.AgentID, ReleaseVersion: turn.AgentVersion,
+		Status: string(turn.Status), WorkRef: turn.WorkRef, TaskKind: turn.TaskKind, InputSummary: turn.InputSummary,
+		ErrorText: turn.ErrorText, Result: turn.Result, CreatedAt: turn.QueuedAt, CompletedAt: optionalTime(turn.CompletedAt),
+	}
+	if turn.Currency != "" {
+		item.CostMinor, item.Currency, item.Exponent = &turn.CostMinorUnits, turn.Currency, &turn.Exponent
+	}
+	return item
 }
 
 // caller resolves the session to a person: a turn from HTTP always acts for someone, so

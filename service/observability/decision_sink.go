@@ -205,14 +205,18 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 		query.Resource, query.Resource, query.RequestID, query.RequestID,
 		query.ConversationID, query.ConversationID, string(query.Outcome), string(query.Outcome),
 		nullableTime(query.Since), query.Since, nullableTime(query.Until), query.Until,
-		query.Before, query.Before, limit)
+		query.Before, query.Before, limit+1)
 	if err != nil {
 		return domain.DecisionPage{}, fmt.Errorf("query decisions: %w", err)
 	}
 	page := domain.DecisionPage{Records: make([]domain.DecisionRecord, 0, len(result.Rows))}
-	for _, row := range result.Rows {
+	for index, row := range result.Rows {
+		if index == limit {
+			page.NextBefore = page.Records[limit-1].ID
+			break
+		}
 		record := domain.DecisionRecord{
-			TenantID: query.TenantID, Category: common.AsString(row[1]),
+			ID: common.AsInt64(row[0]), TenantID: query.TenantID, Category: common.AsString(row[1]),
 			Principal: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[2])), ID: common.AsString(row[3])},
 			Authority: domain.AuthorityRef{
 				GrantID: common.AsString(row[4]),
@@ -232,10 +236,6 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 		}
 		record.Authority.Subject = record.Principal
 		page.Records = append(page.Records, record)
-		page.NextBefore = common.AsInt64(row[0])
-	}
-	if len(page.Records) < limit {
-		page.NextBefore = 0
 	}
 	return page, nil
 }

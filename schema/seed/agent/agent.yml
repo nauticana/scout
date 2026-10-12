@@ -220,6 +220,8 @@ seeds:
       - [agent_run_trace_max_journal_bytes, int, true, "4194304", "Cumulative loop journal payload bytes one Studio run trace classifies; past them the trace is truncated (1024..67108864); 0 takes 4194304"]
       - [agent_live_turn_page_size, int, true, "50", "Live turns one Studio turn control page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50"]
       - [agent_live_turn_max_page_size, int, true, "200", "Largest live turn page a Studio turn control caller may ask for (1..1000); 0 takes 200"]
+      - [agent_turn_history_page_size, int, true, "50", "Turns one conversation history page returns when the caller names no limit (0..agent_turn_history_max_page_size); 0 takes 50"]
+      - [agent_turn_history_max_page_size, int, true, "200", "Largest conversation history page a caller may ask for (1..1000); 0 takes 200"]
       - [agent_outcome_attest_grace, int, true, "60", "Seconds added to a non-read-only tool call's dispatch window for its outcome deadline, after which a person may attest an unknown outcome (1..86400); 0 takes 60"]
       - [agent_takeover_lease, int, true, "900", "Seconds an operator's lease on a turn they took over lasts from the takeover or their latest act, by the store clock (1..86400); 0 takes 900"]
       - [agent_operator_entry_max_bytes, int, true, "16384", "Encoded bytes of one entry an operator makes in a turn they took over (1..1048576); 0 takes 16384"]
@@ -232,6 +234,7 @@ seeds:
       - [AGENT_STUDIO, Agent Studio]
       - [AGENT_APPROVAL, Agent approval decisions]
       - [AGENT_RESTRICTION, Agent restriction layers]
+      - [AGENT_AUDIT, Agent decision records]
   - table: authorization_object_action
     columns: [authorization_object_id, action, caption]
     rows:
@@ -248,6 +251,7 @@ seeds:
       - [AGENT_APPROVAL, DECIDE, Decide assigned approval requests]
       - [AGENT_RESTRICTION, VIEW, View the platform and tenant restriction layers]
       - [AGENT_RESTRICTION, REPLACE_TENANT, Replace the tenant restriction layer]
+      - [AGENT_AUDIT, VIEW, View the tenant's decision records]
       - [AGENT_STUDIO, REVIEW, "Read, grade, and dismiss sampled and low-rated turns"]
       - [AGENT_STUDIO, OVERRIDE_GATE, Publish a draft its evaluation gate does not admit]
   - table: authorization_role
@@ -291,6 +295,7 @@ seeds:
       - [AGENT_ADMIN, AGENT_APPROVAL, DECIDE, "*"]
       - [AGENT_ADMIN, AGENT_RESTRICTION, VIEW, "*"]
       - [AGENT_ADMIN, AGENT_RESTRICTION, REPLACE_TENANT, "*"]
+      - [AGENT_ADMIN, AGENT_AUDIT, VIEW, "*"]
       - [AGENT_ADMIN, PAGE, ACCESS, agent_studio]
       - [AGENT_ADMIN, TABLE, SELECT, agent_profile]
       - [AGENT_ADMIN, TABLE, SELECT, agent_draft]

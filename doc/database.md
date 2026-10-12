@@ -1769,6 +1769,7 @@ erDiagram
         varchar holder_kind
         varchar holder_id
         timestamp hold_until
+        varchar work_ref
     }
     turn_status {
         char code PK
@@ -1973,7 +1974,7 @@ erDiagram
 
 `agent_conversation` pins the release a conversation runs on and records why: `version_source` names the rule (`stable`, `canary`, `experiment_cohort`, `pilot`, a pin, or `request_pin` with its `pin_reason`), null when the product supplied the version, and `alias_id` is the agent type it was requested through. `usage_event` attributes settled usage to the spending principal, the person it acted for (`on_behalf_kind`, `on_behalf_id`), and the product's opaque `work_ref`; `audit_event.work_ref` carries the same reference.
 
-Settlement writes one `usage_event` per model that performed part of the turn, plus one unattributed row for usage no model performed. Partial unique indexes keep those rows distinct. Until settlement, `conversation_turn_detail` stages the total tool calls and search queries and keeps the per-model breakdown as transient JSON. The `(partner_id, queued_at)` index on `conversation_turn` serves the trailing-minute turn count of the `limits` setting.
+Settlement writes one `usage_event` per model that performed part of the turn, plus one unattributed row for usage no model performed. Partial unique indexes keep those rows distinct. Until settlement, `conversation_turn_detail` stages the total tool calls and search queries and keeps the per-model breakdown as transient JSON. The `(partner_id, queued_at)` index on `conversation_turn` serves the trailing-minute turn count of the `limits` setting. `conversation_turn.work_ref` keeps the product work item a runtime turn served, as `usage_event` does, and the partial `conversation_turn_work_ix (partner_id, work_ref, queued_at)` serves a person's history of one work item.
 
 `turn_feedback` holds one person's rating, 1 to 5, of one completed turn; the person is kept for audit, and reports count ratings per release, never per person.
 

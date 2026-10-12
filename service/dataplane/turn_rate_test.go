@@ -103,7 +103,7 @@ func TestTableTurnRecordStoreNeverRefusesAReplayedRequest(t *testing.T) {
 			qRecordRecentTurn: {{int64(400)}},
 			qTurnRateReplay:   {{int64(1)}},
 			qRecordOpen:       nil,
-			qRecordFind:       {{int64(4), "conversation-1", string(domain.TurnQueued), rateInput.Digest, nil, nil, int64(0)}},
+			qRecordFind:       {{int64(4), "conversation-1", string(domain.TurnQueued), rateInput.Digest, nil, nil, int64(0), ""}},
 		})
 		if !frozen {
 			query.rows[qReleaseGet] = nil

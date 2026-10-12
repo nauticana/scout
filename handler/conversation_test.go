@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -249,12 +250,12 @@ func TestMapConversationErrorPreservesRetryAfter(t *testing.T) {
 
 func TestConversationRoutesUseConfiguredBasePath(t *testing.T) {
 	routes := newConversationHandler(&conversationPlane{}).Routes()
-	for _, path := range []string{"/api/wingmate/turn", "/api/wingmate/turn/stream", "/api/wingmate/turn/cancel", "/api/wingmate/agents", "/api/wingmate/turn/feedback"} {
+	for _, path := range []string{"/api/wingmate/turn", "/api/wingmate/turn/stream", "/api/wingmate/turn/cancel", "/api/wingmate/agents", "/api/wingmate/turn/feedback", "/api/wingmate/turns"} {
 		if routes[path] == nil {
 			t.Fatalf("missing route %s", path)
 		}
 	}
-	if len(routes) != 5 || api.ConversationTurnPath != "turn" {
+	if len(routes) != 6 || api.ConversationTurnPath != "turn" {
 		t.Fatalf("routes = %v", routes)
 	}
 }
@@ -277,5 +278,56 @@ func TestConversationRefusesASessionWithNoPerson(t *testing.T) {
 	handler.Routes()["/api/wingmate/agents"](recorder, authenticatedRequest(http.MethodGet, "/api/wingmate/agents?agent_type=writer", nil))
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d", recorder.Code)
+	}
+}
+
+type turnHistoryFunc func(context.Context, domain.TenantContext, domain.PrincipalRef, domain.TurnHistoryFilter) (domain.TurnHistoryPage, error)
+
+func (function turnHistoryFunc) Turns(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, filter domain.TurnHistoryFilter) (domain.TurnHistoryPage, error) {
+	return function(ctx, tenant, person, filter)
+}
+
+func TestConversationTurnsListsThePersonsHistory(t *testing.T) {
+	handler := newConversationHandler(&conversationPlane{})
+	path := "/api/wingmate/turns"
+	recorder := httptest.NewRecorder()
+	handler.Routes()[path](recorder, authenticatedRequest(http.MethodGet, path, nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("uncomposed status = %d", recorder.Code)
+	}
+
+	queued := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	var asked domain.TurnHistoryFilter
+	handler.History = turnHistoryFunc(func(_ context.Context, tenant domain.TenantContext, person domain.PrincipalRef, filter domain.TurnHistoryFilter) (domain.TurnHistoryPage, error) {
+		if tenant.TenantID != 7 || person.ID != "42" {
+			return domain.TurnHistoryPage{}, domain.ErrForbidden
+		}
+		asked = filter
+		return domain.TurnHistoryPage{NextBefore: "c", Turns: []domain.TurnSummary{
+			{RequestID: "r-2", AgentID: "writer", AgentVersion: "3", Status: domain.TurnCompleted, QueuedAt: queued, CompletedAt: queued,
+				Currency: "JPY", Result: json.RawMessage(`{"ok":true}`)},
+			{RequestID: "r-1", Status: domain.TurnQueued, QueuedAt: queued},
+		}}, nil
+	})
+	recorder = httptest.NewRecorder()
+	handler.Routes()[path](recorder, authenticatedRequest(http.MethodGet, path+"?work_ref=case-9&before=b&limit=2", nil))
+	if recorder.Code != http.StatusOK || asked != (domain.TurnHistoryFilter{WorkRef: "case-9", Before: "b", Limit: 2}) {
+		t.Fatalf("status = %d, filter = %+v, body = %s", recorder.Code, asked, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, want := range []string{`"next_before":"c"`, `"agent_name":"writer"`, `"release_version":"3"`, `"cost_minor":0`, `"currency":"JPY"`,
+		`"exponent":0`, `"result":{"ok":true}`, `"completed_at":"2026-10-01T12:00:00Z"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body lacks %s: %s", want, body)
+		}
+	}
+	if strings.Count(body, `"exponent"`) != 1 || strings.Count(body, `"completed_at"`) != 1 {
+		t.Fatalf("an unsettled or open turn carries no currency or completion: %s", body)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.Routes()[path](recorder, authenticatedRequest(http.MethodGet, path+"?limit=x", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("malformed limit status = %d", recorder.Code)
 	}
 }

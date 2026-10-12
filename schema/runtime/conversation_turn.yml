@@ -65,6 +65,10 @@ columns:
     type: TIMESTAMP
     nullable: true
     comment: Store-clock end of the operator's lease; the sweeper holds a lapsed turn again
+  - name: work_ref
+    type: VARCHAR(200)
+    nullable: true
+    comment: The product work item the turn served; products own its meaning, which prevents a foreign key
 primary_key: [partner_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turns
@@ -87,6 +91,9 @@ indexes:
     columns: [partner_id, queued_at]
   - name: conversation_turn_hold_ix
     columns: [status_code, hold_until]
+  - name: conversation_turn_work_ix
+    columns: [partner_id, work_ref, queued_at]
+    where: work_ref IS NOT NULL
 checks:
   - name: conversation_turn_number_ck
     expression: turn_no > 0

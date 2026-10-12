@@ -23,7 +23,10 @@ type MakerChecker interface {
 	Withdraw(ctx context.Context, partnerID, id, makerID int64, note string) (*approval.Request, error)
 }
 
-var _ MakerChecker = (*approval.Service)(nil)
+var (
+	_ MakerChecker                  = (*approval.Service)(nil)
+	_ contract.MCPConfirmationInbox = (*Inbox)(nil)
+)
 
 // Inbox lists and acts on confirmations across the tenants a person may act for. Every
 // action is keyed by tenant and id, and a confirmation outside the person's view is not found.

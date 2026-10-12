@@ -13,6 +13,12 @@ type StudioAuthorizer interface {
 	Authorize(ctx context.Context, actor domain.StudioActor, action domain.StudioAction, agentID string) error
 }
 
+// StudioDecisionsBackend pages the actor's tenant's decision records, newest first. It
+// authorizes AGENT_AUDIT VIEW at the tenant and binds the query to the actor's tenant.
+type StudioDecisionsBackend interface {
+	Decisions(ctx context.Context, actor domain.StudioActor, query domain.DecisionQuery) (domain.DecisionPage, error)
+}
+
 // StudioTrafficBackend moves an agent's traffic between its releases and explains which
 // release a conversation runs on.
 type StudioTrafficBackend interface {

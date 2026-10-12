@@ -29,7 +29,7 @@ func TestAnOperatedTurnRefusesAcquisitionAsHeld(t *testing.T) {
 // neither failed nor resumed.
 func TestAnOperatedTurnIsNeitherFailedNorResumedByAVerdict(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordFind: {{int64(4), "conversation-1", string(operatedCode), strings.Repeat("a", 64), "", "", int64(5)}},
+		qRecordFind: {{int64(4), "conversation-1", string(operatedCode), strings.Repeat("a", 64), "", "", int64(5), ""}},
 	}}
 	store := &TableTurnRecordStore{DB: queueDBFake{query: query}, Objects: newObjectStateStore(&fake.ObjectStorage{})}
 	if err := store.FailParked(context.Background(), 7, "request-1", "rejected"); !errors.Is(err, domain.ErrTurnHeld) {

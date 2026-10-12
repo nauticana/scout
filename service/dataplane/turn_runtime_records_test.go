@@ -40,7 +40,9 @@ func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
-	turnNo, err := store.Open(context.Background(), ingressRequest(), input)
+	request := ingressRequest()
+	request.WorkRef = "case-9"
+	turnNo, err := store.Open(context.Background(), request, input)
 	if err != nil || turnNo != 4 {
 		t.Fatalf("turn = %d, error = %v", turnNo, err)
 	}
@@ -55,7 +57,7 @@ func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
 		t.Fatalf("conversation pin args = %v", pin)
 	}
 	args := query.firstArgs(qRecordOpen)
-	want := []any{int64(7), "conversation-1", "request-1", input.URI, input.Digest, int64(7), "conversation-1"}
+	want := []any{int64(7), "conversation-1", "request-1", input.URI, input.Digest, "case-9", int64(7), "conversation-1"}
 	if len(args) != len(want) {
 		t.Fatalf("args = %v", args)
 	}
@@ -70,12 +72,18 @@ func TestTableTurnRecordStoreDetectsReusedRequestID(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
 		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
 		qRecordOpen:        nil,
-		qRecordFind:        {{int64(4), "conversation-1", string(domain.TurnQueued), testDigest("other"), nil, nil, int64(0)}},
+		qRecordFind:        {{int64(4), "conversation-1", string(domain.TurnQueued), testDigest("other"), nil, nil, int64(0), ""}},
 	}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
 	if _, err := store.Open(context.Background(), ingressRequest(), input); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("error = %v, want conflict", err)
+	}
+	query.rows[qRecordFind] = [][]any{{int64(4), "conversation-1", string(domain.TurnQueued), input.Digest, nil, nil, int64(0), "case-1"}}
+	request := ingressRequest()
+	request.WorkRef = "case-2"
+	if _, err := store.Open(context.Background(), request, input); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("changed work reference: error = %v, want conflict", err)
 	}
 }
 
@@ -87,7 +95,7 @@ func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordFind: {{int64(4), "conversation-1", string(domain.TurnCompleted), testDigest("input"), ref.URI, ref.Digest, int64(6)}},
+		qRecordFind: {{int64(4), "conversation-1", string(domain.TurnCompleted), testDigest("input"), ref.URI, ref.Digest, int64(6), ""}},
 	}}
 	store := newTestRecordStore(query)
 	store.Objects = codec
@@ -331,7 +339,7 @@ func TestTableTurnRecordStoreFailsAParkedTurn(t *testing.T) {
 	}
 	for status, want := range map[domain.TurnStatus]error{domain.TurnHeld: domain.ErrTurnHeld, domain.TurnRunning: domain.ErrConflict} {
 		query := &queueQueryFake{rows: map[string][][]any{
-			qRecordFind: {{int64(4), "conversation-1", string(status), testDigest("input"), nil, nil, int64(2)}},
+			qRecordFind: {{int64(4), "conversation-1", string(status), testDigest("input"), nil, nil, int64(2), ""}},
 		}}
 		if err := newTestRecordStore(query).FailParked(context.Background(), 7, "request-1", "rejected"); !errors.Is(err, want) {
 			t.Fatalf("%s: %v, want %v", status, err, want)

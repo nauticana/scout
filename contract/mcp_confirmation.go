@@ -35,6 +35,15 @@ type MCPInboxViewer interface {
 	Reconciler(ctx context.Context, confirmation domain.MCPConfirmation) error
 }
 
+// MCPConfirmationInbox lists and acts on the confirmations one person may see, across the
+// tenants they may act for, plus their own. A confirmation outside that view is not found.
+type MCPConfirmationInbox interface {
+	List(ctx context.Context, person domain.PrincipalRef, since time.Time, limit int) ([]domain.MCPInboxEntry, error)
+	Decide(ctx context.Context, person domain.PrincipalRef, key domain.MCPConfirmationKey, approve bool, note string) (domain.MCPConfirmation, error)
+	Withdraw(ctx context.Context, person domain.PrincipalRef, key domain.MCPConfirmationKey) error
+	Reconcile(ctx context.Context, person domain.PrincipalRef, key domain.MCPConfirmationKey, outcome domain.MCPConfirmationStatus, note string) (domain.MCPConfirmation, error)
+}
+
 // MCPConfirmedRunner runs a confirmed action's stored payload through the
 // product's tool backend. An error wrapping domain.ErrEffectUnknown records the
 // outcome as unknown; any other error records it as failed.

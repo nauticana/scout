@@ -10,6 +10,11 @@ const (
 	ApprovalPendingPath = ApprovalBasePath + "pending"
 	ApprovalResolvePath = ApprovalBasePath + "resolve"
 	ApprovalLinkPath    = ApprovalBasePath + "link"
+
+	ConfirmationsPath         = ApprovalBasePath + "confirmations"
+	ConfirmationDecidePath    = ApprovalBasePath + "confirmation/decide"
+	ConfirmationWithdrawPath  = ApprovalBasePath + "confirmation/withdraw"
+	ConfirmationReconcilePath = ApprovalBasePath + "confirmation/reconcile"
 )
 
 // ApprovalRequest is one decision a reviewer owes; evidence stays behind its own authorization.
@@ -58,4 +63,53 @@ type ApprovalLinkRequest struct {
 	ExecutionStepID int64  `json:"execution_step_id"`
 	Verdict         string `json:"verdict"`
 	Reason          string `json:"reason,omitempty"`
+}
+
+// Confirmation is one MCP tool call awaiting or past a person's confirmation, with what the
+// signed-in person may do now. Its stored payload stays server-side; preview is what a person reads.
+type Confirmation struct {
+	TenantID         int64           `json:"tenant_id"`
+	ID               int64           `json:"id"`
+	Maker            PrincipalRef    `json:"maker"`
+	ClientRef        string          `json:"client_ref,omitempty"`
+	Tool             string          `json:"tool"`
+	PayloadDigest    string          `json:"payload_digest"`
+	Preview          json.RawMessage `json:"preview,omitempty"`
+	Channel          string          `json:"channel"`
+	Status           string          `json:"status"`
+	ApprovalRequired bool            `json:"approval_required"`
+	Expired          bool            `json:"expired"`
+	ExpiresAt        time.Time       `json:"expires_at"`
+	CreatedAt        time.Time       `json:"created_at"`
+	DecidedAt        *time.Time      `json:"decided_at,omitempty"`
+	Decider          *PrincipalRef   `json:"decider,omitempty"`
+	DecisionNote     string          `json:"decision_note,omitempty"`
+	Error            string          `json:"error,omitempty"`
+	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+	Reconciler       *PrincipalRef   `json:"reconciler,omitempty"`
+	ReconcileNote    string          `json:"reconcile_note,omitempty"`
+	CanDecide        bool            `json:"can_decide"`
+	CanWithdraw      bool            `json:"can_withdraw"`
+	CanReconcile     bool            `json:"can_reconcile"`
+}
+
+// ConfirmationKey names one confirmation.
+type ConfirmationKey struct {
+	TenantID int64 `json:"tenant_id"`
+	ID       int64 `json:"id"`
+}
+
+// ConfirmationDecideRequest approves or declines a pending confirmation.
+type ConfirmationDecideRequest struct {
+	ConfirmationKey
+	Approve bool   `json:"approve"`
+	Note    string `json:"note,omitempty"`
+}
+
+// ConfirmationReconcileRequest records the verified outcome of an unknown confirmation: an
+// mcp_confirmation_status code, D executed or F failed.
+type ConfirmationReconcileRequest struct {
+	ConfirmationKey
+	Outcome string `json:"outcome"`
+	Note    string `json:"note,omitempty"`
 }

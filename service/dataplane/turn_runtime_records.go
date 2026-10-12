@@ -59,7 +59,7 @@ var turnRecordQueries = map[string]string{
 	qRecordLock: `SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`,
 
 	qRecordFind: `
-SELECT turn_no, conversation_id, status_code, input_digest, response_uri, response_digest, fence
+SELECT turn_no, conversation_id, status_code, input_digest, response_uri, response_digest, fence, COALESCE(work_ref, '')
   FROM conversation_turn
  WHERE partner_id = ? AND request_id = ?`,
 
@@ -131,8 +131,8 @@ ON CONFLICT (partner_id, conversation_id, turn_no) DO NOTHING`,
 
 	qRecordOpen: `
 INSERT INTO conversation_turn
-       (partner_id, conversation_id, turn_no, request_id, status_code, input_uri, input_digest)
-SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, ` + sqlTurnQueued + `, ?, ?
+       (partner_id, conversation_id, turn_no, request_id, status_code, input_uri, input_digest, work_ref)
+SELECT ?, ?, COALESCE(MAX(turn_no), 0) + 1, ?, ` + sqlTurnQueued + `, ?, ?, ?
   FROM conversation_turn
  WHERE partner_id = ? AND conversation_id = ?
 ON CONFLICT DO NOTHING
@@ -240,6 +240,7 @@ type turnRecordRow struct {
 	inputDigest    string
 	response       domain.ObjectRef
 	fence          int64
+	workRef        string
 }
 
 func (store *TableTurnRecordStore) find(ctx context.Context, tenantID int64, requestID string) (turnRecordRow, bool, error) {
@@ -251,14 +252,14 @@ func (store *TableTurnRecordStore) find(ctx context.Context, tenantID int64, req
 		return turnRecordRow{}, false, nil
 	}
 	row := result.Rows[0]
-	if len(row) < 7 {
-		return turnRecordRow{}, false, fmt.Errorf("decode turn record: expected 7 columns, got %d", len(row))
+	if len(row) < 8 {
+		return turnRecordRow{}, false, fmt.Errorf("decode turn record: expected 8 columns, got %d", len(row))
 	}
 	return turnRecordRow{
 		turnNo: common.AsInt64(row[0]), conversationID: common.AsString(row[1]),
 		status: domain.TurnStatus(common.AsString(row[2])), inputDigest: common.AsString(row[3]),
 		response: domain.ObjectRef{URI: common.AsString(row[4]), Digest: common.AsString(row[5])},
-		fence:    common.AsInt64(row[6]),
+		fence:    common.AsInt64(row[6]), workRef: common.AsString(row[7]),
 	}, true, nil
 }
 
@@ -420,7 +421,7 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 		}
 	}
 	inserted, err := tx.Query(ctx, qRecordOpen,
-		tenantID, request.ConversationID, request.RequestID, input.URI, input.Digest,
+		tenantID, request.ConversationID, request.RequestID, input.URI, input.Digest, nullableUsageField(request.WorkRef),
 		tenantID, request.ConversationID)
 	if err != nil {
 		return 0, fmt.Errorf("open turn: insert: %w", err)
@@ -445,8 +446,8 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 	if !found {
 		return 0, fmt.Errorf("open turn: request %q disappeared after insert", request.RequestID)
 	}
-	if existing.inputDigest != input.Digest || existing.conversationID != request.ConversationID {
-		return 0, fmt.Errorf("%w: request %q was already used with different input", domain.ErrConflict, request.RequestID)
+	if existing.inputDigest != input.Digest || existing.conversationID != request.ConversationID || existing.workRef != request.WorkRef {
+		return 0, fmt.Errorf("%w: request %q was already used with different input or work reference", domain.ErrConflict, request.RequestID)
 	}
 	return existing.turnNo, nil
 }

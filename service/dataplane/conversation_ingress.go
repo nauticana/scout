@@ -113,7 +113,7 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 	// Subscribe before dispatch so a fast worker cannot publish before the route exists.
 	subscription, err := ingress.Replies.Subscribe(ctx, tenantID, request.RequestID)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("subscribe reply route: %w", err), ingress.refund(ctx, reservation, request, "subscribe_failed"))
+		return nil, errors.Join(fmt.Errorf("subscribe reply route: %w", err), ingress.refund(ctx, reservation, request, turnSubscribeFailed))
 	}
 	dispatch := domain.TurnDispatch{Turn: request, ReplyRoute: subscription.Route(), EnqueuedAt: ingress.now()}
 	if err = ingress.admitted(ctx, request); err == nil {
@@ -121,7 +121,7 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 	}
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("dispatch turn %q: %w", request.RequestID, err),
-			ingress.refund(ctx, reservation, request, "dispatch_failed"), subscription.Close())
+			ingress.refund(ctx, reservation, request, turnDispatchFailed), subscription.Close())
 	}
 	return subscription, nil
 }
@@ -215,6 +215,12 @@ func (ingress *TurnIngress) admitted(ctx context.Context, request domain.TurnReq
 	}
 	return nil
 }
+
+// Failure codes of a turn whose admission could not deliver it.
+const (
+	turnSubscribeFailed = "subscribe_failed"
+	turnDispatchFailed  = "dispatch_failed"
+)
 
 // refund releases the reservation and fails the turn record; a client that
 // disconnects later only closes its subscription, and its provider-confirmed

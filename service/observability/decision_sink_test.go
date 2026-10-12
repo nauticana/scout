@@ -47,11 +47,11 @@ func TestTableAuditSinkStoresAndReadsTheClientApplication(t *testing.T) {
 		t.Fatalf("client_ref insert = %v", query.args[0][7])
 	}
 	row := make([]any, 23)
-	row[21], row[22] = decision.ClientRef, "task-9"
+	row[0], row[21], row[22] = int64(55), decision.ClientRef, "task-9"
 	query.rows = [][]any{row}
 	page, err := sink.Decisions(context.Background(), domain.DecisionQuery{TenantID: 7})
-	if !strings.Contains(decisionQueries[qDecisionPage], "occurred_at, client_ref") ||
-		err != nil || len(page.Records) != 1 || page.Records[0].ClientRef != decision.ClientRef || page.Records[0].WorkRef != "task-9" {
+	if !strings.Contains(decisionQueries[qDecisionPage], "occurred_at, client_ref") || err != nil || len(page.Records) != 1 ||
+		page.Records[0].ID != 55 || page.Records[0].ClientRef != decision.ClientRef || page.Records[0].WorkRef != "task-9" {
 		t.Fatalf("Decisions = %+v, %v", page, err)
 	}
 	decision.ClientRef = ""
@@ -60,6 +60,25 @@ func TestTableAuditSinkStoresAndReadsTheClientApplication(t *testing.T) {
 	}
 	if got := query.args[1][7]; got != nil {
 		t.Fatalf("empty client_ref = %v", got)
+	}
+}
+
+func TestTableAuditSinkOnlyReturnsACursorWhenAnotherRecordExists(t *testing.T) {
+	row := func(id int64) []any {
+		values := make([]any, 23)
+		values[0] = id
+		return values
+	}
+	query := &decisionQueryFake{rows: [][]any{row(3), row(2)}}
+	sink := &TableAuditSink{DB: query, PageSize: 2}
+	page, err := sink.Decisions(context.Background(), domain.DecisionQuery{TenantID: 7})
+	if err != nil || len(page.Records) != 2 || page.NextBefore != 0 {
+		t.Fatalf("exact page = %+v, %v", page, err)
+	}
+	query.rows = append(query.rows, row(1))
+	page, err = sink.Decisions(context.Background(), domain.DecisionQuery{TenantID: 7})
+	if err != nil || len(page.Records) != 2 || page.NextBefore != 2 {
+		t.Fatalf("continued page = %+v, %v", page, err)
 	}
 }
 

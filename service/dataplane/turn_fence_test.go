@@ -87,7 +87,7 @@ func (table *fenceTable) Query(_ context.Context, name string, args ...any) (*ke
 	case qRecordAcquireProbe:
 		return rows([]any{string(table.status), table.currentLease(args[0], args[1], args[2])}), nil
 	case qRecordFind:
-		return rows([]any{fenceTurnNo, "conversation-1", string(table.status), testDigest("input"), nil, nil, table.fence}), nil
+		return rows([]any{fenceTurnNo, "conversation-1", string(table.status), testDigest("input"), nil, nil, table.fence, ""}), nil
 	case qRecordOwnerState:
 		return rows([]any{table.fence, string(table.status), false, ""}), nil
 	case qRecordOwnerGuard, qSessionOwnerGuard, qOutcomeOwnerGuard:

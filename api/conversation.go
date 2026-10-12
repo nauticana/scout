@@ -1,6 +1,9 @@
 package api
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	ConversationDefaultBasePath = "/api/conversation/"
@@ -9,6 +12,7 @@ const (
 	ConversationCancelPath      = "turn/cancel"
 	ConversationAgentsPath      = "agents"
 	ConversationFeedbackPath    = "turn/feedback"
+	ConversationTurnsPath       = "turns"
 )
 
 // ConversationFeedbackRequest rates one completed turn from 1 to 5.
@@ -57,4 +61,31 @@ type ConversationStreamError struct {
 	Status    int    `json:"status"`
 	Detail    string `json:"detail"`
 	RequestID string `json:"request_id,omitempty"`
+}
+
+// ConversationTurn is one turn of the signed-in person's history. cost_minor is the settled
+// cost in minor units of currency at exponent decimal places; currency and exponent are absent
+// while nothing is settled.
+type ConversationTurn struct {
+	RequestID      string          `json:"request_id"`
+	ConversationID string          `json:"conversation_id"`
+	AgentName      string          `json:"agent_name"`
+	ReleaseVersion string          `json:"release_version"`
+	Status         string          `json:"status"`
+	WorkRef        string          `json:"work_ref,omitempty"`
+	TaskKind       string          `json:"task_kind"`
+	InputSummary   string          `json:"input_summary"`
+	ErrorText      string          `json:"error_text,omitempty"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
+	CostMinor      *int64          `json:"cost_minor,omitempty"`
+	Currency       string          `json:"currency,omitempty"`
+	Exponent       *int            `json:"exponent,omitempty"`
+}
+
+// ConversationTurnPage is one page of turns, newest first; next_before is empty on the last.
+type ConversationTurnPage struct {
+	Turns      []ConversationTurn `json:"turns"`
+	NextBefore string             `json:"next_before,omitempty"`
 }

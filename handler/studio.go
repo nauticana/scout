@@ -322,6 +322,17 @@ func command[R any](h *keelhandler.AbstractHandler, call func(context.Context, d
 
 // query serves one authenticated GET with its URL parameters.
 func query(h *keelhandler.AbstractHandler, call func(context.Context, domain.StudioActor, url.Values) (any, error)) http.HandlerFunc {
+	return sessionQuery(h, func(ctx context.Context, session *keelmodel.UserSession, values url.Values) (any, error) {
+		actor, err := sessionActor(session)
+		if err != nil {
+			return nil, err
+		}
+		return call(ctx, actor, values)
+	})
+}
+
+// sessionQuery serves one authenticated GET with its session and URL parameters.
+func sessionQuery(h *keelhandler.AbstractHandler, call func(context.Context, *keelmodel.UserSession, url.Values) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.RequireMethod(w, r, http.MethodGet) {
 			return
@@ -330,12 +341,7 @@ func query(h *keelhandler.AbstractHandler, call func(context.Context, domain.Stu
 		if !ok {
 			return
 		}
-		actor, err := sessionActor(session)
-		var result any
-		if err == nil {
-			result, err = call(r.Context(), actor, r.URL.Query())
-		}
-		result, err = mapServiceError(result, err)
+		result, err := mapServiceError(call(r.Context(), session, r.URL.Query()))
 		if err == nil {
 			common.WriteJSON(w, http.StatusOK, result)
 			return

@@ -63,6 +63,8 @@ type Decision struct {
 // identity, authority, client application, and reasoning; Evidence points at
 // redacted content in object storage and never holds the content itself.
 type DecisionRecord struct {
+	// ID is the stored record's key, set when it is read back.
+	ID int64
 	// TenantID is zero only for platform-wide decisions such as global rollouts.
 	TenantID  int64
 	Principal PrincipalRef
@@ -103,6 +105,14 @@ const (
 	DecisionCategoryCredential  = "credential"
 	DecisionCategoryStateChange = "state_change"
 	DecisionCategoryRestriction = "restriction"
+)
+
+// AuditAuthorizationObject is the keel authorization object a tenant's decision records are read
+// under: action AuditView at the tenant-wide value AuditAuthorizationValue.
+const (
+	AuditAuthorizationObject = "AGENT_AUDIT"
+	AuditAuthorizationValue  = "tenant"
+	AuditView                = "VIEW"
 )
 
 // DecisionQuery selects records for a timeline or an explain view. A positive

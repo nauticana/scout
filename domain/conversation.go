@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // TurnRequest contains one tenant-scoped end-user turn. Principal is the acting
 // agent; OnBehalfOf names the human whose authority it exercises, if any.
@@ -34,6 +37,41 @@ type SelectableAgent struct {
 	// Default marks the alias target, which serves a turn that names no agent.
 	Default bool
 	Release string
+}
+
+// TurnHistoryFilter pages a person's turns, newest first, optionally of one work item;
+// Before is the previous page's NextBefore.
+type TurnHistoryFilter struct {
+	WorkRef string
+	Before  string
+	Limit   int
+}
+
+// TurnSummary is one turn of a person's history. Its settled cost is in minor units of
+// Currency at Exponent decimal places; Currency is empty while nothing is settled.
+type TurnSummary struct {
+	RequestID      string
+	ConversationID string
+	AgentID        string
+	AgentVersion   string
+	Status         TurnStatus
+	WorkRef        string
+	TaskKind       string
+	InputSummary   string
+	ErrorText      string
+	// Result is the product's result card, absent until the turn records one.
+	Result         json.RawMessage
+	QueuedAt       time.Time
+	CompletedAt    time.Time
+	CostMinorUnits int64
+	Currency       string
+	Exponent       int
+}
+
+// TurnHistoryPage is one page of turns; NextBefore is empty on the last page.
+type TurnHistoryPage struct {
+	Turns      []TurnSummary
+	NextBefore string
 }
 
 // TurnDispatch couples a durable turn with its short-lived reply route.

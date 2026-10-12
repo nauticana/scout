@@ -44,8 +44,8 @@ func TestTableAuditSinkPageSizes(t *testing.T) {
 		if _, err := sink.Decisions(context.Background(), domain.DecisionQuery{TenantID: 7, Limit: tc.limit}); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if query.limit != tc.want {
-			t.Fatalf("%s: limit = %v, want %d", name, query.limit, tc.want)
+		if query.limit != tc.want+1 {
+			t.Fatalf("%s: limit = %v, want %d", name, query.limit, tc.want+1)
 		}
 	}
 	for name, sink := range map[string]*TableAuditSink{

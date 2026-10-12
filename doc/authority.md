@@ -61,7 +61,8 @@ turn at once), and `RECONCILE` (attesting an unknown call outcome) are checked a
 all four and `AGENT_OPER` `VIEW` and `OPERATE`. An attestation also passes `contract.OperationSeparation`, which
 fails closed and requires a second person for a high-risk call. No authoring action implies them, which keeps operating a running agent apart from changing it (see
 [live turn operation](governance.md#live-turn-operation)). `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
-layers and are checked at the tenant-wide value `tenant`. `AGENT_APPROVAL` `DECIDE` is checked at the
+layers and are checked at the tenant-wide value `tenant`, as is `AGENT_AUDIT` `VIEW`, reading the tenant's
+decision records. `AGENT_APPROVAL` `DECIDE` is checked at the
 request's scope.
 
 Agents are deliberately **not** rows in `user_account`. That table is a credential store —

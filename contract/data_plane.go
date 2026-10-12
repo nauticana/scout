@@ -36,6 +36,11 @@ type TurnFeedbackRecorder interface {
 	RecordFeedback(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, requestID string, rating int, reason string) error
 }
 
+// TurnHistory pages the turns a person's conversations hold in their tenant.
+type TurnHistory interface {
+	Turns(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, filter domain.TurnHistoryFilter) (domain.TurnHistoryPage, error)
+}
+
 // TurnRequeuer returns the acknowledged delivery of a resumed turn to the queue, so a
 // worker replays it from its last checkpoint. A repeat is a no-op.
 type TurnRequeuer interface {

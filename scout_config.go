@@ -182,6 +182,8 @@ const (
 	agent_run_trace_max_journal_bytes     = "agent_run_trace_max_journal_bytes"
 	agent_live_turn_page_size             = "agent_live_turn_page_size"
 	agent_live_turn_max_page_size         = "agent_live_turn_max_page_size"
+	agent_turn_history_page_size          = "agent_turn_history_page_size"
+	agent_turn_history_max_page_size      = "agent_turn_history_max_page_size"
 	agent_outcome_attest_grace            = "agent_outcome_attest_grace"
 	agent_takeover_lease                  = "agent_takeover_lease"
 	agent_operator_entry_max_bytes        = "agent_operator_entry_max_bytes"
@@ -381,6 +383,8 @@ type ScoutConfig struct {
 	AgentRunTraceMaxJournalBytes      int // agent_run_trace_max_journal_bytes 4194304 Cumulative loop journal payload bytes one run trace classifies (1024..67108864); 0 takes 4194304
 	AgentLiveTurnPageSize             int // agent_live_turn_page_size 50 Live turns one Studio page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50
 	AgentLiveTurnMaxPageSize          int // agent_live_turn_max_page_size 200 Largest live turn page a Studio caller may ask for (1..1000); 0 takes 200
+	AgentTurnHistoryPageSize          int // agent_turn_history_page_size 50 Turns one conversation history page returns when the caller names no limit (0..agent_turn_history_max_page_size); 0 takes 50
+	AgentTurnHistoryMaxPageSize       int // agent_turn_history_max_page_size 200 Largest conversation history page a caller may ask for (1..1000); 0 takes 200
 	AgentOutcomeAttestGrace           int // agent_outcome_attest_grace 60 Seconds added to a non-read-only tool call's dispatch window for its outcome deadline (1..86400); 0 takes 60
 	AgentTakeoverLease                int // agent_takeover_lease 900 Seconds an operator's lease on a turn they took over lasts from their latest act (1..86400); 0 takes 900
 	AgentOperatorEntryMaxBytes        int // agent_operator_entry_max_bytes 16384 Encoded bytes of one operator entry (1..1048576); 0 takes 16384
@@ -634,6 +638,8 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentRunTraceMaxJournalBytes = c.Int(rows, agent_run_trace_max_journal_bytes)
 	c.AgentLiveTurnPageSize = c.Int(rows, agent_live_turn_page_size)
 	c.AgentLiveTurnMaxPageSize = c.Int(rows, agent_live_turn_max_page_size)
+	c.AgentTurnHistoryPageSize = c.Int(rows, agent_turn_history_page_size)
+	c.AgentTurnHistoryMaxPageSize = c.Int(rows, agent_turn_history_max_page_size)
 	c.AgentOutcomeAttestGrace = c.Int(rows, agent_outcome_attest_grace)
 	c.AgentTakeoverLease = c.Int(rows, agent_takeover_lease)
 	c.AgentOperatorEntryMaxBytes = c.Int(rows, agent_operator_entry_max_bytes)
@@ -690,26 +696,33 @@ func (c *ScoutConfig) LiveTurnLimits() domain.LiveTurnLimits {
 	return domain.LiveTurnLimits{PageSize: c.AgentLiveTurnPageSize, MaxPageSize: c.AgentLiveTurnMaxPageSize}
 }
 
-// liveTurnFlagErrors refuses a live turn page flag or agent_outcome_attest_grace outside its range
-// and a default page larger than the largest page; zero takes each default.
+// liveTurnFlagErrors refuses a live turn or turn history page flag, or agent_outcome_attest_grace,
+// outside its range, and a default page larger than its largest page; zero takes each default.
 func (c *ScoutConfig) liveTurnFlagErrors() error {
 	var errs []error
-	for _, flag := range []struct {
-		name       string
-		value, max int
+	for _, pages := range []struct {
+		sizeName, maxName                  string
+		size, max, defaultSize, defaultMax int
 	}{
-		{agent_live_turn_page_size, c.AgentLiveTurnPageSize, 1000}, {agent_live_turn_max_page_size, c.AgentLiveTurnMaxPageSize, 1000},
+		{agent_live_turn_page_size, agent_live_turn_max_page_size, c.AgentLiveTurnPageSize, c.AgentLiveTurnMaxPageSize,
+			dataplane.DefaultLiveTurnPageSize, dataplane.DefaultLiveTurnMaxPageSize},
+		{agent_turn_history_page_size, agent_turn_history_max_page_size, c.AgentTurnHistoryPageSize, c.AgentTurnHistoryMaxPageSize,
+			dataplane.DefaultTurnHistoryPageSize, dataplane.DefaultTurnHistoryMaxPageSize},
 	} {
-		if flag.value < 0 || flag.value > flag.max {
-			errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", flag.name, flag.value, flag.max))
+		for _, flag := range []struct {
+			name  string
+			value int
+		}{{pages.sizeName, pages.size}, {pages.maxName, pages.max}} {
+			if flag.value < 0 || flag.value > 1000 {
+				errs = append(errs, fmt.Errorf("%s: %d is outside 0..1000; 0 takes the default", flag.name, flag.value))
+			}
+		}
+		if size, maxSize := cmp.Or(pages.size, pages.defaultSize), cmp.Or(pages.max, pages.defaultMax); size > maxSize {
+			errs = append(errs, fmt.Errorf("%s: %d exceeds the largest page %d", pages.sizeName, size, maxSize))
 		}
 	}
 	if c.AgentOutcomeAttestGrace < 0 || c.AgentOutcomeAttestGrace > maxOutcomeAttestGrace {
 		errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", agent_outcome_attest_grace, c.AgentOutcomeAttestGrace, maxOutcomeAttestGrace))
-	}
-	size, maxSize := cmp.Or(c.AgentLiveTurnPageSize, dataplane.DefaultLiveTurnPageSize), cmp.Or(c.AgentLiveTurnMaxPageSize, dataplane.DefaultLiveTurnMaxPageSize)
-	if size > maxSize {
-		errs = append(errs, fmt.Errorf("%s: %d exceeds the largest page %d", agent_live_turn_page_size, size, maxSize))
 	}
 	return errors.Join(errs...)
 }

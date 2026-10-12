@@ -175,7 +175,7 @@ func (s *StudioTurnControl) LiveTurns(ctx context.Context, actor domain.StudioAc
 	if filter.Limit < 0 || filter.Limit > limits.MaxPageSize {
 		return domain.LiveTurnPage{}, fmt.Errorf("%w: limit must lie within 0..%d", domain.ErrValidation, limits.MaxPageSize)
 	}
-	beforeAt, beforeRequest, err := decodeLiveTurnCursor(filter.Before)
+	beforeAt, beforeRequest, err := decodeTurnCursor(filter.Before)
 	if err != nil {
 		return domain.LiveTurnPage{}, err
 	}
@@ -191,7 +191,7 @@ func (s *StudioTurnControl) LiveTurns(ctx context.Context, actor domain.StudioAc
 	for index, row := range result.Rows {
 		if index == limit {
 			last := page.Turns[limit-1]
-			page.NextBefore = strconv.FormatInt(last.QueuedAt.UnixNano(), 10) + ":" + last.RequestID
+			page.NextBefore = encodeTurnCursor(last.QueuedAt, last.RequestID)
 			break
 		}
 		turn, err := decodeLiveTurn(row)
@@ -203,14 +203,19 @@ func (s *StudioTurnControl) LiveTurns(ctx context.Context, actor domain.StudioAc
 	return page, nil
 }
 
-func decodeLiveTurnCursor(before string) (time.Time, string, error) {
+// encodeTurnCursor names the last turn of a page ordered newest first by queue time, then request id.
+func encodeTurnCursor(queuedAt time.Time, requestID string) string {
+	return strconv.FormatInt(queuedAt.UnixNano(), 10) + ":" + requestID
+}
+
+func decodeTurnCursor(before string) (time.Time, string, error) {
 	if before == "" {
 		return time.Unix(0, 0).UTC(), "", nil
 	}
 	nanos, requestID, found := strings.Cut(before, ":")
 	at, err := strconv.ParseInt(nanos, 10, 64)
 	if !found || err != nil || strings.TrimSpace(requestID) == "" {
-		return time.Time{}, "", fmt.Errorf("%w: before is not a live turn cursor", domain.ErrValidation)
+		return time.Time{}, "", fmt.Errorf("%w: before is not a turn cursor", domain.ErrValidation)
 	}
 	return time.Unix(0, at).UTC(), requestID, nil
 }

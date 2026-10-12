@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.12",
+      "title": "Turn history, decision records, and the confirmation inbox over HTTP",
+      "tags": [
+        "additive",
+        "schema"
+      ],
+      "summary": "A person lists their own turns, a tenant's decision records page through Studio under AGENT_AUDIT, and the MCP confirmation inbox is served by the approval handler.",
+      "body_markdown": "**Turn history.** `conversation_turn.work_ref` (with `conversation_turn_work_ix`) keeps the work item a runtime turn served. `dataplane.TurnHistory`, a `contract.TurnHistory`, pages the turns of the conversations a person opened, newest first, with the task kind, summary, result card, and settled cost in minor units with currency and exponent; set it as `ConversationHandler.History` to serve `GET <base>/turns?work_ref=&before=&limit=`. Flags `agent_turn_history_page_size` (50) and `agent_turn_history_max_page_size` (200) bound its pages.\n\n**Decision records.** `domain.DecisionRecord.ID` carries the stored key on read. Studio feature `decisions` (`handler.StudioDecisionsHandler` over `observability.StudioDecisions`) serves `GET decisions?before=&limit=&category=&outcome=` for the actor's tenant under the new authorization object `AGENT_AUDIT` `VIEW` at `tenant`, seeded to `AGENT_ADMIN`; evidence is shown by digest only.\n\n**Confirmation inbox.** `confirmation.Inbox` implements the new `contract.MCPConfirmationInbox`. With `ApprovalHandler.Inbox` set, the approval handler also serves `GET /api/approval/confirmations` and `POST /api/approval/confirmation/{decide,withdraw,reconcile}` as `api.Confirmation`, never returning a confirmation's payload or requirements."
+    },
+    {
       "version": "v1.2.11",
       "title": "keel currency catalog, named agents, fact evidence, tool denylist, confirmation inbox, tenant memory",
       "tags": [

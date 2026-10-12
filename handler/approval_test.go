@@ -3,9 +3,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	keelhandler "github.com/nauticana/keel/handler"
 
@@ -90,5 +93,79 @@ func TestApprovalLinkMapsASpentLinkToNotFound(t *testing.T) {
 	handler.Routes()[api.ApprovalLinkPath](recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+type confirmationInboxFake struct {
+	person  domain.PrincipalRef
+	key     domain.MCPConfirmationKey
+	approve bool
+	outcome domain.MCPConfirmationStatus
+	limit   int
+	err     error
+}
+
+func (inbox *confirmationInboxFake) List(_ context.Context, person domain.PrincipalRef, _ time.Time, limit int) ([]domain.MCPInboxEntry, error) {
+	inbox.person, inbox.limit = person, limit
+	stored := domain.MCPConfirmation{ID: 5, TenantID: 7, Maker: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}, Tool: "refund",
+		Payload: json.RawMessage(`{"secret":1}`), Requirements: json.RawMessage(`{"role":"x"}`), Preview: json.RawMessage(`{"amount":"5.00"}`),
+		Status: domain.MCPConfirmationPending}
+	return []domain.MCPInboxEntry{{MCPConfirmation: stored, CanDecide: true}}, inbox.err
+}
+
+func (inbox *confirmationInboxFake) Decide(_ context.Context, person domain.PrincipalRef, key domain.MCPConfirmationKey, approve bool, _ string) (domain.MCPConfirmation, error) {
+	inbox.person, inbox.key, inbox.approve = person, key, approve
+	return domain.MCPConfirmation{ID: key.ID, TenantID: key.TenantID, Status: domain.MCPConfirmationApproved, Decider: person}, inbox.err
+}
+
+func (inbox *confirmationInboxFake) Withdraw(_ context.Context, person domain.PrincipalRef, key domain.MCPConfirmationKey) error {
+	inbox.person, inbox.key = person, key
+	return inbox.err
+}
+
+func (inbox *confirmationInboxFake) Reconcile(_ context.Context, person domain.PrincipalRef, key domain.MCPConfirmationKey, outcome domain.MCPConfirmationStatus, _ string) (domain.MCPConfirmation, error) {
+	inbox.person, inbox.key, inbox.outcome = person, key, outcome
+	return domain.MCPConfirmation{ID: key.ID, TenantID: key.TenantID, Status: outcome}, inbox.err
+}
+
+func TestApprovalConfirmationRoutesActAsTheSessionPerson(t *testing.T) {
+	if routes := (&ApprovalHandler{}).Routes(); routes[api.ConfirmationsPath] != nil {
+		t.Fatal("confirmation routes need a composed inbox")
+	}
+	configureConversationRequestLimit(t)
+	inbox := &confirmationInboxFake{}
+	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Inbox: inbox}
+	serve := func(method, path, target string, body []byte) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.Routes()[path](recorder, authenticatedRequest(method, target, body))
+		return recorder
+	}
+
+	recorder := serve(http.MethodGet, api.ConfirmationsPath, api.ConfirmationsPath+"?since=2026-10-01T00:00:00Z&limit=3", nil)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || inbox.person.ID != "42" || inbox.limit != 3 ||
+		!strings.Contains(body, `"preview":{"amount":"5.00"}`) || !strings.Contains(body, `"can_decide":true`) ||
+		strings.Contains(body, "secret") || strings.Contains(body, "role") {
+		t.Fatalf("list status = %d, body = %s", recorder.Code, body)
+	}
+	if recorder = serve(http.MethodGet, api.ConfirmationsPath, api.ConfirmationsPath+"?since=yesterday", nil); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("malformed since status = %d", recorder.Code)
+	}
+
+	recorder = serve(http.MethodPost, api.ConfirmationDecidePath, api.ConfirmationDecidePath, []byte(`{"tenant_id":8,"id":5,"approve":true}`))
+	if recorder.Code != http.StatusOK || inbox.key != (domain.MCPConfirmationKey{TenantID: 8, ID: 5}) || !inbox.approve ||
+		!strings.Contains(recorder.Body.String(), `"decider":{"kind":"human","id":"42"}`) {
+		t.Fatalf("decide status = %d, key = %+v, body = %s", recorder.Code, inbox.key, recorder.Body.String())
+	}
+	recorder = serve(http.MethodPost, api.ConfirmationReconcilePath, api.ConfirmationReconcilePath, []byte(`{"tenant_id":8,"id":5,"outcome":"D","note":"checked"}`))
+	if recorder.Code != http.StatusOK || inbox.outcome != domain.MCPConfirmationExecuted {
+		t.Fatalf("reconcile status = %d, outcome = %q", recorder.Code, inbox.outcome)
+	}
+	inbox.err = domain.ErrNotFound
+	if recorder = serve(http.MethodPost, api.ConfirmationWithdrawPath, api.ConfirmationWithdrawPath, []byte(`{"tenant_id":8,"id":6}`)); recorder.Code != http.StatusNotFound || inbox.key.ID != 6 {
+		t.Fatalf("withdraw status = %d", recorder.Code)
+	}
+	if recorder = serve(http.MethodPost, api.ConfirmationDecidePath, api.ConfirmationDecidePath, []byte(`{"tenant_id":8,"id":5,"maker":"x"}`)); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unknown member status = %d", recorder.Code)
 	}
 }

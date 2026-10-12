@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	keelhandler "github.com/nauticana/keel/handler"
@@ -16,19 +18,28 @@ import (
 )
 
 // ApprovalHandler is the HTTP bridge to the approval desk: signed-in deciders list and
-// decide their requests, and a decision link is redeemed without a session.
+// decide their requests, and a decision link is redeemed without a session. With an Inbox it
+// also serves the signed-in person's MCP confirmations.
 type ApprovalHandler struct {
 	keelhandler.AbstractHandler
-	Desk contract.ApprovalDesk
+	Desk  contract.ApprovalDesk
+	Inbox contract.MCPConfirmationInbox
 }
 
-// Routes returns the approval routes.
+// Routes returns the approval routes, and the confirmation routes when an Inbox is composed.
 func (h *ApprovalHandler) Routes() map[string]http.HandlerFunc {
-	return map[string]http.HandlerFunc{
+	routes := map[string]http.HandlerFunc{
 		api.ApprovalPendingPath: h.JSON(http.MethodGet, h.pending),
 		api.ApprovalResolvePath: bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.resolve)),
 		api.ApprovalLinkPath:    bounded(&h.AbstractHandler, h.JSONPublic(http.MethodPost, h.redeem)),
 	}
+	if h.Inbox != nil {
+		routes[api.ConfirmationsPath] = sessionQuery(&h.AbstractHandler, h.confirmations)
+		routes[api.ConfirmationDecidePath] = bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.decideConfirmation))
+		routes[api.ConfirmationWithdrawPath] = bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.withdrawConfirmation))
+		routes[api.ConfirmationReconcilePath] = bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.reconcileConfirmation))
+	}
+	return routes
 }
 
 func (h *ApprovalHandler) pending(ctx context.Context, session *keelmodel.UserSession, _ json.RawMessage) (any, error) {
@@ -87,6 +98,114 @@ func (h *ApprovalHandler) redeem(ctx context.Context, body json.RawMessage) (any
 		return mapServiceError(nil, err)
 	}
 	return apiApproval(result), nil
+}
+
+// confirmations lists the person's inbox, ?since=&limit=: open confirmations and those created
+// since an RFC 3339 time, newest first.
+func (h *ApprovalHandler) confirmations(ctx context.Context, session *keelmodel.UserSession, query url.Values) (any, error) {
+	person, err := sessionPerson(session)
+	if err != nil {
+		return nil, err
+	}
+	var since time.Time
+	if raw := query.Get("since"); raw != "" {
+		if since, err = time.Parse(time.RFC3339, raw); err != nil {
+			return nil, badRequest("since must be an RFC 3339 time")
+		}
+	}
+	limit, err := optionalInt(query.Get("limit"), 0)
+	if err != nil {
+		return nil, badRequest("limit must be an integer")
+	}
+	entries, err := h.Inbox.List(ctx, person, since, int(limit))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]api.Confirmation, 0, len(entries))
+	for _, entry := range entries {
+		item := apiConfirmation(entry.MCPConfirmation)
+		item.CanDecide, item.CanWithdraw, item.CanReconcile = entry.CanDecide, entry.CanWithdraw, entry.CanReconcile
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (h *ApprovalHandler) decideConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+	var request api.ConfirmationDecideRequest
+	person, err := personRequest(session, body, &request)
+	if err != nil {
+		return nil, err
+	}
+	decided, err := h.Inbox.Decide(ctx, person, confirmationKey(request.ConfirmationKey), request.Approve, request.Note)
+	if err != nil {
+		return mapServiceError(nil, err)
+	}
+	return apiConfirmation(decided), nil
+}
+
+func (h *ApprovalHandler) withdrawConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+	var request api.ConfirmationKey
+	person, err := personRequest(session, body, &request)
+	if err != nil {
+		return nil, err
+	}
+	if err = h.Inbox.Withdraw(ctx, person, confirmationKey(request)); err != nil {
+		return mapServiceError(nil, err)
+	}
+	return request, nil
+}
+
+func (h *ApprovalHandler) reconcileConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+	var request api.ConfirmationReconcileRequest
+	person, err := personRequest(session, body, &request)
+	if err != nil {
+		return nil, err
+	}
+	reconciled, err := h.Inbox.Reconcile(ctx, person, confirmationKey(request.ConfirmationKey),
+		domain.MCPConfirmationStatus(request.Outcome), request.Note)
+	if err != nil {
+		return mapServiceError(nil, err)
+	}
+	return apiConfirmation(reconciled), nil
+}
+
+// sessionPerson is the signed-in person; the confirmation inbox spans tenants, so no partner is needed.
+func sessionPerson(session *keelmodel.UserSession) (domain.PrincipalRef, error) {
+	if session == nil || session.Id <= 0 {
+		return domain.PrincipalRef{}, keelhandler.NewAPIError(http.StatusUnauthorized, "user session required")
+	}
+	return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.Itoa(session.Id)}, nil
+}
+
+func personRequest(session *keelmodel.UserSession, body json.RawMessage, request any) (domain.PrincipalRef, error) {
+	person, err := sessionPerson(session)
+	if err == nil {
+		err = decode(body, request)
+	}
+	return person, err
+}
+
+func confirmationKey(key api.ConfirmationKey) domain.MCPConfirmationKey {
+	return domain.MCPConfirmationKey{TenantID: key.TenantID, ID: key.ID}
+}
+
+func apiConfirmation(stored domain.MCPConfirmation) api.Confirmation {
+	return api.Confirmation{
+		TenantID: stored.TenantID, ID: stored.ID, Maker: principalItem(stored.Maker), ClientRef: stored.ClientRef,
+		Tool: stored.Tool, PayloadDigest: stored.PayloadDigest, Preview: stored.Preview, Channel: string(stored.Channel),
+		Status: string(stored.Status), ApprovalRequired: stored.ApprovalRequired, Expired: stored.Expired,
+		ExpiresAt: stored.ExpiresAt, CreatedAt: stored.CreatedAt, DecidedAt: optionalTime(stored.DecidedAt),
+		Decider: optionalPrincipal(stored.Decider), DecisionNote: stored.DecisionNote, Error: stored.Error,
+		CompletedAt: optionalTime(stored.CompletedAt), Reconciler: optionalPrincipal(stored.Reconciler), ReconcileNote: stored.ReconcileNote,
+	}
+}
+
+func optionalPrincipal(ref domain.PrincipalRef) *api.PrincipalRef {
+	if ref.ID == "" {
+		return nil
+	}
+	item := principalItem(ref)
+	return &item
 }
 
 func apiApproval(request domain.ApprovalRequest) api.ApprovalRequest {
