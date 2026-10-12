@@ -21,6 +21,8 @@ type turnControlFake struct {
 	holds    []string
 	released []string
 	release  error
+	// operation is the slice-3 half of the fake, in studio_turn_operation_test.go.
+	operation turnOperationFake
 }
 
 var _ contract.TurnControl = (*turnControlFake)(nil)
@@ -125,14 +127,14 @@ type turnControlFixture struct {
 
 func liveTurnRow(requestID string, status domain.TurnStatus, fence int64, holdCode string) []any {
 	queued := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	return []any{requestID, "conversation-1", int64(4), string(status), fence, holdCode, false, "", false, queued, nil, nil}
+	return []any{requestID, "conversation-1", int64(4), string(status), fence, holdCode, false, "", false, queued, nil, nil, "", "", nil}
 }
 
 func newTurnControlFixture(actions ...domain.OperationAction) *turnControlFixture {
 	fixture := &turnControlFixture{
 		query: &queueQueryFake{rows: map[string][][]any{
 			qOperateTurn:     {liveTurnRow("request-1", domain.TurnHeld, 3, string(domain.HoldCheckpoint))},
-			qOperateDispatch: {{"conversation-1", "writer-a", ""}},
+			qOperateDispatch: {{"conversation-1", "writer-a", "", "route:request-1"}},
 		}},
 		control: &turnControlFake{status: map[string]domain.TurnStatus{"request-1": domain.TurnHeld}, fence: map[string]int64{"request-1": 3}},
 		audit:   &observability.MemoryAuditSink{},

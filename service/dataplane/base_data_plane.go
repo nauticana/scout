@@ -54,9 +54,13 @@ type BaseDataPlane struct {
 	Limits   domain.ToolLoopLimits
 	// Currency denominates budget quotes and the cost breaker.
 	Currency string
-	// UsageCategory labels each settled turn's usage event; TaskKind its history row.
-	UsageCategory   string
-	TaskKind        string
+	// UsageCategory labels each settled turn's agent usage events and OperatorUsageCategory, which
+	// must differ, the one line of what people spent operating it; TaskKind labels its history row.
+	UsageCategory         string
+	OperatorUsageCategory string
+	TaskKind              string
+	// Operation bounds turn takeover: the lease, entry size and count, and the lapse sweeper.
+	Operation       domain.OperatorSettings
 	MaxOutputTokens int64
 	// LanguageCode and Task are ReleaseLoopRequestBuilder's; both are optional.
 	LanguageCode string
@@ -210,6 +214,9 @@ func (plane *BaseDataPlane) validate() error {
 	if len(plane.Currency) != 3 || strings.TrimSpace(plane.UsageCategory) == "" || plane.MaxOutputTokens <= 0 {
 		return fmt.Errorf("%w: data plane needs a three-letter currency, a usage category, and positive max output tokens", domain.ErrValidation)
 	}
+	if operator := strings.TrimSpace(plane.OperatorUsageCategory); operator == "" || operator == strings.TrimSpace(plane.UsageCategory) {
+		return fmt.Errorf("%w: data plane needs an operator usage category distinct from its usage category", domain.ErrValidation)
+	}
 	if ledger, ok := plane.Budget.(*isolation.BudgetLedger); ok && ledger.Releases == nil {
 		return fmt.Errorf("%w: the budget ledger enforces no release budget; set BudgetLedger.Releases to the data plane's PrincipalLimits", domain.ErrValidation)
 	}
@@ -240,15 +247,8 @@ func (plane *BaseDataPlane) composeState() error {
 	if plane.Objects == nil {
 		plane.Objects = &ObjectStateStore{Storage: plane.Storage, MaxBytes: settings.StateMaxBytes}
 	}
-	settlement := func() (TurnSettlementWriter, error) {
-		settler, ok := plane.Budget.(TurnBudgetSettler)
-		if !ok {
-			return TurnSettlementWriter{}, fmt.Errorf("%w: the budget manager cannot settle a turn in the transaction that ends it; compose a TurnBudgetSettler such as isolation.BudgetLedger", domain.ErrValidation)
-		}
-		return TurnSettlementWriter{Budget: settler, UsageCategory: plane.UsageCategory}, nil
-	}
 	if plane.Records == nil {
-		writer, err := settlement()
+		writer, err := plane.settlement()
 		if err != nil {
 			return err
 		}
@@ -259,7 +259,7 @@ func (plane *BaseDataPlane) composeState() error {
 			TaskKind: plane.TaskKind, Versions: plane.Versions}
 	}
 	if plane.Sessions == nil {
-		writer, err := settlement()
+		writer, err := plane.settlement()
 		if err != nil {
 			return err
 		}
@@ -291,6 +291,15 @@ func (plane *BaseDataPlane) composeState() error {
 		plane.Outcomes = &TableCallOutcomeStore{DB: plane.DB, Objects: plane.Objects}
 	}
 	return nil
+}
+
+// settlement is the writer every default store ends a turn with.
+func (plane *BaseDataPlane) settlement() (TurnSettlementWriter, error) {
+	settler, ok := plane.Budget.(TurnBudgetSettler)
+	if !ok {
+		return TurnSettlementWriter{}, fmt.Errorf("%w: the budget manager cannot settle a turn in the transaction that ends it; compose a TurnBudgetSettler such as isolation.BudgetLedger", domain.ErrValidation)
+	}
+	return TurnSettlementWriter{Budget: settler, UsageCategory: plane.UsageCategory, OperatorUsageCategory: plane.OperatorUsageCategory}, nil
 }
 
 func (plane *BaseDataPlane) composeGovernance() error {
@@ -346,9 +355,17 @@ func (plane *BaseDataPlane) composeDelivery() error {
 		plane.closers = append(plane.closers, plane.ReplyHub)
 	}
 	if plane.Control == nil {
+		writer, err := plane.settlement()
+		if err != nil {
+			return err
+		}
 		plane.Control = &TableTurnControl{DB: plane.DB, Cache: plane.Cache, PollInterval: settings.CancelPollInterval,
-			MaxReadFailures: settings.CancelMaxReadFailures}
+			MaxReadFailures: settings.CancelMaxReadFailures, Objects: plane.Objects, Settlement: writer, Operation: plane.Operation,
+			MaxResultCardBytes: settings.ResultCardMaxBytes}
 		plane.closers = append(plane.closers, plane.Control)
+	}
+	if _, err := plane.Control.operation(); err != nil {
+		return err
 	}
 	if plane.DeadLetters == nil {
 		plane.DeadLetters = &TableDeadLetterQueue{DB: plane.DB}
@@ -494,6 +511,7 @@ func (plane *BaseDataPlane) composeRuntime() error {
 			Records: plane.Records, Sessions: plane.Sessions, Definitions: plane.Definitions, Policies: plane.Policies,
 			Governor: plane.Governor, Executors: plane.Executors, Idempotency: plane.Idempotency, Guardrails: plane.Guardrails,
 			Publisher: plane.ReplyHub, Estimator: plane.Estimator, Budget: plane.Budget, Limits: plane.PrincipalLimits, Control: plane.Control,
+			Operator:         plane.Control,
 			GuardrailConfigs: plane.GuardrailConfigs, Audit: plane.Audit, Runs: plane.Runs, Review: plane.Review, OnSettled: plane.OnSettled,
 			MaxSteps: plane.Settings.TurnMaxSteps,
 		}

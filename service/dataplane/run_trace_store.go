@@ -343,7 +343,11 @@ func (store *TableRunTrace) charterActions(ctx context.Context, tenantID int64, 
 	if err != nil {
 		return traceSourceFailure("charter actions", err)
 	}
-	actions = actions[:min(len(actions), limits.MaxEvents+1)]
+	// Charter returns a run's latest actions, so a full window may omit its first ones: no
+	// consistent prefix of the trace can be built from it.
+	if len(actions) > limits.MaxEvents {
+		return fmt.Errorf("%w: run %q has more than %d Charter actions; a trace cannot show their beginning", domain.ErrExecutionLimit, requestID, limits.MaxEvents)
+	}
 	for index := range actions {
 		action := &actions[index]
 		collector.add(traceKey{at: action.At, source: traceSourceCharter, seq: int64(index)}, domain.RunTraceEvent{

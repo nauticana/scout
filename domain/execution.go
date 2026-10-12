@@ -80,6 +80,9 @@ type StepInput struct {
 	// HoldRequested reports a pending hold request; a step that can stop at a durable boundary
 	// returns ErrTurnHeld there. Nil means no hold is ever requested.
 	HoldRequested func() bool `json:"-"`
+	// Operator are the entries people made in this step's turn while they held it at this step,
+	// in order; the step takes each once its journal reached the entry's position.
+	Operator []OperatorEntry `json:"-"`
 }
 
 // StepResult contains state, routing, and usage produced by a step.

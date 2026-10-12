@@ -140,20 +140,54 @@ type TurnWatch interface {
 	Release()
 }
 
-// TurnControl holds and releases turns for whoever operates them. Each transition moves the
-// turn's fence, which fences out a worker that still runs it.
+// TurnControl holds, releases, and lets people operate turns. Each transition moves the turn's
+// fence, which fences out a worker that still runs it. A person's writes in a turn they took over
+// present their OperatorLease, renew it, and are refused with domain.ErrFenceLost once its fence
+// moved on or its lease lapsed by the store clock.
 type TurnControl interface {
 	// RequestHold holds a queued or suspended turn at once under code and asks a running one to
 	// hold at its next durable checkpoint; the first request's reason stands. A turn already held
-	// reports TurnHeld, and an ended or cancelled one is domain.ErrNotFound.
+	// reports TurnHeld, one a person operates is domain.ErrTurnHeld, and an ended or cancelled one
+	// is domain.ErrNotFound.
 	RequestHold(ctx context.Context, tenantID int64, requestID string, code domain.TurnHoldCode, reason string) (domain.TurnHoldOutcome, error)
 	// Preempt holds any live, uncancelled turn at once under domain.HoldPreempted, so a running
-	// worker's next fenced write is refused. A turn already held reports TurnHeld, and an ended or
-	// cancelled one is domain.ErrNotFound.
+	// worker's next fenced write is refused. A turn already held reports TurnHeld, one a person
+	// operates is domain.ErrTurnHeld, and an ended or cancelled one is domain.ErrNotFound.
 	Preempt(ctx context.Context, tenantID int64, requestID string) (domain.TurnHoldOutcome, error)
 	// Release returns a turn held at expectedFence to the queue and returns its new fence; any
 	// other state or fence, or a call of the turn whose outcome is still open, is domain.ErrConflict.
 	Release(ctx context.Context, tenantID int64, requestID string, expectedFence int64) (int64, error)
+	// TakeOver moves a turn held at takeover.Fence to operated by takeover.Holder, with its fence
+	// incremented and a lease that ends by the store clock. Any other state or fence, an earlier
+	// live turn of its conversation, or a call of the turn whose outcome is open is domain.ErrConflict.
+	TakeOver(ctx context.Context, takeover domain.TurnTakeover) (domain.OperatorHold, error)
+	// IntendCall records the holder's tool call in flight under the turn's next entry number before
+	// it leaves; an operator call already in flight or a turn at its entry limit refuses it.
+	IntendCall(ctx context.Context, lease domain.OperatorLease, tool domain.ToolReference, window time.Duration) (domain.OperatorCallIntent, error)
+	// Act appends one entry. A tool call's entry settles its intent in the same transaction, and a
+	// call nobody can establish is marked unknown and holds the turn again under a new fence.
+	Act(ctx context.Context, act domain.OperatorAct) (domain.OperatorActed, error)
+	// HandBack appends the instruction, when there is one, and returns the operated turn to the
+	// queue with its fence incremented, in one transaction with its queue row. A call of the turn
+	// whose outcome is open refuses it with domain.ErrConflict.
+	HandBack(ctx context.Context, lease domain.OperatorLease, instruction string) (domain.OperatorHandedBack, error)
+	// Finish completes the operated turn with the holder's reply, recorded as theirs, settling the
+	// agent's held reservation and the operator usage in the same transaction. A call whose outcome
+	// is open, or an earlier live turn of its conversation, refuses it with domain.ErrConflict.
+	Finish(ctx context.Context, finish domain.OperatorFinish) (domain.OperatorEntry, error)
+	OperatorEntryReader
+}
+
+// OperatorEntryReader reads a turn's operator entries in order, their objects hydrated and
+// digest-verified, within the tenant.
+type OperatorEntryReader interface {
+	OperatorEntries(ctx context.Context, tenantID int64, requestID string) ([]domain.OperatorEntry, error)
+}
+
+// TurnHoldLapser holds again, by the store clock, at most batch operated turns whose lease
+// lapsed, each with its fence incremented, and returns them.
+type TurnHoldLapser interface {
+	LapseHolds(ctx context.Context, batch int) ([]domain.LapsedHold, error)
 }
 
 // TurnReplySubscription receives ordered response frames for one request.
@@ -261,8 +295,8 @@ type TurnRecordStore interface {
 	Find(ctx context.Context, tenantID int64, requestID string) (domain.TurnRecord, error)
 	// Acquire moves a queued turn, or a running one redelivered under its current lease, to running
 	// with its fence incremented, in the transaction that checks the claim is the current lease of
-	// the turn's queue row. A stale or forged claim is domain.ErrFenceLost, a held or suspended turn
-	// domain.ErrTurnHeld, and an ended one domain.ErrConflict.
+	// the turn's queue row. A stale or forged claim is domain.ErrFenceLost, a held, operated, or
+	// suspended turn domain.ErrTurnHeld, and an ended one domain.ErrConflict.
 	Acquire(ctx context.Context, claim domain.TurnClaim) (domain.TurnOwner, error)
 	// Hold stops the owner's running turn under code, domain.HoldCheckpoint at a durable checkpoint
 	// or domain.HoldUnknownOutcome on a call it could not settle: held, fence incremented, a
@@ -271,16 +305,16 @@ type TurnRecordStore interface {
 	// Fail marks the owner's running turn failed or cancelled with its error code, in the
 	// transaction that writes its settlement.
 	Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string, settlement domain.TurnSettlement) error
-	// FailParked fails a turn no worker runs, queued or suspended, with its error code; a held
-	// turn is domain.ErrTurnHeld and any other state domain.ErrConflict.
+	// FailParked fails a turn no worker runs, queued or suspended, with its error code; a held or
+	// operated turn is domain.ErrTurnHeld and any other state domain.ErrConflict.
 	FailParked(ctx context.Context, tenantID int64, requestID, errorCode string) error
 	// Suspend parks the owner's running turn awaiting a human decision with its fence
 	// incremented, which it returns. The budget reservation is held, not settled, and the
 	// worker releases its lease.
 	Suspend(ctx context.Context, owner domain.TurnOwner, reason string) (int64, error)
 	// Resume returns a suspended turn to queued with its fence incremented, so a worker replays
-	// it from its last checkpoint. A queued turn is a no-op, a held one domain.ErrTurnHeld, and
-	// any other domain.ErrConflict.
+	// it from its last checkpoint. A queued turn is a no-op, a held or operated one
+	// domain.ErrTurnHeld, and any other domain.ErrConflict.
 	Resume(ctx context.Context, tenantID int64, requestID string) error
 }
 

@@ -34,7 +34,10 @@ type ToolCall struct {
 	TenantContext TenantContext
 	Principal     Principal
 	// OnBehalfOf is the human the turn acts for, so a handler can authorize per user; zero when there is none.
-	OnBehalfOf     PrincipalRef
+	OnBehalfOf PrincipalRef
+	// Operator is the person who makes the call in a turn they took over; zero for the agent's own
+	// call. Principal stays the turn's acting principal, whose release and authority bound the call.
+	Operator       Principal
 	RequestID      string
 	ConversationID string
 	ToolID         string

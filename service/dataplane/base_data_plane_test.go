@@ -50,7 +50,7 @@ func composablePlane() *BaseDataPlane {
 			GuardrailMaxInputBytes: 1024, GuardrailMaxOutputBytes: 1024,
 		},
 		Limits:   domain.ToolLoopLimits{MaxIterations: 4, MaxToolCalls: 8, MaxTokens: 1000, MaxRepeatedCalls: 2, Deadline: time.Minute},
-		Currency: "USD", UsageCategory: "agent", MaxOutputTokens: 512,
+		Currency: "USD", UsageCategory: "agent", OperatorUsageCategory: "operator", MaxOutputTokens: 512,
 	}
 }
 

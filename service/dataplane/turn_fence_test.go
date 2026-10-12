@@ -176,7 +176,7 @@ func fenceDispatch() domain.TurnDispatch {
 
 func newFenceRecordStore(table *fenceTable) *TableTurnRecordStore {
 	return &TableTurnRecordStore{DB: table, Objects: newObjectStateStore(&fake.ObjectStorage{}),
-		Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output"}}
+		Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output", OperatorUsageCategory: "operator"}}
 }
 
 func TestTableStoresConformToTheFenceSuite(t *testing.T) {
@@ -187,7 +187,7 @@ func TestTableStoresConformToTheFenceSuite(t *testing.T) {
 		journal := &TableLoopJournal{DB: table, Objects: objects}
 		outcomes := &TableCallOutcomeStore{DB: table, Objects: objects}
 		steps := &StepIdempotencyStore{DB: table, Objects: objects, ClaimLease: stepLease}
-		sessions := &DurableSessionStore{DB: table, Objects: objects, Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output"}}
+		sessions := &DurableSessionStore{DB: table, Objects: objects, Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output", OperatorUsageCategory: "operator"}}
 		key := domain.LoopKey{TenantID: fenceTenant, RequestID: fenceRequest, ExecutionStepID: 11}
 		entry := domain.LoopEntry{EntryNo: 1, Kind: domain.LoopEntryModel, Iteration: 1, Model: &domain.ModelResult{Output: []byte("x")}}
 		checkpoint := validCheckpoint("x")

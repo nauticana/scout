@@ -91,7 +91,7 @@ checks:
   - name: turn_call_outcome_resolution_code_ck
     expression: resolution_code IN ('G', 'W', 'E', 'L', 'T', 'M')
   - name: turn_call_outcome_origin_ck
-    expression: origin_code IN ('A')
+    expression: origin_code IN ('A', 'O')
   - name: turn_call_outcome_resolved_ck
     expression: (status_code IN ('C', 'F')) = (resolution_code IS NOT NULL) AND (resolution_code IS NULL) = (resolved_at IS NULL) AND (resolution_code IS NULL) = (resolved_fence IS NULL)
   - name: turn_call_outcome_attested_ck

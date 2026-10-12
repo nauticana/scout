@@ -62,7 +62,7 @@ indexes:
   - name: budget_reservation_principal_ix
     columns: [partner_id, principal_kind, principal_id, status_code, settled_at]
   - name: budget_reservation_request_attempt_uq
-    columns: [partner_id, request_id, attempt_no]
+    columns: [partner_id, request_id, principal_kind, attempt_no]
     unique: true
 checks:
   - name: budget_reservation_principal_ck

@@ -121,7 +121,7 @@ takes `agent_health_window`) is the measurement window, and `min_turns` the samp
 fewest judged turns, never below one, on which a failure rate or latency is read. A measure must
 exceed a `max_*` threshold to open an alert; `max_silence_minutes` (at most a week) is the longest an
 active agent with a stable release may serve no turn, and `max_unresolved_minutes` (at most a week) the
-longest any turn of the agent may stay held with a tool call whose outcome is open. No release freezes the setting, so a change
+longest any turn of the agent may stay held or operated by a person with a tool call whose outcome is open. No release freezes the setting, so a change
 applies at the next evaluation without a publish.
 
 Studio's `health` feature (`handler.StudioHealthHandler` over `AgentHealth`, `VIEW`) serves the
@@ -136,7 +136,7 @@ an agent's alerts newest first, optionally by status. An agent the actor cannot 
 
 `agent_alert` holds the alerts: `kind_code` `F` (failure rate, in basis points), `L` (p95 latency, in
 milliseconds), `H` (hard safety events), `S` (silence: turns in the span and the span's minutes), or `U` (unresolved
-outcome: turns held at least the span with an open call outcome, and the span's minutes),
+outcome: turns held or operated at least the span with an open call outcome, and the span's minutes),
 with the measured value, the threshold it exceeded, and the window. `AgentHealth.EvaluateAll` opens
 and resolves them in passes:
 
@@ -150,7 +150,7 @@ and resolves them in passes:
 - Removing a policy or disabling one threshold resolves any open alert for that threshold.
 - Silence is judged only for an agent with a stable release that has been serving, active under its
   current deployment, for the whole span: no turn queued in the span opens it, and a turn resolves it.
-- An unresolved-outcome alert opens while any turn of the agent has been held, by `held_at` and the
+- An unresolved-outcome alert opens while any turn of the agent has been held or operated, by `held_at` and the
   database clock, at least `max_unresolved_minutes` with a call outcome still `I`, `A`, or `U`, and
   resolves once none has. The count is exact and read afresh each pass, so no sample floor applies.
 - Each write names one tenant and agent and is a conditional insert or update; nothing takes a lock.

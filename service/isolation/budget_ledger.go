@@ -30,6 +30,7 @@ const (
 	qReleaseBudget   = "scout_isolation_release_budget"
 	qExpireOneBudget = "scout_isolation_expire_one_budget"
 	qExpireBudget    = "scout_isolation_expire_budget"
+	qOperatorAttempt = "scout_isolation_operator_attempt"
 
 	// budgetCatalogID binds the ledger's queries to a turn's ending transaction.
 	budgetCatalogID = "scout.isolation.budget"
@@ -51,9 +52,14 @@ SELECT reservation_id, request_id, status_code, granted_tokens,
        settled_tokens, settled_cost_minor_units, attempt_no,
        status_code = ` + sqlReservationHeld + ` AND expires_at <= CURRENT_TIMESTAMP
   FROM budget_reservation
- WHERE partner_id = ? AND request_id = ?
+ WHERE partner_id = ? AND request_id = ? AND principal_kind = ` + sqlPrincipalAgent + `
  ORDER BY attempt_no DESC
  LIMIT 1`,
+	// A person's holds number their own attempts, apart from the turn agent's.
+	qOperatorAttempt: `
+SELECT COALESCE(MAX(attempt_no), 0) + 1
+  FROM budget_reservation
+ WHERE partner_id = ? AND request_id = ? AND principal_kind = ` + sqlPrincipalHuman,
 	qGetBudget: `
 SELECT reservation_id, request_id, status_code, granted_tokens,
        granted_cost_minor_units, currency_code, expires_at,
@@ -122,7 +128,10 @@ type BudgetLedger struct {
 	qs   keelport.QueryService
 }
 
-var _ contract.TenantBudgetManager = (*BudgetLedger)(nil)
+var (
+	_ contract.TenantBudgetManager = (*BudgetLedger)(nil)
+	_ contract.OperatorBudget      = (*BudgetLedger)(nil)
+)
 
 func (ledger *BudgetLedger) init(ctx context.Context) error {
 	if ledger.DB == nil {
@@ -311,6 +320,95 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 	}
 	committed = true
 	return reservation, nil
+}
+
+// ReserveOperatorAction holds the tenant's window for one action a person takes in a turn they
+// operate. The hold is the person's: it never counts against the turn agent's release budget and
+// is never replayed as the turn's own hold. Commit settles it at what the action spent.
+func (ledger *BudgetLedger) ReserveOperatorAction(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
+	tenantID, tokens, costMinorUnits, currency := request.TenantID, request.Tokens, request.CostMinorUnits, request.Currency
+	requestID := strings.TrimSpace(request.RequestID)
+	if tenantID <= 0 || requestID == "" || tokens <= 0 || costMinorUnits < 0 || len(currency) != 3 {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: tenant, request, positive tokens, cost, and currency are required", domain.ErrValidation)
+	}
+	if request.Principal.Kind != domain.PrincipalHuman || strings.TrimSpace(request.Principal.ID) == "" {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: an operator action is held for its person", domain.ErrPrincipalUnknown)
+	}
+	if ledger.Policy == nil {
+		return domain.BudgetReservation{}, fmt.Errorf("budget ledger: policy is required")
+	}
+	if err := ledger.init(ctx); err != nil {
+		return domain.BudgetReservation{}, err
+	}
+	limits, err := ledger.Policy.BudgetFor(ctx, tenantID)
+	if err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("budget policy for tenant %d: %w", tenantID, err)
+	}
+	if limits.Window < time.Second || limits.WindowTokens <= 0 || limits.WindowCostMinorUnits < 0 {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: tenant budget limits are invalid", domain.ErrValidation)
+	}
+	if currency != limits.Currency {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: currency %s does not match budget currency %s", domain.ErrValidation, currency, limits.Currency)
+	}
+	windowSeconds := durationSeconds(limits.Window)
+	tx, err := ledger.DB.BeginTx(ctx, budgetQueries)
+	if err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = keeldata.RollbackDetached(tx)
+		}
+	}()
+	if _, err = tx.Query(ctx, qLockBudget, strconv.FormatInt(tenantID, 10)); err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: lock tenant: %w", err)
+	}
+	turnState, err := tx.Query(ctx, qGetTurnState, tenantID, requestID)
+	if err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: find turn: %w", err)
+	}
+	if len(turnState.Rows) == 0 {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q does not exist", domain.ErrNotFound, requestID)
+	}
+	if common.AsBool(turnState.Rows[0][0]) {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q is terminal", domain.ErrConflict, requestID)
+	}
+	next, err := tx.Query(ctx, qOperatorAttempt, tenantID, requestID)
+	if err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: number attempt: %w", err)
+	}
+	if len(next.Rows) == 0 {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: no attempt number")
+	}
+	reservationID, err := newReservationID()
+	if err != nil {
+		return domain.BudgetReservation{}, err
+	}
+	attempt := common.AsInt64(next.Rows[0][0])
+	result, err := tx.Query(ctx, qReserveBudget,
+		tenantID, reservationID, requestID, string(domain.PrincipalHuman), request.Principal.ID, attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
+		tenantID, windowSeconds, tokens, limits.WindowTokens,
+		tenantID, currency, windowSeconds, costMinorUnits, limits.WindowCostMinorUnits,
+	)
+	if err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: %w", err)
+	}
+	if len(result.Rows) == 0 {
+		return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of tenant %d is exhausted", domain.ErrBudgetExceeded, tenantID)
+	}
+	expiresAt, ok := common.AsTimeOK(result.Rows[0][1])
+	if !ok {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: invalid expires_at %q", common.AsString(result.Rows[0][1]))
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: commit: %w", err)
+	}
+	committed = true
+	return domain.BudgetReservation{
+		TenantID: tenantID, ReservationID: common.AsString(result.Rows[0][0]), RequestID: requestID, Attempt: attempt,
+		GrantedTokens: tokens, GrantedCostMinorUnits: costMinorUnits, Currency: currency, ExpiresAt: expiresAt,
+	}, nil
 }
 
 // Commit settles actual usage, including an overrun, into the budget window.

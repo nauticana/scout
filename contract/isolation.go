@@ -38,6 +38,13 @@ type TenantBudgetManager interface {
 	Release(ctx context.Context, reservation domain.BudgetReservation) error
 }
 
+// OperatorBudget holds and settles the tenant's window for one action a person takes in a turn
+// they operate, attributed to the person and never to the turn agent's release budget.
+type OperatorBudget interface {
+	ReserveOperatorAction(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error)
+	Release(ctx context.Context, reservation domain.BudgetReservation) error
+}
+
 // ExecutionGovernor creates hard limits for one agent turn.
 type ExecutionGovernor interface {
 	// Start initializes hard limits for one tenant turn.

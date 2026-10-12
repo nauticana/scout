@@ -17,12 +17,16 @@ import (
 )
 
 type turnControlBackend struct {
-	filter  domain.LiveTurnFilter
-	hold    domain.TurnHoldRequest
-	release domain.TurnReleaseRequest
-	lookup  domain.TurnOutcomeRequest
-	attest  domain.TurnAttestRequest
-	err     error
+	filter   domain.LiveTurnFilter
+	hold     domain.TurnHoldRequest
+	release  domain.TurnReleaseRequest
+	lookup   domain.TurnOutcomeRequest
+	attest   domain.TurnAttestRequest
+	takeover domain.TurnTakeoverRequest
+	act      domain.TurnActRequest
+	handback domain.TurnHandbackRequest
+	finish   domain.TurnFinishRequest
+	err      error
 }
 
 var settledCall = domain.CallOutcome{

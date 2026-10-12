@@ -182,6 +182,11 @@ const (
 	agent_live_turn_page_size             = "agent_live_turn_page_size"
 	agent_live_turn_max_page_size         = "agent_live_turn_max_page_size"
 	agent_outcome_attest_grace            = "agent_outcome_attest_grace"
+	agent_takeover_lease                  = "agent_takeover_lease"
+	agent_operator_entry_max_bytes        = "agent_operator_entry_max_bytes"
+	agent_operator_max_entries            = "agent_operator_max_entries"
+	agent_hold_lapse_batch                = "agent_hold_lapse_batch"
+	agent_hold_lapse_period               = "agent_hold_lapse_period"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -375,6 +380,11 @@ type ScoutConfig struct {
 	AgentLiveTurnPageSize             int // agent_live_turn_page_size 50 Live turns one Studio page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50
 	AgentLiveTurnMaxPageSize          int // agent_live_turn_max_page_size 200 Largest live turn page a Studio caller may ask for (1..1000); 0 takes 200
 	AgentOutcomeAttestGrace           int // agent_outcome_attest_grace 60 Seconds added to a non-read-only tool call's dispatch window for its outcome deadline (1..86400); 0 takes 60
+	AgentTakeoverLease                int // agent_takeover_lease 900 Seconds an operator's lease on a turn they took over lasts from their latest act (1..86400); 0 takes 900
+	AgentOperatorEntryMaxBytes        int // agent_operator_entry_max_bytes 16384 Encoded bytes of one operator entry (1..1048576); 0 takes 16384
+	AgentOperatorMaxEntries           int // agent_operator_max_entries 64 Operator entries one turn may hold (1..4096); 0 takes 64
+	AgentHoldLapseBatch               int // agent_hold_lapse_batch 100 Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100
+	AgentHoldLapsePeriod              int // agent_hold_lapse_period 30 Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -622,6 +632,11 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentLiveTurnPageSize = c.Int(rows, agent_live_turn_page_size)
 	c.AgentLiveTurnMaxPageSize = c.Int(rows, agent_live_turn_max_page_size)
 	c.AgentOutcomeAttestGrace = c.Int(rows, agent_outcome_attest_grace)
+	c.AgentTakeoverLease = c.Int(rows, agent_takeover_lease)
+	c.AgentOperatorEntryMaxBytes = c.Int(rows, agent_operator_entry_max_bytes)
+	c.AgentOperatorMaxEntries = c.Int(rows, agent_operator_max_entries)
+	c.AgentHoldLapseBatch = c.Int(rows, agent_hold_lapse_batch)
+	c.AgentHoldLapsePeriod = c.Int(rows, agent_hold_lapse_period)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -631,7 +646,37 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 			judgeErr = fmt.Errorf("agent_evaluation_judge_*: %w", judgeErr)
 		}
 	}
-	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors())
+	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors(), c.operatorFlagErrors())
+}
+
+// OperatorSettings is what the agent_takeover_lease, agent_operator_*, and agent_hold_lapse_*
+// flags configure for dataplane.TableTurnControl and its lapse worker.
+func (c *ScoutConfig) OperatorSettings() domain.OperatorSettings {
+	return domain.OperatorSettings{
+		Lease: time.Duration(c.AgentTakeoverLease) * time.Second, EntryMaxBytes: c.AgentOperatorEntryMaxBytes,
+		MaxEntries: c.AgentOperatorMaxEntries, LapseBatch: c.AgentHoldLapseBatch,
+		LapsePeriod: time.Duration(c.AgentHoldLapsePeriod) * time.Second,
+	}
+}
+
+// operatorFlagErrors refuses an operation flag outside its range; zero takes each default.
+func (c *ScoutConfig) operatorFlagErrors() error {
+	var errs []error
+	for _, flag := range []struct {
+		name       string
+		value, max int
+	}{
+		{agent_takeover_lease, c.AgentTakeoverLease, int(dataplane.MaxTakeoverLease / time.Second)},
+		{agent_operator_entry_max_bytes, c.AgentOperatorEntryMaxBytes, dataplane.MaxOperatorEntryBytes},
+		{agent_operator_max_entries, c.AgentOperatorMaxEntries, dataplane.MaxOperatorEntries},
+		{agent_hold_lapse_batch, c.AgentHoldLapseBatch, dataplane.MaxHoldLapseBatch},
+		{agent_hold_lapse_period, c.AgentHoldLapsePeriod, int(dataplane.MaxHoldLapsePeriod / time.Second)},
+	} {
+		if flag.value < 0 || flag.value > flag.max {
+			errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", flag.name, flag.value, flag.max))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // maxOutcomeAttestGrace bounds agent_outcome_attest_grace: one day, in seconds.

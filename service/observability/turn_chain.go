@@ -18,9 +18,17 @@ const (
 	AuditCategoryTurnHoldRequested = "turn_hold_requested"
 	AuditCategoryTurnHeld          = "turn_held"
 	AuditCategoryTurnReleased      = "turn_released"
-	AuditCategoryTurnCompleted     = "turn_completed"
-	AuditCategoryTurnFailed        = "turn_failed"
-	AuditCategoryTurnCancelled     = "turn_cancelled"
+	// AuditCategoryTurnTakenOver records a person taking over a held turn under a lease.
+	AuditCategoryTurnTakenOver = "turn_taken_over"
+	// AuditCategoryTurnOperatorAction records one entry a person made in a turn they operate.
+	AuditCategoryTurnOperatorAction = "turn_operator_action"
+	// AuditCategoryTurnHandedBack records a person returning an operated turn to its agent.
+	AuditCategoryTurnHandedBack = "turn_handed_back"
+	// AuditCategoryTurnHoldLapsed records an operator lease lapsing and the turn held again.
+	AuditCategoryTurnHoldLapsed = "turn_hold_lapsed"
+	AuditCategoryTurnCompleted  = "turn_completed"
+	AuditCategoryTurnFailed     = "turn_failed"
+	AuditCategoryTurnCancelled  = "turn_cancelled"
 	// AuditCategoryCallOutcomeAttested records one person's attestation of an unknown call outcome.
 	AuditCategoryCallOutcomeAttested = "call_outcome_attested"
 	// AuditCategoryCallOutcomeResolved records a person settling an unknown call outcome.

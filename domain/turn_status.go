@@ -9,7 +9,9 @@ const (
 	TurnStreaming TurnStatus = "S"
 	TurnSuspended TurnStatus = "U"
 	// TurnHeld is fenced: no worker runs it until it is released.
-	TurnHeld      TurnStatus = "H"
+	TurnHeld TurnStatus = "H"
+	// TurnOperated is held by a person under a store-clock lease; no worker runs it.
+	TurnOperated  TurnStatus = "O"
 	TurnCompleted TurnStatus = "C"
 	TurnFailed    TurnStatus = "F"
 	TurnCancelled TurnStatus = "X"
@@ -18,7 +20,7 @@ const (
 // Valid reports whether the status is a seeded turn_status code.
 func (status TurnStatus) Valid() bool {
 	switch status {
-	case TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnHeld, TurnCompleted, TurnFailed, TurnCancelled:
+	case TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnHeld, TurnOperated, TurnCompleted, TurnFailed, TurnCancelled:
 		return true
 	}
 	return false

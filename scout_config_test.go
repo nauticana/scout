@@ -340,6 +340,11 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_live_turn_page_size:             "50",
 		agent_live_turn_max_page_size:         "200",
 		agent_outcome_attest_grace:            "60",
+		agent_takeover_lease:                  "900",
+		agent_operator_entry_max_bytes:        "16384",
+		agent_operator_max_entries:            "64",
+		agent_hold_lapse_batch:                "100",
+		agent_hold_lapse_period:               "30",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

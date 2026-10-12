@@ -86,8 +86,8 @@ type RunTraceQuery interface {
 	Trace(ctx context.Context, tenantID int64, agentID string, runID int64) (domain.RunTrace, error)
 }
 
-// CharterActionSource returns, in time order and at most limit, the governed actions Charter
-// recorded in the execution context a run's request id names.
+// CharterActionSource returns, in time order, the latest limit governed actions Charter recorded
+// in the execution context a run's request id names.
 type CharterActionSource interface {
 	RunActions(ctx context.Context, tenantID int64, requestID string, limit int) ([]domain.CharterAction, error)
 }

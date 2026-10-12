@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.10",
+      "title": "Turn takeover and handback",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "A person can take over a held turn under a lease, act in it as themselves, hand it back to the agent, or finish it with their own reply; adopts Charter v1.3.2.",
+      "body_markdown": "**Turn takeover and handback.** Turn status `O` is a turn a person operates under a store-clock lease (`conversation_turn.holder_kind`, `holder_id`, `hold_until`). `turn/takeover` moves a held turn to `O` at its fence once no outcome is open; `turn/act` appends an operator entry (`turn_operator_entry`, kinds `N` note, `T` tool call, `Y` reply, `W` withdraw, `H` handback instruction) and renews the lease; `turn/handback` re-admits the agent's budget and requeues the turn, whose loop reads the entries as one untrusted operator message; `turn/finish` completes the turn with the person's guarded reply, recorded as operator-authored with no agent run. An operator tool call runs as the person within the release's bound tools, the person's grants, and the turn's authority, records an outcome of origin `O`, and is charged to the tenant envelope, never the agent's release budget; a turn's operator spend settles as one usage line in `OperatorUsageCategory`. `TurnHoldLapseWorker` returns a lapsed lease to held. `observability.VerifyTurnControl` checks the order of hold, takeover, acts, and handback or finish.\n\n| Before | After |\n|---|---|\n| `contract.TurnControl`, `StudioTurnControlBackend` | add `TakeOver`, `Act`, `HandBack`, `Finish` (and `IntendCall`, `OperatorEntryReader` on `TurnControl`) |\n| `TurnSettlementWriter`, `BaseDataPlane` | require a distinct `OperatorUsageCategory`; `BaseDataPlane.Operation` takes `ScoutConfig.OperatorSettings()` |\n| — | `StudioTurnControl.{Tools,Gateway,OperatorBudget,Dispatch,Guardrails,Definitions,Publisher}`; `contract.OperatorBudget` (reserve and release; settlement joins the fenced act), `TurnHoldLapser`; `TurnHoldLapseWorker` in a worker binary |\n\nSchema: `turn_operator_entry` (including token, tool-call, search, and cost usage); `turn_status` `O`; `turn_call_origin` `O`; `budget_reservation_request_attempt_uq` includes `principal_kind`. Flags: `agent_takeover_lease`, `agent_operator_entry_max_bytes`, `agent_operator_max_entries`, `agent_hold_lapse_batch`, `agent_hold_lapse_period`.\n\nRequires Charter v1.3.2, whose `evidence.ActionsIn` returns a run's latest actions: the Charter outcome lookup reads that window directly, and a run trace whose Charter read comes back full is refused with an execution limit (`422`) rather than shown without its first decisions."
+    },
+    {
       "version": "v1.2.9",
       "title": "Unknown tool outcomes and preemption",
       "tags": [

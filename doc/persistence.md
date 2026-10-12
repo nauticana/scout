@@ -2,7 +2,8 @@
 
 Reference implementations live in `service/dataplane/`: `ObjectStateStore` (`state_codec.go`),
 `DurableSessionStore` (`durable_session_store.go`), `StepIdempotencyStore`
-(`step_idempotency_store.go`), the turn fence (`turn_fence.go`, `turn_runtime_records.go`, `table_turn_control.go`),
+(`step_idempotency_store.go`), the turn fence (`turn_fence.go`, `turn_runtime_records.go`, `table_turn_control.go`), turn operation
+(`table_turn_operation.go`, `tool_loop_operator.go`, `turn_hold_lapse_worker.go`),
 the turn settlement (`turn_settlement.go`), call outcomes (`call_outcome_store.go`, `tool_loop_outcomes.go`),
 and the cache discipline in `SessionCoordinator` (`session_coordinator.go`).
 
@@ -56,7 +57,9 @@ is `ErrDigestMismatch`/download error, never empty state.
   ledger's queries into the caller's transaction (keel `TxQueryCatalog`), takes the tenant advisory lock, and
   commits the reservation at the turn's usage, or releases it when a failed turn spent nothing; then the turn's
   `usage_event` lines are inserted once per turn and category, without the usage lock, because the guarded touch
-  already serializes the turn. Locks are taken in the order turn row, then tenant. A fence that moved before the
+  already serializes the turn. Every turn end, a refunded failure included, also writes one operator line in
+  `OperatorUsageCategory` summing the turn's operator tool-call entries, attributed to the last person who called a
+  tool and `OnBehalfOf` the end user; operator spend in more than one currency refuses the end. Locks are taken in the order turn row, then tenant. A fence that moved before the
   touch refuses the whole unit, and once the touch is taken the fence cannot move until commit, so a reservation
   is never settled while its turn's end can still be refused. `TurnLedger`'s synchronous terminal transaction
   remains the other settlement path.
@@ -65,6 +68,12 @@ is `ErrDigestMismatch`/download error, never empty state.
   `Attest` is **one tx** { conditional touch of the outcome row; the attestation row; the settlement once enough
   people agree }; `confirmation.TableStore.Reconcile` settles linked rows in the confirmation's own transaction.
   Every other call-outcome write is one statement.
+- **Operator writes** (`TableTurnControl`): `TakeOver` is one conditional `UPDATE`; `IntendCall`, `Act`, `HandBack`,
+  and `Finish` are each **one tx** opened by the holder's guarded touch ([turn fence](#turn-fence)). `Act` for a
+  tool call settles the origin-`O` row and inserts its entry together, and holds the turn on an unknown answer in
+  the same tx; `HandBack` is { touch; instruction entry; O→Q; requeue }; `Finish` is { touch; reply entry; the
+  turn settlement; O→C with the response and its history row }. Entry bodies and the finished response are uploaded
+  before the tx.
 - `StepIdempotencyStore`: every transition is one fenced statement, the owner's guarded touch plus a single-row
   CAS on `status_code` (autocommit); `updated_at` is written from the injected clock so lease arithmetic never
   mixes worker and database time.
@@ -105,7 +114,14 @@ stateDiagram-v2
     Q --> H: Preempt (+1)
     U --> H: Preempt (+1)
     H --> Q: Release at the held fence, no open outcome (+1, requeue)
+    H --> O: TakeOver at the held fence, no open outcome, no earlier live turn (+1, lease)
+    O --> O: operator act (lease renewed)
+    O --> H: lease lapsed, sweeper (+1)
+    O --> H: unknown operator call outcome (+1)
+    O --> Q: HandBack, no open outcome (+1, requeue)
+    O --> C: Finish, no open outcome, no earlier live turn
     H --> Q: cancel wake (+1, requeue)
+    O --> Q: cancel wake (+1, requeue)
     U --> Q: cancel wake (+1, requeue)
     R --> C: Complete (fenced)
     R --> F: Fail (fenced)
@@ -119,8 +135,8 @@ stateDiagram-v2
 - **Acquire.** `TurnRecordStore.Acquire(claim)` moves a `Q` turn, or an `R`/`S` turn redelivered after a crash, to
   `R` with the fence incremented, in one statement whose `EXISTS` checks that the claim's queue id, lease token, and
   worker id are the current lease of the turn's `turn_queue` row (`status_code = 'L'`,
-  `lease_until > CURRENT_TIMESTAMP`). A refused claim reads as: not the current lease `ErrFenceLost`, an `H` or `U`
-  turn `ErrTurnHeld`, an ended one `ErrConflict`.
+  `lease_until > CURRENT_TIMESTAMP`). A refused claim reads as: not the current lease `ErrFenceLost`, an `H`, `O`, or
+  `U` turn `ErrTurnHeld`, an ended one `ErrConflict`.
 - **Guarded touch.** A write that is not itself a transition of `conversation_turn` opens with
   `UPDATE conversation_turn SET fence = fence WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN ('R','S') RETURNING turn_no`,
   as the first CTE of one statement or the first statement of its transaction. The implicit row lock of that
@@ -136,8 +152,9 @@ stateDiagram-v2
 - **On `ErrFenceLost`** the runtime stops the delivery with no terminal record, settlement, terminal audit, or final
   frame: the turn belongs to whoever moved the fence.
 - **Conversation order.** Both queue claim paths and `qSessionActiveTurn` block a turn behind every earlier turn of
-  its conversation, by `turn_no`, that is `Q`, `R`, `S`, `U`, or `H`, so a later turn never runs while an earlier
-  one is parked or held, and `Complete` refuses a turn that is not the oldest live one. Queue timestamps do not
+  its conversation, by `turn_no`, that is `Q`, `R`, `S`, `U`, `H`, or `O`, so a later turn never runs while an
+  earlier one is parked, held, or operated, and `Complete`, `TakeOver`, and `Finish` refuse a turn that is not the
+  oldest live one. Queue timestamps do not
   order a conversation.
 - **Hold.** `TableTurnControl.RequestHold` holds a `Q` or `U` turn at once (`H`, fence +1, `hold_code`, `held_at`)
   and asks an `R`/`S` turn to hold by setting `hold_requested_at` and `hold_reason`, the first request winning; a
@@ -150,16 +167,16 @@ stateDiagram-v2
 - **Preempt.** `TableTurnControl.Preempt` moves a live, uncancelled `Q`, `U`, `R`, or `S` turn to `H` at once
   (fence +1, `hold_code` `P`, pending hold request cleared) in one statement and wakes the watcher through the
   cache, so a running worker's next fenced write is `ErrFenceLost`. A cancellation requested first wins; an
-  already held turn reports held. A hold or suspension yields to a cancellation requested before it: the transition is refused with
+  already held turn reports held, and an operated one is `ErrTurnHeld`, for both `Preempt` and `RequestHold`. A hold or suspension yields to a cancellation requested before it: the transition is refused with
   `ErrTurnCanceled` and the worker ends the turn `X` instead of parking it out of the canceller's reach. A delivery
-  that finds its turn `H` or `U` is acknowledged without running.
+  that finds its turn `H`, `O`, or `U` is acknowledged without running.
 - **Suspend and resume.** `Suspend` moves the owner's turn to `U` (fence +1) and keeps the reservation;
-  `Resume` moves `U` to `Q` (fence +1), is a no-op on `Q`, and returns `ErrTurnHeld` for a held turn. `FailParked`
+  `Resume` moves `U` to `Q` (fence +1), is a no-op on `Q`, and returns `ErrTurnHeld` for a held or operated turn, as `FailParked` does. `FailParked`
   fails a `Q` or `U` turn no worker runs; owner `Fail` applies to `R`/`S` only.
 - **Release.** `TableTurnControl.Release` moves `H` to `Q` only at the expected held fence and only while no call
   of the turn has an open outcome (fence +1), clears every hold column, and requeues the queue row in the same
   transaction; any other state or fence, or an open outcome, is `ErrConflict`.
-  Cancelling a `U` or `H` turn wakes it to `Q` the same way, and the worker that picks it up ends it `X`.
+  Cancelling a `U`, `H`, or `O` turn wakes it to `Q` the same way, and the worker that picks it up ends it `X`.
   `qQueueRequeue` requeues only a `Q` turn's row, including one still leased by a worker that found the turn
   parked.
 - **Watcher.** `TableTurnControl.Watch(owner)` derives the running turn's context. One poll every
@@ -168,11 +185,37 @@ stateDiagram-v2
   other than `R`/`S` with `ErrFenceLost`, and a hold request only sets the flag `TurnWatch.HoldRequested` reports.
   `agent_cancel_max_read_failures` consecutive failed reads stop the turn. `MemoryTurnControl` has no fence
   authority and never cancels on a fence move; the memory stores refuse the stale owner's writes instead.
+- **Takeover.** `TableTurnControl.TakeOver` moves `H` to `O` at the held fence (fence +1) in one conditional
+  `UPDATE` that sets `holder_kind`, `holder_id`, and `hold_until = CURRENT_TIMESTAMP + agent_takeover_lease`, keeps
+  `hold_code` and `held_at`, and is gated on no open outcome and no earlier live turn; any refusal is `ErrConflict`.
+- **The holder's guarded touch.** Every operator transaction opens with
+  `UPDATE conversation_turn SET hold_until = CURRENT_TIMESTAMP + <lease> WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code = 'O' AND holder_kind = ? AND holder_id = ? AND hold_until > CURRENT_TIMESTAMP`,
+  which renews the lease. Zero rows is `ErrFenceLost`, whether the lease lapsed by the store clock or the fence
+  moved. The touch reads the turn's position under the same lock: `step_no` (committed steps + 1), the step in
+  progress, and its journal length; an act built against a position that moved is `ErrConflict`.
+- **Operator entries.** `turn_operator_entry` rows are append-only and immutable, numbered per turn, each body a
+  content-addressed object. On a later delivery `TurnRuntime` reads them once (`TurnRuntime.Operator`) and hands
+  each step the entries of its `step_no` in `StepInput.Operator`; before each decision the tool loop drains every
+  entry whose `after_entry_no` its journal cursor reached into one user message, marked as untrusted operator
+  content. A withdrawal is journaled as the withdrawn call's failed observation instead, and the call is never
+  invoked. The journal itself is unchanged, so replay adds the same message at the same place. A reply entry's
+  frame keeps the sequence it took and is published again under the new owner's fence.
+- **Handback.** `TableTurnControl.HandBack` runs { touch; the instruction entry, when given; O→Q (fence +1, every
+  hold and holder column cleared) gated on no open outcome; `qQueueRequeue` } in one transaction; a refusal leaves
+  the turn `O`. Studio re-admits the budget before it.
+- **Finish.** `TableTurnControl.Finish` runs { touch; the reply entry; the turn settlement; O→C with the response,
+  gated on no open outcome and no earlier live turn, mirrored into `conversation_turn_detail` } in one
+  transaction. The hold columns are cleared and the holder is kept, which marks the response operator-authored.
+- **Lapse.** `TurnHoldLapseWorker` calls `LapseHolds(batch)` every `agent_hold_lapse_period` until a batch comes back
+  short: one statement locks up to `agent_hold_lapse_batch` `O` turns with `hold_until <= CURRENT_TIMESTAMP`,
+  oldest first, `FOR UPDATE SKIP LOCKED`, and moves them to `H` (fence +1, holder and `hold_until` cleared,
+  `hold_code` and `held_at` kept). An operator call with an unknown outcome holds the turn the same way, with
+  `hold_code` `U`, in the act's transaction.
 
 The CHECKs on `conversation_turn` keep the hold columns consistent: `fence >= 0`, the request columns both set or
-both null, `hold_code` in `C`, `A`, `P`, or `U`, and `hold_code` and `held_at` set exactly while the status is `H`.
-[Turn takeover](turn_takeover.md) is the accepted design for what remains — takeover and handback — and lists
-the open findings in its §1.5.
+both null, `hold_code` in `C`, `A`, `P`, or `U`, `hold_code` and `held_at` set exactly while the status is `H` or
+`O`, `hold_until` set exactly while it is `O`, the holder pair together, required in `O` and allowed only in `O`
+or `C`. [Turn takeover](turn_takeover.md) is the full design and lists the open findings in its §1.5.
 
 ## Idempotency state machine
 
@@ -210,7 +253,8 @@ journal, remains what `step_idempotency` replays once the step commits.
 
 ## Call outcomes
 
-`turn_call_outcome` records every non-read-only call of the tool loop, keyed by the call. The row is written before
+`turn_call_outcome` records every non-read-only call of the tool loop (origin `A`) and every tool call a person makes
+in a turn they operate (origin `O`), keyed by the call. The row is written before
 the call leaves, so a call with no row never left, and its status moves only toward resolution: once `C` or `F`
 it never changes again.
 
@@ -253,11 +297,18 @@ stateDiagram-v2
   when the required number of distinct people agree. The confirmation hook settles linked open rows `M` through
   `turn_call_confirmation`, scoped by tenant.
 - **Cancel** moves the turn's `I` and `A` rows to `U` in the cancelling transaction.
+- **Operator calls.** `IntendCall` inserts an origin-`O` `I` row under the holder's touch, filed under the step in
+  progress or the turn's latest step, with call id `op:<fence>:<entry>` and key `op:` + SHA-256 of (tenant,
+  request, fence, entry); a turn that ran no step refuses it, and so does another operator call still in flight.
+  `Act` settles it `C`/`F` (resolution `G`) or marks it `U` together with the entry. A call that never left is
+  retracted; one whose lease was lost mid-call is reported late (`W`).
 - **Release gate.** The release `UPDATE` carries
   `AND NOT EXISTS (SELECT 1 FROM turn_call_outcome o WHERE ... AND o.status_code IN ('I','A','U'))`. After a hold no
-  fenced writer adds a row, and rows only settle or are retracted, so the gate needs no lock.
+  fenced writer adds a row, and rows only settle or are retracted, so the gate needs no lock. Takeover, handback,
+  and finish carry the same gate.
 
-Every statement is keyed by `partner_id` and uses the store clock; there is no `FOR UPDATE` and no advisory lock.
+Every statement is keyed by `partner_id` and uses the store clock; no call-outcome write takes `FOR UPDATE` or an
+advisory lock.
 
 ## Cache discipline (`SessionCoordinator`, `MemorySessionCache`)
 

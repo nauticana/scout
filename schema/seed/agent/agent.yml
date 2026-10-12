@@ -220,6 +220,11 @@ seeds:
       - [agent_live_turn_page_size, int, true, "50", "Live turns one Studio turn control page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50"]
       - [agent_live_turn_max_page_size, int, true, "200", "Largest live turn page a Studio turn control caller may ask for (1..1000); 0 takes 200"]
       - [agent_outcome_attest_grace, int, true, "60", "Seconds added to a non-read-only tool call's dispatch window for its outcome deadline, after which a person may attest an unknown outcome (1..86400); 0 takes 60"]
+      - [agent_takeover_lease, int, true, "900", "Seconds an operator's lease on a turn they took over lasts from the takeover or their latest act, by the store clock (1..86400); 0 takes 900"]
+      - [agent_operator_entry_max_bytes, int, true, "16384", "Encoded bytes of one entry an operator makes in a turn they took over (1..1048576); 0 takes 16384"]
+      - [agent_operator_max_entries, int, true, "64", "Operator entries one turn may hold (1..4096); 0 takes 64"]
+      - [agent_hold_lapse_batch, int, true, "100", "Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100"]
+      - [agent_hold_lapse_period, int, true, "30", "Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30"]
   - table: authorization_object
     columns: [id, caption]
     rows:

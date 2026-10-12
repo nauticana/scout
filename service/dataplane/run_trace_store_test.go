@@ -380,3 +380,20 @@ func TestRunTraceRefusesAnOverflowingGuardrailDuration(t *testing.T) {
 		t.Fatalf("overflowing guardrail duration = %v", err)
 	}
 }
+
+// Charter returns a run's latest actions, so a window it filled may omit the run's first ones; a
+// trace refuses rather than show a beginning without its Charter decisions.
+func TestRunTraceRefusesACharterWindowThatMayOmitTheRunsStart(t *testing.T) {
+	fixture := newTraceFixture(t)
+	fixture.store.Limits = domain.RunTraceLimits{MaxEvents: 2}
+	fixture.store.Charter = charterActionsFunc(func(_ context.Context, _ int64, _ string, limit int) ([]domain.CharterAction, error) {
+		actions := make([]domain.CharterAction, limit)
+		for index := range actions {
+			actions[index] = domain.CharterAction{ActionID: domain.CharterRef{ID: fmt.Sprintf("ACT-%d", index)}, At: traceAt(3)}
+		}
+		return actions, nil
+	})
+	if _, err := fixture.store.Trace(context.Background(), 7, "writer-a", 31); !errors.Is(err, domain.ErrExecutionLimit) {
+		t.Fatalf("a full Charter window = %v, want ErrExecutionLimit", err)
+	}
+}

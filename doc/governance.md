@@ -219,8 +219,8 @@ declaring each, every ask with the route serving it, and what publication would 
 ## Live turn operation
 
 Operating a live turn is its own authority, apart from authoring. `AGENT_OPERATION` is checked at `agent:<id>`:
-`VIEW` lists an agent's live turns and reads one with its call outcomes; `OPERATE` holds and releases them and
-looks up a call's outcome; `PREEMPT` holds a running turn at once, fencing out its worker; and `RECONCILE` attests
+`VIEW` lists an agent's live turns and reads one with its call outcomes and operator entries; `OPERATE` holds,
+releases, takes over, acts in, hands back, and finishes them and looks up a call's outcome; `PREEMPT` holds a running turn at once, fencing out its worker; and `RECONCILE` attests
 an unknown call outcome. No authoring action (`EDIT`, `PUBLISH`) implies any of them, and every call also needs
 `AGENT_STUDIO` `VIEW`, so an agent the actor cannot view reads as not found. `AGENT_ADMIN` holds all four at `*`;
 `AGENT_OPER` holds `VIEW` and `OPERATE`.
@@ -233,6 +233,30 @@ only then requeues it; a refused re-admission leaves the turn held, and a stale 
 still open is refused. Pausing an agent with policy `suspend` holds its live turns the same way, and unpausing
 releases none.
 
+A person with `OPERATE` may take over a held turn with no open call outcome and no earlier live turn in its
+conversation. The turn becomes `O` (operated) under a lease that ends by the store clock after
+`agent_takeover_lease` and renews with each act; once it lapses, a sweeper holds the turn again under a new fence.
+Only a person operates a turn, and every act names the fence the takeover returned. The person may note, reply to
+the end user, withdraw a call the agent proposed but never sent, and call a tool, then hand the turn back to the
+agent with an optional instruction or finish it with their own reply:
+
+- **Authority.** An operator tool call is bounded by the intersection of the tools the conversation's pinned
+  release binds, the person's grants, the turn's tenant and delegated authority, and current policy obligations.
+  The gateway authorizes the turn's own acting principal and authority chain, decides policy both as that
+  principal and as the person and applies the riskier ask, applies the release's guardrails, and resolves the
+  person's own credential just in time; the agent's operating mode does not govern a person. `OnBehalfOf` stays
+  the end user, and the gateway's credential, invocation, and guardrail records name the person.
+- **Spend.** Each operator call is admitted against the tenant envelope alone, held for the person and never
+  charged to the agent's release budget. Settlement and its immutable entry share the holder's fenced transaction,
+  and every end of the turn writes one operator usage line in the data plane's `OperatorUsageCategory`, distinct
+  from the agent's, attributed to the last person who called a tool and `OnBehalfOf` the end user. An operator call that may have taken
+  effect but is not established, or that answers asynchronously, holds the turn again as the agent's would.
+- **Replies and finish.** A reply passes the release's output guardrails and, when the release requires evidence,
+  the evidence rule over the turn's tool results. A finished turn is recorded as operator-authored: the person
+  stays its holder, no agent run is recorded, and `turn_completed` is attributed to the person.
+- **Hand back.** A handback re-admits the turn's budget first; the resumed agent reads the person's entries as
+  untrusted operator content before its next decision.
+
 An unknown outcome is settled from evidence, never assumed. A lookup asks the tool's effect verifier or the
 product's composed outcome lookup without sending the call again. Attestation is a person's statement, after the
 call's deadline, that the call completed or failed, with a mandatory note and optional digest-verified evidence.
@@ -244,10 +268,15 @@ A team with one authorized person keeps such a turn held until a second is grant
 
 Each change is a decision record keyed by the fence it left the turn at, so a retried request records once:
 `turn_hold_requested` (a running turn asked to hold), `turn_held` (held at once, preempted, or held by its worker;
-a worker's hold carries its cause class, `held` or `outcome_unknown`, as the reason), and `turn_released`. Each
+a worker's hold carries its cause class, `held` or `outcome_unknown`, as the reason), `turn_released`,
+`turn_taken_over`, `turn_handed_back`, and `turn_hold_lapsed` (attributed to the person whose lease lapsed).
+Each operator entry is `turn_operator_action`, keyed by the fence and the entry number. Each
 person's act on a call is keyed by the call and the person: `call_outcome_attested` for every attestation, and
 `call_outcome_resolved` when a person's lookup or the deciding attestation settles the call.
-[Turn takeover](turn_takeover.md) is the design for taking over and handing back a turn.
+`observability.VerifyTurnControl` checks a turn's control records against its call outcomes: a takeover follows
+a hold, operator actions are at the takeover's fence, an operated turn ends in handback, lapse, a hold, or finish,
+fences only increase, and no takeover happens while a call dispatched before it was open.
+[Turn takeover](turn_takeover.md) is the full design.
 
 ## Two-person publish and restore
 
@@ -426,11 +455,13 @@ keeps the first record of a key, so a redelivered turn re-makes a decision witho
 A decision made outside any scope has no key and stays append-only.
 
 A turn's chain is gap-free: it opens with `turn_admitted`, written before dispatch, may carry the
-intermediate `turn_suspended`, `turn_hold_requested`, `turn_held`, `turn_released`, `call_outcome_attested`,
-and `call_outcome_resolved`, and closes with
-exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`; the suspension, hold,
-release, and terminal records carry the turn's `fence` in their payload, and a worker whose fence
-moved writes no terminal record. An audit write that fails fails
+intermediate `turn_suspended`, `turn_hold_requested`, `turn_held`, `turn_released`, `turn_taken_over`,
+`turn_operator_action`, `turn_handed_back`, `turn_hold_lapsed`, `call_outcome_attested`, and
+`call_outcome_resolved`, and closes with
+exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`; the suspension, hold, release,
+operator, and terminal records carry the turn's `fence` in their payload, and a worker whose fence
+moved writes no terminal record. A person's finish records `turn_completed` under the key the
+runtime's terminal record takes, so a stale delivery's terminal replay writes nothing. An audit write that fails fails
 the delivery rather than passing silently, and the terminal replay offers the terminal record again,
 which the key makes a no-op unless the first write was lost. `observability.VerifyTurnChain` asserts
 all of this over one request's records. The `call_outcome_*` records of a person's lookup or attestation are call
@@ -490,6 +521,10 @@ rolling envelope:
   `domain.BudgetUnenforceableError` naming the problem, which is `ErrDegraded`.
 - **Admission is for new holds.** A live hold for the same request is returned as it stands, so
   cancellation and `TurnRuntime.Abandon` can always release it.
+- **Operator actions.** `ReserveOperatorAction` (`contract.OperatorBudget`) holds a person's tool call
+  in a turn they operate against the tenant's rolling envelope only, charged to the person
+  (`principal_kind` human, attempts numbered apart from the agent's), never to the release budget;
+  the turn's own hold lookup reads only the agent's attempts.
 
 ## What is not here yet
 

@@ -9,18 +9,22 @@ const (
 	sqlTurnStreaming = "'" + string(domain.TurnStreaming) + "'"
 	sqlTurnSuspended = "'" + string(domain.TurnSuspended) + "'"
 	sqlTurnHeld      = "'" + string(domain.TurnHeld) + "'"
+	sqlTurnOperated  = "'" + string(domain.TurnOperated) + "'"
 	sqlTurnCompleted = "'" + string(domain.TurnCompleted) + "'"
 	sqlTurnFailed    = "'" + string(domain.TurnFailed) + "'"
 
 	// sqlTurnOwned lists the statuses a worker owns a turn in; sqlTurnLive every non-terminal one.
 	sqlTurnOwned = sqlTurnRunning + ", " + sqlTurnStreaming
-	sqlTurnLive  = sqlTurnQueued + ", " + sqlTurnRunning + ", " + sqlTurnStreaming + ", " + sqlTurnSuspended + ", " + sqlTurnHeld
+	sqlTurnLive  = sqlTurnQueued + ", " + sqlTurnRunning + ", " + sqlTurnStreaming + ", " + sqlTurnSuspended + ", " + sqlTurnHeld + ", " + sqlTurnOperated
+	// sqlTurnHeldOrOperated lists the statuses a turn is held in: by its fence alone, or by a person's lease.
+	sqlTurnHeldOrOperated = sqlTurnHeld + ", " + sqlTurnOperated
 
 	sqlTurnCancelled = "'" + string(domain.TurnCancelled) + "'"
-	// sqlTurnUnworked lists the statuses no worker runs a turn in: held, or ended.
+	// sqlTurnUnworked lists the statuses no worker runs a turn in and no person operates it: held, or ended.
 	sqlTurnUnworked = sqlTurnHeld + ", " + sqlTurnCompleted + ", " + sqlTurnFailed + ", " + sqlTurnCancelled
 
-	sqlHoldPreempted = "'" + string(domain.HoldPreempted) + "'"
+	sqlHoldPreempted      = "'" + string(domain.HoldPreempted) + "'"
+	sqlHoldUnknownOutcome = "'" + string(domain.HoldUnknownOutcome) + "'"
 
 	sqlCallInFlight  = "'" + string(domain.CallInFlight) + "'"
 	sqlCallAccepted  = "'" + string(domain.CallAccepted) + "'"
@@ -28,9 +32,14 @@ const (
 	sqlCallFailed    = "'" + string(domain.CallFailed) + "'"
 	sqlCallUnknown   = "'" + string(domain.CallUnknown) + "'"
 	// sqlCallOpen lists the statuses of a call that still awaits a definite outcome.
-	sqlCallOpen      = sqlCallInFlight + ", " + sqlCallAccepted + ", " + sqlCallUnknown
-	sqlCallFromAgent = "'" + string(domain.CallFromAgent) + "'"
+	sqlCallOpen         = sqlCallInFlight + ", " + sqlCallAccepted + ", " + sqlCallUnknown
+	sqlCallFromAgent    = "'" + string(domain.CallFromAgent) + "'"
+	sqlCallFromOperator = "'" + string(domain.CallFromOperator) + "'"
 
+	sqlOperatorTool  = "'" + string(domain.OperatorTool) + "'"
+	sqlOperatorReply = "'" + string(domain.OperatorReply) + "'"
+
+	sqlResolvedByGateway      = "'" + string(domain.ResolvedByGateway) + "'"
 	sqlResolvedByWorker       = "'" + string(domain.ResolvedByWorker) + "'"
 	sqlResolvedByAttestation  = "'" + string(domain.ResolvedByAttestation) + "'"
 	sqlResolvedByConfirmation = "'" + string(domain.ResolvedByConfirmation) + "'"

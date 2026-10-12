@@ -89,7 +89,7 @@ func newDurableSessionStore(query *persistenceQueryFake, storage *fake.ObjectSto
 		query.rows[qSessionOwnerGuard] = [][]any{{int64(4)}}
 	}
 	return &DurableSessionStore{DB: persistenceDBFake{query: query}, Objects: newObjectStateStore(storage),
-		Settlement: TurnSettlementWriter{Budget: &settlerFake{query: query}, UsageCategory: "model_output"}}
+		Settlement: TurnSettlementWriter{Budget: &settlerFake{query: query}, UsageCategory: "model_output", OperatorUsageCategory: "operator"}}
 }
 
 // settlerFake is a budget settler joined to the ending turn's transaction; it records each

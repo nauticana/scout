@@ -279,7 +279,7 @@ func (hub *CacheReplyHub) StoredReply(ctx context.Context, tenantID int64, reque
 	if err != nil {
 		return domain.TurnReply{}, err
 	}
-	if !record.Status.Terminal() && record.Status != domain.TurnHeld {
+	if !record.Status.Terminal() && !heldStatus(record.Status) {
 		return domain.TurnReply{}, fmt.Errorf("%w: turn %q is not terminal", domain.ErrConflict, requestID)
 	}
 	return storedReply(tenantID, requestID, sequence, record), nil
@@ -291,15 +291,20 @@ func storedReply(tenantID int64, requestID string, sequence int64, record domain
 		TenantID: tenantID, RequestID: requestID, ReplyRoute: replyTerminalRouteLabel,
 		Sequence: sequence, Final: true, Fence: record.Fence,
 	}
-	switch record.Status {
-	case domain.TurnCompleted:
+	switch {
+	case record.Status == domain.TurnCompleted:
 		reply.Payload = record.Payload
-	case domain.TurnHeld:
+	case heldStatus(record.Status):
 		reply.ErrorCode, reply.Events = heldFrame()
 	default:
 		reply.ErrorCode = terminalTurnErrorCode(record.Status, record.Payload)
 	}
 	return reply
+}
+
+// heldStatus reports a turn no worker runs until it is released, handed back, or finished.
+func heldStatus(status domain.TurnStatus) bool {
+	return status == domain.TurnHeld || status == domain.TurnOperated
 }
 
 // heldFrame is the error code and event of the frame a held delivery ends on.
@@ -392,7 +397,7 @@ func (subscription *cacheReplySubscription) missing(ctx context.Context) (domain
 	}
 	// A turn held while the cache holds none of its stream ends this delivery on a held frame
 	// rebuilt from the record; a held turn whose final frame was published already said so.
-	if !record.Status.Terminal() && (record.Status != domain.TurnHeld || started) {
+	if !record.Status.Terminal() && (!heldStatus(record.Status) || started) {
 		return domain.TurnReply{}, false, nil
 	}
 	// Past the final frame of a settled turn there is nothing left; a suspended turn's stream continues.

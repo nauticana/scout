@@ -29,7 +29,7 @@ func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 	return &TableTurnRecordStore{
 		DB:         queueDBFake{query: query},
 		Objects:    &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20},
-		Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output"},
+		Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output", OperatorUsageCategory: "operator"},
 	}
 }
 

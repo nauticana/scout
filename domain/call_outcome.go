@@ -69,14 +69,18 @@ func (resolution CallResolution) Valid() bool {
 	return false
 }
 
-// CallOrigin is who made a call: a turn_call_origin code. Operator calls come with takeover.
+// CallOrigin is who made a call: a turn_call_origin code.
 type CallOrigin string
 
-// CallFromAgent is a call the agent's tool loop made.
-const CallFromAgent CallOrigin = "A"
+const (
+	// CallFromAgent is a call the agent's tool loop made.
+	CallFromAgent CallOrigin = "A"
+	// CallFromOperator is a call a person made in a turn they took over.
+	CallFromOperator CallOrigin = "O"
+)
 
 // Valid reports whether the code is a seeded turn_call_origin code.
-func (origin CallOrigin) Valid() bool { return origin == CallFromAgent }
+func (origin CallOrigin) Valid() bool { return origin == CallFromAgent || origin == CallFromOperator }
 
 // MaxAcceptanceWait bounds how long an accepted call may ask its lookup to be awaited.
 const MaxAcceptanceWait = 7 * 24 * time.Hour

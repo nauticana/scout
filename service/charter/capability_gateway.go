@@ -39,8 +39,8 @@ type CapabilityGateway struct {
 	// Actions finds the recorded attempt a lookup's reconciliation names; without it a lookup
 	// answers unknown.
 	Actions evidence.Queries
-	// MaxActions bounds the actions of one execution context a lookup reads; zero takes 1000,
-	// and values above 10000 take 10000.
+	// MaxActions bounds the latest actions of one execution context a lookup reads; zero takes
+	// 1000, and values above 10000 take 10000.
 	MaxActions int
 	Now        func() time.Time
 }
@@ -134,10 +134,6 @@ func (g *CapabilityGateway) Lookup(ctx context.Context, call domain.ToolCall, _ 
 	actions, err := g.Actions.ActionsIn(ctx, inv.Namespace, inv.Runtime.ExecutionContextID, limit)
 	if err != nil {
 		return domain.CallReport{}, fmt.Errorf("read charter actions of request %q: %w", call.RequestID, err)
-	}
-	if len(actions) == limit {
-		unknown.Reason = "the bounded action history may omit the latest attempt"
-		return unknown, nil
 	}
 	action, found := attemptToReconcile(actions, target.ID, inv.MaterialInputsDigest)
 	if !found {

@@ -33,7 +33,8 @@ const (
 const liveTurnColumns = `
 SELECT turn.request_id, turn.conversation_id, turn.turn_no, turn.status_code, turn.fence,
        COALESCE(turn.hold_code, ''), turn.hold_requested_at IS NOT NULL, COALESCE(turn.hold_reason, ''),
-       turn.cancel_requested_at IS NOT NULL, turn.queued_at, turn.started_at, turn.held_at
+       turn.cancel_requested_at IS NOT NULL, turn.queued_at, turn.started_at, turn.held_at,
+       COALESCE(turn.holder_kind, ''), COALESCE(turn.holder_id, ''), turn.hold_until
   FROM conversation_turn turn
   JOIN agent_conversation conv ON conv.partner_id = turn.partner_id AND conv.conversation_id = turn.conversation_id`
 
@@ -45,21 +46,23 @@ var operateQueries = map[string]string{
  LIMIT ?`,
 	qOperateTurn: liveTurnColumns + `
  WHERE turn.partner_id = ? AND conv.agent_id = ? AND turn.request_id = ?`,
-	// The acting context the turn was admitted under, which its re-admission is charged to.
+	// The acting context the turn was admitted under, which its re-admission is charged to, and
+	// the route its replies go to.
 	qOperateDispatch: `
-SELECT conversation_id, agent_id, COALESCE(acting_context, '')
+SELECT conversation_id, agent_id, COALESCE(acting_context, ''), reply_route
   FROM turn_queue
  WHERE partner_id = ? AND request_id = ?`,
 	qOperateRelease: `
-SELECT agent_version FROM agent_conversation WHERE partner_id = ? AND conversation_id = ?`,
+SELECT agent_version, COALESCE(end_user_ref, '') FROM agent_conversation WHERE partner_id = ? AND conversation_id = ?`,
 }
 
 // StudioTurnControl lets an operator see an agent's live turns, hold them, settle their unknown
-// call outcomes, and release held ones. Every call needs AGENT_STUDIO VIEW on the agent, which
-// an unviewable agent fails as not found, and AGENT_OPERATION VIEW to read or OPERATE to change
-// on agent:<id>; a preempting hold also needs PREEMPT and an attestation RECONCILE. A release
-// re-admits the turn's budget before it requeues the turn, and releases only a reservation it
-// newly took when the release itself is refused.
+// call outcomes, release held ones, and take one over: act in it under a lease, then hand it back
+// or finish it. Every call needs AGENT_STUDIO VIEW on the agent, which an unviewable agent fails as
+// not found, and AGENT_OPERATION VIEW to read or OPERATE to change on agent:<id>; a preempting hold
+// also needs PREEMPT and an attestation RECONCILE. A release or handback re-admits the turn's
+// budget before it requeues the turn, and releases only a reservation it newly took when the
+// transition itself is refused.
 type StudioTurnControl struct {
 	DB         port.DatabaseRepository
 	Authorizer contract.StudioAuthorizer
@@ -77,10 +80,26 @@ type StudioTurnControl struct {
 	Separation contract.OperationSeparation
 	// Evidence verifies an attestation's evidence object; evidence without it is refused.
 	Evidence contract.EvidenceObjectVerifier
-	// Audit records each hold, release, attestation, and resolution; nil records none.
+	// Audit records each hold, release, attestation, resolution, and operator act; nil records none.
 	Audit  contract.AuditSink
 	Limits domain.LiveTurnLimits
 	Now    func() time.Time
+
+	// The operator's tool calls need Tools, the release's bound tools; Gateway, the governed gateway
+	// they go through; OperatorBudget, which admits each against the tenant's window; and Dispatch,
+	// which bounds how long one may stay in flight. Without them a tool act is domain.ErrNotReady.
+	Tools          contract.ToolRegistry
+	Gateway        contract.GovernedToolGateway
+	OperatorBudget contract.OperatorBudget
+	Dispatch       domain.ToolDispatchWindow
+	// A reply or finish passes Guardrails under the release's GuardrailConfigs (nil reads an empty
+	// policy) and, when Definitions shows the release requires evidence, Claims; Publisher sends its
+	// frame. Without Guardrails, Definitions, or Publisher a reply is domain.ErrNotReady.
+	Guardrails       contract.GuardrailEnforcer
+	GuardrailConfigs contract.GuardrailConfigRepository
+	Definitions      contract.DefinitionResolver
+	Claims           contract.EvidenceValidator
+	Publisher        contract.TurnReplyPublisher
 
 	once sync.Once
 	qs   port.QueryService
@@ -197,8 +216,8 @@ func decodeLiveTurnCursor(before string) (time.Time, string, error) {
 }
 
 func decodeLiveTurn(row []any) (domain.LiveTurn, error) {
-	if len(row) < 12 {
-		return domain.LiveTurn{}, fmt.Errorf("decode live turn: expected 12 columns, got %d", len(row))
+	if len(row) < 15 {
+		return domain.LiveTurn{}, fmt.Errorf("decode live turn: expected 15 columns, got %d", len(row))
 	}
 	turn := domain.LiveTurn{
 		RequestID: common.AsString(row[0]), ConversationID: common.AsString(row[1]), TurnNo: common.AsInt64(row[2]),
@@ -208,10 +227,13 @@ func decodeLiveTurn(row []any) (domain.LiveTurn, error) {
 	turn.QueuedAt, _ = common.AsTimeOK(row[9])
 	turn.StartedAt, _ = common.AsTimeOK(row[10])
 	turn.HeldAt, _ = common.AsTimeOK(row[11])
+	turn.Holder = domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[12])), ID: common.AsString(row[13])}
+	turn.HoldUntil, _ = common.AsTimeOK(row[14])
 	return turn, nil
 }
 
-// Turn reads one turn of the agent with its call outcomes; a turn of another agent is not found.
+// Turn reads one turn of the agent with its call outcomes and operator entries; a turn of another
+// agent is not found.
 func (s *StudioTurnControl) Turn(ctx context.Context, actor domain.StudioActor, agentID, requestID string) (domain.LiveTurn, error) {
 	if _, err := s.ready(ctx); err != nil {
 		return domain.LiveTurn{}, err
@@ -228,6 +250,9 @@ func (s *StudioTurnControl) turnWithOutcomes(ctx context.Context, tenantID int64
 		return domain.LiveTurn{}, err
 	}
 	if turn.Outcomes, err = s.Outcomes.List(ctx, tenantID, requestID); err != nil {
+		return domain.LiveTurn{}, err
+	}
+	if turn.Entries, err = s.Control.OperatorEntries(ctx, tenantID, requestID); err != nil {
 		return domain.LiveTurn{}, err
 	}
 	return turn, nil
@@ -334,17 +359,24 @@ func (s *StudioTurnControl) Release(ctx context.Context, actor domain.StudioActo
 
 // dispatched rebuilds the acting identity a turn was admitted under from its queue row.
 func (s *StudioTurnControl) dispatched(ctx context.Context, qs port.QueryService, tenantID int64, requestID string) (domain.TurnRequest, error) {
+	dispatch, err := s.dispatch(ctx, qs, tenantID, requestID)
+	return dispatch.Turn, err
+}
+
+// dispatch rebuilds the turn's delivery from its queue row: its acting identity and reply route.
+func (s *StudioTurnControl) dispatch(ctx context.Context, qs port.QueryService, tenantID int64, requestID string) (domain.TurnDispatch, error) {
 	result, err := qs.Query(ctx, qOperateDispatch, tenantID, requestID)
 	if err != nil {
-		return domain.TurnRequest{}, fmt.Errorf("read dispatch of turn %q: %w", requestID, err)
+		return domain.TurnDispatch{}, fmt.Errorf("read dispatch of turn %q: %w", requestID, err)
 	}
-	if len(result.Rows) == 0 {
-		return domain.TurnRequest{}, fmt.Errorf("%w: turn %q was never dispatched", domain.ErrConflict, requestID)
+	if len(result.Rows) == 0 || len(result.Rows[0]) < 4 {
+		return domain.TurnDispatch{}, fmt.Errorf("%w: turn %q was never dispatched", domain.ErrConflict, requestID)
 	}
 	row := result.Rows[0]
 	turn := domain.TurnRequest{
 		TenantContext: domain.TenantContext{TenantID: tenantID}, RequestID: requestID,
 		ConversationID: common.AsString(row[0]), AgentID: common.AsString(row[1]),
 	}
-	return turn, decodeActingContext(common.AsString(row[2]), &turn)
+	err = decodeActingContext(common.AsString(row[2]), &turn)
+	return domain.TurnDispatch{Turn: turn, ReplyRoute: common.AsString(row[3])}, err
 }

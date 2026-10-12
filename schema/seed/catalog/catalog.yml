@@ -28,6 +28,7 @@ seeds:
       - [S, false, Emitting a partial response]
       - [U, false, Parked awaiting a human decision]
       - [H, false, Held under a new fence]
+      - [O, false, Operated by a person under a lease]
       - [C, true, Finished successfully]
       - [F, true, Finished with an error]
       - [X, true, Abandoned before completion]

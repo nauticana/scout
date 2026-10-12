@@ -225,7 +225,7 @@ func (store *TableTurnRecordStore) validate() error {
 }
 
 func (store *TableTurnRecordStore) queryMap() map[string]string {
-	return common.MergeMaps(TurnLedgerQueries(), turnRecordQueries, turnRateQueries)
+	return common.MergeMaps(TurnLedgerQueries(), turnRecordQueries, turnRateQueries, turnSettlementQueries)
 }
 
 func (store *TableTurnRecordStore) queries(ctx context.Context) port.QueryService {
@@ -513,7 +513,7 @@ func refusedAcquisition(requestID string, status domain.TurnStatus, currentLease
 	switch {
 	case !currentLease:
 		return fmt.Errorf("%w: delivery of turn %q is not the current lease of its queue row", domain.ErrFenceLost, requestID)
-	case status == domain.TurnHeld || status == domain.TurnSuspended:
+	case status == domain.TurnHeld || status == domain.TurnOperated || status == domain.TurnSuspended:
 		return fmt.Errorf("%w: turn %q is %s", domain.ErrTurnHeld, requestID, status)
 	}
 	return fmt.Errorf("%w: turn %q is %s", domain.ErrConflict, requestID, status)
@@ -568,7 +568,7 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, owner domain.TurnOw
 		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
 	}
 	turnNo, conversationID := common.AsInt64(touched.Rows[0][0]), common.AsString(touched.Rows[0][1])
-	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, conversationID, turnNo, settlement)
+	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, owner.RequestID, conversationID, turnNo, settlement)
 	if err != nil {
 		return err
 	}
@@ -621,8 +621,8 @@ func (store *TableTurnRecordStore) refusedParked(ctx context.Context, tenantID i
 		return err
 	case !found:
 		return fmt.Errorf("%w: turn request %q", domain.ErrNotFound, requestID)
-	case row.status == domain.TurnHeld:
-		return fmt.Errorf("%w: turn %q", domain.ErrTurnHeld, requestID)
+	case row.status == domain.TurnHeld || row.status == domain.TurnOperated:
+		return fmt.Errorf("%w: turn %q is %s", domain.ErrTurnHeld, requestID, row.status)
 	case done != "" && row.status == done:
 		return nil
 	}

@@ -177,6 +177,9 @@ func (s *StudioTurnControl) dispatchedCall(ctx context.Context, tenantID int64, 
 		RequestID: outcome.Key.RequestID, ConversationID: turn.ConversationID, ToolID: outcome.Tool.ToolID, ToolVersion: outcome.Tool.Version,
 		IdempotencyKey: outcome.IdempotencyKey,
 	}
+	if outcome.Origin == domain.CallFromOperator {
+		return s.operatorCall(ctx, tenantID, call, outcome)
+	}
 	found := false
 	for _, entry := range entries {
 		switch {
@@ -194,6 +197,25 @@ func (s *StudioTurnControl) dispatchedCall(ctx context.Context, tenantID int64, 
 		return domain.ToolCall{}, fmt.Errorf("%w: the journal of turn %q proposes no call %q", domain.ErrConflict, outcome.Key.RequestID, outcome.Key.CallID)
 	}
 	return call, nil
+}
+
+// operatorCall rebuilds a person's call from the entry that records it: its arguments, and the
+// person, whose credential a lookup resolves as the call's own did.
+func (s *StudioTurnControl) operatorCall(ctx context.Context, tenantID int64, call domain.ToolCall, outcome domain.CallOutcome) (domain.ToolCall, error) {
+	entries, err := s.Control.OperatorEntries(ctx, tenantID, outcome.Key.RequestID)
+	if err != nil {
+		return domain.ToolCall{}, err
+	}
+	for _, entry := range entries {
+		if use := entry.Body.Tool; use != nil && use.CallID == outcome.Key.CallID {
+			if call.Operator, err = s.Principals.Resolve(ctx, tenantID, entry.Actor); err != nil {
+				return domain.ToolCall{}, err
+			}
+			call.Arguments = use.Arguments
+			return call, nil
+		}
+	}
+	return domain.ToolCall{}, fmt.Errorf("%w: no operator entry of turn %q records call %q", domain.ErrConflict, outcome.Key.RequestID, outcome.Key.CallID)
 }
 
 // reportSettlement turns a reconciliation answer into the call's settlement; false when the

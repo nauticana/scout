@@ -15,13 +15,15 @@ const (
 	TurnEventApprovalPending  TurnEventKind = "approval_pending"
 	TurnEventApprovalResolved TurnEventKind = "approval_resolved"
 	// TurnEventHeld ends a delivery whose turn was held; a released turn continues the stream.
-	TurnEventHeld      TurnEventKind = "held"
-	TurnEventEvidence  TurnEventKind = "evidence"
-	TurnEventEffect    TurnEventKind = "effect"
-	TurnEventProgress  TurnEventKind = "progress"
-	TurnEventResult    TurnEventKind = "result"
-	TurnEventCitations TurnEventKind = "citations"
-	TurnEventExtension TurnEventKind = "extension"
+	TurnEventHeld TurnEventKind = "held"
+	// TurnEventOperatorReply is a reply a person sent in a turn they took over.
+	TurnEventOperatorReply TurnEventKind = "operator_reply"
+	TurnEventEvidence      TurnEventKind = "evidence"
+	TurnEventEffect        TurnEventKind = "effect"
+	TurnEventProgress      TurnEventKind = "progress"
+	TurnEventResult        TurnEventKind = "result"
+	TurnEventCitations     TurnEventKind = "citations"
+	TurnEventExtension     TurnEventKind = "extension"
 )
 
 // TurnEvent is one typed, versioned event. Exactly the field its Kind names is

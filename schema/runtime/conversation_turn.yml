@@ -54,6 +54,17 @@ columns:
   - name: held_at
     type: TIMESTAMP
     nullable: true
+  - name: holder_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: holder_id
+    type: VARCHAR(120)
+    nullable: true
+    comment: The person who operates the turn, or who finished it
+  - name: hold_until
+    type: TIMESTAMP
+    nullable: true
+    comment: Store-clock end of the operator's lease; the sweeper holds a lapsed turn again
 primary_key: [partner_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turns
@@ -74,6 +85,8 @@ indexes:
     columns: [status_code, queued_at]
   - name: conversation_turn_tenant_queued_ix
     columns: [partner_id, queued_at]
+  - name: conversation_turn_hold_ix
+    columns: [status_code, hold_until]
 checks:
   - name: conversation_turn_number_ck
     expression: turn_no > 0
@@ -96,6 +109,12 @@ checks:
   - name: conversation_turn_hold_code_ck
     expression: hold_code IN ('C', 'A', 'P', 'U')
   - name: conversation_turn_held_code_ck
-    expression: (status_code = 'H') = (hold_code IS NOT NULL)
+    expression: (status_code IN ('H', 'O')) = (hold_code IS NOT NULL)
   - name: conversation_turn_held_at_ck
-    expression: (status_code = 'H') = (held_at IS NOT NULL)
+    expression: (status_code IN ('H', 'O')) = (held_at IS NOT NULL)
+  - name: conversation_turn_holder_ck
+    expression: (holder_kind IS NULL) = (holder_id IS NULL)
+  - name: conversation_turn_operated_ck
+    expression: (status_code <> 'O' OR holder_id IS NOT NULL) AND (holder_id IS NULL OR status_code IN ('O', 'C'))
+  - name: conversation_turn_hold_until_ck
+    expression: (status_code = 'O') = (hold_until IS NOT NULL)

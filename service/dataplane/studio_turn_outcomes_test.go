@@ -62,7 +62,7 @@ func heldCallFixture(t *testing.T, actions ...domain.OperationAction) *turnContr
 		t.Fatal(err)
 	}
 	fixture.fences.Hold(7, "request-1")
-	fixture.query.rows[qOperateRelease] = [][]any{{"v3"}}
+	fixture.query.rows[qOperateRelease] = [][]any{{"v3", ""}}
 	return fixture
 }
 

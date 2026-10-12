@@ -16,6 +16,14 @@ tenant-wide one.
 its `PrincipalRef` is attributed on `Observation`, `SafetyEvent`, and `GuardrailSubject`. A tool call
 whose principal tenant differs from the call tenant is `domain.ErrForbidden`.
 
+A person's tool call in a turn they [operate](governance.md#live-turn-operation) keeps the turn's pinned
+acting principal as `ToolCall.Principal` and names the person in `ToolCall.Operator`, a human of the
+call's tenant (otherwise `ErrForbidden`). Its authority is the intersection of the tools the pinned
+release binds, the turn principal's bindings and authority chain, policy decided as both that principal
+and the person, and the release's guardrails. The person's own credential is resolved for the call,
+`OnBehalfOf` stays the turn's end user, and the gateway's credential, invocation, and guardrail records
+name the person. The agent's operating mode governs only the agent.
+
 `AuthorityChain` is the delegation path in the shape of the RFC 8693 `act` claim: the immediate
 delegator first, the original authority last. Each hop carries a grant id, grantor, remaining depth,
 budget bound, and validity window — references and bounds, never a credential. `ChainVerifier` checks
@@ -46,8 +54,9 @@ template with other tenants, at `template_audience:all` or `template_audience:te
 it by default. `OVERRIDE_GATE`, publishing or restoring a draft its [evaluation gate](governance.md#evaluation-gate)
 does not admit and removing or loosening that gate, is checked at `agent:<id>` and seeded to no role.
 `REVIEW`, reading, grading, and dismissing an agent's sampled and low-rated production turns, is
-checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_OPERATION` `VIEW` (an agent's live turns and their call
-outcomes), `OPERATE` (holding and releasing them and looking up a call's outcome), `PREEMPT` (holding a running
+checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_OPERATION` `VIEW` (an agent's live turns, their call
+outcomes, and operator entries), `OPERATE` (holding, releasing, taking over, acting in, handing back, and
+finishing them and looking up a call's outcome; only a person operates a turn), `PREEMPT` (holding a running
 turn at once), and `RECONCILE` (attesting an unknown call outcome) are checked at `agent:<id>`; `AGENT_ADMIN` holds
 all four and `AGENT_OPER` `VIEW` and `OPERATE`. An attestation also passes `contract.OperationSeparation`, which
 fails closed and requires a second person for a high-risk call. No authoring action implies them, which keeps operating a running agent apart from changing it (see

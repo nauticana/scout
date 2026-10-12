@@ -44,6 +44,9 @@ type TurnRuntime struct {
 	// Control is optional; when set a requested cancellation or a moved fence stops the running
 	// turn and a requested hold is taken at its next durable checkpoint.
 	Control contract.TurnControlWatcher
+	// Operator reads the entries people made while they operated the turn; nil reads none. A step
+	// takes the entries positioned at it, and each reply frame is published again at its sequence.
+	Operator contract.OperatorEntryReader
 	// GuardrailConfigs pins the policy version of the running agent; nil uses an empty policy.
 	GuardrailConfigs contract.GuardrailConfigRepository
 	// Audit records each turn transition once; nil skips auditing. A failed write fails the
@@ -110,6 +113,40 @@ type turnExecution struct {
 	// bounds are the delegation limits this turn may pass on; the zero value
 	// means the turn acts on its own authority and delegates nothing.
 	bounds domain.DelegationBounds
+	// operator are the turn's operator entries, and replies the frames of its replies by sequence.
+	operator []domain.OperatorEntry
+	replies  map[int64]domain.TurnReply
+}
+
+// loadOperator reads the turn's operator entries once per delivery: a turn no worker runs gains
+// none while this one owns it.
+func (runtime *TurnRuntime) loadOperator(ctx context.Context, execution *turnExecution) error {
+	if runtime.Operator == nil {
+		return nil
+	}
+	turn := execution.dispatch.Turn
+	entries, err := runtime.Operator.OperatorEntries(ctx, turn.TenantContext.TenantID, turn.RequestID)
+	if err != nil {
+		return fmt.Errorf("read operator entries: %w", err)
+	}
+	execution.operator, execution.replies = entries, make(map[int64]domain.TurnReply)
+	for _, entry := range entries {
+		if entry.Kind == domain.OperatorReply && entry.Body.Frame != nil {
+			execution.replies[entry.Body.Frame.Sequence] = *entry.Body.Frame
+		}
+	}
+	return nil
+}
+
+// stepOperator are the operator entries positioned at the turn's stepNo-th step.
+func (execution *turnExecution) stepOperator(stepNo int) []domain.OperatorEntry {
+	var entries []domain.OperatorEntry
+	for _, entry := range execution.operator {
+		if entry.Position.StepNo == stepNo {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
 }
 
 // HandleTurn acquires the delivered turn with its claim, executes it, and returns once its
@@ -138,6 +175,9 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, claim domain.TurnCla
 		return runtime.replayTerminal(ctx, execution, record)
 	}
 	if execution.owner, err = runtime.Records.Acquire(ctx, claim); err != nil {
+		return domain.TurnResult{}, err
+	}
+	if err = runtime.loadOperator(ctx, execution); err != nil {
 		return domain.TurnResult{}, err
 	}
 	turnCtx := ctx
@@ -235,7 +275,11 @@ func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnE
 		return domain.TurnResult{}, err
 	}
 	execution.snapshot = snapshot
-	execution.published = finalFrameSequence(snapshot, execution.turnNo)
+	if err = runtime.loadOperator(ctx, execution); err != nil {
+		return domain.TurnResult{}, err
+	}
+	// Every reply a person sent precedes the final frame.
+	execution.published = finalFrameSequence(snapshot, execution.turnNo) + int64(len(execution.replies))
 	errorCode := ""
 	if status != domain.TurnCompleted {
 		errorCode = terminalTurnErrorCode(status, payload)
@@ -392,7 +436,7 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 			Principal:  pinnedPrincipal(execution.dispatch.Turn, execution.snapshot.AgentVersion),
 			OnBehalfOf: actingFor(execution.dispatch.Turn, execution.snapshot), Bounds: execution.bounds, Limits: execution.limits,
 			WorkItemID: execution.dispatch.Turn.WorkItemID, WorkItemDepth: execution.dispatch.Turn.WorkItemDepth, Spend: spend,
-			Owner: execution.owner, HoldRequested: execution.holdRequested,
+			Owner: execution.owner, HoldRequested: execution.holdRequested, Operator: execution.stepOperator(stepNo),
 		}
 		if result, err = executor.Execute(ctx, input); err != nil {
 			spent := spentUsage(err)
@@ -586,7 +630,10 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, claim domain.TurnClaim,
 		return err
 	}
 	execution.snapshot = snapshot
-	execution.published = finalFrameSequence(snapshot, record.TurnNo)
+	if err = runtime.loadOperator(ctx, execution); err != nil {
+		return err
+	}
+	execution.published = finalFrameSequence(snapshot, record.TurnNo) + int64(len(execution.replies))
 	quote, err := runtime.Estimator.Estimate(ctx, turn)
 	if err != nil {
 		return fmt.Errorf("estimate turn budget: %w", err)
@@ -670,6 +717,19 @@ func hasUsage(usage domain.Usage) bool {
 
 func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecution, payload []byte, final bool, errorCode string, events ...domain.TurnEvent) error {
 	turn := execution.dispatch.Turn
+	// A person's reply took its sequence while they operated the turn; it is published again there
+	// under this owner's fence, so a frame the stream refused then is not lost.
+	for {
+		reply, found := execution.replies[execution.published]
+		if !found {
+			break
+		}
+		reply.Fence, reply.EmittedAt = execution.owner.Fence, runtime.now()
+		if err := runtime.Publisher.Publish(ctx, reply); err != nil && !errors.Is(err, domain.ErrReplayExpired) {
+			return err
+		}
+		execution.published++
+	}
 	err := runtime.Publisher.Publish(ctx, domain.TurnReply{
 		TenantID:       turn.TenantContext.TenantID,
 		RequestID:      turn.RequestID,

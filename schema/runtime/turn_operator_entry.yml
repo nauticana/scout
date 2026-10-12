@@ -1,0 +1,89 @@
+table: turn_operator_entry
+comment: Append-only entry a person made in a turn they took over, written only under the operated status, the fence, and the holder's live lease
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: fence
+    type: BIGINT
+    comment: The operated turn's fence the entry was made under
+  - name: entry_no
+    type: INTEGER
+    comment: Position among the turn's operator entries, from 1
+  - name: kind_code
+    type: CHAR(1)
+  - name: actor_kind
+    type: VARCHAR(20)
+  - name: actor_id
+    type: VARCHAR(120)
+  - name: step_no
+    type: INTEGER
+    comment: The turn's step that receives the entry, counted from 1
+  - name: execution_step_id
+    type: BIGINT
+    nullable: true
+    comment: That step, when it had started before the hold
+  - name: after_entry_no
+    type: INTEGER
+    comment: The step's loop journal length at the hold; the step takes the entry once its cursor reaches it
+  - name: entry_uri
+    type: TEXT
+  - name: entry_digest
+    type: CHAR(64)
+  - name: input_tokens
+    type: BIGINT
+    default: "0"
+  - name: output_tokens
+    type: BIGINT
+    default: "0"
+  - name: tool_calls
+    type: INTEGER
+    default: "0"
+  - name: search_queries
+    type: BIGINT
+    default: "0"
+  - name: cost_minor_units
+    type: BIGINT
+    default: "0"
+  - name: currency_code
+    type: CHAR(3)
+    nullable: true
+    comment: The tenant budget currency a tool call was settled in; its exponent comes from the currency catalog
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, request_id, fence, entry_no]
+foreign_keys:
+  - name: turn_operator_entries
+    columns: [partner_id, request_id]
+    references:
+      table: conversation_turn
+      columns: [partner_id, request_id]
+  - name: step_operator_entries
+    columns: [partner_id, request_id, execution_step_id]
+    references:
+      table: step_idempotency
+      columns: [partner_id, request_id, execution_step_id]
+  - name: currency_operator_entries
+    columns: [currency_code]
+    references:
+      table: currency
+      columns: [code]
+indexes:
+  - name: turn_operator_entry_turn_uq
+    columns: [partner_id, request_id, entry_no]
+    unique: true
+checks:
+  - name: turn_operator_entry_kind_ck
+    expression: kind_code IN ('N', 'T', 'Y', 'W', 'H')
+  - name: turn_operator_entry_position_ck
+    expression: fence > 0 AND entry_no > 0 AND step_no > 0 AND after_entry_no >= 0 AND (execution_step_id IS NOT NULL OR after_entry_no = 0)
+  - name: turn_operator_entry_actor_ck
+    expression: CHAR_LENGTH(actor_kind) > 0 AND CHAR_LENGTH(actor_id) > 0
+  - name: turn_operator_entry_digest_ck
+    expression: CHAR_LENGTH(entry_digest) = 64
+  - name: turn_operator_entry_usage_ck
+    expression: input_tokens >= 0 AND output_tokens >= 0 AND tool_calls >= 0 AND search_queries >= 0 AND cost_minor_units >= 0
+  - name: turn_operator_entry_spend_ck
+    expression: (kind_code = 'T') = (currency_code IS NOT NULL) AND (kind_code = 'T' OR (input_tokens = 0 AND output_tokens = 0 AND tool_calls = 0 AND search_queries = 0 AND cost_minor_units = 0))

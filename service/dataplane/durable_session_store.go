@@ -136,7 +136,7 @@ type DurableSessionStore struct {
 }
 
 // completionQueries are the statements of one completion: the session's and the usage events'.
-var completionQueries = common.MergeMaps(durableSessionQueries, TurnLedgerQueries())
+var completionQueries = common.MergeMaps(durableSessionQueries, TurnLedgerQueries(), turnSettlementQueries)
 
 func (store *DurableSessionStore) validate() error {
 	if store.DB == nil || store.Objects == nil {
@@ -333,7 +333,7 @@ func (store *DurableSessionStore) completeTx(ctx context.Context, owner domain.T
 	if guarded != turnNo {
 		return fmt.Errorf("%w: the owner of turn %d cannot complete turn %d", domain.ErrFenceLost, guarded, turnNo)
 	}
-	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, conversationID, turnNo, settlement)
+	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, owner.RequestID, conversationID, turnNo, settlement)
 	if err != nil {
 		return err
 	}

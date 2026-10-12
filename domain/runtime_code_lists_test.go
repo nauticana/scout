@@ -19,7 +19,7 @@ func TestRuntimeCatalogCodesAgreeWithSeedAndSchema(t *testing.T) {
 	lists := []runtimeCatalogList{
 		{
 			table: "turn_status",
-			codes: codes(TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnHeld, TurnCompleted, TurnFailed, TurnCancelled),
+			codes: codes(TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnHeld, TurnOperated, TurnCompleted, TurnFailed, TurnCancelled),
 			valid: func(code string) bool { return TurnStatus(code).Valid() },
 			columns: [][2]string{{"runtime/conversation_turn.yml", "status_code"}, {"runtime/agent_work_item.yml", "status_code"},
 				{"runtime/agent_run.yml", "status_code"}},
@@ -120,7 +120,7 @@ func TestRuntimeCheckedCodesAgreeWithSeedAndSchema(t *testing.T) {
 			t.Errorf("terminal turn status %q must be terminal and a run status", status)
 		}
 	}
-	for _, status := range []TurnStatus{TurnQueued, TurnRunning, TurnStreaming, TurnSuspended} {
+	for _, status := range []TurnStatus{TurnQueued, TurnRunning, TurnStreaming, TurnSuspended, TurnHeld, TurnOperated} {
 		if status.Terminal() || RunStatus(status).Valid() {
 			t.Errorf("live turn status %q must be neither terminal nor a run status", status)
 		}

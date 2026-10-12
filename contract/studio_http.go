@@ -40,10 +40,20 @@ type StudioPauseBackend interface {
 }
 
 // StudioTurnControlBackend lets an operator see an agent's live turns, hold and release them,
-// and settle their unknown call outcomes. Reading needs AGENT_OPERATION VIEW and changing
-// OPERATE on the agent, a preempting hold PREEMPT too, and an attestation RECONCILE; an agent
-// the actor cannot view in Studio, and a turn of another agent, read as not found.
+// take them over, act in them, and hand them back or finish them, and settle their unknown call
+// outcomes. Reading needs AGENT_OPERATION VIEW and changing OPERATE on the agent, a preempting
+// hold PREEMPT too, and an attestation RECONCILE; an agent the actor cannot view in Studio, and a
+// turn of another agent, read as not found. A stale fence or a lapsed lease is domain.ErrConflict
+// or domain.ErrFenceLost.
 type StudioTurnControlBackend interface {
+	// TakeOver takes a turn held at the fence the actor saw, with no open call outcome.
+	TakeOver(ctx context.Context, actor domain.StudioActor, request domain.TurnTakeoverRequest) (domain.LiveTurn, error)
+	// Act appends one entry to a turn the actor operates and renews their lease.
+	Act(ctx context.Context, actor domain.StudioActor, request domain.TurnActRequest) (domain.TurnActResult, error)
+	// HandBack re-admits the turn's budget, then returns it to the agent with an optional instruction.
+	HandBack(ctx context.Context, actor domain.StudioActor, request domain.TurnHandbackRequest) (domain.LiveTurn, error)
+	// Finish completes a turn the actor operates with their guarded reply.
+	Finish(ctx context.Context, actor domain.StudioActor, request domain.TurnFinishRequest) (domain.LiveTurn, error)
 	LiveTurns(ctx context.Context, actor domain.StudioActor, filter domain.LiveTurnFilter) (domain.LiveTurnPage, error)
 	// Turn reads one turn with its call outcomes.
 	Turn(ctx context.Context, actor domain.StudioActor, agentID, requestID string) (domain.LiveTurn, error)

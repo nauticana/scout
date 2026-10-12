@@ -100,6 +100,8 @@ type loopRun struct {
 	repeats   map[string]int
 	events    []domain.TurnEvent
 	started   time.Time
+	// drained counts the operator entries already given to the model.
+	drained int
 }
 
 func (executor *ToolLoopExecutor) now() time.Time {
@@ -266,6 +268,7 @@ func (executor *ToolLoopExecutor) iterate(ctx context.Context, run *loopRun) (do
 		if iteration > 1 && run.holdRequested() {
 			return domain.StepResult{}, fmt.Errorf("%w: before loop iteration %d", domain.ErrTurnHeld, iteration)
 		}
+		run.drainOperator()
 		decision, err := executor.decide(ctx, run, iteration)
 		if err != nil {
 			return domain.StepResult{}, err
@@ -414,6 +417,10 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		}
 		run.recordCall(call, reference, entry, wasPending)
 		return *entry.Observation, call, run.account(entry.Usage)
+	}
+	if withdrawal, withdrawn := run.withdrawal(call.CallID); withdrawn {
+		observation, err := executor.withdraw(ctx, run, iteration, call, reference, withdrawal, wasPending)
+		return observation, call, err
 	}
 	mutating := !run.readOnly[call.Name]
 	sent := outgoingCall{key: run.callKey(call), reference: reference, call: call, proposal: proposal, iteration: iteration, wasPending: wasPending}

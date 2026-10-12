@@ -21,6 +21,7 @@ type RunActions struct {
 
 var _ contract.CharterActionSource = (*RunActions)(nil)
 
+// RunActions returns the latest limit actions of the run, in time order.
 func (r *RunActions) RunActions(ctx context.Context, tenantID int64, requestID string, limit int) ([]domain.CharterAction, error) {
 	if r == nil || r.Evidence == nil || r.Namespace == nil {
 		return nil, fmt.Errorf("%w: run actions need evidence and a namespace", domain.ErrNotReady)

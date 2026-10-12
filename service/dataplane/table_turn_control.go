@@ -33,8 +33,17 @@ const (
 	defaultCancelReadFailures = 3
 )
 
-// unheld clears every hold column; a held or parked turn leaves its hold this way.
-const unheld = `hold_code = NULL, held_at = NULL, hold_requested_at = NULL, hold_reason = NULL`
+// unheld clears every hold column, the holder's included; a held, operated, or parked turn leaves
+// its hold this way.
+const unheld = `hold_code = NULL, held_at = NULL, hold_requested_at = NULL, hold_reason = NULL,
+       holder_kind = NULL, holder_id = NULL, hold_until = NULL`
+
+// noOpenOutcome gates a transition of the turn aliased turn on none of its calls awaiting an
+// outcome. After a hold no fenced writer adds a call and calls only move toward resolution, so
+// the gate in the transition's own statement is race-free without a lock.
+const noOpenOutcome = `
+   AND NOT EXISTS (SELECT 1 FROM turn_call_outcome o
+                    WHERE o.partner_id = turn.partner_id AND o.request_id = turn.request_id AND o.status_code IN (` + sqlCallOpen + `))`
 
 var turnControlQueries = map[string]string{
 	// The first request wins, so the recorded reason is the one that stopped the turn.
@@ -44,12 +53,12 @@ UPDATE conversation_turn
        cancel_reason = COALESCE(cancel_reason, ?)
  WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnLive + `)
 RETURNING status_code`,
-	// Nothing runs a suspended or held turn, so it goes back to a worker under a new fence; the
-	// worker ends it cancelled and releases the reservation the turn kept.
+	// Nothing runs a suspended, held, or operated turn, so it goes back to a worker under a new
+	// fence; the worker ends it cancelled and releases the reservation the turn kept.
 	qControlWake: `
 UPDATE conversation_turn
    SET status_code = ` + sqlTurnQueued + `, fence = fence + 1, ` + unheld + `
- WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnSuspended + `, ` + sqlTurnHeld + `)
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnSuspended + `, ` + sqlTurnHeldOrOperated + `)
 RETURNING turn_no`,
 	qQueueRequeue: turnDispatcherQueries[qQueueRequeue],
 	// One poll reads every control signal of the running turn.
@@ -73,14 +82,10 @@ UPDATE conversation_turn
 RETURNING status_code, fence`,
 	qControlState: `
 SELECT status_code, fence FROM conversation_turn WHERE partner_id = ? AND request_id = ?`,
-	// After a hold no fenced writer adds a call, and calls only move toward resolution, so the
-	// gate in the same statement is race-free without a lock.
 	qControlRelease: `
 UPDATE conversation_turn turn
    SET status_code = ` + sqlTurnQueued + `, fence = fence + 1, ` + unheld + `
- WHERE turn.partner_id = ? AND turn.request_id = ? AND turn.status_code = ` + sqlTurnHeld + ` AND turn.fence = ?
-   AND NOT EXISTS (SELECT 1 FROM turn_call_outcome o
-                    WHERE o.partner_id = turn.partner_id AND o.request_id = turn.request_id AND o.status_code IN (` + sqlCallOpen + `))
+ WHERE turn.partner_id = ? AND turn.request_id = ? AND turn.status_code = ` + sqlTurnHeld + ` AND turn.fence = ?` + noOpenOutcome + `
 RETURNING turn.fence`,
 	// Preemption holds any live turn at once under a new fence; a running worker's next fenced write is refused.
 	qControlPreempt: `
@@ -97,10 +102,11 @@ UPDATE turn_call_outcome SET status_code = ` + sqlCallUnknown + `
 RETURNING call_id`,
 }
 
-// TableTurnControl cancels, holds, and releases turns from any process and lets the worker
-// running one watch for those requests. Every request is a column of conversation_turn, so it
-// cannot be lost and also reaches a turn that is queued, parked, or picked up later; the worker
-// polls it. Cache is optional and only shortens the delay: a lost wake-up costs one poll interval.
+// TableTurnControl cancels, holds, and releases turns from any process, lets people operate
+// held ones, and lets the worker running one watch for those requests. Every request is a column
+// of conversation_turn, so it cannot be lost and also reaches a turn that is queued, parked, or
+// picked up later; the worker polls it. Cache is optional and only shortens the delay: a lost
+// wake-up costs one poll interval.
 type TableTurnControl struct {
 	DB    keelport.DatabaseRepository
 	Cache cache.CacheService
@@ -109,6 +115,13 @@ type TableTurnControl struct {
 	// MaxReadFailures consecutive failed control reads stop the turn; default 3.
 	MaxReadFailures int
 	Now             func() time.Time
+	// Objects stores operator entries and the response of a turn a person finishes, Settlement
+	// settles that turn, and Operation bounds operation; the operator methods need all three.
+	Objects    ObjectStateCodec
+	Settlement TurnSettlementWriter
+	Operation  domain.OperatorSettings
+	// MaxResultCardBytes bounds a finished response copied into turn history; default 64 KiB.
+	MaxResultCardBytes int
 
 	once   sync.Once
 	qs     keelport.QueryService
@@ -116,9 +129,11 @@ type TableTurnControl struct {
 }
 
 var (
-	_ contract.TurnCanceller      = (*TableTurnControl)(nil)
-	_ contract.TurnControlWatcher = (*TableTurnControl)(nil)
-	_ contract.TurnControl        = (*TableTurnControl)(nil)
+	_ contract.TurnCanceller       = (*TableTurnControl)(nil)
+	_ contract.TurnControlWatcher  = (*TableTurnControl)(nil)
+	_ contract.TurnControl         = (*TableTurnControl)(nil)
+	_ contract.OperatorEntryReader = (*TableTurnControl)(nil)
+	_ contract.TurnHoldLapser      = (*TableTurnControl)(nil)
 )
 
 func (control *TableTurnControl) queries(ctx context.Context) (keelport.QueryService, error) {
@@ -129,7 +144,7 @@ func (control *TableTurnControl) queries(ctx context.Context) (keelport.QuerySer
 		return nil, fmt.Errorf("turn control: poll interval and read failures must not be negative")
 	}
 	control.once.Do(func() {
-		control.qs = control.DB.GetQueryService(ctx, turnControlQueries)
+		control.qs = control.DB.GetQueryService(ctx, operationQueries)
 		control.signal.cache, control.signal.channel = control.Cache, controlChannel
 	})
 	return control.qs, nil
@@ -153,7 +168,7 @@ func (control *TableTurnControl) Close() error {
 }
 
 // Cancel records the request; a turn that is unknown or already terminal is domain.ErrNotFound.
-// A suspended or held turn is woken under a new fence so a worker ends it.
+// A suspended, held, or operated turn is woken under a new fence so a worker ends it.
 func (control *TableTurnControl) Cancel(ctx context.Context, tenantID int64, requestID, reason string) error {
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
 		return fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
@@ -162,7 +177,7 @@ func (control *TableTurnControl) Cancel(ctx context.Context, tenantID int64, req
 		return err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := control.DB.BeginTx(ctx, turnControlQueries)
+	tx, err := control.DB.BeginTx(ctx, operationQueries)
 	if err != nil {
 		return fmt.Errorf("begin turn cancellation: %w", err)
 	}
@@ -182,7 +197,7 @@ func (control *TableTurnControl) Cancel(ctx context.Context, tenantID int64, req
 	if _, err = tx.Query(ctx, qControlUnknown, tenantID, requestID); err != nil {
 		return fmt.Errorf("mark cancelled turn's open calls unknown: %w", err)
 	}
-	if status := domain.TurnStatus(common.AsString(requested.Rows[0][0])); status == domain.TurnSuspended || status == domain.TurnHeld {
+	if status := domain.TurnStatus(common.AsString(requested.Rows[0][0])); status == domain.TurnSuspended || status == domain.TurnHeld || status == domain.TurnOperated {
 		if _, err = tx.Query(ctx, qControlWake, tenantID, requestID); err != nil {
 			return fmt.Errorf("wake parked turn: %w", err)
 		}
@@ -230,12 +245,23 @@ func (control *TableTurnControl) RequestHold(ctx context.Context, tenantID int64
 		}
 		return outcome, control.wake(ctx, tenantID, requestID, "hold request")
 	}
+	return control.alreadyHeld(ctx, qs, tenantID, requestID)
+}
+
+// alreadyHeld reads why a hold matched no turn: a held turn reports its fence, one a person
+// operates is domain.ErrTurnHeld, and any other is not a live, uncancelled turn.
+func (control *TableTurnControl) alreadyHeld(ctx context.Context, qs keelport.QueryService, tenantID int64, requestID string) (domain.TurnHoldOutcome, error) {
 	state, err := qs.Query(ctx, qControlState, tenantID, requestID)
 	if err != nil {
 		return domain.TurnHoldOutcome{}, fmt.Errorf("read turn state: %w", err)
 	}
-	if len(state.Rows) > 0 && domain.TurnStatus(common.AsString(state.Rows[0][0])) == domain.TurnHeld {
-		return domain.TurnHoldOutcome{Status: domain.TurnHeld, Fence: common.AsInt64(state.Rows[0][1])}, nil
+	if len(state.Rows) > 0 {
+		switch status := domain.TurnStatus(common.AsString(state.Rows[0][0])); status {
+		case domain.TurnHeld:
+			return domain.TurnHoldOutcome{Status: domain.TurnHeld, Fence: common.AsInt64(state.Rows[0][1])}, nil
+		case domain.TurnOperated:
+			return domain.TurnHoldOutcome{}, fmt.Errorf("%w: turn %q is operated by a person", domain.ErrTurnHeld, requestID)
+		}
 	}
 	return domain.TurnHoldOutcome{}, fmt.Errorf("%w: no live, uncancelled turn for request %q", domain.ErrNotFound, requestID)
 }
@@ -259,14 +285,7 @@ func (control *TableTurnControl) Preempt(ctx context.Context, tenantID int64, re
 		outcome := domain.TurnHoldOutcome{Status: domain.TurnStatus(common.AsString(held.Rows[0][0])), Fence: common.AsInt64(held.Rows[0][1])}
 		return outcome, control.wake(ctx, tenantID, requestID, "preemption")
 	}
-	state, err := qs.Query(ctx, qControlState, tenantID, requestID)
-	if err != nil {
-		return domain.TurnHoldOutcome{}, fmt.Errorf("read turn state: %w", err)
-	}
-	if len(state.Rows) > 0 && domain.TurnStatus(common.AsString(state.Rows[0][0])) == domain.TurnHeld {
-		return domain.TurnHoldOutcome{Status: domain.TurnHeld, Fence: common.AsInt64(state.Rows[0][1])}, nil
-	}
-	return domain.TurnHoldOutcome{}, fmt.Errorf("%w: no live, uncancelled turn for request %q", domain.ErrNotFound, requestID)
+	return control.alreadyHeld(ctx, qs, tenantID, requestID)
 }
 
 // Release returns the turn held at expectedFence to the queue under a new fence, with its queue
@@ -279,7 +298,7 @@ func (control *TableTurnControl) Release(ctx context.Context, tenantID int64, re
 		return 0, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := control.DB.BeginTx(ctx, turnControlQueries)
+	tx, err := control.DB.BeginTx(ctx, operationQueries)
 	if err != nil {
 		return 0, fmt.Errorf("begin turn release: %w", err)
 	}

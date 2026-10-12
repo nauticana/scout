@@ -76,7 +76,7 @@ func (gateway *GovernedGateway) completed(ctx context.Context, call domain.ToolC
 		return domain.CallReport{}, err
 	}
 	subject := domain.GuardrailSubject{
-		TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+		TenantID: call.TenantContext.TenantID, Principal: actor(call),
 		RequestID: call.RequestID, ConversationID: call.ConversationID, ReleaseVersion: call.Principal.Release,
 	}
 	guarded, err := gateway.Guardrails.AfterTool(ctx, guardrails, subject, result)

@@ -42,7 +42,7 @@ func TestEvaluateAllAlertsOnOutcomesLeftUnresolved(t *testing.T) {
 		t.Fatalf("resolve args = %v", args)
 	}
 	sql := healthQueries[qHealthUnresolved]
-	for _, part := range []string{"t.status_code = " + sqlTurnHeld, "t.held_at <= CURRENT_TIMESTAMP - make_interval(mins => ?)",
+	for _, part := range []string{"t.status_code IN (" + sqlTurnHeld + ", " + sqlTurnOperated + ")", "t.held_at <= CURRENT_TIMESTAMP - make_interval(mins => ?)",
 		"o.status_code IN (" + sqlCallOpen + ")", "t.partner_id = ? AND c.agent_id = ?"} {
 		if !strings.Contains(sql, part) {
 			t.Errorf("unresolved count lacks %q", part)

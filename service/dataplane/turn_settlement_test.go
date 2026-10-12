@@ -121,7 +121,7 @@ func TestDurableSessionStoreSettlesAndCompletesInOneTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{qSessionActiveTurn, qSessionOwnerGuard, "scout_isolation_lock_budget", "scout_isolation_get_budget",
-		"scout_isolation_settle_budget", qLedgerUsageSettled, qLedgerInsertUsageEvent, qSessionCompleteTurn}
+		"scout_isolation_settle_budget", qSettleOperatorUsage, qLedgerUsageSettled, qLedgerInsertUsageEvent, qSessionCompleteTurn}
 	if !slices.Equal(query.calls, want) || query.commits != 1 {
 		t.Fatalf("statements %v, commits %d; want %v in one transaction", query.calls, query.commits, want)
 	}

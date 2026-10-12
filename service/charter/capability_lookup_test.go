@@ -31,11 +31,8 @@ func TestCapabilityGatewayLooksAnUnknownCallUpWithoutSendingIt(t *testing.T) {
 		t.Fatalf("a lookup that cannot read actions = %+v, %v", report, err)
 	}
 	h.gateway.Actions = evidence.Queries{Provider: h.runtime.Evidence}
+	// Charter returns the latest actions, so a window of one still holds the attempt to reconcile.
 	h.gateway.MaxActions = 1
-	if bounded, err := h.gateway.Lookup(ctx, reserveCall("turn-42:2"), domain.ToolDefinition{}); err != nil || bounded.Status != domain.CallUnknown {
-		t.Fatalf("a lookup with truncated history = %+v, %v", bounded, err)
-	}
-	h.gateway.MaxActions = 1000
 	report, err := h.gateway.Lookup(ctx, reserveCall("turn-42:2"), domain.ToolDefinition{})
 	if err != nil || report.Status != domain.CallCompleted || report.Resolution != domain.ResolvedByLookup ||
 		string(report.Result.Output) != `{"outcome":"reserved"}` || report.Result.Usage.ToolCalls != 1 {

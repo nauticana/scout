@@ -62,7 +62,10 @@ type GovernedGateway struct {
 // A failure says what became of the call: domain.ErrNotSent when it was refused before it left;
 // for a non-read-only tool, domain.ErrEffectUnknown when it was sent and nothing establishes its
 // effect, domain.ErrNoEffect or domain.ErrEffectViolated when its effect is proven absent, and
-// domain.ErrOutputWithheld when it took effect but its output cannot be returned.
+// domain.ErrOutputWithheld when it took effect but its output cannot be returned. A person's call
+// in a turn they took over is bounded by decision 5's intersection: the turn principal's release
+// bindings and authority chain through the Authorizer, policy as that principal and as the person,
+// the release's guardrails, and the person's own credential; the agent's operating mode does not apply.
 func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
 	if err := gateway.validate(call); err != nil {
 		return domain.ToolResult{}, notSent(err)
@@ -81,6 +84,17 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 		return result, fmt.Errorf("%w: %w", domain.ErrOutputWithheld, recordErr)
 	}
 	return result, errors.Join(err, recordErr)
+}
+
+// operated reports a call a person makes in a turn they took over.
+func operated(call domain.ToolCall) bool { return call.Operator.Kind != "" }
+
+// actor is who the call's records name: the person for an operated call, else its principal.
+func actor(call domain.ToolCall) domain.PrincipalRef {
+	if operated(call) {
+		return domain.PrincipalRef{Kind: call.Operator.Kind, ID: call.Operator.ID}
+	}
+	return domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID}
 }
 
 // notSent marks a failure that kept the call from leaving the platform.
@@ -130,12 +144,21 @@ func (gateway *GovernedGateway) prepare(ctx context.Context, call domain.ToolCal
 	if err := gateway.Authorizer.Authorize(ctx, call, definition); err != nil {
 		return preparedCall{}, err
 	}
-	policyAsk, err := gateway.decide(ctx, call, definition)
+	policyAsk, err := gateway.decide(ctx, call, call.Principal, definition)
 	if err != nil {
 		return preparedCall{}, err
 	}
-	autonomyAsks, err := gateway.autonomy(ctx, call, definition)
-	if err != nil {
+	autonomyAsks := false
+	if operated(call) {
+		// A person's call meets policy as the person too; the agent's operating mode does not govern a person.
+		operatorAsk, err := gateway.decide(ctx, call, call.Operator, definition)
+		if err != nil {
+			return preparedCall{}, err
+		}
+		if operatorAsk != nil && (policyAsk == nil || scope.ApprovalRiskRank(operatorAsk.RiskTier) > scope.ApprovalRiskRank(policyAsk.RiskTier)) {
+			policyAsk = operatorAsk
+		}
+	} else if autonomyAsks, err = gateway.autonomy(ctx, call, definition); err != nil {
 		return preparedCall{}, err
 	}
 	if err := gateway.approve(ctx, call, policyAsk, autonomyAsks); err != nil {
@@ -158,7 +181,12 @@ func (gateway *GovernedGateway) prepare(ctx context.Context, call domain.ToolCal
 	if err != nil {
 		return preparedCall{}, err
 	}
-	credential, authority, err := gateway.Credentials.Credential(ctx, call.Principal, call.ToolID, "invoke", gateway.CredentialPurpose)
+	// A person's call runs on the person's own credential, resolved for this call.
+	holder := call.Principal
+	if operated(call) {
+		holder = call.Operator
+	}
+	credential, authority, err := gateway.Credentials.Credential(ctx, holder, call.ToolID, "invoke", gateway.CredentialPurpose)
 	if err != nil {
 		return preparedCall{}, err
 	}
@@ -219,7 +247,7 @@ func (gateway *GovernedGateway) dispatch(ctx context.Context, prepared preparedC
 			}
 			if gateway.Guardrails != nil {
 				subject := domain.GuardrailSubject{
-					TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+					TenantID: call.TenantContext.TenantID, Principal: actor(call),
 					RequestID: call.RequestID, ConversationID: call.ConversationID, ReleaseVersion: call.Principal.Release,
 				}
 				guarded, err := gateway.Guardrails.AfterTool(ctx, prepared.guardrails, subject, result)
@@ -319,19 +347,23 @@ func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	if call.Principal.TenantID != call.TenantContext.TenantID {
 		return fmt.Errorf("%w: principal tenant %d does not own the call", domain.ErrForbidden, call.Principal.TenantID)
 	}
+	if operated(call) && (call.Operator.Kind != domain.PrincipalHuman || strings.TrimSpace(call.Operator.ID) == "" || call.Operator.TenantID != call.TenantContext.TenantID) {
+		return fmt.Errorf("%w: an operator call is made by a person of the call's tenant", domain.ErrForbidden)
+	}
 	return nil
 }
 
-// decide asks the policy decision point and applies every obligation it attached. An
-// unrecognized obligation is a hard failure: silently ignoring one would turn a conditional
-// allow into an unconditional one. With an approval gate composed, require_approval becomes
-// one ask at the riskiest tier its obligations name, which approve then puts to a person.
-func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall, definition domain.ToolDefinition) (*domain.ApprovalAsk, error) {
+// decide asks the policy decision point about principal invoking the call and applies every
+// obligation it attached. An unrecognized obligation is a hard failure: silently ignoring one would
+// turn a conditional allow into an unconditional one. With an approval gate composed,
+// require_approval becomes one ask at the riskiest tier its obligations name, which approve then
+// puts to a person.
+func (gateway *GovernedGateway) decide(ctx context.Context, call domain.ToolCall, principal domain.Principal, definition domain.ToolDefinition) (*domain.ApprovalAsk, error) {
 	if gateway.Policy == nil {
 		return nil, nil
 	}
 	subject := domain.DecisionSubject{
-		Principal: call.Principal, Action: domain.PolicyActionToolInvoke, Resource: definition.ToolID,
+		Principal: principal, Action: domain.PolicyActionToolInvoke, Resource: definition.ToolID,
 		ResourceKind: domain.ResourceTool, RequestID: call.RequestID, ConversationID: call.ConversationID,
 	}
 	decision, err := gateway.Policy.Decide(ctx, subject)
@@ -441,7 +473,7 @@ func (gateway *GovernedGateway) recordCredential(ctx context.Context, call domai
 		return nil
 	}
 	return gateway.Audit.Record(ctx, domain.DecisionRecord{
-		TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+		TenantID: call.TenantContext.TenantID, Principal: actor(call),
 		Authority: authority, ScopeID: call.Principal.ScopeID, Category: domain.DecisionCategoryCredential,
 		Action: "resolve", Resource: definition.ToolID, ReleaseVersion: call.Principal.Release,
 		Outcome: domain.DecisionAllow, RequestID: call.RequestID, ConversationID: call.ConversationID,
@@ -462,7 +494,7 @@ func (gateway *GovernedGateway) recordInvocation(ctx context.Context, call domai
 		reason = strings.TrimPrefix(reason+" effect "+string(result.Effect.Status), " ")
 	}
 	return gateway.Audit.Record(ctx, domain.DecisionRecord{
-		TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
+		TenantID: call.TenantContext.TenantID, Principal: actor(call),
 		ScopeID: call.Principal.ScopeID, Category: domain.DecisionCategoryToolInvoke, Action: "invoke",
 		Resource: call.ToolID, ReleaseVersion: call.Principal.Release, Outcome: outcome, Reason: reason,
 		RequestID: call.RequestID, ConversationID: call.ConversationID,

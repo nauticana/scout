@@ -293,6 +293,7 @@ flowchart RL
         step_loop_entry["step_loop_entry"]
         turn_call_outcome["turn_call_outcome"]
         turn_call_attestation["turn_call_attestation"]
+        turn_operator_entry["turn_operator_entry"]
         turn_queue["turn_queue"]
         turn_dead_letter["turn_dead_letter"]
         budget_reservation["budget_reservation"]
@@ -320,6 +321,8 @@ flowchart RL
     turn_call_outcome --> step_idempotency
     turn_call_outcome --> tool_version
     turn_call_attestation --> turn_call_outcome
+    turn_operator_entry --> conversation_turn
+    turn_operator_entry --> step_idempotency
     budget_reservation --> conversation_turn
 
     subgraph release["Release"]
@@ -1671,6 +1674,8 @@ erDiagram
     step_idempotency ||--o{ turn_call_outcome : step_call_outcomes
     tool_version ||--o{ turn_call_outcome : tool_call_outcomes
     turn_call_outcome ||--o{ turn_call_attestation : call_outcome_attestations
+    conversation_turn ||--o{ turn_operator_entry : turn_operator_entries
+    step_idempotency |o--o{ turn_operator_entry : step_operator_entries
     conversation_turn ||--o{ budget_reservation : budget_reservations
     budget_reservation }o--|| reservation_status : status_budget_reservations
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
@@ -1723,6 +1728,9 @@ erDiagram
         varchar hold_reason
         char hold_code
         timestamp held_at
+        varchar holder_kind
+        varchar holder_id
+        timestamp hold_until
     }
     turn_status {
         char code PK
@@ -1807,6 +1815,27 @@ erDiagram
         varchar note
         text evidence_uri
         timestamp attested_at
+    }
+    turn_operator_entry {
+        bigint partner_id PK,FK
+        varchar request_id PK,FK
+        bigint fence PK
+        integer entry_no PK
+        char kind_code
+        varchar actor_kind
+        varchar actor_id
+        integer step_no
+        bigint execution_step_id FK
+        integer after_entry_no
+        text entry_uri
+        char entry_digest
+        bigint input_tokens
+        bigint output_tokens
+        integer tool_calls
+        bigint search_queries
+        bigint cost_minor_units
+        char currency_code FK
+        timestamp created_at
     }
     idempotency_status {
         char code PK
@@ -1910,15 +1939,19 @@ Settlement writes one `usage_event` per model that performed part of the turn, p
 
 `turn_feedback` holds one person's rating, 1 to 5, of one completed turn; the person is kept for audit, and reports count ratings per release, never per person.
 
-`step_checkpoint`, `budget_reservation`, and `usage_event` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of an `L` (tool loop) step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
+`step_checkpoint`, `budget_reservation`, `usage_event`, and `turn_operator_entry` reference `currency`; those edges are omitted from the diagram to keep the layout readable. `agent_ops_event` deliberately references the Keel business partner directly because provisioning failures can occur before `agent_tenant` exists. The durable checkpoint precedes cache refresh and queue acknowledgement, and `step_idempotency` makes at-least-once delivery replay-safe. `step_loop_entry` is the append-only journal of an `L` (tool loop) step: each model decision and tool observation is one numbered entry whose body lives in object storage, so a redelivered or resumed loop replays it instead of repeating a decision or an effect.
 
-Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry. Each hold is charged to the turn's agent in `principal_kind` and `principal_id`; a release budget — per turn, rolling window, or calendar day or month, with a frozen currency exponent — is enforced against the agent's settled and live holds in the current period, measured by the database clock, which the `budget_reservation_principal_ix` index on principal, status, and `settled_at` serves.
+Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enforces this order and the foreign key preserves it. `budget_reservation` is an attempt lease. A nonterminal turn may replace an expired attempt after fencing it; live attempts replay idempotently. Settlement records actual usage even above the grant, so overruns remain in the tenant window. `BudgetLedger` owns reserve, settle, release, and bounded expiry. Each turn hold is charged to the turn's agent in `principal_kind` and `principal_id`, and a person's hold for a tool call in a turn they operate to that person; the unique `budget_reservation_request_attempt_uq (partner_id, request_id, principal_kind, attempt_no)` numbers each kind's attempts apart, and the ledger's turn lookup reads only the agent's. A release budget — per turn, rolling window, or calendar day or month, with a frozen currency exponent — is enforced against the agent's settled and live holds in the current period, measured by the database clock, which the `budget_reservation_principal_ix` index on principal, status, and `settled_at` serves.
 
-`turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. A claim also waits while any earlier turn of the conversation, by `turn_no`, is queued, running, streaming, suspended, or held, so the durable turn number, not queue time, orders a conversation. `acting_context` carries who the turn acts as — principal, authority chain, delegation bounds, work item — as references and bounds, never a credential. A delivery is requeued only when its turn is queued again — resumed after approval, released from a hold, or woken by a cancellation — whether it was acknowledged or is still leased by a worker that found the turn parked; that is how such a turn returns to a worker. `conversation_turn.cancel_requested_at` is the durable cancellation request a worker polls.
+`turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. A claim also waits while any earlier turn of the conversation, by `turn_no`, is queued, running, streaming, suspended, held, or operated, so the durable turn number, not queue time, orders a conversation. `acting_context` carries who the turn acts as — principal, authority chain, delegation bounds, work item — as references and bounds, never a credential. A delivery is requeued only when its turn is queued again — resumed after approval, released from a hold, handed back by a person, or woken by a cancellation — whether it was acknowledged or is still leased by a worker that found the turn parked; that is how such a turn returns to a worker. `conversation_turn.cancel_requested_at` is the durable cancellation request a worker polls.
 
-`conversation_turn.fence` is the epoch of the turn's owner: every acquisition and ownership transition increments it, and every runtime write checks it ([persistence](persistence.md#turn-fence)); the check `conversation_turn_fence_ck` keeps it non-negative. `turn_status` `H` (held) is a non-terminal status no worker runs. `hold_requested_at` and `hold_reason` are a pending request that a running turn hold at its next durable checkpoint, both set or both null (`conversation_turn_hold_request_ck`); `hold_code` and `held_at` are set exactly while the turn is `H` (`conversation_turn_held_code_ck`, `conversation_turn_held_at_ck`). `hold_code` is `C` (held at a checkpoint on request), `A` (held because its agent was suspended), `P` (preempted by an operator), or `U` (held on a call whose outcome is unknown), checked by `conversation_turn_hold_code_ck`; the `runtime` seed registers the code list `turn_hold_code` beside `turn_queue_status` and `agent_run_status` as keel constants.
+`conversation_turn.fence` is the epoch of the turn's owner: every acquisition and ownership transition increments it, and every runtime write checks it ([persistence](persistence.md#turn-fence)); the check `conversation_turn_fence_ck` keeps it non-negative. `turn_status` `H` (held) is a non-terminal status no worker runs, and `O` (operated) one a person holds under a lease. `hold_requested_at` and `hold_reason` are a pending request that a running turn hold at its next durable checkpoint, both set or both null (`conversation_turn_hold_request_ck`); `hold_code` and `held_at` are set exactly while the turn is `H` or `O` (`conversation_turn_held_code_ck`, `conversation_turn_held_at_ck`). `holder_kind` and `holder_id` name the person who operates the turn: both set or both null (`conversation_turn_holder_ck`), set in `O`, and allowed only in `O` or `C`, where they name the person who finished it (`conversation_turn_operated_ck`). `hold_until`, from the store clock, ends the operator's lease and is set exactly in `O` (`conversation_turn_hold_until_ck`); `conversation_turn_hold_ix (status_code, hold_until)` serves the lapse sweeper. `hold_code` is `C` (held at a checkpoint on request), `A` (held because its agent was suspended), `P` (preempted by an operator), or `U` (held on a call whose outcome is unknown), checked by `conversation_turn_hold_code_ck`; the `runtime` seed registers the code list `turn_hold_code` beside `turn_queue_status` and `agent_run_status` as keel constants.
 
-`turn_call_outcome` records every non-read-only call of a tool-loop step before it leaves, keyed by the turn, the execution step, and the model's call id, with real foreign keys to the turn-scoped `step_idempotency` row and the `tool_version` it called ([persistence](persistence.md#call-outcomes)). `status_code` is `I` (in flight), `A` (accepted asynchronously), `C` (completed), `F` (failed), or `U` (unknown), keel constant list `turn_call_outcome_status`; `resolution_code` is `G` (gateway), `W` (late worker report), `E` (effect observation), `L` (outcome lookup), `T` (attestation), or `M` (MCP confirmation), list `turn_call_resolution`; and `origin_code` is `A` (the agent's loop), list `turn_call_origin`. Checks keep a resolution, `resolved_at`, and `resolved_fence` set exactly on `C` and `F`, a resolver and note on `T`, `deadline_at >= dispatched_at`, positive fences, the uri and digest pairs, and a result object on `A`. `dispatch_fence` is the turn fence the call was last sent under, and only that worker may report it late; `deadline_at`, from the store clock, is when the call can no longer be in flight. The unique `turn_call_outcome_key_uq (partner_id, idempotency_key)` keeps one key from naming two effects, `turn_call_outcome_turn_ix (partner_id, request_id, status_code)` serves the release gate and turn reads, and `turn_call_outcome_due_ix (status_code, deadline_at)` is there for reconciliation by deadline. `turn_call_attestation` holds one row per person attesting an open call, `outcome_code` `C` or `F` (list `turn_call_attested`) with a non-empty note and optional evidence; the call settles `T` once the required number of distinct people agree. `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
+`turn_call_outcome` records every non-read-only call of a tool-loop step before it leaves, keyed by the turn, the execution step, and the model's call id, with real foreign keys to the turn-scoped `step_idempotency` row and the `tool_version` it called ([persistence](persistence.md#call-outcomes)). `status_code` is `I` (in flight), `A` (accepted asynchronously), `C` (completed), `F` (failed), or `U` (unknown), keel constant list `turn_call_outcome_status`; `resolution_code` is `G` (gateway), `W` (late worker report), `E` (effect observation), `L` (outcome lookup), `T` (attestation), or `M` (MCP confirmation), list `turn_call_resolution`; and `origin_code` is `A` (the agent's loop) or `O` (a person operating the turn), list `turn_call_origin`. Checks keep a resolution, `resolved_at`, and `resolved_fence` set exactly on `C` and `F`, a resolver and note on `T`, `deadline_at >= dispatched_at`, positive fences, the uri and digest pairs, and a result object on `A`. `dispatch_fence` is the turn fence the call was last sent under, and only that worker may report it late; `deadline_at`, from the store clock, is when the call can no longer be in flight. The unique `turn_call_outcome_key_uq (partner_id, idempotency_key)` keeps one key from naming two effects, `turn_call_outcome_turn_ix (partner_id, request_id, status_code)` serves the release gate and turn reads, and `turn_call_outcome_due_ix (status_code, deadline_at)` is there for reconciliation by deadline. `turn_call_attestation` holds one row per person attesting an open call, `outcome_code` `C` or `F` (list `turn_call_attested`) with a non-empty note and optional evidence; the call settles `T` once the required number of distinct people agree.
+
+`turn_operator_entry` is the append-only record of what a person did in a turn they operated ([persistence](persistence.md#turn-fence)), keyed by the turn, the fence it was made under, and `entry_no`, which also numbers the turn's entries uniquely (`turn_operator_entry_turn_uq`). `kind_code` is `N` (note), `T` (tool call), `Y` (reply), `W` (withdrawal), or `H` (handback instruction), list `turn_operator_entry_kind`. `step_no` is the step that takes the entry, `execution_step_id` that step once it had started (a nullable foreign key `step_operator_entries` to `step_idempotency`), and `after_entry_no` its journal length at the hold, 0 without a step. The body lives in object storage (`entry_uri`, `entry_digest`). Only a tool call carries usage — tokens, tool calls, searches, and `cost_minor_units` in `currency_code`, whose exponent is read from `currency` — and it always names its currency (`turn_operator_entry_spend_ck`).
+
+`turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
 
 ## Platform release safety and audit
 
@@ -2132,49 +2165,28 @@ Agent-version and platform-release identity stay separate. `agent_version_pin` h
 
 The `evaluation` group holds the evidence a rollout gate consumes.
 
+#### Golden datasets and review
+
 ```mermaid
 erDiagram
     knowledge_base ||--o{ golden_query : knowledge_base_golden_queries
     agent_profile ||--o| agent_golden_set : agent_golden_sets
     agent_profile |o--o{ golden_set : agent_owned_golden_sets
     agent_tenant ||--o{ golden_set : golden_sets
+    agent_golden_set }o--|| golden_set : golden_set_agents
     golden_set ||--o{ golden_set_version : golden_set_versions
     golden_set ||--o{ golden_case : golden_cases
     approval_risk_tier ||--o{ golden_case : risk_tier_golden_cases
     golden_case ||--o{ golden_case_turn : golden_case_turns
     golden_case ||--o{ golden_case_tool : golden_case_tools
-    golden_set ||--o{ agent_golden_set : golden_set_agents
-    golden_set_version ||--o{ golden_example : golden_examples
-    golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
     golden_set_version ||--o{ golden_query : golden_queries
-    golden_set_version ||--o{ evaluation_manifest : evaluation_manifests
-    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
-    golden_example ||--o{ evaluation_result : example_evaluation_results
-    evaluation_run ||--o{ evaluation_result : evaluation_results
-    agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
-    agent_version ||--o{ evaluation_manifest : candidate_evaluation_manifests
-    agent_version ||--o{ evaluation_manifest : baseline_evaluation_manifests
-    evaluation_manifest |o--o{ evaluation_run : evaluation_runs
-    evaluation_manifest ||--o{ gate_decision : gate_decisions
-    gate_decision }o--|| platform_release : platform_gate_decisions
+    golden_set_version ||--o{ golden_example : golden_examples
     agent_tenant ||--o{ evaluation_sample : evaluation_samples
     evaluation_sample }o--|| agent_version : agent_evaluation_samples
     agent_version ||--o{ human_review_item : agent_version_human_review_items
     conversation_turn ||--o| human_review_item : turn_human_review_items
     golden_set |o--o{ human_review_item : promoted_set_human_review_items
     human_review_item |o--o{ golden_case : review_item_golden_cases
-    golden_set_version ||--o{ evaluation_baseline : golden_set_version_baselines
-    evaluation_baseline ||--o{ evaluation_baseline_output : evaluation_baseline_outputs
-    golden_example ||--o{ evaluation_baseline_output : example_baseline_outputs
-    evaluation_baseline |o--o{ evaluation_run_subject : baseline_evaluation_run_subjects
-    model_definition |o--o{ evaluation_run_subject : model_evaluation_run_subjects
-    evaluation_run ||--o{ evaluation_comparison : evaluation_comparisons
-    golden_example ||--o{ evaluation_comparison : example_evaluation_comparisons
-    agent_profile ||--o{ agent_gate_decision : agent_gate_decisions
-    agent_version |o--o{ agent_gate_decision : base_version_gate_decisions
-    golden_set_version |o--o{ agent_gate_decision : golden_set_version_gate_decisions
-    agent_gate_decision ||--o{ agent_gate_decision_run : agent_gate_decision_runs
-    evaluation_run ||--o{ agent_gate_decision_run : evaluation_run_gate_decisions
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -2192,17 +2204,10 @@ erDiagram
         bigint partner_id PK,FK
         varchar knowledge_base_id PK
     }
-    platform_release {
-        varchar platform_version PK
-    }
     conversation_turn {
         bigint partner_id PK
         varchar conversation_id PK
         bigint turn_no PK
-    }
-    model_definition {
-        varchar provider_id PK
-        varchar model_id PK
     }
     golden_set {
         bigint partner_id PK,FK
@@ -2280,6 +2285,81 @@ erDiagram
         text expected_document_ids
         boolean expect_abstention
     }
+    human_review_item {
+        bigint id PK
+        bigint partner_id FK
+        varchar agent_id FK
+        varchar agent_version FK
+        char source_code
+        varchar risk_tier
+        varchar conversation_id FK
+        bigint turn_no FK
+        char status_code
+        smallint score
+        char verdict_code
+        text expected_behavior
+        varchar reviewer_kind
+        varchar reviewer_id
+        varchar promoted_set_id FK
+        varchar promoted_case_id
+    }
+    evaluation_sample {
+        bigint partner_id PK,FK
+        varchar sample_id PK
+        varchar request_id
+        varchar agent_id FK
+        varchar agent_version FK
+        int risk_bp
+        int uncertainty_bp
+        boolean redacted
+        text payload_uri
+        char payload_digest
+        varchar retention_class
+        timestamp expires_at
+    }
+```
+
+#### Evaluation runs and comparisons
+
+```mermaid
+erDiagram
+    agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
+    agent_version ||--o{ evaluation_manifest : candidate_evaluation_manifests
+    agent_version ||--o{ evaluation_manifest : baseline_evaluation_manifests
+    evaluation_manifest |o--o{ evaluation_run : evaluation_runs
+    golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
+    golden_set_version ||--o{ evaluation_manifest : evaluation_manifests
+    evaluation_run_subject }o--|| model_definition : model_evaluation_run_subjects
+    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
+    evaluation_run ||--o{ evaluation_comparison : evaluation_comparisons
+    evaluation_run ||--o{ evaluation_result : evaluation_results
+    golden_set_version ||--o{ evaluation_baseline : golden_set_version_baselines
+    evaluation_baseline ||--o{ evaluation_baseline_output : evaluation_baseline_outputs
+    evaluation_baseline |o--o{ evaluation_run_subject : baseline_evaluation_run_subjects
+    evaluation_comparison }o--|| golden_example : example_evaluation_comparisons
+    evaluation_result }o--|| golden_example : example_evaluation_results
+    evaluation_baseline_output }o--|| golden_example : example_baseline_outputs
+
+    golden_set_version {
+        bigint partner_id PK
+        varchar golden_set_id PK
+        bigint set_version PK
+    }
+    golden_example {
+        bigint partner_id PK
+        varchar golden_set_id PK
+        bigint set_version PK
+        varchar example_id PK
+    }
+    agent_version {
+        bigint partner_id PK
+        varchar agent_id PK
+        varchar agent_version PK
+    }
+    model_definition {
+        varchar provider_id PK
+        varchar model_id PK
+    }
     evaluation_manifest {
         char manifest_id PK
         bigint partner_id FK
@@ -2339,37 +2419,6 @@ erDiagram
         varchar trajectory_uri
         char trajectory_digest
     }
-    gate_decision {
-        char decision_id PK
-        bigint partner_id FK
-        char manifest_id FK
-        varchar platform_version FK
-        char verdict_code
-        int confidence_bp
-        text decision_json
-        text signature_hex
-        varchar signer_key_id
-        timestamp expires_at
-        timestamp telemetry_fresh_at
-    }
-    human_review_item {
-        bigint id PK
-        bigint partner_id FK
-        varchar agent_id FK
-        varchar agent_version FK
-        char source_code
-        varchar risk_tier
-        varchar conversation_id FK
-        bigint turn_no FK
-        char status_code
-        smallint score
-        char verdict_code
-        text expected_behavior
-        varchar reviewer_kind
-        varchar reviewer_id
-        varchar promoted_set_id FK
-        varchar promoted_case_id
-    }
     evaluation_baseline {
         bigint id PK
         bigint partner_id FK
@@ -2406,6 +2455,56 @@ erDiagram
         char currency_code FK
         varchar reason
     }
+```
+
+#### Gate decisions
+
+```mermaid
+erDiagram
+    evaluation_manifest ||--o{ gate_decision : gate_decisions
+    gate_decision }o--|| platform_release : platform_gate_decisions
+    agent_profile ||--o{ agent_gate_decision : agent_gate_decisions
+    agent_version |o--o{ agent_gate_decision : base_version_gate_decisions
+    golden_set_version |o--o{ agent_gate_decision : golden_set_version_gate_decisions
+    agent_gate_decision ||--o{ agent_gate_decision_run : agent_gate_decision_runs
+    evaluation_run ||--o{ agent_gate_decision_run : evaluation_run_gate_decisions
+
+    evaluation_manifest {
+        char manifest_id PK
+    }
+    platform_release {
+        varchar platform_version PK
+    }
+    agent_profile {
+        bigint partner_id PK
+        varchar agent_id PK
+    }
+    agent_version {
+        bigint partner_id PK
+        varchar agent_id PK
+        varchar agent_version PK
+    }
+    golden_set_version {
+        bigint partner_id PK
+        varchar golden_set_id PK
+        bigint set_version PK
+    }
+    evaluation_run {
+        bigint id PK
+    }
+    gate_decision {
+        char decision_id PK
+        bigint partner_id FK
+        char manifest_id FK
+        varchar platform_version FK
+        char verdict_code
+        int confidence_bp
+        text decision_json
+        text signature_hex
+        varchar signer_key_id
+        timestamp expires_at
+        timestamp telemetry_fresh_at
+    }
     agent_gate_decision {
         bigint partner_id PK,FK
         varchar agent_id PK,FK
@@ -2430,20 +2529,6 @@ erDiagram
         int score_bp
         int sample_count
         int critical_count
-    }
-    evaluation_sample {
-        bigint partner_id PK,FK
-        varchar sample_id PK
-        varchar request_id
-        varchar agent_id FK
-        varchar agent_version FK
-        int risk_bp
-        int uncertainty_bp
-        boolean redacted
-        text payload_uri
-        char payload_digest
-        varchar retention_class
-        timestamp expires_at
     }
 ```
  `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring platform verdict, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
@@ -2471,7 +2556,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
-| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_call_outcome`, `turn_call_attestation`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
+| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_call_outcome`, `turn_call_attestation`, `turn_operator_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
 | `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison`, `golden_case_turn`, `golden_case_tool` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |

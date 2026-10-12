@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Studio turn control paths: an agent's live turns newest first, one turn, holding and
 // releasing it, and looking up or attesting the outcome of one of its calls.
@@ -19,8 +22,9 @@ const (
 	CallOutcomeFailed    = "failed"
 )
 
-// LiveTurn is one turn of an agent as an operator sees it. status is a turn_status code and
-// hold_code a turn_hold_code code when held; fence is what a release names.
+// LiveTurn is one turn of an agent as an operator sees it. status is a turn_status code (O while a
+// person operates it) and hold_code a turn_hold_code code when held; fence is what a release,
+// takeover, act, handback, or finish names.
 type LiveTurn struct {
 	RequestID       string     `json:"request_id"`
 	ConversationID  string     `json:"conversation_id"`
@@ -34,8 +38,15 @@ type LiveTurn struct {
 	QueuedAt        time.Time  `json:"queued_at"`
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	HeldAt          *time.Time `json:"held_at,omitempty"`
-	// Outcomes are the turn's dispatched calls; only the single-turn read returns them.
-	Outcomes []CallOutcome `json:"outcomes,omitempty"`
+	// HolderKind and HolderID name the person who operates the turn, or who finished it;
+	// hold_until ends their lease by the store clock.
+	HolderKind string     `json:"holder_kind,omitempty"`
+	HolderID   string     `json:"holder_id,omitempty"`
+	HoldUntil  *time.Time `json:"hold_until,omitempty"`
+	// Outcomes are the turn's dispatched calls and Entries its operator entries; only the
+	// single-turn read returns them.
+	Outcomes []CallOutcome   `json:"outcomes,omitempty"`
+	Entries  []OperatorEntry `json:"entries,omitempty"`
 }
 
 // CallOutcome is one non-read-only call of a turn. status is a turn_call_outcome_status code
@@ -118,4 +129,109 @@ type TurnReleaseRequest struct {
 	AgentName string `json:"agent_name"`
 	RequestID string `json:"request_id"`
 	Fence     int64  `json:"fence"`
+}
+
+// Studio turn operation paths: taking a held turn over, acting in it, and handing it back or finishing it.
+const (
+	StudioTurnTakeoverPath = StudioBasePath + "turn/takeover"
+	StudioTurnActPath      = StudioBasePath + "turn/act"
+	StudioTurnHandbackPath = StudioBasePath + "turn/handback"
+	StudioTurnFinishPath   = StudioBasePath + "turn/finish"
+)
+
+// Kinds of an operator act.
+const (
+	OperatorActNote     = "note"
+	OperatorActTool     = "tool"
+	OperatorActReply    = "reply"
+	OperatorActWithdraw = "withdraw"
+)
+
+// TurnTakeoverRequest takes over a turn held at fence; a stale fence or an open call outcome is 409.
+type TurnTakeoverRequest struct {
+	AgentName string `json:"agent_name"`
+	RequestID string `json:"request_id"`
+	Fence     int64  `json:"fence"`
+}
+
+// TurnActRequest appends one entry to a turn the caller operates at fence and renews their lease.
+// kind is note or reply with text, tool with tool_id, tool_version, and arguments, or withdraw with
+// the call_id of a call the agent proposed and never sent. A lapsed lease or a stale fence is 409.
+type TurnActRequest struct {
+	AgentName   string          `json:"agent_name"`
+	RequestID   string          `json:"request_id"`
+	Fence       int64           `json:"fence"`
+	Kind        string          `json:"kind"`
+	Text        string          `json:"text,omitempty"`
+	ToolID      string          `json:"tool_id,omitempty"`
+	ToolVersion string          `json:"tool_version,omitempty"`
+	Arguments   json.RawMessage `json:"arguments,omitempty"`
+	CallID      string          `json:"call_id,omitempty"`
+}
+
+// TurnActResult is the entry an act appended, its call's outcome for a tool call, the turn as it
+// now stands, and whether a reply reached the end user's stream now rather than when the turn resumes.
+type TurnActResult struct {
+	Entry     OperatorEntry `json:"entry"`
+	Outcome   *CallOutcome  `json:"outcome,omitempty"`
+	Turn      LiveTurn      `json:"turn"`
+	Published bool          `json:"published"`
+}
+
+// TurnHandbackRequest returns a turn the caller operates at fence to its agent, with an optional
+// instruction the agent's next step reads; an open call outcome is 409.
+type TurnHandbackRequest struct {
+	AgentName   string `json:"agent_name"`
+	RequestID   string `json:"request_id"`
+	Fence       int64  `json:"fence"`
+	Instruction string `json:"instruction,omitempty"`
+}
+
+// TurnFinishRequest completes a turn the caller operates at fence with their reply, which passes
+// the release's output guardrails and evidence rule; an open call outcome is 409.
+type TurnFinishRequest struct {
+	AgentName string `json:"agent_name"`
+	RequestID string `json:"request_id"`
+	Fence     int64  `json:"fence"`
+	Reply     string `json:"reply"`
+}
+
+// OperatorEntry is one entry a person made in a turn they operated. kind is a
+// turn_operator_entry_kind code (N note, T tool call, Y reply, W withdrawal, H handback
+// instruction); step_no and after_entry_no say where the agent reads it. A tool call's spend is in
+// minor units of currency, which has exponent decimal places.
+type OperatorEntry struct {
+	Fence           int64            `json:"fence"`
+	EntryNo         int              `json:"entry_no"`
+	Kind            string           `json:"kind"`
+	ActorKind       string           `json:"actor_kind"`
+	ActorID         string           `json:"actor_id"`
+	StepNo          int              `json:"step_no"`
+	ExecutionStepID int64            `json:"execution_step_id,omitempty"`
+	AfterEntryNo    int              `json:"after_entry_no"`
+	Text            string           `json:"text,omitempty"`
+	Tool            *OperatorToolUse `json:"tool,omitempty"`
+	CallID          string           `json:"call_id,omitempty"`
+	Reply           string           `json:"reply,omitempty"`
+	ReplySequence   *int64           `json:"reply_sequence,omitempty"`
+	InputTokens     int64            `json:"input_tokens,omitempty"`
+	OutputTokens    int64            `json:"output_tokens,omitempty"`
+	ToolCalls       int              `json:"tool_calls,omitempty"`
+	SearchQueries   int64            `json:"search_queries,omitempty"`
+	CostMinorUnits  int64            `json:"cost_minor_units,omitempty"`
+	Currency        string           `json:"currency,omitempty"`
+	Exponent        int              `json:"exponent,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+}
+
+// OperatorToolUse is a person's tool call: status is a turn_call_outcome_status code.
+type OperatorToolUse struct {
+	CallID       string          `json:"call_id"`
+	ToolID       string          `json:"tool_id"`
+	ToolVersion  string          `json:"tool_version"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
+	Status       string          `json:"status"`
+	Output       json.RawMessage `json:"output,omitempty"`
+	IsError      bool            `json:"is_error,omitempty"`
+	ResourceURIs []string        `json:"resource_uris,omitempty"`
 }

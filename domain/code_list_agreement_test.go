@@ -76,10 +76,17 @@ func TestCodeListsAgreeWithSeedAndSchema(t *testing.T) {
 		},
 		{
 			constantID: "turn_call_origin",
-			codes:      codes(CallFromAgent),
+			codes:      codes(CallFromAgent, CallFromOperator),
 			valid:      func(code string) bool { return CallOrigin(code).Valid() },
 			seed:       "runtime/runtime.yml", schema: "runtime/turn_call_outcome.yml",
 			column: "origin_code", columnType: "CHAR(1)", check: "turn_call_outcome_origin_ck",
+		},
+		{
+			constantID: "turn_operator_entry_kind",
+			codes:      codes(OperatorNote, OperatorTool, OperatorReply, OperatorWithdraw, OperatorHandback),
+			valid:      func(code string) bool { return OperatorEntryKind(code).Valid() },
+			seed:       "runtime/runtime.yml", schema: "runtime/turn_operator_entry.yml",
+			column: "kind_code", columnType: "CHAR(1)", check: "turn_operator_entry_kind_ck",
 		},
 		{
 			constantID: "turn_call_attested",

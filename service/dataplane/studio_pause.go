@@ -117,8 +117,8 @@ func (p *StudioPause) Pause(ctx context.Context, actor domain.StudioActor, reque
 			}
 			asked[requestID] = true
 			err = apply(requestID)
-			if errors.Is(err, domain.ErrNotFound) {
-				continue // it ended between the listing and the request
+			if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrTurnHeld) {
+				continue // it ended, or a person took it over, between the listing and the request
 			}
 			if err != nil {
 				return result, fmt.Errorf("%s turn of paused agent %q: %w", request.Policy, request.AgentID, err)

@@ -136,12 +136,12 @@ SELECT COUNT(*)
   JOIN conversation_turn t ON t.partner_id = o.partner_id AND t.request_id = o.request_id
   JOIN agent_conversation c ON c.partner_id = t.partner_id AND c.conversation_id = t.conversation_id
  WHERE o.partner_id = ? AND c.agent_id = ? AND o.status_code IN (` + sqlCallOpen + `)`,
-	// The agent's turns held at least the span with a call whose outcome is still open.
+	// The agent's turns held, or operated by a person, at least the span with a call whose outcome is still open.
 	qHealthUnresolved: `
 SELECT COUNT(*)
   FROM conversation_turn t
   JOIN agent_conversation c ON c.partner_id = t.partner_id AND c.conversation_id = t.conversation_id
- WHERE t.partner_id = ? AND c.agent_id = ? AND t.status_code = ` + sqlTurnHeld + `
+ WHERE t.partner_id = ? AND c.agent_id = ? AND t.status_code IN (` + sqlTurnHeldOrOperated + `)
    AND t.held_at <= CURRENT_TIMESTAMP - make_interval(mins => ?)
    AND EXISTS (SELECT 1 FROM turn_call_outcome o
                 WHERE o.partner_id = t.partner_id AND o.request_id = t.request_id AND o.status_code IN (` + sqlCallOpen + `))`,
