@@ -9,7 +9,7 @@
   },
   "migrations": [
     {
-      "version": "v1.2.12",
+      "version": "v1.2.13",
       "title": "Turn history, decision records, and the confirmation inbox over HTTP",
       "tags": [
         "additive",
