@@ -14,6 +14,7 @@ import (
 	keelschema "github.com/nauticana/keel/schema"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/service/dataplane"
 )
 
 type scoutConfigQueryFake struct {
@@ -631,5 +632,204 @@ func TestReleaseActivationSettingsFromFlags(t *testing.T) {
 	settings := cfg.ReleaseActivationSettings()
 	if settings.Batch != 20 || settings.PollPeriod != 30*time.Second || settings.MaxAttempts != 5 {
 		t.Fatalf("settings = %+v", settings)
+	}
+}
+
+func TestRunTraceFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.RunTraceLimits{MaxEvents: dataplane.DefaultRunTraceEvents, MaxJournalEntries: dataplane.DefaultRunTraceJournalEntries,
+		MaxJournalBytes: dataplane.DefaultRunTraceJournalBytes}
+	if got := cfg.RunTraceLimits(); got != want {
+		t.Fatalf("RunTraceLimits() = %+v, want the seeded defaults %+v", got, want)
+	}
+	zero := scoutConfigRows()
+	for _, flag := range []string{agent_run_trace_max_events, agent_run_trace_max_journal_entries, agent_run_trace_max_journal_bytes} {
+		zero[flag] = keelconfig.ConfigRow{Value: "0"}
+	}
+	if err := (&ScoutConfig{}).Apply(zero); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
+	}
+	for flag, value := range map[string]string{
+		agent_run_trace_max_events: "5001", agent_run_trace_max_journal_entries: "-1",
+		agent_run_trace_max_journal_bytes: "1023",
+	} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s=%s: Apply error = %v, want a refusal naming the flag", flag, value, err)
+		}
+	}
+}
+
+func TestBaselineFlagsTakeTheirDefaultsAndRefuseNegatives(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentEvaluationBaselineMaxBytes != 32768 || cfg.AgentEvaluationMaxBaselines != 20 || cfg.AgentEvaluationComparePageBytes != 1048576 {
+		t.Fatalf("baseline flags = %d, %d", cfg.AgentEvaluationBaselineMaxBytes, cfg.AgentEvaluationMaxBaselines)
+	}
+	for _, flag := range []string{agent_evaluation_baseline_max_bytes, agent_evaluation_max_baselines, agent_evaluation_compare_page_bytes} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: "-1"}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s: Apply error = %v, want a refusal naming the flag", flag, err)
+		}
+	}
+}
+
+func TestHealthFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.AgentHealthSettings{Period: time.Minute, Batch: 100, WindowMinutes: 60, StalePeriods: 3, AlertPageSize: 50, AlertMaxPageSize: 200}
+	if got := cfg.AgentHealthSettings(); got != want {
+		t.Fatalf("settings = %+v, want %+v", got, want)
+	}
+	for flag, value := range map[string]string{
+		agent_health_period: "-1", agent_health_batch: "10001", agent_health_window: "10081",
+		agent_health_stale_periods: "1001", agent_alert_page_size: "-2", agent_alert_max_page_size: "1001",
+	} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Errorf("%s=%s: Apply error = %v, want a refusal naming the flag", flag, value, err)
+		}
+	}
+	rows := scoutConfigRows()
+	rows[agent_alert_page_size] = keelconfig.ConfigRow{Value: "300"}
+	if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), agent_alert_page_size) {
+		t.Fatalf("a default page above the largest page must be refused: %v", err)
+	}
+	rows = scoutConfigRows()
+	for _, flag := range []string{agent_health_period, agent_health_batch, agent_health_window, agent_health_stale_periods, agent_alert_page_size, agent_alert_max_page_size} {
+		rows[flag] = keelconfig.ConfigRow{Value: "0"}
+	}
+	zero := &ScoutConfig{}
+	if err := zero.Apply(rows); err != nil || zero.AgentHealthSettings() != (domain.AgentHealthSettings{}) {
+		t.Fatalf("zero flags pass through for the service to default: %+v, %v", zero.AgentHealthSettings(), err)
+	}
+}
+
+func TestLiveTurnFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.LiveTurnLimits(), (domain.LiveTurnLimits{PageSize: 50, MaxPageSize: 200}); got != want {
+		t.Fatalf("LiveTurnLimits() = %+v, want the seeded defaults %+v", got, want)
+	}
+	zero := scoutConfigRows()
+	for _, flag := range []string{agent_live_turn_page_size, agent_live_turn_max_page_size} {
+		zero[flag] = keelconfig.ConfigRow{Value: "0"}
+	}
+	if err := (&ScoutConfig{}).Apply(zero); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
+	}
+	for flag, value := range map[string]string{
+		agent_live_turn_page_size: "-1", agent_live_turn_max_page_size: "1001",
+	} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s=%s: Apply error = %v, want a refusal naming the flag", flag, value, err)
+		}
+	}
+	// A default page larger than the largest page is refused, naming the default.
+	rows := scoutConfigRows()
+	rows[agent_live_turn_page_size] = keelconfig.ConfigRow{Value: "300"}
+	if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), agent_live_turn_page_size) {
+		t.Fatalf("page above the maximum: %v", err)
+	}
+}
+
+// agent_outcome_attest_grace reaches the data plane in seconds; zero takes the 60-second default
+// downstream, and a value outside 0..86400 is refused naming the flag.
+func TestOutcomeAttestGraceTakesItsDefaultAndRefusesOutOfRange(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.DataPlaneSettings().OutcomeAttestGrace; got != time.Minute {
+		t.Fatalf("OutcomeAttestGrace = %s, want the seeded 60s", got)
+	}
+	zero := scoutConfigRows()
+	zero[agent_outcome_attest_grace] = keelconfig.ConfigRow{Value: "0"}
+	if err := (&ScoutConfig{}).Apply(zero); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
+	}
+	for _, value := range []string{"-1", "86401"} {
+		rows := scoutConfigRows()
+		rows[agent_outcome_attest_grace] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), agent_outcome_attest_grace) {
+			t.Fatalf("%s: Apply error = %v, want a refusal naming the flag", value, err)
+		}
+	}
+}
+
+func TestReviewFlagsParseTheirDefaults(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentReviewFeedbackThreshold != 2 || cfg.AgentReviewMaxPending != 1000 || cfg.AgentReviewPageSize != 50 ||
+		cfg.AgentReviewMaxPageSize != 200 || cfg.AgentReviewMaxTurnBytes != 1<<20 {
+		t.Fatalf("review defaults = %d %d %d %d %d", cfg.AgentReviewFeedbackThreshold, cfg.AgentReviewMaxPending,
+			cfg.AgentReviewPageSize, cfg.AgentReviewMaxPageSize, cfg.AgentReviewMaxTurnBytes)
+	}
+	rows := scoutConfigRows()
+	rows[agent_review_feedback_threshold] = keelconfig.ConfigRow{Value: "0"}
+	if err := cfg.Apply(rows); err != nil || cfg.AgentReviewFeedbackThreshold != 0 {
+		t.Fatalf("threshold 0 = %d, %v", cfg.AgentReviewFeedbackThreshold, err)
+	}
+}
+
+func TestReviewFlagsRefuseOutOfRangeValues(t *testing.T) {
+	for flag, change := range map[string]map[string]string{
+		agent_review_feedback_threshold: {agent_review_feedback_threshold: "6"},
+		agent_review_max_pending:        {agent_review_max_pending: "-1"},
+		agent_review_max_turn_bytes:     {agent_review_max_turn_bytes: "-1"},
+		agent_review_page_size:          {agent_review_max_page_size: "40"},
+	} {
+		rows := scoutConfigRows()
+		for id, value := range change {
+			rows[id] = keelconfig.ConfigRow{Value: value}
+		}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s: error = %v, want a refusal naming the flag", flag, err)
+		}
+	}
+}
+
+func TestCaseScriptFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentEvaluationCaseMaxTurns != 10 || cfg.AgentEvaluationCaseMaxTools != 20 || cfg.AgentEvaluationCaseToolMaxBytes != 16384 ||
+		cfg.AgentEvaluationTrajectoryMaxBytes != 1048576 {
+		t.Fatalf("case script flags = %d, %d, %d, %d", cfg.AgentEvaluationCaseMaxTurns, cfg.AgentEvaluationCaseMaxTools,
+			cfg.AgentEvaluationCaseToolMaxBytes, cfg.AgentEvaluationTrajectoryMaxBytes)
+	}
+	zero := scoutConfigRows()
+	for _, flag := range []string{agent_evaluation_case_max_turns, agent_evaluation_case_max_tools, agent_evaluation_case_tool_max_bytes, agent_evaluation_trajectory_max_bytes} {
+		zero[flag] = keelconfig.ConfigRow{Value: "0"}
+	}
+	if err := (&ScoutConfig{}).Apply(zero); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
+	}
+	for flag, value := range map[string]string{
+		agent_evaluation_case_max_turns: "101", agent_evaluation_case_max_tools: "-1",
+		agent_evaluation_case_tool_max_bytes: "1", agent_evaluation_trajectory_max_bytes: "1023",
+	} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s=%s: Apply error = %v, want a refusal naming the flag", flag, value, err)
+		}
 	}
 }

@@ -196,8 +196,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/mark3labs/mcp-go v1.1.1 h1:PMZjyayCF01Y4R2kQXgDtsmxVLOdq1Mol4CnzzTYSEo=
 github.com/mark3labs/mcp-go v1.1.1/go.mod h1:r2fW4o3wsoJ7IMsx1Wuq5xeP8PRGXPDfNveoGAYbb/s=
-github.com/nauticana/charter v1.3.1 h1:tk2FZq0VJyQt1cd6fK3+JpqUdCIgbWGZ12+StRbVCZ8=
-github.com/nauticana/charter v1.3.1/go.mod h1:uih1aDarVmKPa2d3p/XYN2p3yvVbwfCGOYrsvI+UAzw=
+github.com/nauticana/charter v1.3.2 h1:VvmyvORgsTl/CmhPdaHuh4Og07Vmb8bUldOrASecD8s=
+github.com/nauticana/charter v1.3.2/go.mod h1:Od9H1NO426xlfjQTxXEe+k2f5+hgM5mfDMzbVZigBFA=
 github.com/nauticana/keel v1.2.110 h1:mYr8C9CTMkZTNOCf16upXClflJOJXGf5WRBJwLmgVTk=
 github.com/nauticana/keel v1.2.110/go.mod h1:PXcCVWm1KDRDiuBOImAmkhrKwEfByV4grLhcOlv/voI=
 github.com/nyaruka/phonenumbers v1.7.2 h1:biMUpF5TWuHtYXVzuNE7pSCjlA9tkvd8Vaq8b1CYaaQ=
