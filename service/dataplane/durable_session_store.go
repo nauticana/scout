@@ -128,10 +128,15 @@ type DurableSessionStore struct {
 	// MaxResultCardBytes is the largest response copied into turn history; a larger one is
 	// referenced, not copied. Default 64 KiB.
 	MaxResultCardBytes int
+	// Settlement writes a completing turn's budget and usage in its completion's transaction.
+	Settlement TurnSettlementWriter
 
 	once sync.Once
 	qs   port.QueryService
 }
+
+// completionQueries are the statements of one completion: the session's and the usage events'.
+var completionQueries = common.MergeMaps(durableSessionQueries, TurnLedgerQueries())
 
 func (store *DurableSessionStore) validate() error {
 	if store.DB == nil || store.Objects == nil {
@@ -264,7 +269,9 @@ func (store *DurableSessionStore) commitCheckpoint(ctx context.Context, owner do
 
 // Complete stores the response and marks the owner's turn completed while it is the
 // conversation's executing turn, its fence holds, and the snapshot is still at expectedRevision.
-func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+// The settlement commits in the same transaction, opened by the guarded touch of the owner's
+// turn, so a reservation is settled exactly when its turn completes.
+func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult, settlement domain.TurnSettlement) error {
 	if err := owner.Check(); err != nil {
 		return err
 	}
@@ -273,6 +280,9 @@ func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.Tur
 		return fmt.Errorf("%w: non-negative revision and conversation are required", domain.ErrValidation)
 	}
 	if err := store.validate(); err != nil {
+		return err
+	}
+	if err := store.Settlement.validate(); err != nil {
 		return err
 	}
 	active, err := store.queries(ctx).Query(ctx, qSessionActiveTurn, tenantID, conversationID)
@@ -295,13 +305,7 @@ func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.Tur
 	}
 	ctx = context.WithoutCancel(ctx)
 	kind, card := resultCard(result.Response, ref, positiveOr(store.MaxResultCardBytes, defaultResultCardBytes))
-	completed, err := store.queries(ctx).Query(ctx, qSessionCompleteTurn,
-		ref.URI, ref.Digest, tenantID, conversationID, turnNo, owner.RequestID, owner.Fence, expectedRevision, kind, card)
-	if err != nil {
-		err = fmt.Errorf("complete turn: %w", err)
-	} else if len(completed.Rows) == 0 {
-		err = store.refusedCompletion(ctx, owner, turnNo, conversationID)
-	}
+	err = store.completeTx(ctx, owner, conversationID, turnNo, expectedRevision, ref, kind, card, settlement)
 	if errors.Is(err, domain.ErrFenceLost) {
 		return err
 	}
@@ -311,9 +315,49 @@ func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.Tur
 	return nil
 }
 
+func (store *DurableSessionStore) completeTx(ctx context.Context, owner domain.TurnOwner, conversationID string, turnNo, expectedRevision int64, ref domain.ObjectRef, kind, card string, settlement domain.TurnSettlement) error {
+	tx, err := store.DB.BeginTx(ctx, completionQueries)
+	if err != nil {
+		return fmt.Errorf("begin completion: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	guarded, err := guardOwnerTurn(ctx, tx, qSessionOwnerGuard, owner)
+	if err != nil {
+		return err
+	}
+	if guarded != turnNo {
+		return fmt.Errorf("%w: the owner of turn %d cannot complete turn %d", domain.ErrFenceLost, guarded, turnNo)
+	}
+	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, conversationID, turnNo, settlement)
+	if err != nil {
+		return err
+	}
+	if unheld != nil {
+		return unheld
+	}
+	completed, err := tx.Query(ctx, qSessionCompleteTurn,
+		ref.URI, ref.Digest, owner.TenantID, conversationID, turnNo, owner.RequestID, owner.Fence, expectedRevision, kind, card)
+	if err != nil {
+		return fmt.Errorf("complete turn: %w", err)
+	}
+	if len(completed.Rows) == 0 {
+		return store.refusedCompletion(ctx, tx, owner, turnNo, conversationID)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit completion: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // refusedCompletion tells a lost fence apart from a snapshot that moved.
-func (store *DurableSessionStore) refusedCompletion(ctx context.Context, owner domain.TurnOwner, turnNo int64, conversationID string) error {
-	current, err := store.queries(ctx).Query(ctx, qSessionTurnFence, owner.TenantID, owner.RequestID)
+func (store *DurableSessionStore) refusedCompletion(ctx context.Context, tx port.TxQueryService, owner domain.TurnOwner, turnNo int64, conversationID string) error {
+	current, err := tx.Query(ctx, qSessionTurnFence, owner.TenantID, owner.RequestID)
 	if err != nil {
 		return fmt.Errorf("read turn fence: %w", err)
 	}

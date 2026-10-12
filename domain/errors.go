@@ -79,6 +79,21 @@ var (
 	// ErrEffectUnknown indicates a mutation's effect could not be observed; the outcome is
 	// unknown, never success, and the mutation is not invoked again until it can be.
 	ErrEffectUnknown = errors.New("effect unknown")
+	// ErrOutcomeUnknown indicates a dispatched call of the turn has no definite outcome: the call
+	// is recorded unknown and the turn holds until the outcome is reconciled.
+	ErrOutcomeUnknown = errors.New("call outcome unknown")
+	// ErrNotSent indicates a tool call was refused before it left the platform, so it had no effect.
+	ErrNotSent = errors.New("tool call not sent")
+	// ErrNoEffect indicates a sent tool call definitely had no effect: its transport proved it never
+	// reached the tool, or the tool refused it before acting. A transport marks such a failure;
+	// any other failure of a sent mutating call is an unknown outcome.
+	ErrNoEffect = errors.New("tool call had no effect")
+	// ErrOutputWithheld indicates a tool call took effect but its output cannot be shown, such as
+	// output a guardrail blocked; the call completed and the model sees only the failure class.
+	ErrOutputWithheld = errors.New("tool output withheld")
+	// ErrBudgetUnsettled indicates a turn ended but its reservation was no longer held, so it was
+	// not settled; the turn's end stands.
+	ErrBudgetUnsettled = errors.New("budget unsettled")
 )
 
 // TurnStage identifies the turn-lifecycle boundary that produced an error.

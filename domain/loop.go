@@ -102,6 +102,9 @@ type LoopEntry struct {
 	Effect *EffectObservation `json:"effect,omitempty"`
 	// Revision is set on a revision entry.
 	Revision *CallRevision `json:"revision,omitempty"`
-	Usage    Usage         `json:"usage,omitzero"`
-	Offset   time.Duration `json:"offset,omitempty"`
+	// Outcome is set on an observation journaled from a call's outcome record rather than from
+	// the gateway's answer to this loop; replay consumes it unchanged.
+	Outcome *LoopOutcome  `json:"outcome,omitempty"`
+	Usage   Usage         `json:"usage,omitzero"`
+	Offset  time.Duration `json:"offset,omitempty"`
 }

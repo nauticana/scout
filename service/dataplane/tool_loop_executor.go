@@ -27,7 +27,9 @@ import (
 // the model answers without calling a tool. Every model decision and every tool
 // observation is journaled before the loop moves on, so redelivery and approval
 // resume replay the journal instead of repeating a decision or an effect. Tools
-// are reachable only through the governed gateway.
+// are reachable only through the governed gateway. Every non-read-only call is
+// recorded in flight before it leaves and settled with its observation; a call
+// whose outcome is unknown is never re-sent or failed, it holds the turn.
 type ToolLoopExecutor struct {
 	Requests contract.ToolLoopRequestBuilder
 	Router   contract.ModelRouter
@@ -35,6 +37,13 @@ type ToolLoopExecutor struct {
 	Registry contract.ToolRegistry
 	Tools    contract.GovernedToolGateway
 	Journal  contract.LoopJournal
+	// Outcomes records the outcome of every non-read-only call; required.
+	Outcomes contract.CallOutcomeStore
+	// Reconciler settles a dispatched call met unobserved, and declares which tools deduplicate by
+	// key or accept asynchronously; nil leaves such a call unknown and declares nothing.
+	Reconciler contract.ToolOutcomeReconciler
+	// Dispatch bounds how long a call may stay in flight, which sets its outcome deadline.
+	Dispatch domain.ToolDispatchWindow
 	// Pricer is optional; without it MaxCostMinorUnits sees only the cost providers and tools report.
 	Pricer contract.ModelPricer
 	// Evidence is optional; it is required by a step whose configuration sets require_evidence.
@@ -49,8 +58,11 @@ type ToolLoopExecutor struct {
 // NewToolLoopExecutor rejects a composition that could run unbounded.
 func NewToolLoopExecutor(executor ToolLoopExecutor) (*ToolLoopExecutor, error) {
 	if executor.Requests == nil || executor.Router == nil || executor.Models == nil || executor.Registry == nil ||
-		executor.Tools == nil || executor.Journal == nil {
-		return nil, fmt.Errorf("%w: tool loop needs a request builder, router, model gateway, tool registry, tool gateway, and journal", domain.ErrValidation)
+		executor.Tools == nil || executor.Journal == nil || executor.Outcomes == nil {
+		return nil, fmt.Errorf("%w: tool loop needs a request builder, router, model gateway, tool registry, tool gateway, journal, and call outcome store", domain.ErrValidation)
+	}
+	if err := executor.Dispatch.Validate(); err != nil {
+		return nil, fmt.Errorf("tool loop: %w", err)
 	}
 	limits := executor.Limits
 	if limits.MaxIterations <= 0 || limits.MaxToolCalls <= 0 || limits.MaxTokens <= 0 || limits.MaxRepeatedCalls <= 0 ||
@@ -80,6 +92,7 @@ type loopRun struct {
 	request   domain.ModelRequest
 	tools     map[string]domain.ModelTool
 	readOnly  map[string]bool
+	windows   map[string]time.Duration
 	journal   []domain.LoopEntry
 	cursor    int
 	usage     domain.Usage
@@ -186,6 +199,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 		return nil, fmt.Errorf("list tools bound to %s@%s: %w", principal.ID, principal.Release, err)
 	}
 	run.tools, run.readOnly = make(map[string]domain.ModelTool, len(bound)), make(map[string]bool, len(bound))
+	run.windows = make(map[string]time.Duration, len(bound))
 	request.Tools = request.Tools[:0]
 	for _, definition := range bound {
 		tool := domain.ModelTool{
@@ -196,6 +210,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 			return nil, fmt.Errorf("%w: tools of %s@%s collide on model name %q", domain.ErrConflict, principal.ID, principal.Release, tool.Name)
 		}
 		run.tools[tool.Name], run.readOnly[tool.Name] = tool, definition.ReadOnly
+		run.windows[tool.Name] = executor.Dispatch.For(definition)
 		request.Tools = append(request.Tools, tool)
 	}
 	run.request = request
@@ -306,6 +321,9 @@ func (executor *ToolLoopExecutor) decide(ctx context.Context, run *loopRun, iter
 				fmt.Errorf("%w: model called tool %q, which is not bound to the release", domain.ErrInvalidModelOutput, call.Name))
 		}
 	}
+	if err := run.distinctCalls(result.ToolCalls); err != nil {
+		return domain.ModelResult{}, errors.Join(run.account(usage), err)
+	}
 	entry, err := executor.append(ctx, run, domain.LoopEntry{Kind: domain.LoopEntryModel, Iteration: iteration, Model: &result, Usage: usage})
 	if err != nil {
 		return domain.ModelResult{}, errors.Join(err, run.account(usage))
@@ -397,14 +415,43 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		run.recordCall(call, reference, entry, wasPending)
 		return *entry.Observation, call, run.account(entry.Usage)
 	}
+	mutating := !run.readOnly[call.Name]
+	sent := outgoingCall{key: run.callKey(call), reference: reference, call: call, proposal: proposal, iteration: iteration, wasPending: wasPending}
+	resend := false
+	if mutating {
+		// An unobserved call at the cursor may already have left: its record decides, never a resend.
+		recorded, found, err := executor.Outcomes.Find(ctx, sent.key)
+		if err != nil {
+			return domain.ModelToolObservation{}, call, stage.At(domain.StageCheckpoint, err)
+		}
+		if found {
+			observation, handled, err := executor.resume(ctx, run, sent, recorded)
+			if handled || err != nil {
+				return observation, call, err
+			}
+			resend, sent.resend = true, true
+		}
+	}
 	if err := run.admitCall(call); err != nil {
 		return domain.ModelToolObservation{}, call, err
 	}
 	// The decision is journaled and the call has not left: a mutation is held here, before its effect.
-	if !run.readOnly[call.Name] && run.holdRequested() {
+	if mutating && run.holdRequested() {
 		return domain.ModelToolObservation{}, call, fmt.Errorf("%w: before call %q", domain.ErrTurnHeld, call.CallID)
 	}
+	if mutating && !resend {
+		// Intent before effect: a call without a record never left.
+		if _, _, err := executor.Outcomes.Intend(ctx, run.input.Owner, domain.CallIntent{
+			Key: sent.key, IdempotencyKey: proposal.IdempotencyKey, Tool: reference, Window: run.windows[call.Name],
+		}); err != nil {
+			return domain.ModelToolObservation{}, call, stage.At(domain.StageCheckpoint, fmt.Errorf("record intent of call %q: %w", call.CallID, err))
+		}
+	}
 	result, err := executor.Tools.Invoke(domain.WithDecisionScope(ctx, "iteration/", iteration, "/call/", call.CallID), proposal)
+	if mutating {
+		observation, err := executor.settleSent(ctx, run, sent, result, err)
+		return observation, call, err
+	}
 	observation := domain.ModelToolObservation{CallID: call.CallID, Name: call.Name, Output: result.Output}
 	switch {
 	case err == nil:
@@ -514,6 +561,26 @@ func (run *loopRun) holdRequested() bool {
 	return run.input.HoldRequested != nil && run.input.HoldRequested()
 }
 
+// distinctCalls refuses a decision that reuses a call id of this step: the id is what the call's
+// idempotency key, approval, and outcome record are bound to.
+func (run *loopRun) distinctCalls(calls []domain.ModelToolCall) error {
+	seen := map[string]bool{}
+	for _, entry := range run.journal {
+		if entry.Kind == domain.LoopEntryModel && entry.Model != nil {
+			for _, call := range entry.Model.ToolCalls {
+				seen[call.CallID] = true
+			}
+		}
+	}
+	for _, call := range calls {
+		if strings.TrimSpace(call.CallID) == "" || seen[call.CallID] {
+			return fmt.Errorf("%w: model call id %q is empty or already used in this step", domain.ErrInvalidModelOutput, call.CallID)
+		}
+		seen[call.CallID] = true
+	}
+	return nil
+}
+
 // next consumes the journal entry at the cursor when it is of the wanted kind.
 func (run *loopRun) next(kind domain.LoopEntryKind) (domain.LoopEntry, bool) {
 	if run.cursor >= len(run.journal) || run.journal[run.cursor].Kind != kind {
@@ -562,10 +629,6 @@ func (run *loopRun) admitCall(call domain.ModelToolCall) error {
 
 // account adds settled usage and fails closed on the token, cost, and delegated budget limits.
 func (run *loopRun) account(usage domain.Usage) error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 ||
-		usage.CostMinorUnits > 0 && strings.TrimSpace(usage.Currency) == "" {
-		return fmt.Errorf("%w: loop usage is invalid", domain.ErrValidation)
-	}
 	if bounds := run.input.Bounds; bounds.BudgetMinorUnits > 0 && usage.Currency != "" && usage.Currency != bounds.Currency {
 		return fmt.Errorf("%w: loop usage currency %s differs from delegated budget currency %s", domain.ErrValidation, usage.Currency, bounds.Currency)
 	}
@@ -575,22 +638,12 @@ func (run *loopRun) account(usage domain.Usage) error {
 	if spend := run.input.Spend; spend.PricingRequired && usage.Currency != "" && usage.Currency != spend.Currency {
 		return fmt.Errorf("%w: loop usage currency %s differs from the release budget currency %s", domain.ErrValidation, usage.Currency, spend.Currency)
 	}
-	models, err := mergeModelSpend(run.usage.Models, usage.Models)
-	if err != nil {
+	if err := addChunkUsage(&run.usage, usage); err != nil {
 		return err
 	}
-	run.usage.InputTokens += usage.InputTokens
-	run.usage.OutputTokens += usage.OutputTokens
-	run.usage.ToolCalls += usage.ToolCalls
-	run.usage.SearchQueries += usage.SearchQueries
-	run.usage.CostMinorUnits += usage.CostMinorUnits
-	run.usage.Models = models
-	if run.usage.Currency == "" {
-		run.usage.Currency = usage.Currency
-	}
-	run.toolCalls += usage.ToolCalls
+	run.toolCalls = run.usage.ToolCalls
 	switch bounds := run.input.Bounds; {
-	case run.usage.InputTokens+run.usage.OutputTokens > run.limits.MaxTokens:
+	case run.usage.InputTokens > run.limits.MaxTokens || run.usage.OutputTokens > run.limits.MaxTokens-run.usage.InputTokens:
 		return fmt.Errorf("%w: tool loop exceeded %d tokens", domain.ErrBudgetExceeded, run.limits.MaxTokens)
 	case run.limits.MaxCostMinorUnits > 0 && run.usage.CostMinorUnits > run.limits.MaxCostMinorUnits:
 		return fmt.Errorf("%w: tool loop exceeded its cost limit", domain.ErrBudgetExceeded)

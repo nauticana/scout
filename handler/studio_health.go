@@ -47,7 +47,7 @@ func (h *StudioHealthHandler) health(ctx context.Context, actor domain.StudioAct
 		FirstResponseP50MS: measure.FirstResponseP50MS, FirstResponseP95MS: measure.FirstResponseP95MS,
 		LastCompletedAt: optionalTime(measure.LastCompletedAt), LastFailedAt: optionalTime(measure.LastFailedAt),
 		SafetyEvents: make(map[string]int64, len(measure.SafetyBySeverity)), OpenAlerts: apiAlerts(report.OpenAlerts),
-		PolicyProblem: report.PolicyProblem, LastEvaluatedAt: optionalTime(report.LastEvaluatedAt),
+		PolicyProblem: report.PolicyProblem, LastEvaluatedAt: optionalTime(report.LastEvaluatedAt), OpenOutcomes: report.OpenOutcomes,
 	}
 	for status, count := range measure.TurnsByStatus {
 		result.TurnsByStatus[string(status)] = count
@@ -62,6 +62,7 @@ func (h *StudioHealthHandler) health(ctx context.Context, actor domain.StudioAct
 		result.Policy = &api.HealthAlertPolicy{
 			WindowMinutes: policy.WindowMinutes, MinTurns: policy.MinTurns, MaxFailureRateBP: policy.MaxFailureRateBP,
 			MaxP95LatencyMS: policy.MaxP95LatencyMS, MaxHardSafetyEvents: policy.MaxHardSafetyEvents, MaxSilenceMinutes: policy.MaxSilenceMinutes,
+			MaxUnresolvedMinutes: policy.MaxUnresolvedMinutes,
 		}
 	}
 	return result, nil

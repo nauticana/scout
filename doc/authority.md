@@ -46,9 +46,11 @@ template with other tenants, at `template_audience:all` or `template_audience:te
 it by default. `OVERRIDE_GATE`, publishing or restoring a draft its [evaluation gate](governance.md#evaluation-gate)
 does not admit and removing or loosening that gate, is checked at `agent:<id>` and seeded to no role.
 `REVIEW`, reading, grading, and dismissing an agent's sampled and low-rated production turns, is
-checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_OPERATION` `VIEW` (an agent's live turns) and
-`OPERATE` (holding and releasing them) are checked at `agent:<id>` and seeded to `AGENT_ADMIN` and `AGENT_OPER`;
-no authoring action implies them, which keeps operating a running agent apart from changing it (see
+checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_OPERATION` `VIEW` (an agent's live turns and their call
+outcomes), `OPERATE` (holding and releasing them and looking up a call's outcome), `PREEMPT` (holding a running
+turn at once), and `RECONCILE` (attesting an unknown call outcome) are checked at `agent:<id>`; `AGENT_ADMIN` holds
+all four and `AGENT_OPER` `VIEW` and `OPERATE`. An attestation also passes `contract.OperationSeparation`, which
+fails closed and requires a second person for a high-risk call. No authoring action implies them, which keeps operating a running agent apart from changing it (see
 [live turn operation](governance.md#live-turn-operation)). `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction
 layers and are checked at the tenant-wide value `tenant`. `AGENT_APPROVAL` `DECIDE` is checked at the
 request's scope.
@@ -78,7 +80,7 @@ Binding values are canonical JSON, fixed per kind:
 | `limits` | `{"turns_per_minute":0,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}` | `LimitsMerger` | `at_most` |
 | `approval_routing` | `{"routes":[{"id":"…","match":{…},"approver":{"kind":"role","ref":"…"},"deadline_seconds":3600,"on_exhausted":"expire"}]}` | `RoutingMerger` | `routing` |
 | `evaluation_gate` | `{"metric":"rubric_score","min_score_bp":8000,"max_regression_bp":200,"min_samples":20,"required_scopes":["dev","gate"]}` | `EvaluationGateMerger` | `gate` |
-| `health_alerts` | `{"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120}` | `HealthAlertsMerger` | `alerts` |
+| `health_alerts` | `{"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120,"max_unresolved_minutes":30}` | `HealthAlertsMerger` | `alerts` |
 
 A set cannot express deny-wins, so `policy` has its own merger and rule: a child may drop an allow or
 add a deny, never add an allow, and an allow it keeps may not widen the parent's actions, resources,
@@ -94,7 +96,7 @@ route and may only tighten each inherited route (see [approval routing](governan
 `max_regression_bp` (never unset it once a parent sets it), and add `required_scopes`.
 `health_alerts` binds by replace only and may only tighten an alert policy: a child keeps the
 window once a parent sets one, may lower a threshold, the sample floor `min_turns`, or the
-silence span its parent sets, never raise or unset it, and may set one its parent leaves at 0
+silence or unresolved-outcome span its parent sets, never raise or unset it, and may set one its parent leaves at 0
 (see [agent health](observability.md#agent-health-and-alerts)). `evaluation_gate` and
 `health_alerts` are operational settings: the gate governs publication and health alerts govern
 alerting, not runtime behavior, so publication and draft freezes drop both

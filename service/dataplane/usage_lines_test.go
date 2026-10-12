@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -131,9 +132,11 @@ func TestDurableStepAndLoopRecordsKeepTheModelBreakdown(t *testing.T) {
 	}
 }
 
-func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
+// A failing turn's settlement writes its usage once per model in the failure's transaction; the
+// guarded touch of the turn row serializes it, so no usage lock is taken.
+func TestFailSettlementWritesEveryModelOfATurnOnce(t *testing.T) {
 	query := &queueQueryFake{
-		rows:     map[string][][]any{qLedgerInsertUsageEvent: {{int64(1)}}},
+		rows:     map[string][][]any{qLedgerInsertUsageEvent: {{int64(1)}}, qRecordFail: {{int64(4)}}},
 		sequence: map[string][][][]any{qLedgerUsageSettled: {nil, {{int64(1)}}}},
 	}
 	store := newTestRecordStore(query)
@@ -143,11 +146,15 @@ func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
 			{Model: claude, InputTokens: 20, OutputTokens: 10, CostMinorUnits: 5},
 		}}
 	attribution := domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "agent"}, WorkRef: "task-9"}
-	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", attribution, usage); err != nil {
+	fail := func(usage domain.Usage) error {
+		return store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error",
+			domain.TurnSettlement{Usage: usage, SubjectRef: "agent@v1", Attribution: attribution})
+	}
+	if err := fail(usage); err != nil {
 		t.Fatal(err)
 	}
-	if lock := query.firstArgs(qLedgerLock); len(lock) != 1 || lock[0] != "usage:7:conversation-1:4:model_output" {
-		t.Fatalf("lock = %v", lock)
+	if query.calls[0] != qRecordOwnerTurn || slices.Contains(query.calls, qLedgerLock) {
+		t.Fatalf("the guarded touch opens the settlement and no usage lock is taken: %v", query.calls)
 	}
 	inserts := query.args[qLedgerInsertUsageEvent]
 	want := [][]any{
@@ -166,7 +173,7 @@ func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
 
 	// A replay, even one whose models differ, finds the turn settled and writes nothing.
 	replay := domain.Usage{InputTokens: 30, OutputTokens: 12, ToolCalls: 2, CostMinorUnits: 9, Currency: "USD"}.AttributedTo(gpt)
-	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", attribution, replay); err != nil {
+	if err := fail(replay); err != nil {
 		t.Fatal(err)
 	}
 	if len(query.args[qLedgerInsertUsageEvent]) != len(want) {
@@ -174,7 +181,7 @@ func TestRecordUsageWritesEveryModelOfATurnOnceUnderTheTurnLock(t *testing.T) {
 	}
 	query.args = nil
 	usage.Models[0].InputTokens = 31
-	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", attribution, usage); !errors.Is(err, domain.ErrValidation) {
+	if err := fail(usage); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("overattributed usage = %v, want validation", err)
 	}
 	if len(query.args[qLedgerInsertUsageEvent]) != 0 {

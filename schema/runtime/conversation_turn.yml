@@ -94,7 +94,7 @@ checks:
   - name: conversation_turn_hold_request_ck
     expression: (hold_requested_at IS NULL) = (hold_reason IS NULL)
   - name: conversation_turn_hold_code_ck
-    expression: hold_code IN ('C', 'A')
+    expression: hold_code IN ('C', 'A', 'P', 'U')
   - name: conversation_turn_held_code_ck
     expression: (status_code = 'H') = (hold_code IS NOT NULL)
   - name: conversation_turn_held_at_ck

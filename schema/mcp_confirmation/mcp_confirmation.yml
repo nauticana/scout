@@ -128,6 +128,9 @@ indexes:
     columns: [status_code, expires_at]
   - name: mcp_confirmation_tenant_ix
     columns: [partner_id, created_at]
+  - name: mcp_confirmation_partner_uq
+    columns: [partner_id, id]
+    unique: true
 checks:
   - name: mcp_confirmation_channel_ck
     expression: channel_code IN ('E', 'I')

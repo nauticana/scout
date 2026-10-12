@@ -22,9 +22,11 @@ import (
 // delivery's queue claim, which moves the turn's fence, and presents that owner on every
 // write; a write refused with domain.ErrFenceLost ends the delivery with no terminal record,
 // settlement, or final frame. Per step the order is idempotency claim or replay, execution,
-// committed result, guardrail, durable checkpoint, published frame; the turn ends with
-// settlement and the terminal record persisted before the final frame, so a crash replays
-// the frame and never the side effect. A requested hold is taken at a durable checkpoint.
+// committed result, guardrail, durable checkpoint, published frame; the turn ends with its
+// settlement and terminal record committed in one transaction before the final frame, so a crash
+// replays the frame and never the side effect, and a reservation is never settled while the end
+// can still be refused. A requested hold is taken at a durable checkpoint, and a call whose
+// outcome is unknown holds the turn.
 type TurnRuntime struct {
 	Records     contract.TurnRecordStore
 	Sessions    contract.SessionCoordinator
@@ -36,7 +38,7 @@ type TurnRuntime struct {
 	Guardrails  contract.GuardrailEnforcer
 	Publisher   contract.TurnReplyPublisher
 	Estimator   contract.TurnBudgetEstimator
-	Budget      contract.TurnBudgetManager
+	Budget      contract.TenantBudgetManager
 	// Limits reads the execution limits frozen into the turn's release, which narrow the tenant runtime policy.
 	Limits contract.PrincipalLimits
 	// Control is optional; when set a requested cancellation or a moved fence stops the running
@@ -55,9 +57,10 @@ type TurnRuntime struct {
 	Review contract.ProductionReviewIntake
 	// Observations records per-step stage observations; nil skips them.
 	Observations contract.ObservationRecorder
-	// OnSettled runs after a turn's usage event is recorded, on success and on a
-	// billed failure, for product-side usage mirrors. It is not transactional
-	// with the event; an error fails the turn's settlement so redelivery retries it.
+	// OnSettled runs before a turn's settlement commits, on success and on a billed failure, for
+	// product-side usage mirrors. It is not transactional with the settlement: an error fails the
+	// turn, and a settlement refused after it ran is offered again by the turn's next owner, so a
+	// mirror keys on the turn.
 	OnSettled func(ctx context.Context, turn domain.TurnRequest, turnNo int64, agentVersion string, usage domain.Usage) error
 	// MaxSteps bounds one turn independently of the tenant policy; required.
 	MaxSteps int
@@ -100,9 +103,10 @@ type turnExecution struct {
 	usage         domain.Usage
 	config        domain.GuardrailConfig
 	reservation   domain.BudgetReservation
-	settled       bool
-	limits        domain.ExecutionLimits
-	budget        domain.ReleaseBudget
+	// mirrored is set once OnSettled ran for this delivery.
+	mirrored bool
+	limits   domain.ExecutionLimits
+	budget   domain.ReleaseBudget
 	// bounds are the delegation limits this turn may pass on; the zero value
 	// means the turn acts on its own authority and delegates nothing.
 	bounds domain.DelegationBounds
@@ -167,8 +171,11 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, claim domain.TurnCla
 		return domain.TurnResult{}, err
 	case errors.Is(err, domain.ErrApprovalPending):
 		return domain.TurnResult{}, runtime.suspend(ctx, execution, err)
+	case errors.Is(err, domain.ErrOutcomeUnknown):
+		// The call's row is unknown: hold the turn for reconciliation, keeping its reservation.
+		return domain.TurnResult{}, runtime.hold(ctx, execution, domain.HoldUnknownOutcome, err)
 	case errors.Is(err, domain.ErrTurnHeld):
-		return domain.TurnResult{}, runtime.hold(ctx, execution)
+		return domain.TurnResult{}, runtime.hold(ctx, execution, domain.HoldCheckpoint, err)
 	default:
 		return domain.TurnResult{}, runtime.fail(ctx, execution, err)
 	}
@@ -196,12 +203,13 @@ func (runtime *TurnRuntime) suspend(ctx context.Context, execution *turnExecutio
 	return runtime.publish(suspendCtx, execution, nil, true, stage.ErrorClass(cause), pending)
 }
 
-// hold takes the turn to held at the durable checkpoint where a hold request was honored.
-// Like a suspension it keeps the reservation and settles nothing; the held frame ends this
-// delivery, and a released turn continues its stream at that sequence.
-func (runtime *TurnRuntime) hold(ctx context.Context, execution *turnExecution) error {
+// hold takes the turn to held under code: at the durable checkpoint where a hold request was
+// honored, or on a call whose outcome is unknown. Like a suspension it keeps the reservation and
+// settles nothing; the held frame ends this delivery, and a released turn continues its stream at
+// that sequence. The audit records why the turn held.
+func (runtime *TurnRuntime) hold(ctx context.Context, execution *turnExecution, code domain.TurnHoldCode, cause error) error {
 	holdCtx := context.WithoutCancel(ctx)
-	fence, err := runtime.Records.Hold(holdCtx, execution.owner)
+	fence, err := runtime.Records.Hold(holdCtx, execution.owner, code)
 	if errors.Is(err, domain.ErrTurnCanceled) {
 		return runtime.fail(ctx, execution, err)
 	}
@@ -210,7 +218,7 @@ func (runtime *TurnRuntime) hold(ctx context.Context, execution *turnExecution) 
 	}
 	execution.owner.Fence = fence
 	errorCode, events := heldFrame()
-	if err := runtime.audit(domain.WithDecisionScope(holdCtx, "fence/", fence), execution, observability.AuditCategoryTurnHeld, errorCode); err != nil {
+	if err := runtime.audit(domain.WithDecisionScope(holdCtx, "fence/", fence), execution, observability.AuditCategoryTurnHeld, stage.ErrorClass(cause)); err != nil {
 		return err
 	}
 	return runtime.publish(holdCtx, execution, nil, true, errorCode, events...)
@@ -307,8 +315,8 @@ func (runtime *TurnRuntime) guardrailConfig(ctx context.Context, tenantID int64,
 	return config, nil
 }
 
-// reserve replays the reservation ingress already holds for this request; a
-// settled reservation means an earlier attempt already paid for this turn.
+// reserve replays the reservation ingress already holds for this request. A live turn's
+// reservation is settled only with its end, so a settled one fails closed: no step runs unheld.
 func (runtime *TurnRuntime) reserve(ctx context.Context, execution *turnExecution) error {
 	turn := execution.dispatch.Turn
 	quote, err := runtime.Estimator.Estimate(ctx, turn)
@@ -316,10 +324,6 @@ func (runtime *TurnRuntime) reserve(ctx context.Context, execution *turnExecutio
 		return fmt.Errorf("estimate turn budget: %w", err)
 	}
 	reservation, err := runtime.Budget.Reserve(ctx, turnBudgetRequest(turn, quote))
-	if errors.Is(err, domain.ErrBudgetSettled) {
-		execution.settled = true
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("reserve turn budget: %w", err)
 	}
@@ -393,7 +397,7 @@ func (runtime *TurnRuntime) runStep(ctx context.Context, execution *turnExecutio
 		if result, err = executor.Execute(ctx, input); err != nil {
 			spent := spentUsage(err)
 			// A parked step is replayed from its journal, which accounts its usage again.
-			if !errors.Is(err, domain.ErrApprovalPending) && !errors.Is(err, domain.ErrTurnHeld) {
+			if !errors.Is(err, domain.ErrApprovalPending) && !errors.Is(err, domain.ErrTurnHeld) && !errors.Is(err, domain.ErrOutcomeUnknown) {
 				err = errors.Join(err, addChunkUsage(&execution.usage, spent))
 			}
 			runtime.observe(ctx, execution, step, started, spent, err)
@@ -486,25 +490,15 @@ func (runtime *TurnRuntime) checkpoint(ctx context.Context, execution *turnExecu
 	return nil
 }
 
-// settle records the settled usage, persists the terminal result, and only
-// then publishes the final frame.
+// settle commits the terminal result with its settlement in one transaction, and only then
+// publishes the final frame.
 func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution, result *domain.TurnResult) error {
 	turn := execution.dispatch.Turn
 	settleCtx := context.WithoutCancel(ctx)
-	if !execution.settled {
-		if err := runtime.Budget.CommitTurn(settleCtx, execution.owner, execution.reservation, execution.usage); err != nil {
-			return fmt.Errorf("settle turn budget: %w", err)
-		}
-		execution.settled = true
-	}
-	subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
-	if err := runtime.Records.RecordUsage(settleCtx, execution.owner, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); err != nil {
-		return err
-	}
 	if err := runtime.settled(settleCtx, execution); err != nil {
 		return err
 	}
-	if err := runtime.Sessions.Complete(settleCtx, execution.owner, turn.ConversationID, execution.revision, *result); err != nil {
+	if err := runtime.Sessions.Complete(settleCtx, execution.owner, turn.ConversationID, execution.revision, *result, runtime.settlement(execution, false)); err != nil {
 		return err
 	}
 	if err := runtime.audit(settleCtx, execution, observability.AuditCategoryTurnCompleted, ""); err != nil {
@@ -519,45 +513,27 @@ func (runtime *TurnRuntime) settle(ctx context.Context, execution *turnExecution
 	return nil
 }
 
-// fail settles work already performed (or refunds an unused hold), records the
-// terminal failure, and only once that record stands writes the terminal audit and
-// publishes a payload-free final frame. A lost fence stops it before any terminal write.
+// fail records the terminal failure with its settlement in one transaction: the work already
+// performed is settled, or an unused hold refunded. Only once that record stands does it write
+// the terminal audit and publish a payload-free final frame; a lost fence stops it before any
+// terminal write.
 func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, cause error) error {
-	turn := execution.dispatch.Turn
 	failCtx := context.WithoutCancel(ctx)
 	status, errorCode := domain.TurnFailed, stage.ErrorClass(cause)
 	if errors.Is(cause, domain.ErrTurnCanceled) || errors.Is(cause, context.Canceled) {
 		status = domain.TurnCancelled
 	}
 	errs := []error{cause}
-	if !execution.settled && execution.reservation.ReservationID != "" {
-		var settleErr error
-		if hasUsage(execution.usage) {
-			settleErr = runtime.Budget.CommitTurn(failCtx, execution.owner, execution.reservation, execution.usage)
-		} else {
-			settleErr = runtime.Budget.ReleaseTurn(failCtx, execution.owner, execution.reservation)
-		}
-		if errors.Is(settleErr, domain.ErrFenceLost) {
-			return errors.Join(cause, settleErr)
-		}
-		if settleErr != nil {
-			errs = append(errs, fmt.Errorf("settle failed turn budget: %w", settleErr))
-		} else {
-			execution.settled = true
-		}
-	}
-	if hasUsage(execution.usage) {
-		subject := turn.AgentID + "@" + execution.snapshot.AgentVersion
-		if err := runtime.Records.RecordUsage(failCtx, execution.owner, turn.ConversationID, execution.turnNo, subject, usageAttribution(turn), execution.usage); errors.Is(err, domain.ErrFenceLost) {
-			return errors.Join(cause, err)
-		} else if err != nil {
-			errs = append(errs, err)
-		} else if err := runtime.settled(failCtx, execution); err != nil {
+	billed := hasUsage(execution.usage)
+	if billed {
+		if err := runtime.settled(failCtx, execution); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	// A refused terminal record means another writer owns the turn's end: its audit and frame are not this one's.
-	if err := runtime.Records.Fail(failCtx, execution.owner, status, errorCode); err != nil {
+	if err := runtime.Records.Fail(failCtx, execution.owner, status, errorCode, runtime.settlement(execution, !billed)); errors.Is(err, domain.ErrBudgetUnsettled) {
+		errs = append(errs, err)
+	} else if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
 	runtime.recordRun(failCtx, execution, domain.RunStatus(status))
@@ -619,10 +595,8 @@ func (runtime *TurnRuntime) Abandon(ctx context.Context, claim domain.TurnClaim,
 	switch {
 	case err == nil:
 		execution.reservation = reservation
-	case errors.Is(err, domain.ErrBudgetSettled):
-		execution.settled = true
-	case errors.Is(err, domain.ErrBudgetExceeded), errors.Is(err, domain.ErrDegraded):
-		// Admission refused a new attempt, so no live hold remains to release.
+	case errors.Is(err, domain.ErrBudgetSettled), errors.Is(err, domain.ErrBudgetExceeded), errors.Is(err, domain.ErrDegraded):
+		// No live hold remains to release: it is settled, or admission refused a new attempt.
 	default:
 		return fmt.Errorf("reserve turn budget: %w", err)
 	}
@@ -659,14 +633,25 @@ func actingFor(turn domain.TurnRequest, snapshot domain.SessionSnapshot) domain.
 	return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: snapshot.EndUserRef}
 }
 
+// settled runs OnSettled once per delivery.
 func (runtime *TurnRuntime) settled(ctx context.Context, execution *turnExecution) error {
-	if runtime.OnSettled == nil {
+	if runtime.OnSettled == nil || execution.mirrored {
 		return nil
 	}
 	if err := runtime.OnSettled(ctx, execution.dispatch.Turn, execution.turnNo, execution.snapshot.AgentVersion, execution.usage); err != nil {
 		return fmt.Errorf("settle hook: %w", err)
 	}
+	execution.mirrored = true
 	return nil
+}
+
+// settlement is what the turn's end settles: its reservation at the turn's usage, or refunded.
+func (runtime *TurnRuntime) settlement(execution *turnExecution, refund bool) domain.TurnSettlement {
+	turn := execution.dispatch.Turn
+	return domain.TurnSettlement{
+		Reservation: execution.reservation, Usage: execution.usage, Refund: refund,
+		SubjectRef: turn.AgentID + "@" + execution.snapshot.AgentVersion, Attribution: usageAttribution(turn),
+	}
 }
 
 // spentUsage is what a failed step reports it already consumed, so the turn

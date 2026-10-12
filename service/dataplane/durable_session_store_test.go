@@ -3,6 +3,7 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -40,6 +41,11 @@ func (query *persistenceQueryFake) Query(_ context.Context, name string, args ..
 }
 
 func (*persistenceQueryFake) GenID() int64 { return 0 }
+
+// QueryService binds another catalog to the same fake transaction, as keel's PostgreSQL one does.
+func (query *persistenceQueryFake) QueryService(string, map[string]string) keelport.QueryService {
+	return query
+}
 func (query *persistenceQueryFake) Commit(context.Context) error {
 	query.commits++
 	return query.commitErr
@@ -82,7 +88,30 @@ func newDurableSessionStore(query *persistenceQueryFake, storage *fake.ObjectSto
 	if _, set := query.rows[qSessionOwnerGuard]; !set {
 		query.rows[qSessionOwnerGuard] = [][]any{{int64(4)}}
 	}
-	return &DurableSessionStore{DB: persistenceDBFake{query: query}, Objects: newObjectStateStore(storage)}
+	return &DurableSessionStore{DB: persistenceDBFake{query: query}, Objects: newObjectStateStore(storage),
+		Settlement: TurnSettlementWriter{Budget: &settlerFake{query: query}, UsageCategory: "model_output"}}
+}
+
+// settlerFake is a budget settler joined to the ending turn's transaction; it records each
+// settlement among that transaction's statements.
+type settlerFake struct {
+	query *persistenceQueryFake
+	calls []string
+	err   error
+}
+
+func (settler *settlerFake) SettleTurnTx(_ context.Context, tx keelport.TxQueryService, reservation domain.BudgetReservation, usage domain.Usage, refund bool) error {
+	settler.calls = append(settler.calls, fmt.Sprintf("%s/%d/%t", reservation.ReservationID, usage.CostMinorUnits, refund))
+	if settler.query != nil && tx == keelport.TxQueryService(settler.query) {
+		settler.query.calls = append(settler.query.calls, "budget_settle")
+	}
+	return settler.err
+}
+
+// testSettlement settles reservation res-1 of request req-1 at five output tokens and two cents.
+var testSettlement = domain.TurnSettlement{
+	Reservation: domain.BudgetReservation{TenantID: 7, ReservationID: "res-1", RequestID: "req-1", Currency: "USD"},
+	Usage:       domain.Usage{OutputTokens: 5, CostMinorUnits: 2, Currency: "USD"}, SubjectRef: "agent@v1",
 }
 
 func validCheckpoint(state string) domain.StepCheckpoint {
@@ -293,7 +322,7 @@ func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	}}
 	store := newDurableSessionStore(query, storage)
 	response := []byte(`{"text":"done"}`)
-	if err := store.Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}); err != nil {
+	if err := store.Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}, testSettlement); err != nil {
 		t.Fatal(err)
 	}
 	digest := DigestBytes(response)
@@ -309,7 +338,7 @@ func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	// Snapshot moved on before the upload: conflict, nothing uploaded.
 	stale := &fake.ObjectStorage{}
 	err := newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{qSessionActiveTurn: {{int64(4), int64(7), "req-1"}}}}, stale).
-		Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+		Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}, testSettlement)
 	if !errors.Is(err, domain.ErrRevisionConflict) || len(stale.Uploads) != 0 {
 		t.Fatalf("stale = %v, uploads = %v", err, stale.Uploads)
 	}
@@ -317,12 +346,12 @@ func TestDurableSessionStoreCompleteGuardsRevisionAndStatus(t *testing.T) {
 	raced := &fake.ObjectStorage{}
 	err = newDurableSessionStore(&persistenceQueryFake{rows: map[string][][]any{
 		qSessionActiveTurn: {{int64(4), int64(6), "req-1"}}, qSessionTurnFence: {{int64(3), string(domain.TurnRunning)}},
-	}}, raced).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+	}}, raced).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}, testSettlement)
 	if !errors.Is(err, domain.ErrRevisionConflict) || len(raced.Deletes) != 1 {
 		t.Fatalf("raced = %v, deletes = %v", err, raced.Deletes)
 	}
 	// No executing turn.
-	err = newDurableSessionStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Complete(context.Background(), sessionOwner, "conv", 0, domain.TurnResult{})
+	err = newDurableSessionStore(&persistenceQueryFake{}, &fake.ObjectStorage{}).Complete(context.Background(), sessionOwner, "conv", 0, domain.TurnResult{}, testSettlement)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("no turn = %v", err)
 	}
@@ -336,13 +365,13 @@ func TestDurableSessionStoreCompleteRefusesAFencedOutOwner(t *testing.T) {
 	query := &persistenceQueryFake{rows: map[string][][]any{
 		qSessionActiveTurn: {{int64(4), int64(6), "req-1"}}, qSessionTurnFence: {{int64(4), string(domain.TurnHeld)}},
 	}}
-	err := newDurableSessionStore(query, held).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+	err := newDurableSessionStore(query, held).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}, testSettlement)
 	if !errors.Is(err, domain.ErrFenceLost) || len(held.Deletes) != 0 {
 		t.Fatalf("held = %v, deletes = %v", err, held.Deletes)
 	}
 	// An earlier turn still live, parked or held, is the executing turn: a later one cannot complete.
 	query = &persistenceQueryFake{rows: map[string][][]any{qSessionActiveTurn: {{int64(3), int64(6), "req-0"}}}}
-	err = newDurableSessionStore(query, &fake.ObjectStorage{}).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+	err = newDurableSessionStore(query, &fake.ObjectStorage{}).Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}, testSettlement)
 	if !errors.Is(err, domain.ErrFenceLost) || slices.Contains(query.calls, qSessionCompleteTurn) {
 		t.Fatalf("out of order = %v, calls = %v", err, query.calls)
 	}
@@ -375,7 +404,7 @@ func TestDurableSessionStoreResultCardLimitIsConfigurable(t *testing.T) {
 		}}
 		store := newDurableSessionStore(query, &fake.ObjectStorage{})
 		store.MaxResultCardBytes = maxBytes
-		err := store.Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response})
+		err := store.Complete(context.Background(), sessionOwner, "conv", 6, domain.TurnResult{Response: response}, testSettlement)
 		if args := query.lastArgs(qSessionCompleteTurn); len(args) > 8 {
 			return args[8].(string), err
 		}

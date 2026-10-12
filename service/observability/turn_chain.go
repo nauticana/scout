@@ -21,9 +21,17 @@ const (
 	AuditCategoryTurnCompleted     = "turn_completed"
 	AuditCategoryTurnFailed        = "turn_failed"
 	AuditCategoryTurnCancelled     = "turn_cancelled"
+	// AuditCategoryCallOutcomeAttested records one person's attestation of an unknown call outcome.
+	AuditCategoryCallOutcomeAttested = "call_outcome_attested"
+	// AuditCategoryCallOutcomeResolved records a person settling an unknown call outcome.
+	AuditCategoryCallOutcomeResolved = "call_outcome_resolved"
 )
 
 var terminalTurnCategories = []string{AuditCategoryTurnCompleted, AuditCategoryTurnFailed, AuditCategoryTurnCancelled}
+
+// reconciliationCategories are evidence about one call, not steps of the turn's lifecycle: a person
+// may settle a call while the turn is held or after it ended.
+var reconciliationCategories = []string{AuditCategoryCallOutcomeAttested, AuditCategoryCallOutcomeResolved}
 
 // MemoryAuditSink keeps decisions in process with the table sink's semantics: the
 // first record of a decision key wins, a keyless record always appends.
@@ -66,13 +74,20 @@ func (sink *MemoryAuditSink) Request(tenantID int64, requestID string) []domain.
 }
 
 // VerifyTurnChain checks one request's records, oldest first, for a gap-free chain:
-// admission first, one terminal state last, every decision keyed and made once.
+// admission first, one terminal state last among the lifecycle records, every decision keyed
+// and made once. Call reconciliation records may fall anywhere after admission.
 func VerifyTurnChain(records []domain.DecisionRecord) error {
 	if len(records) == 0 {
 		return fmt.Errorf("%w: the turn left no decision record", domain.ErrNotFound)
 	}
 	if records[0].Category != AuditCategoryTurnAdmitted {
 		return fmt.Errorf("%w: the chain opens with %q, not admission", domain.ErrConflict, records[0].Category)
+	}
+	last := 0
+	for index, record := range records {
+		if !slices.Contains(reconciliationCategories, record.Category) {
+			last = index
+		}
 	}
 	seen := make(map[string]struct{}, len(records))
 	for index, record := range records {
@@ -86,7 +101,10 @@ func VerifyTurnChain(records []domain.DecisionRecord) error {
 			return fmt.Errorf("%w: %s record %d repeats an earlier decision", domain.ErrConflict, record.Category, index)
 		}
 		seen[record.DecisionKey] = struct{}{}
-		if terminal := slices.Contains(terminalTurnCategories, record.Category); terminal != (index == len(records)-1) {
+		if slices.Contains(reconciliationCategories, record.Category) {
+			continue
+		}
+		if terminal := slices.Contains(terminalTurnCategories, record.Category); terminal != (index == last) {
 			return fmt.Errorf("%w: the chain must end with its one terminal state; record %d is %q", domain.ErrConflict, index, record.Category)
 		}
 	}

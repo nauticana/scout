@@ -22,6 +22,7 @@ const (
 	qOperateLiveTurns = "scout_operate_live_turns"
 	qOperateTurn      = "scout_operate_turn"
 	qOperateDispatch  = "scout_operate_dispatch"
+	qOperateRelease   = "scout_operate_release"
 
 	// DefaultLiveTurnPageSize and DefaultLiveTurnMaxPageSize bound one Studio page of live turns.
 	DefaultLiveTurnPageSize    = 50
@@ -49,11 +50,14 @@ var operateQueries = map[string]string{
 SELECT conversation_id, agent_id, COALESCE(acting_context, '')
   FROM turn_queue
  WHERE partner_id = ? AND request_id = ?`,
+	qOperateRelease: `
+SELECT agent_version FROM agent_conversation WHERE partner_id = ? AND conversation_id = ?`,
 }
 
-// StudioTurnControl lets an operator see an agent's live turns, hold them, and release held
-// ones. Every call needs AGENT_STUDIO VIEW on the agent, which an unviewable agent fails as not
-// found, and AGENT_OPERATION VIEW to read or OPERATE to change on agent:<id>. A release
+// StudioTurnControl lets an operator see an agent's live turns, hold them, settle their unknown
+// call outcomes, and release held ones. Every call needs AGENT_STUDIO VIEW on the agent, which
+// an unviewable agent fails as not found, and AGENT_OPERATION VIEW to read or OPERATE to change
+// on agent:<id>; a preempting hold also needs PREEMPT and an attestation RECONCILE. A release
 // re-admits the turn's budget before it requeues the turn, and releases only a reservation it
 // newly took when the release itself is refused.
 type StudioTurnControl struct {
@@ -64,7 +68,16 @@ type StudioTurnControl struct {
 	Control    contract.TurnControl
 	Estimator  contract.TurnBudgetEstimator
 	Budget     contract.TenantBudgetManager
-	// Audit records each hold and release; nil records none.
+	Outcomes   contract.CallOutcomeStore
+	// Journal reads the arguments a call ran with, which a lookup reconciles by.
+	Journal contract.LoopJournal
+	// Reconciler looks an open call up; nil answers every lookup domain.ErrNotReady.
+	Reconciler contract.ToolOutcomeReconciler
+	// Separation decides who may attest; an attestation without it fails closed.
+	Separation contract.OperationSeparation
+	// Evidence verifies an attestation's evidence object; evidence without it is refused.
+	Evidence contract.EvidenceObjectVerifier
+	// Audit records each hold, release, attestation, and resolution; nil records none.
 	Audit  contract.AuditSink
 	Limits domain.LiveTurnLimits
 	Now    func() time.Time
@@ -76,8 +89,9 @@ type StudioTurnControl struct {
 var _ contract.StudioTurnControlBackend = (*StudioTurnControl)(nil)
 
 func (s *StudioTurnControl) ready(ctx context.Context) (port.QueryService, error) {
-	if s.DB == nil || s.Authorizer == nil || s.Principals == nil || s.Roles == nil || s.Control == nil || s.Estimator == nil || s.Budget == nil {
-		return nil, fmt.Errorf("studio turn control: database, authorizers, principal resolver, turn control, estimator, and budget are required")
+	if s.DB == nil || s.Authorizer == nil || s.Principals == nil || s.Roles == nil || s.Control == nil || s.Estimator == nil || s.Budget == nil ||
+		s.Outcomes == nil || s.Journal == nil {
+		return nil, fmt.Errorf("studio turn control: database, authorizers, principal resolver, turn control, estimator, budget, call outcomes, and journal are required")
 	}
 	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, operateQueries) })
 	return s.qs, nil
@@ -90,9 +104,9 @@ func (s *StudioTurnControl) now() time.Time {
 	return time.Now()
 }
 
-// authorize fails closed unless the actor may view the agent in Studio and holds action on
-// AGENT_OPERATION for it.
-func (s *StudioTurnControl) authorize(ctx context.Context, actor domain.StudioActor, action domain.OperationAction, agentID string) error {
+// authorize fails closed unless the actor may view the agent in Studio and holds every action
+// on AGENT_OPERATION for it.
+func (s *StudioTurnControl) authorize(ctx context.Context, actor domain.StudioActor, action domain.OperationAction, agentID string, more ...domain.OperationAction) error {
 	if strings.TrimSpace(agentID) == "" {
 		return fmt.Errorf("%w: agent_name is required", domain.ErrValidation)
 	}
@@ -106,12 +120,14 @@ func (s *StudioTurnControl) authorize(ctx context.Context, actor domain.StudioAc
 	if err != nil {
 		return err
 	}
-	grant, err := s.Roles.Authorize(ctx, principal, domain.OperationAuthorizationObject, string(action), "agent:"+agentID)
-	if err != nil {
-		return fmt.Errorf("authorize %s %s: %w", domain.OperationAuthorizationObject, action, err)
-	}
-	if !grant.Allowed {
-		return fmt.Errorf("%w: %s %s on agent %q", domain.ErrForbidden, domain.OperationAuthorizationObject, action, agentID)
+	for _, required := range append([]domain.OperationAction{action}, more...) {
+		grant, err := s.Roles.Authorize(ctx, principal, domain.OperationAuthorizationObject, string(required), "agent:"+agentID)
+		if err != nil {
+			return fmt.Errorf("authorize %s %s: %w", domain.OperationAuthorizationObject, required, err)
+		}
+		if !grant.Allowed {
+			return fmt.Errorf("%w: %s %s on agent %q", domain.ErrForbidden, domain.OperationAuthorizationObject, required, agentID)
+		}
 	}
 	return nil
 }
@@ -195,7 +211,7 @@ func decodeLiveTurn(row []any) (domain.LiveTurn, error) {
 	return turn, nil
 }
 
-// Turn reads one turn of the agent; a turn of another agent is not found.
+// Turn reads one turn of the agent with its call outcomes; a turn of another agent is not found.
 func (s *StudioTurnControl) Turn(ctx context.Context, actor domain.StudioActor, agentID, requestID string) (domain.LiveTurn, error) {
 	if _, err := s.ready(ctx); err != nil {
 		return domain.LiveTurn{}, err
@@ -203,7 +219,18 @@ func (s *StudioTurnControl) Turn(ctx context.Context, actor domain.StudioActor, 
 	if err := s.authorize(ctx, actor, domain.OperationView, agentID); err != nil {
 		return domain.LiveTurn{}, err
 	}
-	return s.turn(ctx, actor.TenantID, agentID, requestID)
+	return s.turnWithOutcomes(ctx, actor.TenantID, agentID, requestID)
+}
+
+func (s *StudioTurnControl) turnWithOutcomes(ctx context.Context, tenantID int64, agentID, requestID string) (domain.LiveTurn, error) {
+	turn, err := s.turn(ctx, tenantID, agentID, requestID)
+	if err != nil {
+		return domain.LiveTurn{}, err
+	}
+	if turn.Outcomes, err = s.Outcomes.List(ctx, tenantID, requestID); err != nil {
+		return domain.LiveTurn{}, err
+	}
+	return turn, nil
 }
 
 func (s *StudioTurnControl) turn(ctx context.Context, tenantID int64, agentID, requestID string) (domain.LiveTurn, error) {
@@ -220,23 +247,34 @@ func (s *StudioTurnControl) turn(ctx context.Context, tenantID int64, agentID, r
 	return decodeLiveTurn(result.Rows[0])
 }
 
-// Hold holds a queued or parked turn of the agent at once and asks a running one to hold at
-// its next durable checkpoint. Only the checkpoint mode exists.
+// Hold holds a queued or parked turn of the agent at once and, in checkpoint mode, asks a running
+// one to hold at its next durable checkpoint; in preempt mode a running one is held at once too,
+// fencing out its worker.
 func (s *StudioTurnControl) Hold(ctx context.Context, actor domain.StudioActor, request domain.TurnHoldRequest) (domain.TurnHoldOutcome, error) {
 	if _, err := s.ready(ctx); err != nil {
 		return domain.TurnHoldOutcome{}, err
 	}
 	reason := strings.TrimSpace(request.Reason)
-	if request.Mode != domain.HoldModeCheckpoint || reason == "" {
-		return domain.TurnHoldOutcome{}, fmt.Errorf("%w: a hold needs the mode %q and a reason", domain.ErrValidation, domain.HoldModeCheckpoint)
+	if request.Mode != domain.HoldModeCheckpoint && request.Mode != domain.HoldModePreempt || reason == "" {
+		return domain.TurnHoldOutcome{}, fmt.Errorf("%w: a hold needs the mode %q or %q and a reason", domain.ErrValidation, domain.HoldModeCheckpoint, domain.HoldModePreempt)
 	}
-	if err := s.authorize(ctx, actor, domain.OperationOperate, request.AgentID); err != nil {
+	var more []domain.OperationAction
+	if request.Mode == domain.HoldModePreempt {
+		more = append(more, domain.OperationPreempt)
+	}
+	if err := s.authorize(ctx, actor, domain.OperationOperate, request.AgentID, more...); err != nil {
 		return domain.TurnHoldOutcome{}, err
 	}
 	if _, err := s.turn(ctx, actor.TenantID, request.AgentID, request.RequestID); err != nil {
 		return domain.TurnHoldOutcome{}, err
 	}
-	outcome, err := s.Control.RequestHold(ctx, actor.TenantID, request.RequestID, domain.HoldCheckpoint, reason)
+	var outcome domain.TurnHoldOutcome
+	var err error
+	if request.Mode == domain.HoldModePreempt {
+		outcome, err = s.Control.Preempt(ctx, actor.TenantID, request.RequestID)
+	} else {
+		outcome, err = s.Control.RequestHold(ctx, actor.TenantID, request.RequestID, domain.HoldCheckpoint, reason)
+	}
 	if err != nil {
 		return domain.TurnHoldOutcome{}, err
 	}
@@ -276,8 +314,9 @@ func (s *StudioTurnControl) Release(ctx context.Context, actor domain.StudioActo
 	if err != nil {
 		return domain.LiveTurn{}, fmt.Errorf("estimate turn budget: %w", err)
 	}
+	// A held turn's reservation is settled only with its end, so a settled one refuses the release.
 	reservation, err := s.Budget.Reserve(ctx, turnBudgetRequest(turn, quote))
-	if err != nil && !errors.Is(err, domain.ErrBudgetSettled) {
+	if err != nil {
 		return domain.LiveTurn{}, fmt.Errorf("re-admit held turn: %w", err)
 	}
 	fence, err := s.Control.Release(ctx, actor.TenantID, request.RequestID, request.Fence)

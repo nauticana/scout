@@ -3,6 +3,8 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,9 +100,14 @@ func replayExample() domain.GoldenExample {
 	return domain.GoldenExample{TenantID: 7, ExampleID: "alt-text", Payload: domain.ObjectRef{URI: "object://golden/alt-text", Digest: sha256Hex([]byte(replayInput))}}
 }
 
+// scriptedCallIDs numbers scripted calls, as a provider's call ids are distinct within a step.
+var scriptedCallIDs atomic.Int64
+
+func nextCallID() string { return fmt.Sprintf("c%d", scriptedCallIDs.Add(1)) }
+
 func searchCall() domain.ModelResult {
 	return domain.ModelResult{
-		ToolCalls:    []domain.ModelToolCall{{CallID: "c1", Name: "catalog_search", Arguments: []byte(`{"missing":"alt"}`)}},
+		ToolCalls:    []domain.ModelToolCall{{CallID: nextCallID(), Name: "catalog_search", Arguments: []byte(`{"missing":"alt"}`)}},
 		FinishReason: domain.FinishReasonToolCalls, Usage: domain.Usage{InputTokens: 10, OutputTokens: 4},
 	}
 }

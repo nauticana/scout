@@ -51,12 +51,21 @@ type GovernedGateway struct {
 	// CredentialPurpose labels why the credential is requested; it selects the binding.
 	CredentialPurpose string
 	Timeout           time.Duration
+	// Outcomes is the product's trusted declaration, by tool id, of which tools deduplicate by
+	// idempotency key and which the Lookup answers; nothing a tenant registers can declare either.
+	Outcomes map[string]domain.ToolOutcomeTraits
+	// Lookup answers the calls of tools whose Outcomes declare lookup support; required by any.
+	Lookup contract.ToolOutcomeLookup
 }
 
 // Invoke executes one tool call through the complete governance chain and records its outcome.
+// A failure says what became of the call: domain.ErrNotSent when it was refused before it left;
+// for a non-read-only tool, domain.ErrEffectUnknown when it was sent and nothing establishes its
+// effect, domain.ErrNoEffect or domain.ErrEffectViolated when its effect is proven absent, and
+// domain.ErrOutputWithheld when it took effect but its output cannot be returned.
 func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
 	if err := gateway.validate(call); err != nil {
-		return domain.ToolResult{}, err
+		return domain.ToolResult{}, notSent(err)
 	}
 	// The idempotency key is stable across redelivery, so the call's decisions are recorded once.
 	if call.IdempotencyKey != "" {
@@ -66,79 +75,129 @@ func (gateway *GovernedGateway) Invoke(ctx context.Context, call domain.ToolCall
 	if errors.Is(err, domain.ErrApprovalPending) {
 		return result, err
 	}
-	return result, errors.Join(err, gateway.recordInvocation(ctx, call, result, err))
+	recordErr := gateway.recordInvocation(ctx, call, result, err)
+	if err == nil && recordErr != nil {
+		// The call took effect; only its evidence failed.
+		return result, fmt.Errorf("%w: %w", domain.ErrOutputWithheld, recordErr)
+	}
+	return result, errors.Join(err, recordErr)
+}
+
+// notSent marks a failure that kept the call from leaving the platform.
+func notSent(err error) error {
+	return fmt.Errorf("%w: %w", domain.ErrNotSent, err)
+}
+
+// preparedCall is a call that passed governance and may now be sent.
+type preparedCall struct {
+	call       domain.ToolCall
+	definition domain.ToolDefinition
+	guardrails domain.GuardrailConfig
+	generation int64
+	credential []byte
 }
 
 func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
+	prepared, err := gateway.prepare(ctx, call)
+	if err != nil {
+		return domain.ToolResult{}, notSent(err)
+	}
+	result, err := gateway.dispatch(ctx, prepared)
+	if err != nil && !prepared.definition.ReadOnly {
+		err = classifySent(err)
+	}
+	return result, err
+}
+
+// prepare runs every check before the call can leave; none of its failures sent anything.
+func (gateway *GovernedGateway) prepare(ctx context.Context, call domain.ToolCall) (preparedCall, error) {
 	if err := gateway.RateLimiter.AllowToolCall(ctx, call); err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	definition, err := gateway.Registry.Get(ctx, call.TenantContext.TenantID, call.ToolID, call.ToolVersion)
 	if err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	if definition.ToolID != call.ToolID || definition.Version != call.ToolVersion || strings.TrimSpace(definition.Endpoint) == "" {
-		return domain.ToolResult{}, fmt.Errorf("%w: registered tool definition is inconsistent", domain.ErrConflict)
+		return preparedCall{}, fmt.Errorf("%w: registered tool definition is inconsistent", domain.ErrConflict)
 	}
 	if definition.VerifyEffect && gateway.Effects == nil {
-		return domain.ToolResult{}, fmt.Errorf("%w: tool %q requires effect verification but no verifier is composed", domain.ErrNotReady, call.ToolID)
+		return preparedCall{}, fmt.Errorf("%w: tool %q requires effect verification but no verifier is composed", domain.ErrNotReady, call.ToolID)
 	}
 	if err := validateArguments(definition, call.Arguments); err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	if err := gateway.Authorizer.Authorize(ctx, call, definition); err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	policyAsk, err := gateway.decide(ctx, call, definition)
 	if err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	autonomyAsks, err := gateway.autonomy(ctx, call, definition)
 	if err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	if err := gateway.approve(ctx, call, policyAsk, autonomyAsks); err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	// Guardrails run before egress and credentials so blocked arguments never leave the platform.
 	guardrails, err := gateway.guardrailConfig(ctx, call)
 	if err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	if gateway.Guardrails != nil {
 		if call, err = gateway.Guardrails.BeforeTool(ctx, guardrails, call); err != nil {
-			return domain.ToolResult{}, stage.At(domain.StageGuardrail, err)
+			return preparedCall{}, stage.At(domain.StageGuardrail, err)
 		}
 	}
 	if err := gateway.Egress.ValidateDestination(ctx, call.TenantContext.TenantID, definition.Endpoint); err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	generation, err := gateway.admit(ctx, call, definition)
 	if err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	credential, authority, err := gateway.Credentials.Credential(ctx, call.Principal, call.ToolID, "invoke", gateway.CredentialPurpose)
 	if err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
 	if err := gateway.recordCredential(ctx, call, definition, authority); err != nil {
-		return domain.ToolResult{}, err
+		return preparedCall{}, err
 	}
+	return preparedCall{call: call, definition: definition, guardrails: guardrails, generation: generation, credential: credential}, nil
+}
 
+// dispatch sends the prepared call within its attempt ceiling. Attempt one's pre-observation
+// precedes any send of this invocation, so its failure is marked not sent.
+func (gateway *GovernedGateway) dispatch(ctx context.Context, prepared preparedCall) (domain.ToolResult, error) {
+	call, definition := prepared.call, prepared.definition
 	// The registered contract's own timeout and attempt ceiling win over the gateway defaults.
 	timeout := gateway.Timeout
 	if definition.Timeout > 0 {
 		timeout = definition.Timeout
 	}
+	// uncertain is set once an attempt of a mutating call ended without proving it took no effect.
+	uncertain := false
 	for attempt := 1; ; attempt++ {
 		// Observing first keeps a redelivered or retried call from repeating an effect that already landed.
 		result, reconciled, err := gateway.reconcile(ctx, call, definition)
 		if err != nil {
+			if attempt == 1 {
+				err = notSent(err)
+			}
 			return result, err
 		}
 		var callErr error
 		if !reconciled {
-			result, callErr = gateway.Transport.Invoke(ctx, call, definition, credential, timeout)
+			if uncertain && !definition.ReadOnly && !gateway.Traits(call.ToolID).DedupesByKey &&
+				(result.Effect == nil || result.Effect.Status != domain.EffectViolated) {
+				return result, fmt.Errorf("%w: no source proves the previous attempt had no effect", domain.ErrEffectUnknown)
+			}
+			result, callErr = gateway.Transport.Invoke(ctx, call, definition, prepared.credential, timeout)
+		}
+		if callErr == nil && result.Acceptance != nil {
+			return gateway.acceptance(ctx, prepared, result)
 		}
 		if callErr == nil {
 			if err := gateway.Validator.Validate(ctx, definition, result); err != nil {
@@ -148,34 +207,40 @@ func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall
 		if callErr == nil && !result.Retryable && !reconciled {
 			if result, err = gateway.verifyEffect(ctx, call, definition, result); err != nil {
 				if !definition.RetryWhenEffectAbsent || !errors.Is(err, domain.ErrEffectViolated) {
-					return result, errors.Join(err, gateway.settle(ctx, call, definition, generation, true))
+					return result, errors.Join(err, gateway.settle(ctx, call, definition, prepared.generation, true))
 				}
 				// A proven-absent effect the contract declares safe to resend takes the bounded retry path.
 				callErr, result.Retryable = err, true
 			}
 		}
 		if callErr == nil && !result.Retryable {
-			if err := gateway.settle(ctx, call, definition, generation, true); err != nil {
-				return result, err
+			if err := gateway.settle(ctx, call, definition, prepared.generation, true); err != nil {
+				return result, withheld(err)
 			}
 			if gateway.Guardrails != nil {
 				subject := domain.GuardrailSubject{
 					TenantID: call.TenantContext.TenantID, Principal: domain.PrincipalRef{Kind: call.Principal.Kind, ID: call.Principal.ID},
 					RequestID: call.RequestID, ConversationID: call.ConversationID, ReleaseVersion: call.Principal.Release,
 				}
-				guarded, err := gateway.Guardrails.AfterTool(ctx, guardrails, subject, result)
+				guarded, err := gateway.Guardrails.AfterTool(ctx, prepared.guardrails, subject, result)
 				if err != nil {
-					return domain.ToolResult{}, stage.At(domain.StageGuardrail, err)
+					return domain.ToolResult{Usage: result.Usage}, withheld(stage.At(domain.StageGuardrail, err))
 				}
 				result = guarded
 			}
 			return result, nil
 		}
 		if callErr == nil {
-			callErr = fmt.Errorf("tool %q returned a retryable result", call.ToolID)
+			callErr = fmt.Errorf("%w: tool %q returned a retryable result", domain.ErrNoEffect, call.ToolID)
+		} else if result.Retryable && !errors.Is(callErr, domain.ErrEffectViolated) {
+			// A retryable answer declares the attempt took no effect, which is what makes resending it safe.
+			callErr = fmt.Errorf("%w: %w", domain.ErrNoEffect, callErr)
+		}
+		if uncertain = uncertain || !definition.ReadOnly && !errors.Is(callErr, domain.ErrNoEffect) && !errors.Is(callErr, domain.ErrEffectViolated); uncertain {
+			callErr = fmt.Errorf("%w: %w", domain.ErrEffectUnknown, callErr)
 		}
 		if gateway.classifier().CountsAsDependencyFailure(ctx, call, result, callErr) {
-			if err := gateway.settle(ctx, call, definition, generation, false); err != nil {
+			if err := gateway.settle(ctx, call, definition, prepared.generation, false); err != nil {
 				return result, errors.Join(callErr, err)
 			}
 		}
@@ -192,6 +257,39 @@ func (gateway *GovernedGateway) invoke(ctx context.Context, call domain.ToolCall
 	}
 }
 
+// acceptance admits an asynchronous acceptance only from a tool whose composition declares lookup
+// support and only when it is valid; otherwise it is invalid output of a sent call.
+func (gateway *GovernedGateway) acceptance(ctx context.Context, prepared preparedCall, result domain.ToolResult) (domain.ToolResult, error) {
+	call := prepared.call
+	if !gateway.Traits(call.ToolID).Lookup {
+		return domain.ToolResult{Usage: result.Usage}, fmt.Errorf("%w: tool %q accepted a call but declares no lookup", ErrInvalidToolOutput, call.ToolID)
+	}
+	if err := result.Acceptance.Validate(); err != nil {
+		return domain.ToolResult{Usage: result.Usage}, fmt.Errorf("%w: %w", ErrInvalidToolOutput, err)
+	}
+	if err := gateway.settle(ctx, call, prepared.definition, prepared.generation, true); err != nil {
+		return result, withheld(err)
+	}
+	// An acceptance carries no output for the model; only its handle and usage go on.
+	return domain.ToolResult{Usage: result.Usage, Acceptance: result.Acceptance}, nil
+}
+
+// withheld marks a failure after the call took effect.
+func withheld(err error) error {
+	return fmt.Errorf("%w: %w", domain.ErrOutputWithheld, err)
+}
+
+// classifySent marks a sent non-read-only call's failure that proves no effect and leaves no
+// effect established either way as unknown.
+func classifySent(err error) error {
+	switch {
+	case errors.Is(err, domain.ErrNotSent), errors.Is(err, domain.ErrEffectUnknown), errors.Is(err, domain.ErrOutputWithheld),
+		errors.Is(err, domain.ErrEffectViolated), errors.Is(err, domain.ErrNoEffect):
+		return err
+	}
+	return fmt.Errorf("%w: %w", domain.ErrEffectUnknown, err)
+}
+
 func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	if gateway.Registry == nil || gateway.RateLimiter == nil || gateway.Authorizer == nil || gateway.Credentials == nil || gateway.Egress == nil || gateway.Circuit == nil || gateway.Transport == nil || gateway.Retry == nil || gateway.Validator == nil || gateway.Limits == nil {
 		return fmt.Errorf("tool gateway: every governance dependency is required")
@@ -204,6 +302,13 @@ func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	}
 	if gateway.Approvals != nil && gateway.enforcerFor(domain.ObligationRequireApproval) != nil {
 		return fmt.Errorf("tool gateway: require_approval is enforced by the approval gate; an enforcer of it as well is ambiguous")
+	}
+	if gateway.Lookup == nil {
+		for toolID, traits := range gateway.Outcomes {
+			if traits.Lookup {
+				return fmt.Errorf("tool gateway: tool %q declares lookup support but no outcome lookup is composed", toolID)
+			}
+		}
 	}
 	if call.TenantContext.TenantID <= 0 || strings.TrimSpace(call.RequestID) == "" || strings.TrimSpace(call.ToolID) == "" || strings.TrimSpace(call.ToolVersion) == "" {
 		return fmt.Errorf("%w: tenant, request, tool, and version are required", domain.ErrValidation)

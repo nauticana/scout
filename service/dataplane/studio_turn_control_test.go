@@ -37,6 +37,18 @@ func (control *turnControlFake) RequestHold(_ context.Context, _ int64, requestI
 	return domain.TurnHoldOutcome{}, fmt.Errorf("%w: %s", domain.ErrNotFound, requestID)
 }
 
+func (control *turnControlFake) Preempt(_ context.Context, _ int64, requestID string) (domain.TurnHoldOutcome, error) {
+	control.holds = append(control.holds, requestID+"/"+string(domain.HoldPreempted))
+	switch control.status[requestID] {
+	case domain.TurnQueued, domain.TurnSuspended, domain.TurnRunning, domain.TurnStreaming:
+		control.status[requestID], control.fence[requestID] = domain.TurnHeld, control.fence[requestID]+1
+		return domain.TurnHoldOutcome{Status: domain.TurnHeld, Fence: control.fence[requestID]}, nil
+	case domain.TurnHeld:
+		return domain.TurnHoldOutcome{Status: domain.TurnHeld, Fence: control.fence[requestID]}, nil
+	}
+	return domain.TurnHoldOutcome{}, fmt.Errorf("%w: %s", domain.ErrNotFound, requestID)
+}
+
 func (control *turnControlFake) Release(_ context.Context, _ int64, requestID string, expectedFence int64) (int64, error) {
 	control.released = append(control.released, requestID)
 	if control.release != nil {
@@ -101,6 +113,9 @@ func (roles operateRoles) Authorize(_ context.Context, _ domain.Principal, objec
 type turnControlFixture struct {
 	query    *queueQueryFake
 	control  *turnControlFake
+	fences   *MemoryTurnFences
+	outcomes *MemoryCallOutcomeStore
+	journal  *MemoryLoopJournal
 	budget   *fake.TenantBudgetManager
 	reserved []domain.BudgetReservation
 	refunded []string
@@ -121,7 +136,10 @@ func newTurnControlFixture(actions ...domain.OperationAction) *turnControlFixtur
 		}},
 		control: &turnControlFake{status: map[string]domain.TurnStatus{"request-1": domain.TurnHeld}, fence: map[string]int64{"request-1": 3}},
 		audit:   &observability.MemoryAuditSink{},
+		fences:  &MemoryTurnFences{},
 	}
+	fixture.journal = &MemoryLoopJournal{Fences: fixture.fences}
+	fixture.outcomes = &MemoryCallOutcomeStore{Fences: fixture.fences, Journal: fixture.journal}
 	fixture.budget = &fake.TenantBudgetManager{
 		ReserveFunc: func(_ context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
 			reservation := domain.BudgetReservation{TenantID: request.TenantID, ReservationID: "reservation-2", RequestID: request.RequestID, Currency: "USD"}
@@ -139,7 +157,7 @@ func newTurnControlFixture(actions ...domain.OperationAction) *turnControlFixtur
 			return domain.Principal{Kind: ref.Kind, ID: ref.ID, TenantID: tenantID}, nil
 		}),
 		Roles: operateRoles{actions: actions}, Control: fixture.control, Estimator: &fake.TurnBudgetEstimator{}, Budget: fixture.budget,
-		Audit: fixture.audit,
+		Outcomes: fixture.outcomes, Journal: fixture.journal, Audit: fixture.audit,
 	}
 	return fixture
 }
@@ -180,12 +198,12 @@ func TestStudioTurnControlAuthorizesOnAgentOperation(t *testing.T) {
 	}
 }
 
-func TestStudioTurnControlHoldsOnlyAtACheckpoint(t *testing.T) {
+func TestStudioTurnControlHoldsAtACheckpointOnRequest(t *testing.T) {
 	fixture := newTurnControlFixture(domain.OperationView, domain.OperationOperate)
 	fixture.control.status["request-1"] = domain.TurnRunning
 	ctx := context.Background()
-	if _, err := fixture.service.Hold(ctx, usageActor, domain.TurnHoldRequest{AgentID: "writer-a", RequestID: "request-1", Mode: "preempt", Reason: "x"}); !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("preempt is not offered yet, got %v", err)
+	if _, err := fixture.service.Hold(ctx, usageActor, domain.TurnHoldRequest{AgentID: "writer-a", RequestID: "request-1", Mode: "now", Reason: "x"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("an unknown mode = %v, want validation", err)
 	}
 	if _, err := fixture.service.Hold(ctx, usageActor, domain.TurnHoldRequest{AgentID: "writer-a", RequestID: "request-1", Mode: domain.HoldModeCheckpoint}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a hold needs a reason, got %v", err)

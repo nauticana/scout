@@ -103,8 +103,8 @@ func (coordinator *SessionCoordinator) Checkpoint(ctx context.Context, owner dom
 	})
 }
 
-// Complete writes the terminal result before invalidating the cached snapshot.
-func (coordinator *SessionCoordinator) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+// Complete writes the terminal result and its settlement before invalidating the cached snapshot.
+func (coordinator *SessionCoordinator) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult, settlement domain.TurnSettlement) error {
 	if err := owner.Check(); err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (coordinator *SessionCoordinator) Complete(ctx context.Context, owner domai
 		return err
 	}
 	return coordinator.write(ctx, owner.TenantID, conversationID, expectedRevision, "complete", func() error {
-		return coordinator.Store.Complete(ctx, owner, conversationID, expectedRevision, result)
+		return coordinator.Store.Complete(ctx, owner, conversationID, expectedRevision, result, settlement)
 	})
 }
 

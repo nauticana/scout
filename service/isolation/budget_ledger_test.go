@@ -3,6 +3,9 @@ package isolation
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -552,48 +555,63 @@ func TestBudgetLedgerCommitAndRelease(t *testing.T) {
 	}
 }
 
-// G3: a turn's settlement opens its transaction with the guarded touch of the owner's turn, so a
-// worker the turn moved past settles nothing and the resumed run still finds its hold live.
-func TestBudgetLedgerSettlesATurnOnlyForItsCurrentOwner(t *testing.T) {
+// catalogTx is a turn's ending transaction that can bind the ledger's queries, recording which catalog it bound.
+type catalogTx struct {
+	*budgetQueryFake
+	bound []string
+}
+
+func (tx *catalogTx) QueryService(catalogID string, _ map[string]string) keelport.QueryService {
+	tx.bound = append(tx.bound, catalogID)
+	return tx.budgetQueryFake
+}
+
+// Decision 18: a turn's settlement joins the transaction that ends the turn, after its guarded
+// touch; it takes the tenant lock and moves the reservation, and never begins or commits itself.
+func TestBudgetLedgerSettlesATurnInsideTheTransactionThatEndsIt(t *testing.T) {
 	current := storedBudget("r", "req", string(domain.ReservationHeld), 1_000, 50, 1, time.Now().Add(time.Minute), nil, nil, false)
-	owner := domain.TurnOwner{TenantID: 8, RequestID: "req", Fence: 4}
 	reservation := domain.BudgetReservation{TenantID: 8, ReservationID: "r", RequestID: "req", Currency: "USD"}
-	usage := domain.Usage{InputTokens: 10, Currency: "USD"}
+	usage := domain.Usage{InputTokens: 10, OutputTokens: 5, CostMinorUnits: 7, Currency: "USD"}
+	ledger := newBudgetLedger(&budgetQueryFake{})
 
-	owned := &budgetQueryFake{rows: map[string][][]any{qGuardTurnOwner: {{int64(3)}}, qGetBudget: {current}, qSettleBudget: {{"r"}}, qReleaseBudget: {{"r"}}}}
-	if err := newBudgetLedger(owned).CommitTurn(context.Background(), owner, reservation, usage); err != nil {
+	tx := &catalogTx{budgetQueryFake: &budgetQueryFake{rows: map[string][][]any{qGetBudget: {current}, qSettleBudget: {{"r"}}}}}
+	if err := ledger.SettleTurnTx(context.Background(), tx, reservation, usage, false); err != nil {
 		t.Fatal(err)
 	}
-	if owned.names[0] != qGuardTurnOwner || len(owned.args[qGuardTurnOwner]) != 3 || owned.args[qGuardTurnOwner][2] != int64(4) {
-		t.Fatalf("the guarded touch must open the settlement: %v, %v", owned.names, owned.args[qGuardTurnOwner])
+	if !slices.Equal(tx.names, []string{qLockBudget, qGetBudget, qSettleBudget}) || !slices.Equal(tx.bound, []string{budgetCatalogID}) {
+		t.Fatalf("settlement ran %v in catalogs %v", tx.names, tx.bound)
 	}
-	if err := newBudgetLedger(owned).ReleaseTurn(context.Background(), owner, reservation); err != nil {
-		t.Fatal(err)
+	if args := tx.args[qSettleBudget]; args[0] != int64(15) || args[1] != int64(7) {
+		t.Fatalf("settled at %v", args)
 	}
 
-	for name, settle := range map[string]func(*BudgetLedger, domain.TurnOwner) error{
-		"commit": func(ledger *BudgetLedger, owner domain.TurnOwner) error {
-			return ledger.CommitTurn(context.Background(), owner, reservation, usage)
-		},
-		"release": func(ledger *BudgetLedger, owner domain.TurnOwner) error {
-			return ledger.ReleaseTurn(context.Background(), owner, reservation)
-		},
-	} {
-		stale := &budgetQueryFake{rows: map[string][][]any{qGetBudget: {current}, qSettleBudget: {{"r"}}, qReleaseBudget: {{"r"}}}}
-		if err := settle(newBudgetLedger(stale), owner); !errors.Is(err, domain.ErrFenceLost) {
-			t.Fatalf("%s by a stale owner = %v, want ErrFenceLost", name, err)
-		}
-		if stale.ran(qSettleBudget) || stale.ran(qReleaseBudget) || stale.ran(qLockBudget) {
-			t.Fatalf("%s by a stale owner touched the reservation: %v", name, stale.names)
-		}
-		other := owner
-		other.RequestID = "another"
-		if err := settle(newBudgetLedger(&budgetQueryFake{}), other); !errors.Is(err, domain.ErrFenceLost) {
-			t.Fatalf("%s by the owner of another turn = %v", name, err)
-		}
-		if err := settle(newBudgetLedger(&budgetQueryFake{}), domain.TurnOwner{}); !errors.Is(err, domain.ErrFenceLost) {
-			t.Fatalf("%s without an owner = %v", name, err)
-		}
+	refund := &catalogTx{budgetQueryFake: &budgetQueryFake{rows: map[string][][]any{qGetBudget: {current}, qReleaseBudget: {{"r"}}}}}
+	if err := ledger.SettleTurnTx(context.Background(), refund, reservation, domain.Usage{}, true); err != nil || !refund.ran(qReleaseBudget) || refund.ran(qSettleBudget) {
+		t.Fatalf("refund = %v, ran %v", err, refund.names)
+	}
+
+	expired := storedBudget("r", "req", string(domain.ReservationHeld), 1_000, 50, 1, time.Now().Add(-time.Minute), nil, nil, true)
+	lapsed := &catalogTx{budgetQueryFake: &budgetQueryFake{rows: map[string][][]any{qGetBudget: {expired}, qExpireOneBudget: {{"r"}}}}}
+	if err := ledger.SettleTurnTx(context.Background(), lapsed, reservation, usage, false); !errors.Is(err, domain.ErrConflict) || lapsed.ran(qSettleBudget) {
+		t.Fatalf("a lapsed hold = %v, ran %v", err, lapsed.names)
+	}
+	settled := storedBudget("r", "req", string(domain.ReservationSettled), 1_000, 50, 1, time.Now(), int64(15), int64(7), false)
+	replay := &catalogTx{budgetQueryFake: &budgetQueryFake{rows: map[string][][]any{qGetBudget: {settled}}}}
+	if err := ledger.SettleTurnTx(context.Background(), replay, reservation, usage, false); err != nil || replay.ran(qSettleBudget) {
+		t.Fatalf("a repeated settlement = %v, ran %v", err, replay.names)
+	}
+
+	if err := ledger.SettleTurnTx(context.Background(), &budgetQueryFake{}, reservation, usage, false); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("a transaction without a query catalog = %v, want ErrNotReady", err)
+	}
+	if err := ledger.SettleTurnTx(context.Background(), tx, domain.BudgetReservation{}, usage, false); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("no reservation = %v", err)
+	}
+	if err := ledger.SettleTurnTx(context.Background(), tx, reservation, domain.Usage{Currency: "EUR"}, false); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("another currency = %v", err)
+	}
+	if strings.Contains(strings.Join(slices.Collect(maps.Values(budgetQueries)), "\n"), "conversation_turn SET fence") {
+		t.Fatal("the ledger must leave the guarded touch to the transaction that ends the turn")
 	}
 }
 

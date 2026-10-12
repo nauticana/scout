@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.9",
+      "title": "Unknown tool outcomes and preemption",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "Non-read-only tool calls are recorded before they are sent, unknown outcomes hold the turn until reconciled, settlement and completion become one fenced unit, and operators can preempt turns and attest outcomes.",
+      "body_markdown": "**Unknown tool outcomes and preemption.** Every non-read-only tool call is recorded in `turn_call_outcome` (`I` in flight, `A` accepted, `C`, `F`, `U` unknown) before it is sent; a definite result and its journal observation are written in one transaction. A call whose effect is unknown no longer reaches the model as an error: the turn holds (`hold_code` `U`). A resumed turn decides each unobserved call from its row: a settled one is journaled, an open one is re-sent only when the product's composition declares the tool deduplicates by key, otherwise reconciled by effect verification or `ToolOutcomeLookup`, else held again. A fenced-out worker's late answer is recorded as evidence. Unknowns settle by lookup, by the MCP confirmation hook, or by attestation (`turn_call_attestation`; a high-risk call needs a second person through the required `contract.OperationSeparation`). `turn/hold` mode `preempt` holds a running turn at once (`hold_code` `P`); release is refused while any outcome is open. Health reports `open_outcomes`, and `health_alerts.max_unresolved_minutes` opens alert kind `U`.\n\nA turn's budget settlement, usage events, and terminal record are one transaction under the owner's fence, so a reservation is never settled while the turn's end can still be refused; a run that finds its reservation settled fails closed with `ErrBudgetSettled`.\n\n| Before | After |\n|---|---|\n| `TurnBudgetManager.CommitTurn`/`ReleaseTurn`, `TurnRecordStore.RecordUsage` | `Complete`/`Fail` take a `domain.TurnSettlement`; `BudgetLedger.SettleTurnTx`; `BaseDataPlane.Budget` is a `TenantBudgetManager` that implements `TurnBudgetSettler` |\n| `TurnRecordStore.Hold(owner)` | `Hold(owner, code)` |\n| — | `ToolLoopExecutor.Outcomes` (required), `Reconciler`, `Dispatch`; `StudioTurnControl.Outcomes`, `Journal`, `Separation`; `TurnControl.Preempt`; `StudioTurnControlBackend.LookupOutcome`/`AttestOutcome`; `contract.CallOutcomeStore`, `ToolOutcomeLookup`, `ToolOutcomeReconciler`, `OperationSeparation`; `ToolResult.Acceptance`; Charter `CapabilityGateway.Lookup`; `confirmation.TableStore.Calls` |\n\nGateways classify failures with `ErrNotSent`, `ErrNoEffect`, `ErrEffectUnknown`, and `ErrOutputWithheld`; any other error on a mutating call holds the turn. Routes: `POST turn/outcome/lookup` (`OPERATE`), `POST turn/outcome/attest` (`RECONCILE`); `AGENT_OPERATION` gains `PREEMPT` and `RECONCILE`. Schema: `turn_call_outcome`, `turn_call_attestation`, `turn_call_confirmation`, `mcp_confirmation_partner_uq`; `hold_code` adds `P`, `U`; `agent_alert` kind adds `U`; `mcp_confirmation` now loads after `runtime`. Flag: `agent_outcome_attest_grace`."
+    },
+    {
       "version": "v1.2.8",
       "title": "Turn fence, holds, and pause suspend",
       "tags": [

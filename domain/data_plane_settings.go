@@ -54,4 +54,7 @@ type DataPlaneSettings struct {
 	SafetyEventMaxPage      int
 	RestrictionCacheTTL     time.Duration
 	RestrictionCacheEntries int
+	// OutcomeAttestGrace is added to a non-read-only call's dispatch window for its outcome
+	// deadline, after which a person may attest an unknown outcome.
+	OutcomeAttestGrace time.Duration
 }

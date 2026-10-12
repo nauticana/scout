@@ -192,9 +192,18 @@ type TableStore struct {
 	// DefaultBatch and DefaultMaxBatch, and Batch may not exceed MaxBatch.
 	Batch    int
 	MaxBatch int
+	// Calls settles the runtime tool calls waiting on a confirmation in the transaction that
+	// reconciles it; nil settles none.
+	Calls ReconciledCalls
 
 	once sync.Once
 	qs   keelport.QueryService
+}
+
+// ReconciledCalls settles, inside the transaction that reconciles a confirmation, what waits on
+// it in the confirmation's tenant; dataplane.TableCallOutcomeStore implements it.
+type ReconciledCalls interface {
+	ConfirmationReconciledTx(ctx context.Context, tx keelport.TxQueryService, key domain.MCPConfirmationKey, outcome domain.MCPConfirmationStatus, reconciler domain.PrincipalRef) error
 }
 
 func (s *TableStore) documentLimit() int {
@@ -560,8 +569,9 @@ func (s *TableStore) ExpireDue(ctx context.Context, limit int) ([]domain.Expired
 	return out, nil
 }
 
-// Reconcile records what a person verified about an unknown outcome. It never
-// runs the action. The caller has authorized the reconciler; Executor.Reconcile does both.
+// Reconcile records what a person verified about an unknown outcome and, in the same
+// transaction, settles the tool calls waiting on it. It never runs the action. The caller has
+// authorized the reconciler; Executor.Reconcile does both.
 func (s *TableStore) Reconcile(ctx context.Context, key domain.MCPConfirmationKey, reconciler domain.PrincipalRef, outcome domain.MCPConfirmationStatus, note string) error {
 	note = strings.TrimSpace(note)
 	switch {
@@ -572,8 +582,37 @@ func (s *TableStore) Reconcile(ctx context.Context, key domain.MCPConfirmationKe
 	case reconciler.Kind == "" || strings.TrimSpace(reconciler.ID) == "":
 		return fmt.Errorf("%w: reconciler is required", domain.ErrPrincipalUnknown)
 	}
-	return s.guarded(ctx, "reconcile", key, qConfirmReconcile, string(outcome), string(reconciler.Kind), reconciler.ID,
-		note, key.TenantID, key.ID)
+	if err := s.init(ctx); err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
+	tx, err := s.DB.BeginTx(ctx, confirmationQueries)
+	if err != nil {
+		return fmt.Errorf("reconcile confirmation %d: begin: %w", key.ID, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	updated, err := tx.Query(ctx, qConfirmReconcile, string(outcome), string(reconciler.Kind), reconciler.ID, note, key.TenantID, key.ID)
+	if err != nil {
+		return fmt.Errorf("reconcile confirmation %d: %w", key.ID, err)
+	}
+	if len(updated.Rows) == 0 {
+		return fmt.Errorf("%w: cannot reconcile confirmation %d in its current state", domain.ErrConflict, key.ID)
+	}
+	if s.Calls != nil {
+		if err = s.Calls.ConfirmationReconciledTx(ctx, tx, key, outcome, reconciler); err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("reconcile confirmation %d: commit: %w", key.ID, err)
+	}
+	committed = true
+	return nil
 }
 
 // Purge drops the payload, preview, and result of a bounded batch of

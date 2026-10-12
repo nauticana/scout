@@ -3,6 +3,7 @@ package scope
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nauticana/scout/domain"
@@ -13,7 +14,7 @@ func TestHealthAlertsCanonicalValueSpellsEveryField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"window_minutes":0,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":0,"max_hard_safety_events":0,"max_silence_minutes":120}`
+	want := `{"window_minutes":0,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":0,"max_hard_safety_events":0,"max_silence_minutes":120,"max_unresolved_minutes":0}`
 	if string(canonical) != want {
 		t.Fatalf("canonical = %s, want %s", canonical, want)
 	}
@@ -21,17 +22,19 @@ func TestHealthAlertsCanonicalValueSpellsEveryField(t *testing.T) {
 
 func TestHealthAlertsCanonicalValueRefusesMalformedPolicies(t *testing.T) {
 	for name, raw := range map[string]string{
-		"negative threshold": `{"max_failure_rate_bp":-1}`,
-		"rate above whole":   `{"max_failure_rate_bp":10001}`,
-		"window too long":    `{"window_minutes":10081}`,
-		"silence too long":   `{"max_silence_minutes":10081}`,
-		"latency too long":   `{"max_p95_latency_ms":86400001}`,
-		"negative floor":     `{"min_turns":-5}`,
-		"fraction":           `{"max_p95_latency_ms":1.5}`,
-		"unknown field":      `{"max_failure_rate_bp":5,"max_cost":3}`,
-		"trailing content":   `{"max_failure_rate_bp":5} {}`,
-		"not an object":      `[1]`,
-		"empty":              ``,
+		"negative threshold":  `{"max_failure_rate_bp":-1}`,
+		"rate above whole":    `{"max_failure_rate_bp":10001}`,
+		"window too long":     `{"window_minutes":10081}`,
+		"silence too long":    `{"max_silence_minutes":10081}`,
+		"unresolved too long": `{"max_unresolved_minutes":10081}`,
+		"negative unresolved": `{"max_unresolved_minutes":-1}`,
+		"latency too long":    `{"max_p95_latency_ms":86400001}`,
+		"negative floor":      `{"min_turns":-5}`,
+		"fraction":            `{"max_p95_latency_ms":1.5}`,
+		"unknown field":       `{"max_failure_rate_bp":5,"max_cost":3}`,
+		"trailing content":    `{"max_failure_rate_bp":5} {}`,
+		"not an object":       `[1]`,
+		"empty":               ``,
 	} {
 		if _, err := CanonicalValue(domain.ResourceHealthAlerts, []byte(raw)); !errors.Is(err, domain.ErrValidation) {
 			t.Errorf("%s: error = %v, want validation", name, err)
@@ -68,8 +71,43 @@ func TestHealthAlertsMergerOnlyTightensAndZeroInherits(t *testing.T) {
 		t.Fatalf("append must be refused: %v", err)
 	}
 	root, err := HealthAlertsMerger{}.Merge(context.Background(), nil, alertsBinding(`{"window_minutes":15,"max_silence_minutes":30}`))
-	if err != nil || string(root) != `{"window_minutes":15,"min_turns":0,"max_failure_rate_bp":0,"max_p95_latency_ms":0,"max_hard_safety_events":0,"max_silence_minutes":30}` {
+	if err != nil || string(root) != `{"window_minutes":15,"min_turns":0,"max_failure_rate_bp":0,"max_p95_latency_ms":0,"max_hard_safety_events":0,"max_silence_minutes":30,"max_unresolved_minutes":0}` {
 		t.Fatalf("root policy = %s, %v", root, err)
+	}
+}
+
+// The unresolved-outcome span narrows like the other thresholds: a child may lower it or set one
+// its parent leaves unset, and its zero inherits; it may neither raise nor unset the parent's.
+func TestHealthAlertsUnresolvedSpanOnlyTightens(t *testing.T) {
+	parent := `{"window_minutes":60,"max_unresolved_minutes":30}`
+	for child, want := range map[string]int64{
+		`{"max_unresolved_minutes":10}`: 10,
+		`{"max_unresolved_minutes":90}`: 30,
+		`{"max_failure_rate_bp":5}`:     30,
+	} {
+		merged, err := HealthAlertsMerger{}.Merge(context.Background(), []byte(parent), alertsBinding(child))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if policy, err := DecodeHealthAlerts(merged); err != nil || policy.MaxUnresolvedMinutes != want {
+			t.Fatalf("%s merged to %+v, %v; want %d", child, policy, err, want)
+		}
+	}
+	if merged, err := (HealthAlertsMerger{}).Merge(context.Background(), []byte(`{"window_minutes":60}`), alertsBinding(`{"max_unresolved_minutes":45}`)); err != nil ||
+		!strings.Contains(string(merged), `"max_unresolved_minutes":45`) {
+		t.Fatalf("a child sets an unresolved span its parent leaves unset: %s, %v", merged, err)
+	}
+	checker := &LatticeChecker{}
+	for name, candidate := range map[string]string{
+		"raised": `{"window_minutes":60,"max_unresolved_minutes":45}`,
+		"unset":  `{"window_minutes":60}`,
+	} {
+		if err := checker.CheckNarrowing(context.Background(), domain.ResourceHealthAlerts, []byte(parent), []byte(candidate)); !errors.Is(err, domain.ErrAuthorityExceeded) {
+			t.Errorf("%s unresolved span = %v, want authority exceeded", name, err)
+		}
+	}
+	if policy := (domain.HealthAlertPolicy{MaxUnresolvedMinutes: 5}); !policy.Evaluates() {
+		t.Fatal("an unresolved-outcome span alone must be evaluated")
 	}
 }
 

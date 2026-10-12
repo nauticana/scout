@@ -55,7 +55,7 @@ func scriptedReplay(t *testing.T, harness *replayHarness) (domain.GoldenExample,
 }
 
 func ordersCall() domain.ModelResult {
-	return domain.ModelResult{ToolCalls: []domain.ModelToolCall{{CallID: "c1", Name: "orders_get", Arguments: []byte(`{"id":1}`)}},
+	return domain.ModelResult{ToolCalls: []domain.ModelToolCall{{CallID: nextCallID(), Name: "orders_get", Arguments: []byte(`{"id":1}`)}},
 		FinishReason: domain.FinishReasonToolCalls, Usage: domain.Usage{InputTokens: 5}}
 }
 

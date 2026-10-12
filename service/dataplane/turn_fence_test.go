@@ -6,10 +6,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
+	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
 	"github.com/nauticana/scout/service/dataplane/dataplanetest"
@@ -88,12 +90,20 @@ func (table *fenceTable) Query(_ context.Context, name string, args ...any) (*ke
 		return rows([]any{fenceTurnNo, "conversation-1", string(table.status), testDigest("input"), nil, nil, table.fence}), nil
 	case qRecordOwnerState:
 		return rows([]any{table.fence, string(table.status), false, ""}), nil
-	case qRecordOwnerGuard, qSessionOwnerGuard:
+	case qRecordOwnerGuard, qSessionOwnerGuard, qOutcomeOwnerGuard:
 		if !table.owned(args[0], args[1], args[2]) {
 			return rows(), nil
 		}
 		return rows([]any{fenceTurnNo}), nil
+	case qRecordOwnerTurn:
+		if !table.owned(args[0], args[1], args[2]) {
+			return rows(), nil
+		}
+		return rows([]any{fenceTurnNo, "conversation-1"}), nil
 	case qRecordHold, qRecordSuspend:
+		if name == qRecordHold {
+			args = args[1:]
+		}
 		if !table.owned(args[0], args[1], args[2]) {
 			return rows(), nil
 		}
@@ -105,8 +115,15 @@ func (table *fenceTable) Query(_ context.Context, name string, args ...any) (*ke
 		}
 		table.status = domain.TurnStatus(args[0].(string))
 		return rows([]any{fenceTurnNo}), nil
-	case qLoopEntryInsert, qStepClaim:
+	case qLoopEntryInsert, qStepClaim, qOutcomeIntend, qOutcomeMarkUnknown, qOutcomeRedispatch:
 		return fenced(true), nil
+	case qOutcomeFind:
+		return rows([]any{fenceRequest, args[2], args[3], "loop:c1", "shop.write", "2", string(domain.CallFromAgent), string(domain.CallInFlight),
+			table.fence, time.Now(), time.Now().Add(time.Minute), false, "", "", "", int64(0), "", "", nil, "", "", ""}), nil
+	case qOutcomeSettle:
+		return rows([]any{"c1"}), nil
+	case qOutcomeJournal:
+		return rows([]any{int64(1)}), nil
 	case qStepCommit, qStepAbandon, qStepReplay, qStepReclaimExpired:
 		return fenced(true), nil
 	case qSessionCreateSnapshot, qSessionAdvanceSnapshot:
@@ -158,7 +175,8 @@ func fenceDispatch() domain.TurnDispatch {
 }
 
 func newFenceRecordStore(table *fenceTable) *TableTurnRecordStore {
-	return &TableTurnRecordStore{DB: table, Objects: newObjectStateStore(&fake.ObjectStorage{}), UsageCategory: "model_output"}
+	return &TableTurnRecordStore{DB: table, Objects: newObjectStateStore(&fake.ObjectStorage{}),
+		Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output"}}
 }
 
 func TestTableStoresConformToTheFenceSuite(t *testing.T) {
@@ -167,13 +185,15 @@ func TestTableStoresConformToTheFenceSuite(t *testing.T) {
 		records := newFenceRecordStore(table)
 		objects := newObjectStateStore(&fake.ObjectStorage{})
 		journal := &TableLoopJournal{DB: table, Objects: objects}
+		outcomes := &TableCallOutcomeStore{DB: table, Objects: objects}
 		steps := &StepIdempotencyStore{DB: table, Objects: objects, ClaimLease: stepLease}
-		sessions := &DurableSessionStore{DB: table, Objects: objects}
+		sessions := &DurableSessionStore{DB: table, Objects: objects, Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output"}}
 		key := domain.LoopKey{TenantID: fenceTenant, RequestID: fenceRequest, ExecutionStepID: 11}
 		entry := domain.LoopEntry{EntryNo: 1, Kind: domain.LoopEntryModel, Iteration: 1, Model: &domain.ModelResult{Output: []byte("x")}}
 		checkpoint := validCheckpoint("x")
 		checkpoint.TurnNo, checkpoint.ConversationID = fenceTurnNo, "conversation-1"
-		usage := domain.Usage{OutputTokens: 1, Currency: "USD"}
+		settlement := domain.TurnSettlement{Reservation: domain.BudgetReservation{TenantID: fenceTenant, ReservationID: "r", RequestID: fenceRequest},
+			Usage: domain.Usage{OutputTokens: 1, Currency: "USD"}, SubjectRef: "agent@v1"}
 		return dataplanetest.FenceHarness{
 			Acquire: func(t *testing.T) domain.TurnOwner {
 				// Each acquisition comes from a newer delivery of the same queue row.
@@ -181,7 +201,7 @@ func TestTableStoresConformToTheFenceSuite(t *testing.T) {
 				return table.acquire(t, records)
 			},
 			Hold: func(t *testing.T, owner domain.TurnOwner) {
-				if _, err := records.Hold(context.Background(), owner); err != nil {
+				if _, err := records.Hold(context.Background(), owner, domain.HoldCheckpoint); err != nil {
 					t.Fatalf("hold: %v", err)
 				}
 			},
@@ -189,6 +209,9 @@ func TestTableStoresConformToTheFenceSuite(t *testing.T) {
 				"loop journal append": func(ctx context.Context, owner domain.TurnOwner) error {
 					_, err := journal.Append(ctx, owner, key, entry)
 					return err
+				},
+				"call intent and outcome": func(ctx context.Context, owner domain.TurnOwner) error {
+					return fencedOutcomeWrites(ctx, outcomes, owner)
 				},
 				"step claim": func(ctx context.Context, owner domain.TurnOwner) error {
 					_, _, err := steps.Begin(ctx, owner, testStep)
@@ -204,21 +227,18 @@ func TestTableStoresConformToTheFenceSuite(t *testing.T) {
 					return sessions.Checkpoint(ctx, owner, 0, checkpoint)
 				},
 				"session complete": func(ctx context.Context, owner domain.TurnOwner) error {
-					return sessions.Complete(ctx, owner, "conversation-1", 0, domain.TurnResult{Response: []byte("done")})
+					return sessions.Complete(ctx, owner, "conversation-1", 0, domain.TurnResult{Response: []byte("done")}, settlement)
 				},
 				"turn fail": func(ctx context.Context, owner domain.TurnOwner) error {
-					return records.Fail(ctx, owner, domain.TurnFailed, "model_error")
+					return records.Fail(ctx, owner, domain.TurnFailed, "model_error", settlement)
 				},
 				"turn suspend": func(ctx context.Context, owner domain.TurnOwner) error {
 					_, err := records.Suspend(ctx, owner, "approval_pending")
 					return err
 				},
 				"turn hold": func(ctx context.Context, owner domain.TurnOwner) error {
-					_, err := records.Hold(ctx, owner)
+					_, err := records.Hold(ctx, owner, domain.HoldCheckpoint)
 					return err
-				},
-				"turn usage": func(ctx context.Context, owner domain.TurnOwner) error {
-					return records.RecordUsage(ctx, owner, "conversation-1", fenceTurnNo, "agent@v1", domain.UsageAttribution{}, usage)
 				},
 			},
 		}
@@ -244,6 +264,9 @@ func TestMemoryStoresConformToTheFenceSuite(t *testing.T) {
 					_, err := journal.Append(ctx, owner, key, domain.LoopEntry{EntryNo: 1, Kind: domain.LoopEntryModel})
 					return err
 				},
+				"call intent and outcome": func(ctx context.Context, owner domain.TurnOwner) error {
+					return fencedOutcomeWrites(ctx, &MemoryCallOutcomeStore{Fences: steps.fences, Journal: journal}, owner)
+				},
 				"step claim and commit": func(ctx context.Context, owner domain.TurnOwner) error {
 					if _, _, err := steps.Begin(ctx, owner, testStep); err != nil {
 						return err
@@ -256,6 +279,26 @@ func TestMemoryStoresConformToTheFenceSuite(t *testing.T) {
 	if err := (&MemoryLoopJournal{}).Fences.Check(loopOwner); !errors.Is(err, domain.ErrFenceLost) {
 		t.Fatalf("a memory journal without a fence authority must refuse every write, got %v", err)
 	}
+}
+
+// fencedOutcomeWrites makes every owner write of a call outcome store in turn: intent, unknown
+// marking, redispatch, and the settlement with its observation.
+func fencedOutcomeWrites(ctx context.Context, outcomes contract.CallOutcomeStore, owner domain.TurnOwner) error {
+	key := domain.CallOutcomeKey{TenantID: fenceTenant, RequestID: fenceRequest, ExecutionStepID: 11, CallID: "c1"}
+	if _, _, err := outcomes.Intend(ctx, owner, domain.CallIntent{Key: key, IdempotencyKey: "loop:c1",
+		Tool: domain.ToolReference{ToolID: "shop.write", Version: "2"}, Window: time.Minute}); err != nil {
+		return err
+	}
+	if err := outcomes.MarkUnknown(ctx, owner, key); err != nil {
+		return err
+	}
+	if _, err := outcomes.Redispatch(ctx, owner, key, time.Minute); err != nil {
+		return err
+	}
+	entry := domain.LoopEntry{EntryNo: 1, Kind: domain.LoopEntryObservation, Observation: &domain.ModelToolObservation{CallID: "c1", Name: "shop_write"}}
+	_, err := outcomes.SettleAndAppend(ctx, owner, domain.CallSettlement{Key: key, Status: domain.CallCompleted, Resolution: domain.ResolvedByGateway},
+		domain.LoopKey{TenantID: fenceTenant, RequestID: fenceRequest, ExecutionStepID: 11}, entry)
+	return err
 }
 
 // G1: a turn whose worker died while running is redelivered under a new lease and acquired
@@ -275,10 +318,10 @@ func TestTableTurnRecordStoreReacquiresARunningTurnForItsCurrentLease(t *testing
 	if err != nil || current.Fence != 2 || table.status != domain.TurnRunning {
 		t.Fatalf("redelivery = %+v, %v, status %s", current, err, table.status)
 	}
-	if _, err := records.Hold(context.Background(), zombie); !errors.Is(err, domain.ErrFenceLost) {
+	if _, err := records.Hold(context.Background(), zombie, domain.HoldCheckpoint); !errors.Is(err, domain.ErrFenceLost) {
 		t.Fatalf("the dead worker's write = %v, want ErrFenceLost", err)
 	}
-	if err := records.Fail(context.Background(), zombie, domain.TurnFailed, "late"); !errors.Is(err, domain.ErrFenceLost) || table.status != domain.TurnRunning {
+	if err := records.Fail(context.Background(), zombie, domain.TurnFailed, "late", domain.TurnSettlement{}); !errors.Is(err, domain.ErrFenceLost) || table.status != domain.TurnRunning {
 		t.Fatalf("the dead worker failed the resumed turn: %v, %s", err, table.status)
 	}
 	if !strings.Contains(turnRecordQueries[qRecordAcquire], sqlTurnQueued+", "+sqlTurnOwned) {
@@ -330,7 +373,7 @@ func TestTableTurnRecordStoreRefusesAStaleOrForgedClaim(t *testing.T) {
 		t.Fatalf("a claim without a lease = %v", err)
 	}
 	// A current delivery that finds the turn held is told so; a terminal one conflicts.
-	if _, err := records.Hold(context.Background(), owner); err != nil {
+	if _, err := records.Hold(context.Background(), owner, domain.HoldCheckpoint); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := records.Acquire(context.Background(), claimOf(fenceDispatch())); !errors.Is(err, domain.ErrTurnHeld) {

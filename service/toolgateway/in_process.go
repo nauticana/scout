@@ -19,7 +19,9 @@ const InProcessScheme = "inprocess"
 func InProcessEndpoint(toolID string) string { return InProcessScheme + "://" + toolID }
 
 // InProcessHandler serves one tool. The tenant and principal come from the call,
-// which the gateway authenticated; never from the model-supplied arguments.
+// which the gateway authenticated; never from the model-supplied arguments. A handler of a
+// mutating tool that refuses a call before acting wraps domain.ErrNoEffect; any other failure
+// leaves the call's outcome unknown.
 type InProcessHandler func(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error)
 
 // InProcessTransport is the ToolTransport for tools implemented in the same
@@ -62,10 +64,10 @@ func (transport *InProcessTransport) Invoke(ctx context.Context, call domain.Too
 		// A registered id received the no-secret in-process credential. Never let
 		// a mismatched registry endpoint forward that call to a network transport.
 		if transport.Serves(definition.ToolID) {
-			return domain.ToolResult{}, fmt.Errorf("%w: registered in-process tool %q has endpoint %q", domain.ErrConflict, definition.ToolID, definition.Endpoint)
+			return domain.ToolResult{}, fmt.Errorf("%w: %w: registered in-process tool %q has endpoint %q", domain.ErrNoEffect, domain.ErrConflict, definition.ToolID, definition.Endpoint)
 		}
 		if transport.Next == nil {
-			return domain.ToolResult{}, fmt.Errorf("%w: no transport serves endpoint of tool %q", domain.ErrNotReady, definition.ToolID)
+			return domain.ToolResult{}, fmt.Errorf("%w: %w: no transport serves endpoint of tool %q", domain.ErrNoEffect, domain.ErrNotReady, definition.ToolID)
 		}
 		return transport.Next.Invoke(ctx, call, definition, credential, timeout)
 	}
@@ -73,7 +75,7 @@ func (transport *InProcessTransport) Invoke(ctx context.Context, call domain.Too
 	handler := transport.handlers[definition.ToolID]
 	transport.mu.RUnlock()
 	if handler == nil {
-		return domain.ToolResult{}, fmt.Errorf("%w: in-process tool %q has no handler in this process", domain.ErrNotReady, definition.ToolID)
+		return domain.ToolResult{}, fmt.Errorf("%w: %w: in-process tool %q has no handler in this process", domain.ErrNoEffect, domain.ErrNotReady, definition.ToolID)
 	}
 	if timeout > 0 {
 		var cancel context.CancelFunc

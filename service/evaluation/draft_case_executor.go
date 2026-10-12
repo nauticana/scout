@@ -118,6 +118,7 @@ func (executor *DraftCaseExecutor) ExecuteDraft(ctx context.Context, tenantID in
 		Requests: executor.Requests(frozenDefinition{draft: frozen}, skills),
 		Router:   executor.Router, Models: executor.Models, Registry: frozenTools{ToolRegistry: executor.Registry, draft: frozen},
 		Tools: sandbox, Journal: journal, Pricer: executor.Pricer, Evidence: executor.Evidence, Limits: executor.Limits, Now: executor.Now,
+		Outcomes: &dataplane.MemoryCallOutcomeStore{Fences: fences, Journal: journal, Now: executor.Now}, Dispatch: sandboxDispatch(executor.Limits),
 	})
 	if err != nil {
 		return domain.EvaluationCase{}, err

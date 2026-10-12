@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/contract"
+	"github.com/nauticana/scout/domain"
 )
 
 // GovernedGatewayConfig is the validated composition input for NewGovernedGateway.
@@ -36,6 +37,10 @@ type GovernedGatewayConfig struct {
 	Limits    contract.PrincipalLimits
 	Approvals contract.ToolApprovalGate
 	Timeout   time.Duration
+	// Outcomes and Lookup declare, by tool id, which tools deduplicate by idempotency key and
+	// which the lookup answers; see GovernedGateway.
+	Outcomes map[string]domain.ToolOutcomeTraits
+	Lookup   contract.ToolOutcomeLookup
 }
 
 // NewGovernedGateway validates the composition and fills in the default breaker and retry policy.
@@ -73,6 +78,7 @@ func NewGovernedGateway(config GovernedGatewayConfig) (*GovernedGateway, error) 
 		Transport: config.Transport, Retry: retry, Validator: config.Validator, Effects: config.Effects,
 		Guardrails: config.Guardrails, GuardrailConfigs: config.GuardrailConfigs,
 		Classifier: config.Classifier, Timeout: config.Timeout, Limits: config.Limits, Approvals: config.Approvals,
+		Outcomes: config.Outcomes, Lookup: config.Lookup,
 	}
 	if err := gateway.validate(validationProbe); err != nil {
 		return nil, err

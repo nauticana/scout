@@ -5,6 +5,8 @@ tables:
   - session_snapshot
   - step_idempotency
   - step_loop_entry
+  - turn_call_outcome
+  - turn_call_attestation
   - budget_reservation
   - conversation_turn_detail
   - usage_event

@@ -29,6 +29,10 @@ type controlTable struct {
 	holdCode   domain.TurnHoldCode
 	woken      []string
 	readErr    error
+	// openOutcomes counts the turn's in-flight, accepted, and unknown calls; unknown the ones a cancellation marked.
+	openOutcomes int
+	inFlight     int
+	unknown      int
 }
 
 func newControlTable(status domain.TurnStatus, fence int64) *controlTable {
@@ -99,11 +103,19 @@ func (table *controlTable) Query(_ context.Context, name string, args ...any) (*
 	case qControlState:
 		result.Rows = [][]any{{string(table.status), table.fence}}
 	case qControlRelease:
-		if table.status == domain.TurnHeld && table.fence == args[2] {
+		if table.status == domain.TurnHeld && table.fence == args[2] && table.openOutcomes == 0 {
 			table.status, table.fence = domain.TurnQueued, table.fence+1
 			table.unhold()
 			result.Rows = [][]any{{table.fence}}
 		}
+	case qControlPreempt:
+		if table.reason == nil && (parked || running) {
+			table.status, table.fence, table.holdCode, table.holdReason = domain.TurnHeld, table.fence+1, domain.HoldPreempted, nil
+			result.Rows = [][]any{{string(table.status), table.fence}}
+		}
+	case qControlUnknown:
+		table.unknown, table.inFlight = table.unknown+table.inFlight, 0
+		table.woken = append(table.woken, name)
 	}
 	return result, nil
 }
@@ -157,7 +169,7 @@ func TestTableTurnControlStopsATurnRunningInAnotherProcess(t *testing.T) {
 	}
 	late.Release()
 
-	if len(table.woken) != 0 {
+	if slices.Contains(table.woken, qControlWake) || slices.Contains(table.woken, qQueueRequeue) {
 		t.Fatalf("a running turn must not be requeued: %v", table.woken)
 	}
 	table.status = domain.TurnFailed
@@ -175,7 +187,7 @@ func TestTableTurnControlWakesAParkedTurnItCancels(t *testing.T) {
 		if err := (&TableTurnControl{DB: table}).Cancel(context.Background(), 7, "request-1", "stop"); err != nil {
 			t.Fatalf("%s: %v", status, err)
 		}
-		if table.status != domain.TurnQueued || table.fence != 5 || table.holdCode != "" || !slices.Equal(table.woken, []string{qControlWake, qQueueRequeue}) {
+		if table.status != domain.TurnQueued || table.fence != 5 || table.holdCode != "" || !slices.Equal(table.woken, []string{qControlUnknown, qControlWake, qQueueRequeue}) {
 			t.Fatalf("%s: status %s, fence %d, hold %q, woken %v", status, table.status, table.fence, table.holdCode, table.woken)
 		}
 	}

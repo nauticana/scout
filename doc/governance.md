@@ -219,20 +219,35 @@ declaring each, every ask with the route serving it, and what publication would 
 ## Live turn operation
 
 Operating a live turn is its own authority, apart from authoring. `AGENT_OPERATION` is checked at `agent:<id>`:
-`VIEW` lists an agent's live turns and reads one, and `OPERATE` holds and releases them. No authoring action
-(`EDIT`, `PUBLISH`) implies either, and every call also needs `AGENT_STUDIO` `VIEW`, so an agent the actor cannot
-view reads as not found. `AGENT_ADMIN` and `AGENT_OPER` hold both at `*`.
+`VIEW` lists an agent's live turns and reads one with its call outcomes; `OPERATE` holds and releases them and
+looks up a call's outcome; `PREEMPT` holds a running turn at once, fencing out its worker; and `RECONCILE` attests
+an unknown call outcome. No authoring action (`EDIT`, `PUBLISH`) implies any of them, and every call also needs
+`AGENT_STUDIO` `VIEW`, so an agent the actor cannot view reads as not found. `AGENT_ADMIN` holds all four at `*`;
+`AGENT_OPER` holds `VIEW` and `OPERATE`.
 
 A hold stops a turn at a durable point under a new [fence](persistence.md#turn-fence): a queued or parked turn
-at once, a running one at its next checkpoint. Stopping is always allowed. A release names the fence the operator
-saw, re-admits the turn's budget, and only then requeues it; a refused re-admission leaves the turn held, and a
-stale fence is refused. Pausing an agent with policy `suspend` holds its live turns the same way, and unpausing
+at once, a running one at its next checkpoint, or, with `PREEMPT`, a running one at once. Stopping is always
+allowed. A worker also holds its own turn when a non-read-only call's outcome is unknown, rather than letting the
+model treat uncertainty as failure. A release names the fence the operator saw, re-admits the turn's budget, and
+only then requeues it; a refused re-admission leaves the turn held, and a stale fence or a call whose outcome is
+still open is refused. Pausing an agent with policy `suspend` holds its live turns the same way, and unpausing
 releases none.
 
+An unknown outcome is settled from evidence, never assumed. A lookup asks the tool's effect verifier or the
+product's composed outcome lookup without sending the call again. Attestation is a person's statement, after the
+call's deadline, that the call completed or failed, with a mandatory note and optional digest-verified evidence.
+`contract.OperationSeparation` decides who may attest: `Required` says the call needs a second authorized person,
+as a high-risk tool's always does, and `Permit` refuses a person the tenant separates from it, such as an author
+of the running release. It fails closed: without a composed policy, or when either method errors, nothing is
+attested, and a call that needs two people settles only when a second distinct person attests the same outcome.
+A team with one authorized person keeps such a turn held until a second is granted.
+
 Each change is a decision record keyed by the fence it left the turn at, so a retried request records once:
-`turn_hold_requested` (a running turn asked to hold), `turn_held` (held at once, or by its worker at a
-checkpoint), and `turn_released`. [Turn takeover](turn_takeover.md) is the design for preempting, taking over, and
-handing back a turn.
+`turn_hold_requested` (a running turn asked to hold), `turn_held` (held at once, preempted, or held by its worker;
+a worker's hold carries its cause class, `held` or `outcome_unknown`, as the reason), and `turn_released`. Each
+person's act on a call is keyed by the call and the person: `call_outcome_attested` for every attestation, and
+`call_outcome_resolved` when a person's lookup or the deciding attestation settles the call.
+[Turn takeover](turn_takeover.md) is the design for taking over and handing back a turn.
 
 ## Two-person publish and restore
 
@@ -411,13 +426,15 @@ keeps the first record of a key, so a redelivered turn re-makes a decision witho
 A decision made outside any scope has no key and stays append-only.
 
 A turn's chain is gap-free: it opens with `turn_admitted`, written before dispatch, may carry the
-intermediate `turn_suspended`, `turn_hold_requested`, `turn_held`, and `turn_released`, and closes with
+intermediate `turn_suspended`, `turn_hold_requested`, `turn_held`, `turn_released`, `call_outcome_attested`,
+and `call_outcome_resolved`, and closes with
 exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`; the suspension, hold,
 release, and terminal records carry the turn's `fence` in their payload, and a worker whose fence
 moved writes no terminal record. An audit write that fails fails
 the delivery rather than passing silently, and the terminal replay offers the terminal record again,
 which the key makes a no-op unless the first write was lost. `observability.VerifyTurnChain` asserts
-all of this over one request's records.
+all of this over one request's records. The `call_outcome_*` records of a person's lookup or attestation are call
+evidence, not lifecycle steps: they may fall anywhere after admission, including after the terminal record.
 
 Studio's `runs/trace` shows one run's audit decisions in order with its model steps, tool calls,
 guardrail hits, and approvals, and, when `charter.RunActions` is composed, the disposition Charter
@@ -426,8 +443,8 @@ subjects; see [run traces](observability.md#run-traces).
 
 ## Attribution
 
-`usage_event` records `principal_kind`, `principal_id`, and `scope_id`, and `RecordUsage` takes a
-`domain.UsageAttribution`. Cost is reportable per agent and organizational scope.
+`usage_event` records `principal_kind`, `principal_id`, and `scope_id`, and a turn's `domain.TurnSettlement`
+carries the `domain.UsageAttribution` its usage events are written with. Cost is reportable per agent and organizational scope.
 
 `isolation.ReleaseLimits` reads the budget, autonomy, and execution limits frozen into the release.
 Compilation already narrowed all three against every parent scope, so nothing here re-derives

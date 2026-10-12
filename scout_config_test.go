@@ -338,6 +338,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_run_trace_max_journal_bytes:     "4194304",
 		agent_live_turn_page_size:             "50",
 		agent_live_turn_max_page_size:         "200",
+		agent_outcome_attest_grace:            "60",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {

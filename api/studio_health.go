@@ -17,12 +17,13 @@ const (
 
 // HealthAlertPolicy is the effective health_alerts setting; zero is not evaluated.
 type HealthAlertPolicy struct {
-	WindowMinutes       int64 `json:"window_minutes"`
-	MinTurns            int64 `json:"min_turns"`
-	MaxFailureRateBP    int64 `json:"max_failure_rate_bp"`
-	MaxP95LatencyMS     int64 `json:"max_p95_latency_ms"`
-	MaxHardSafetyEvents int64 `json:"max_hard_safety_events"`
-	MaxSilenceMinutes   int64 `json:"max_silence_minutes"`
+	WindowMinutes        int64 `json:"window_minutes"`
+	MinTurns             int64 `json:"min_turns"`
+	MaxFailureRateBP     int64 `json:"max_failure_rate_bp"`
+	MaxP95LatencyMS      int64 `json:"max_p95_latency_ms"`
+	MaxHardSafetyEvents  int64 `json:"max_hard_safety_events"`
+	MaxSilenceMinutes    int64 `json:"max_silence_minutes"`
+	MaxUnresolvedMinutes int64 `json:"max_unresolved_minutes"`
 }
 
 // AgentHealth is an agent's production health over window_minutes ending at measured_at, read
@@ -30,7 +31,8 @@ type HealthAlertPolicy struct {
 // samples is completed plus failed turns, the failure rate's denominator. Durations and time to
 // first response run from queueing over completed turns; null had no sample. telemetry is fresh,
 // stale (the health evaluator has not evaluated the agent in time), or missing (no turn in the
-// window); insufficient_samples means no rate or latency verdict may be read.
+// window); insufficient_samples means no rate or latency verdict may be read. open_outcomes counts
+// the in-flight, accepted, and unknown tool calls of the agent's turns, whenever queued.
 type AgentHealth struct {
 	AgentName           string             `json:"agent_name"`
 	WindowMinutes       int64              `json:"window_minutes"`
@@ -51,12 +53,14 @@ type AgentHealth struct {
 	Policy              *HealthAlertPolicy `json:"policy"`
 	PolicyProblem       string             `json:"policy_problem,omitempty"`
 	LastEvaluatedAt     *time.Time         `json:"last_evaluated_at"`
+	OpenOutcomes        int64              `json:"open_outcomes"`
 }
 
 // AgentAlert is one health alert. kind is an agent_alert_kind code (F failure rate, L latency,
-// H hard safety events, S silence) and status an agent_alert_status code (O open, R resolved);
-// observed and threshold are in the kind's unit: basis points, milliseconds, events, or, for
-// silence, turns in the span and the span's minutes.
+// H hard safety events, S silence, U unresolved outcome) and status an agent_alert_status code
+// (O open, R resolved); observed and threshold are in the kind's unit: basis points,
+// milliseconds, events, for silence turns in the span and the span's minutes, and for an
+// unresolved outcome the turns held that long with an open call and the span's minutes.
 type AgentAlert struct {
 	ID            int64      `json:"id"`
 	Kind          string     `json:"kind"`

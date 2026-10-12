@@ -57,7 +57,7 @@ func (cache *ExecutionGraphCache) Invalidate(ctx context.Context, tenantID int64
 type DurableSessionStore struct {
 	LoadFunc       func(context.Context, int64, string) (domain.SessionSnapshot, error)
 	CheckpointFunc func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error
-	CompleteFunc   func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error
+	CompleteFunc   func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult, domain.TurnSettlement) error
 }
 
 // Load invokes LoadFunc.
@@ -74,11 +74,11 @@ func (store *DurableSessionStore) Checkpoint(ctx context.Context, owner domain.T
 }
 
 // Complete invokes CompleteFunc.
-func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error {
+func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult, settlement domain.TurnSettlement) error {
 	if err := owner.Check(); err != nil {
 		return err
 	}
-	return store.CompleteFunc(ctx, owner, conversationID, expectedRevision, result)
+	return store.CompleteFunc(ctx, owner, conversationID, expectedRevision, result, settlement)
 }
 
 // HotSessionCache contains configurable session cache operations.

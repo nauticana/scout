@@ -16,8 +16,12 @@ type OperationAction string
 const (
 	// OperationView shows an agent's live turns.
 	OperationView OperationAction = "VIEW"
-	// OperationOperate holds and releases them.
+	// OperationOperate holds and releases them and looks up their calls' outcomes.
 	OperationOperate OperationAction = "OPERATE"
+	// OperationPreempt holds a running turn at once, fencing out its worker.
+	OperationPreempt OperationAction = "PREEMPT"
+	// OperationReconcile attests an unknown call outcome.
+	OperationReconcile OperationAction = "RECONCILE"
 )
 
 // TurnHoldCode says why a turn is held: a turn_hold_code code.
@@ -28,18 +32,26 @@ const (
 	HoldCheckpoint TurnHoldCode = "C"
 	// HoldAgentPaused is a hold taken at once on a turn no worker ran when its agent was suspended.
 	HoldAgentPaused TurnHoldCode = "A"
+	// HoldPreempted is a hold an operator took at once, fencing out a running worker.
+	HoldPreempted TurnHoldCode = "P"
+	// HoldUnknownOutcome is a hold the worker took on a call whose outcome it could not establish.
+	HoldUnknownOutcome TurnHoldCode = "U"
 )
 
 // Valid reports whether the code is a seeded turn_hold_code code.
 func (code TurnHoldCode) Valid() bool {
-	return code == HoldCheckpoint || code == HoldAgentPaused
+	return code == HoldCheckpoint || code == HoldAgentPaused || code == HoldPreempted || code == HoldUnknownOutcome
 }
 
 // HoldMode is how an operator asks a turn to hold.
 type HoldMode string
 
-// HoldModeCheckpoint holds a queued or parked turn at once and a running one at its next durable checkpoint.
-const HoldModeCheckpoint HoldMode = "checkpoint"
+const (
+	// HoldModeCheckpoint holds a queued or parked turn at once and a running one at its next durable checkpoint.
+	HoldModeCheckpoint HoldMode = "checkpoint"
+	// HoldModePreempt holds any live turn at once; a running worker is fenced out mid-step.
+	HoldModePreempt HoldMode = "preempt"
+)
 
 // TurnClaim is the leased queue delivery a worker presents to acquire a turn. Only the
 // current lease of the turn's queue row acquires it.
@@ -112,6 +124,8 @@ type LiveTurn struct {
 	QueuedAt        time.Time
 	StartedAt       time.Time
 	HeldAt          time.Time
+	// Outcomes are the turn's dispatched calls; only the single-turn read fills them.
+	Outcomes []CallOutcome
 }
 
 // LiveTurnFilter pages an agent's live turns, newest first; Before is the previous page's

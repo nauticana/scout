@@ -125,6 +125,7 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 		Models:   executor.Models, Registry: executor.Registry, Tools: sandbox,
 		Journal: journal, Pricer: executor.Pricer, Evidence: executor.Evidence,
 		Limits: executor.Limits, Now: executor.Now,
+		Outcomes: &dataplane.MemoryCallOutcomeStore{Fences: fences, Journal: journal, Now: executor.Now}, Dispatch: sandboxDispatch(executor.Limits),
 	})
 	if err != nil {
 		return domain.EvaluationCase{}, err
@@ -144,6 +145,11 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 		return domain.EvaluationCase{}, err
 	}
 	return replay.evaluationCase(example, matches), nil
+}
+
+// sandboxDispatch bounds a sandboxed call by the loop deadline: a scripted tool answers at once.
+func sandboxDispatch(limits domain.ToolLoopLimits) domain.ToolDispatchWindow {
+	return domain.ToolDispatchWindow{Timeout: limits.Deadline, Attempts: 1}
 }
 
 // caseInputs reads the example's payload and script, each checked against its digest, and

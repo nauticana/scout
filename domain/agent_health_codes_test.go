@@ -6,7 +6,7 @@ func TestAgentAlertCodesAgreeWithSeedsAndChecks(t *testing.T) {
 	for _, d := range []studioCodeDomain{
 		{
 			name: "agent_alert_kind", width: 1,
-			codes: studioCodesOf(AlertFailureRate, AlertLatency, AlertSafety, AlertSilence),
+			codes: studioCodesOf(AlertFailureRate, AlertLatency, AlertSafety, AlertSilence, AlertUnresolved),
 			seed:  "agent/agent.yml", schema: "agent/agent_alert.yml", check: "agent_alert_kind_ck", column: "kind_code",
 		},
 		{
@@ -27,7 +27,7 @@ func TestAgentAlertCodesAgreeWithSeedsAndChecks(t *testing.T) {
 			}
 		})
 	}
-	for _, kind := range []AgentAlertKind{AlertFailureRate, AlertLatency, AlertSafety, AlertSilence} {
+	for _, kind := range []AgentAlertKind{AlertFailureRate, AlertLatency, AlertSafety, AlertSilence, AlertUnresolved} {
 		if !kind.Valid() {
 			t.Errorf("%q must be valid", kind)
 		}

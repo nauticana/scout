@@ -23,6 +23,8 @@ const (
 	qControlHold          = "scout_turn_control_hold"
 	qControlState         = "scout_turn_control_state"
 	qControlRelease       = "scout_turn_control_release"
+	qControlPreempt       = "scout_turn_control_preempt"
+	qControlUnknown       = "scout_turn_control_unknown_outcomes"
 
 	controlChannel            = "scout:cancel"
 	defaultCancelPollPeriod   = time.Second
@@ -71,11 +73,28 @@ UPDATE conversation_turn
 RETURNING status_code, fence`,
 	qControlState: `
 SELECT status_code, fence FROM conversation_turn WHERE partner_id = ? AND request_id = ?`,
+	// After a hold no fenced writer adds a call, and calls only move toward resolution, so the
+	// gate in the same statement is race-free without a lock.
 	qControlRelease: `
-UPDATE conversation_turn
+UPDATE conversation_turn turn
    SET status_code = ` + sqlTurnQueued + `, fence = fence + 1, ` + unheld + `
- WHERE partner_id = ? AND request_id = ? AND status_code = ` + sqlTurnHeld + ` AND fence = ?
-RETURNING fence`,
+ WHERE turn.partner_id = ? AND turn.request_id = ? AND turn.status_code = ` + sqlTurnHeld + ` AND turn.fence = ?
+   AND NOT EXISTS (SELECT 1 FROM turn_call_outcome o
+                    WHERE o.partner_id = turn.partner_id AND o.request_id = turn.request_id AND o.status_code IN (` + sqlCallOpen + `))
+RETURNING turn.fence`,
+	// Preemption holds any live turn at once under a new fence; a running worker's next fenced write is refused.
+	qControlPreempt: `
+UPDATE conversation_turn
+   SET status_code = ` + sqlTurnHeld + `, fence = fence + 1, hold_code = ` + sqlHoldPreempted + `,
+       held_at = CURRENT_TIMESTAMP, hold_requested_at = NULL, hold_reason = NULL
+ WHERE partner_id = ? AND request_id = ? AND cancel_requested_at IS NULL
+   AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `, ` + sqlTurnOwned + `)
+RETURNING status_code, fence`,
+	// A cancelled turn's in-flight and accepted calls become unknown and stay listed for reconciliation.
+	qControlUnknown: `
+UPDATE turn_call_outcome SET status_code = ` + sqlCallUnknown + `
+ WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlCallInFlight + `, ` + sqlCallAccepted + `)
+RETURNING call_id`,
 }
 
 // TableTurnControl cancels, holds, and releases turns from any process and lets the worker
@@ -160,6 +179,9 @@ func (control *TableTurnControl) Cancel(ctx context.Context, tenantID int64, req
 	if len(requested.Rows) == 0 {
 		return fmt.Errorf("%w: no live turn for request %q", domain.ErrNotFound, requestID)
 	}
+	if _, err = tx.Query(ctx, qControlUnknown, tenantID, requestID); err != nil {
+		return fmt.Errorf("mark cancelled turn's open calls unknown: %w", err)
+	}
 	if status := domain.TurnStatus(common.AsString(requested.Rows[0][0])); status == domain.TurnSuspended || status == domain.TurnHeld {
 		if _, err = tx.Query(ctx, qControlWake, tenantID, requestID); err != nil {
 			return fmt.Errorf("wake parked turn: %w", err)
@@ -218,8 +240,37 @@ func (control *TableTurnControl) RequestHold(ctx context.Context, tenantID int64
 	return domain.TurnHoldOutcome{}, fmt.Errorf("%w: no live, uncancelled turn for request %q", domain.ErrNotFound, requestID)
 }
 
+// Preempt holds a live, uncancelled turn at once under a new fence; a running worker is fenced out
+// and woken to notice.
+func (control *TableTurnControl) Preempt(ctx context.Context, tenantID int64, requestID string) (domain.TurnHoldOutcome, error) {
+	if tenantID <= 0 || strings.TrimSpace(requestID) == "" {
+		return domain.TurnHoldOutcome{}, fmt.Errorf("%w: tenant and request are required", domain.ErrValidation)
+	}
+	qs, err := control.queries(ctx)
+	if err != nil {
+		return domain.TurnHoldOutcome{}, err
+	}
+	ctx = context.WithoutCancel(ctx)
+	held, err := qs.Query(ctx, qControlPreempt, tenantID, requestID)
+	if err != nil {
+		return domain.TurnHoldOutcome{}, fmt.Errorf("preempt turn: %w", err)
+	}
+	if len(held.Rows) > 0 {
+		outcome := domain.TurnHoldOutcome{Status: domain.TurnStatus(common.AsString(held.Rows[0][0])), Fence: common.AsInt64(held.Rows[0][1])}
+		return outcome, control.wake(ctx, tenantID, requestID, "preemption")
+	}
+	state, err := qs.Query(ctx, qControlState, tenantID, requestID)
+	if err != nil {
+		return domain.TurnHoldOutcome{}, fmt.Errorf("read turn state: %w", err)
+	}
+	if len(state.Rows) > 0 && domain.TurnStatus(common.AsString(state.Rows[0][0])) == domain.TurnHeld {
+		return domain.TurnHoldOutcome{Status: domain.TurnHeld, Fence: common.AsInt64(state.Rows[0][1])}, nil
+	}
+	return domain.TurnHoldOutcome{}, fmt.Errorf("%w: no live, uncancelled turn for request %q", domain.ErrNotFound, requestID)
+}
+
 // Release returns the turn held at expectedFence to the queue under a new fence, with its queue
-// row requeued in the same transaction.
+// row requeued in the same transaction; a call of the turn whose outcome is open refuses it.
 func (control *TableTurnControl) Release(ctx context.Context, tenantID int64, requestID string, expectedFence int64) (int64, error) {
 	if tenantID <= 0 || strings.TrimSpace(requestID) == "" || expectedFence <= 0 {
 		return 0, fmt.Errorf("%w: tenant, request, and the held fence are required", domain.ErrValidation)
@@ -243,7 +294,7 @@ func (control *TableTurnControl) Release(ctx context.Context, tenantID int64, re
 		return 0, fmt.Errorf("release turn: %w", err)
 	}
 	if len(released.Rows) == 0 {
-		return 0, fmt.Errorf("%w: turn %q is not held at fence %d", domain.ErrConflict, requestID, expectedFence)
+		return 0, fmt.Errorf("%w: turn %q is not held at fence %d, or a call of it has an open outcome", domain.ErrConflict, requestID, expectedFence)
 	}
 	if _, err = tx.Query(ctx, qQueueRequeue, control.now().UTC(), tenantID, requestID); err != nil {
 		return 0, fmt.Errorf("requeue released turn: %w", err)

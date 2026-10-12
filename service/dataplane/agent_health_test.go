@@ -57,8 +57,9 @@ func TestStudioHealthReportsExactRecordsOverThePolicyWindow(t *testing.T) {
 		qHealthAgent: {{"writer", healthNow, healthNow.Add(-30 * time.Second), int64(1)}},
 		qHealthTurns: {turnRow(domain.TurnCompleted, 18, int64(4000), completed), turnRow(domain.TurnFailed, 2, nil, failed),
 			{string(domain.TurnRunning), int64(1), nil, nil, nil, nil, nil}},
-		qHealthSafety:     {{"hard", int64(2)}, {"soft", int64(5)}},
-		qHealthOpenAlerts: {{int64(9), "F", "O", healthNow.Add(-time.Hour), nil, int64(1000), int64(500), int64(30)}},
+		qHealthSafety:       {{"hard", int64(2)}, {"soft", int64(5)}},
+		qHealthOpenAlerts:   {{int64(9), "F", "O", healthNow.Add(-time.Hour), nil, int64(1000), int64(500), int64(30)}},
+		qHealthOpenOutcomes: {{int64(3)}},
 	}}
 	report, err := healthService(query, policyOf(`{"window_minutes":30,"min_turns":10,"max_failure_rate_bp":500}`)).
 		Health(context.Background(), usageActor, "writer-a")
@@ -70,6 +71,9 @@ func TestStudioHealthReportsExactRecordsOverThePolicyWindow(t *testing.T) {
 	}
 	if args := query.firstArgs(qHealthSafety); args[0] != int64(7) || args[2] != int64(30) {
 		t.Fatalf("safety args = %v", args)
+	}
+	if args := query.firstArgs(qHealthOpenOutcomes); report.OpenOutcomes != 3 || len(args) != 2 || args[0] != int64(7) || args[1] != "writer-a" {
+		t.Fatalf("open outcomes %d read with %v, want the actor's tenant and agent", report.OpenOutcomes, args)
 	}
 	m := report.Measure
 	if m.WindowMinutes != 30 || !m.MeasuredAt.Equal(healthNow) || m.Turns() != 21 || m.Judged() != 20 || *m.DurationP95MS != 4000 ||
@@ -107,7 +111,7 @@ func TestStudioHealthNeverReportsMissingOrStaleTelemetryAsFresh(t *testing.T) {
 		"no policy owes no check": {evaluated: nil, active: 1, turns: [][]any{turnRow(domain.TurnFailed, 1, nil, healthNow)}, bindings: noPolicy, want: domain.TelemetryFresh},
 	} {
 		query := &queueQueryFake{rows: map[string][][]any{
-			qHealthAgent: {{"writer", healthNow, c.evaluated, c.active}}, qHealthTurns: c.turns,
+			qHealthAgent: {{"writer", healthNow, c.evaluated, c.active}}, qHealthTurns: c.turns, qHealthOpenOutcomes: {{int64(0)}},
 		}}
 		report, err := healthService(query, c.bindings).Health(context.Background(), usageActor, "writer-a")
 		if err != nil || report.Telemetry != c.want || report.InsufficientSamples != c.few {
@@ -117,7 +121,7 @@ func TestStudioHealthNeverReportsMissingOrStaleTelemetryAsFresh(t *testing.T) {
 }
 
 func TestStudioHealthReadsAsNotFoundWithoutViewAndReportsABrokenPolicy(t *testing.T) {
-	query := &queueQueryFake{rows: map[string][][]any{qHealthAgent: {{"writer", healthNow, nil, int64(1)}}}}
+	query := &queueQueryFake{rows: map[string][][]any{qHealthAgent: {{"writer", healthNow, nil, int64(1)}}, qHealthOpenOutcomes: {{int64(0)}}}}
 	health := healthService(query, noPolicy)
 	health.Authorizer = allowStudio{domain.StudioEdit}
 	if _, err := health.Health(context.Background(), usageActor, "writer-a"); !errors.Is(err, domain.ErrNotFound) {
@@ -274,7 +278,7 @@ func TestEvaluateAllResolvesAlertsWhoseThresholdWasDisabled(t *testing.T) {
 	if err != nil || report.Resolved != 2 || report.Evaluated != 1 {
 		t.Fatalf("report = %+v, error = %v", report, err)
 	}
-	if args := query.firstArgs(qHealthResolveDisabled); len(args) != 6 || args[2] != 1 || args[3] != 0 || args[4] != 0 || args[5] != 0 {
+	if args := query.firstArgs(qHealthResolveDisabled); len(args) != 7 || args[2] != 1 || args[3] != 0 || args[4] != 0 || args[5] != 0 || args[6] != 0 {
 		t.Fatalf("disabled-alert args = %v", args)
 	}
 

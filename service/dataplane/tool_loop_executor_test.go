@@ -38,6 +38,8 @@ type loopHarness struct {
 	calls       []domain.ToolCall
 	invoke      func(domain.ToolCall) (domain.ToolResult, error)
 	journal     contract.LoopJournal
+	outcomes    *MemoryCallOutcomeStore
+	reconciler  contract.ToolOutcomeReconciler
 	limits      domain.ToolLoopLimits
 	lastRequest domain.ModelRequest
 	revisions   contract.ProposalRevisions
@@ -50,8 +52,24 @@ func newLoopHarness(t *testing.T, script ...domain.ModelResult) *loopHarness {
 	}
 }
 
+// fencesOf is the fence authority a test journal checks owners against.
+func fencesOf(journal contract.LoopJournal) *MemoryTurnFences {
+	switch journal := journal.(type) {
+	case *MemoryLoopJournal:
+		return journal.Fences
+	case *crashingJournal:
+		return journal.Fences
+	}
+	return nil
+}
+
 func (harness *loopHarness) executor() *ToolLoopExecutor {
+	if harness.outcomes == nil {
+		harness.outcomes = &MemoryCallOutcomeStore{Fences: fencesOf(harness.journal), Journal: harness.journal}
+	}
 	executor, err := NewToolLoopExecutor(ToolLoopExecutor{
+		Outcomes: harness.outcomes, Reconciler: harness.reconciler,
+		Dispatch: domain.ToolDispatchWindow{Timeout: 30 * time.Second, Attempts: 1, Grace: time.Minute},
 		Requests: loopRequestBuilder{},
 		Router: fake.ModelRouterFunc(func(context.Context, domain.ModelRequest) (domain.ModelSelection, error) {
 			return domain.ModelSelection{Provider: "p", Model: "m"}, nil
@@ -217,6 +235,17 @@ func TestToolLoopRejectsDifferentContentThatLostAJournalRace(t *testing.T) {
 	})
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("want ErrConflict for different first-writer content, got %v", err)
+	}
+}
+
+func TestToolLoopUsageOverflowFailsClosed(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	run := &loopRun{limits: domain.ToolLoopLimits{MaxTokens: maxInt64}}
+	if err := run.account(domain.Usage{InputTokens: maxInt64}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.account(domain.Usage{InputTokens: 1}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("overflowing usage = %v, want validation error", err)
 	}
 }
 

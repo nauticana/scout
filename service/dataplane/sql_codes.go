@@ -16,7 +16,24 @@ const (
 	sqlTurnOwned = sqlTurnRunning + ", " + sqlTurnStreaming
 	sqlTurnLive  = sqlTurnQueued + ", " + sqlTurnRunning + ", " + sqlTurnStreaming + ", " + sqlTurnSuspended + ", " + sqlTurnHeld
 
-	sqlHoldCheckpoint = "'" + string(domain.HoldCheckpoint) + "'"
+	sqlTurnCancelled = "'" + string(domain.TurnCancelled) + "'"
+	// sqlTurnUnworked lists the statuses no worker runs a turn in: held, or ended.
+	sqlTurnUnworked = sqlTurnHeld + ", " + sqlTurnCompleted + ", " + sqlTurnFailed + ", " + sqlTurnCancelled
+
+	sqlHoldPreempted = "'" + string(domain.HoldPreempted) + "'"
+
+	sqlCallInFlight  = "'" + string(domain.CallInFlight) + "'"
+	sqlCallAccepted  = "'" + string(domain.CallAccepted) + "'"
+	sqlCallCompleted = "'" + string(domain.CallCompleted) + "'"
+	sqlCallFailed    = "'" + string(domain.CallFailed) + "'"
+	sqlCallUnknown   = "'" + string(domain.CallUnknown) + "'"
+	// sqlCallOpen lists the statuses of a call that still awaits a definite outcome.
+	sqlCallOpen      = sqlCallInFlight + ", " + sqlCallAccepted + ", " + sqlCallUnknown
+	sqlCallFromAgent = "'" + string(domain.CallFromAgent) + "'"
+
+	sqlResolvedByWorker       = "'" + string(domain.ResolvedByWorker) + "'"
+	sqlResolvedByAttestation  = "'" + string(domain.ResolvedByAttestation) + "'"
+	sqlResolvedByConfirmation = "'" + string(domain.ResolvedByConfirmation) + "'"
 
 	sqlQueueQueued = "'" + string(domain.QueueQueued) + "'"
 	sqlQueueLeased = "'" + string(domain.QueueLeased) + "'"
@@ -32,11 +49,12 @@ const (
 	sqlReservationReleased = "'" + string(domain.ReservationReleased) + "'"
 	sqlReservationExpired  = "'" + string(domain.ReservationExpired) + "'"
 
-	sqlAgentActive   = "'" + string(domain.AgentStateActive) + "'"
-	sqlAlertOpen     = "'" + string(domain.AlertOpen) + "'"
-	sqlAlertResolved = "'" + string(domain.AlertResolved) + "'"
-	sqlAlertFailure  = "'" + string(domain.AlertFailureRate) + "'"
-	sqlAlertLatency  = "'" + string(domain.AlertLatency) + "'"
-	sqlAlertSafety   = "'" + string(domain.AlertSafety) + "'"
-	sqlAlertSilence  = "'" + string(domain.AlertSilence) + "'"
+	sqlAgentActive     = "'" + string(domain.AgentStateActive) + "'"
+	sqlAlertOpen       = "'" + string(domain.AlertOpen) + "'"
+	sqlAlertResolved   = "'" + string(domain.AlertResolved) + "'"
+	sqlAlertFailure    = "'" + string(domain.AlertFailureRate) + "'"
+	sqlAlertLatency    = "'" + string(domain.AlertLatency) + "'"
+	sqlAlertSafety     = "'" + string(domain.AlertSafety) + "'"
+	sqlAlertSilence    = "'" + string(domain.AlertSilence) + "'"
+	sqlAlertUnresolved = "'" + string(domain.AlertUnresolved) + "'"
 )

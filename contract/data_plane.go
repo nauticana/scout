@@ -68,8 +68,9 @@ type DurableSessionStore interface {
 	Load(ctx context.Context, tenantID int64, conversationID string) (domain.SessionSnapshot, error)
 	// Checkpoint atomically persists a completed step with optimistic concurrency.
 	Checkpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint) error
-	// Complete atomically records the final result of the owner's turn.
-	Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error
+	// Complete atomically records the final result of the owner's turn with its settlement: the
+	// reservation and usage events commit in the same transaction, or nothing does.
+	Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult, settlement domain.TurnSettlement) error
 }
 
 // HotSessionCache accelerates access to durable conversation snapshots.
@@ -88,8 +89,8 @@ type SessionCoordinator interface {
 	Load(ctx context.Context, tenantID int64, conversationID string) (domain.SessionSnapshot, error)
 	// Checkpoint persists a step durably before refreshing the hot cache.
 	Checkpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint) error
-	// Complete durably records the final result before refreshing the hot cache.
-	Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult) error
+	// Complete durably records the final result with its settlement before refreshing the hot cache.
+	Complete(ctx context.Context, owner domain.TurnOwner, conversationID string, expectedRevision int64, result domain.TurnResult, settlement domain.TurnSettlement) error
 }
 
 // TurnReplyPublisher sends ordered worker response frames to conversation ingress.
@@ -146,8 +147,12 @@ type TurnControl interface {
 	// hold at its next durable checkpoint; the first request's reason stands. A turn already held
 	// reports TurnHeld, and an ended or cancelled one is domain.ErrNotFound.
 	RequestHold(ctx context.Context, tenantID int64, requestID string, code domain.TurnHoldCode, reason string) (domain.TurnHoldOutcome, error)
+	// Preempt holds any live, uncancelled turn at once under domain.HoldPreempted, so a running
+	// worker's next fenced write is refused. A turn already held reports TurnHeld, and an ended or
+	// cancelled one is domain.ErrNotFound.
+	Preempt(ctx context.Context, tenantID int64, requestID string) (domain.TurnHoldOutcome, error)
 	// Release returns a turn held at expectedFence to the queue and returns its new fence; any
-	// other state or fence is domain.ErrConflict.
+	// other state or fence, or a call of the turn whose outcome is still open, is domain.ErrConflict.
 	Release(ctx context.Context, tenantID int64, requestID string, expectedFence int64) (int64, error)
 }
 
@@ -238,8 +243,9 @@ type TurnBudgetEstimator interface {
 // TurnRecordStore owns the durable turn identity keyed by (tenant, request id):
 // ingress opens it before reserving budget, the runtime acquires it, replays a
 // finished one, and fails it on terminal errors; success is completed through
-// DurableSessionStore.Complete. Each acquisition moves the turn's fence, and the
-// owner's writes are refused with domain.ErrFenceLost once it moved on.
+// DurableSessionStore.Complete. Either end writes the turn's settlement in its own
+// transaction. Each acquisition moves the turn's fence, and the owner's writes are
+// refused with domain.ErrFenceLost once it moved on.
 type TurnRecordStore interface {
 	// Address resolves the agent serving a turn: agentID when it is of aliasID's type, else the
 	// agent the conversation already runs on, else the alias target.
@@ -258,11 +264,13 @@ type TurnRecordStore interface {
 	// the turn's queue row. A stale or forged claim is domain.ErrFenceLost, a held or suspended turn
 	// domain.ErrTurnHeld, and an ended one domain.ErrConflict.
 	Acquire(ctx context.Context, claim domain.TurnClaim) (domain.TurnOwner, error)
-	// Hold stops the owner's running turn at a durable checkpoint: held, fence incremented, a
+	// Hold stops the owner's running turn under code, domain.HoldCheckpoint at a durable checkpoint
+	// or domain.HoldUnknownOutcome on a call it could not settle: held, fence incremented, a
 	// pending hold request cleared, the budget reservation kept. It returns the held fence.
-	Hold(ctx context.Context, owner domain.TurnOwner) (int64, error)
-	// Fail marks the owner's running turn failed or cancelled with its error code.
-	Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string) error
+	Hold(ctx context.Context, owner domain.TurnOwner, code domain.TurnHoldCode) (int64, error)
+	// Fail marks the owner's running turn failed or cancelled with its error code, in the
+	// transaction that writes its settlement.
+	Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string, settlement domain.TurnSettlement) error
 	// FailParked fails a turn no worker runs, queued or suspended, with its error code; a held
 	// turn is domain.ErrTurnHeld and any other state domain.ErrConflict.
 	FailParked(ctx context.Context, tenantID int64, requestID, errorCode string) error
@@ -274,9 +282,6 @@ type TurnRecordStore interface {
 	// it from its last checkpoint. A queued turn is a no-op, a held one domain.ErrTurnHeld, and
 	// any other domain.ErrConflict.
 	Resume(ctx context.Context, tenantID int64, requestID string) error
-	// RecordUsage writes the settled usage event for the owner's turn once, attributed to the
-	// principal and scope that spent it; a repeat is a no-op.
-	RecordUsage(ctx context.Context, owner domain.TurnOwner, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error
 }
 
 // DataPlane is the composed turn runtime a product depends on: the API process admits and

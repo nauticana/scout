@@ -3,6 +3,8 @@ package fake
 import (
 	"context"
 
+	keelport "github.com/nauticana/keel/port"
+
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 )
@@ -126,36 +128,26 @@ func (exporter *ServingSignalExporter) Export(_ context.Context, signal domain.S
 	return nil
 }
 
-// TenantBudgetManager contains configurable reservation callbacks. Its turn settlements fail
-// closed on a missing owner and run CommitTurnFunc or ReleaseTurnFunc, else CommitFunc or ReleaseFunc.
+// TenantBudgetManager contains configurable reservation callbacks. It also settles a turn inside
+// the transaction that ends it, by SettleTurnTxFunc when configured, else by CommitFunc or ReleaseFunc.
 type TenantBudgetManager struct {
-	ReserveFunc     func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error)
-	CommitFunc      func(context.Context, domain.BudgetReservation, domain.Usage) error
-	ReleaseFunc     func(context.Context, domain.BudgetReservation) error
-	CommitTurnFunc  func(context.Context, domain.TurnOwner, domain.BudgetReservation, domain.Usage) error
-	ReleaseTurnFunc func(context.Context, domain.TurnOwner, domain.BudgetReservation) error
+	ReserveFunc      func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error)
+	CommitFunc       func(context.Context, domain.BudgetReservation, domain.Usage) error
+	ReleaseFunc      func(context.Context, domain.BudgetReservation) error
+	SettleTurnTxFunc func(context.Context, keelport.TxQueryService, domain.BudgetReservation, domain.Usage, bool) error
 }
 
-// CommitTurn settles the owner's reservation.
-func (manager *TenantBudgetManager) CommitTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation, usage domain.Usage) error {
-	if err := owner.Check(); err != nil {
-		return err
+// SettleTurnTx settles a turn's reservation in the caller's transaction.
+func (manager *TenantBudgetManager) SettleTurnTx(ctx context.Context, tx keelport.TxQueryService, reservation domain.BudgetReservation, usage domain.Usage, refund bool) error {
+	switch {
+	case manager.SettleTurnTxFunc != nil:
+		return manager.SettleTurnTxFunc(ctx, tx, reservation, usage, refund)
+	case refund && manager.ReleaseFunc != nil:
+		return manager.ReleaseFunc(ctx, reservation)
+	case !refund && manager.CommitFunc != nil:
+		return manager.CommitFunc(ctx, reservation, usage)
 	}
-	if manager.CommitTurnFunc != nil {
-		return manager.CommitTurnFunc(ctx, owner, reservation, usage)
-	}
-	return manager.Commit(ctx, reservation, usage)
-}
-
-// ReleaseTurn releases the owner's reservation.
-func (manager *TenantBudgetManager) ReleaseTurn(ctx context.Context, owner domain.TurnOwner, reservation domain.BudgetReservation) error {
-	if err := owner.Check(); err != nil {
-		return err
-	}
-	if manager.ReleaseTurnFunc != nil {
-		return manager.ReleaseTurnFunc(ctx, owner, reservation)
-	}
-	return manager.Release(ctx, reservation)
+	return nil
 }
 
 // Reserve invokes ReserveFunc.
@@ -184,4 +176,3 @@ var _ contract.RouteAffinity = (*RouteAffinity)(nil)
 var _ contract.ServingSignalObserver = (*ServingSignalObserver)(nil)
 var _ contract.ServingSignalExporter = (*ServingSignalExporter)(nil)
 var _ contract.TenantBudgetManager = (*TenantBudgetManager)(nil)
-var _ contract.TurnBudgetManager = (*TenantBudgetManager)(nil)

@@ -39,15 +39,23 @@ type StudioPauseBackend interface {
 	Pause(ctx context.Context, actor domain.StudioActor, request domain.AgentPauseRequest) (domain.AgentPauseResult, error)
 }
 
-// StudioTurnControlBackend lets an operator see an agent's live turns and hold and release
-// them. Reading needs AGENT_OPERATION VIEW and changing OPERATE on the agent; an agent the
-// actor cannot view in Studio, and a turn of another agent, read as not found.
+// StudioTurnControlBackend lets an operator see an agent's live turns, hold and release them,
+// and settle their unknown call outcomes. Reading needs AGENT_OPERATION VIEW and changing
+// OPERATE on the agent, a preempting hold PREEMPT too, and an attestation RECONCILE; an agent
+// the actor cannot view in Studio, and a turn of another agent, read as not found.
 type StudioTurnControlBackend interface {
 	LiveTurns(ctx context.Context, actor domain.StudioActor, filter domain.LiveTurnFilter) (domain.LiveTurnPage, error)
+	// Turn reads one turn with its call outcomes.
 	Turn(ctx context.Context, actor domain.StudioActor, agentID, requestID string) (domain.LiveTurn, error)
 	Hold(ctx context.Context, actor domain.StudioActor, request domain.TurnHoldRequest) (domain.TurnHoldOutcome, error)
-	// Release re-admits the held turn's budget, then requeues it; a stale fence is domain.ErrConflict.
+	// Release re-admits the held turn's budget, then requeues it; a stale fence, or a call of the
+	// turn whose outcome is open, is domain.ErrConflict.
 	Release(ctx context.Context, actor domain.StudioActor, request domain.TurnReleaseRequest) (domain.LiveTurn, error)
+	// LookupOutcome asks the reconciliation sources about one open call of a held or ended turn
+	// and settles it when they answer; an answer that is still unknown leaves it open.
+	LookupOutcome(ctx context.Context, actor domain.StudioActor, request domain.TurnOutcomeRequest) (domain.CallOutcome, error)
+	// AttestOutcome records the actor's attestation of one open call after its deadline.
+	AttestOutcome(ctx context.Context, actor domain.StudioActor, request domain.TurnAttestRequest) (domain.AttestationResult, error)
 }
 
 // StudioFeedbackBackend reports the ratings an agent's releases received over a bounded window.

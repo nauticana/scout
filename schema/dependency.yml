@@ -4,7 +4,8 @@
 # seed_depends_on names components whose tables receive this module's seed rows.
 # Scout tenancy additionally requires keel tenant_management, which depends on
 # keel core and geo; approval additionally requires keel outbox, and mcp_confirmation
-# keel approval and outbox.
+# keel approval and outbox. mcp_confirmation links a confirmation to the runtime tool call that
+# waits on it, so it also requires runtime.
 version: 1
 groups:
   - name: catalog
@@ -60,7 +61,7 @@ groups:
   - name: runtime
     path: runtime
     seed: seed/runtime/runtime.yml
-    depends_on: [catalog, tenancy, model, agent, execution_graph, agent_authorization, configuration]
+    depends_on: [catalog, tenancy, model, agent, execution_graph, agent_authorization, configuration, tool]
     seed_depends_on: [core]
 
   - name: release
@@ -98,5 +99,5 @@ groups:
   - name: mcp_confirmation
     path: mcp_confirmation
     seed: seed/mcp_confirmation/mcp_confirmation.yml
-    depends_on: [catalog, tenancy]
+    depends_on: [catalog, tenancy, runtime]
     seed_depends_on: [core]

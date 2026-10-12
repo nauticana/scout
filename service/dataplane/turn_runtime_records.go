@@ -30,6 +30,7 @@ const (
 	qRecordSuspend      = "scout_turn_record_suspend"
 	qRecordResume       = "scout_turn_record_resume"
 	qRecordOwnerGuard   = "scout_turn_record_owner_guard"
+	qRecordOwnerTurn    = "scout_turn_record_owner_turn"
 	qRecordOwnerState   = "scout_turn_record_owner_state"
 	qRecordAddress      = "scout_turn_record_address"
 	qRecordAdmits       = "scout_turn_record_admits"
@@ -63,6 +64,11 @@ SELECT turn_no, conversation_id, status_code, input_digest, response_uri, respon
  WHERE partner_id = ? AND request_id = ?`,
 
 	qRecordOwnerGuard: turnOwnerGuard,
+	// The guarded touch of an ending turn, naming the conversation its usage events belong to.
+	qRecordOwnerTurn: `
+UPDATE conversation_turn SET fence = fence
+ WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
+RETURNING turn_no, conversation_id`,
 	qRecordOwnerState: `
 SELECT fence, status_code, cancel_requested_at IS NOT NULL, COALESCE(cancel_reason, '')
   FROM conversation_turn
@@ -146,12 +152,12 @@ SELECT turn.status_code, EXISTS (` + currentLease + `)
   FROM conversation_turn turn
  WHERE turn.partner_id = ? AND turn.request_id = ?`,
 
-	// The worker honors a hold request at a checkpoint: the request is cleared as the hold is taken.
-	// A hold or suspension yields to a cancellation requested before it, which nothing could wake
-	// out of a parked turn; the worker ends the turn instead.
+	// The worker holds its turn at a checkpoint or on an unknown call outcome, and a pending hold
+	// request is cleared as the hold is taken. A hold or suspension yields to a cancellation
+	// requested before it, which nothing could wake out of a parked turn; the worker ends it instead.
 	qRecordHold: `
 UPDATE conversation_turn
-   SET status_code = ` + sqlTurnHeld + `, fence = fence + 1, hold_code = ` + sqlHoldCheckpoint + `,
+   SET status_code = ` + sqlTurnHeld + `, fence = fence + 1, hold_code = ?,
        held_at = CURRENT_TIMESTAMP, hold_requested_at = NULL, hold_reason = NULL
  WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
    AND cancel_requested_at IS NULL
@@ -191,14 +197,14 @@ RETURNING partner_id, conversation_id, turn_no),` + failedTurn,
 }
 
 // TableTurnRecordStore is the TurnRecordStore over conversation_turn: the
-// request-keyed turn identity, its lifecycle status, and one usage event per
-// settled turn (through the TurnLedger insert). Failure payloads (the error
-// code) go through the object codec like responses do.
+// request-keyed turn identity and its lifecycle status. A failed turn's settlement and usage
+// events are written in the transaction that fails it. Failure payloads (the error code) go
+// through the object codec like responses do.
 type TableTurnRecordStore struct {
 	DB      port.DatabaseRepository
 	Objects ObjectStateCodec
-	// UsageCategory labels the usage event written per settled turn.
-	UsageCategory string
+	// Settlement writes a failing turn's budget and usage in its failure's transaction.
+	Settlement TurnSettlementWriter
 	// TaskKind labels runtime turns in conversation_turn_detail; empty skips the history row.
 	TaskKind string
 	// Versions chooses a new conversation's release by the agent's traffic policy; nil takes
@@ -212,8 +218,8 @@ type TableTurnRecordStore struct {
 var _ contract.TurnRecordStore = (*TableTurnRecordStore)(nil)
 
 func (store *TableTurnRecordStore) validate() error {
-	if store.DB == nil || store.Objects == nil || strings.TrimSpace(store.UsageCategory) == "" {
-		return fmt.Errorf("%w: turn record store needs a database, an object codec, and a usage category", domain.ErrValidation)
+	if store.DB == nil || store.Objects == nil {
+		return fmt.Errorf("%w: turn record store needs a database and an object codec", domain.ErrValidation)
 	}
 	return nil
 }
@@ -513,14 +519,20 @@ func refusedAcquisition(requestID string, status domain.TurnStatus, currentLease
 	return fmt.Errorf("%w: turn %q is %s", domain.ErrConflict, requestID, status)
 }
 
-// Hold takes the owner's running turn to held at a checkpoint and returns the held fence; a
-// cancellation requested before it is domain.ErrTurnCanceled, for the owner to end the turn.
-func (store *TableTurnRecordStore) Hold(ctx context.Context, owner domain.TurnOwner) (int64, error) {
-	return store.ownerTransition(ctx, owner, qRecordHold, "hold turn")
+// Hold takes the owner's running turn to held under code, a checkpoint or an unknown call
+// outcome, and returns the held fence; a cancellation requested before it is
+// domain.ErrTurnCanceled, for the owner to end the turn.
+func (store *TableTurnRecordStore) Hold(ctx context.Context, owner domain.TurnOwner, code domain.TurnHoldCode) (int64, error) {
+	if code != domain.HoldCheckpoint && code != domain.HoldUnknownOutcome {
+		return 0, fmt.Errorf("%w: a worker holds its turn at a checkpoint or on an unknown outcome", domain.ErrValidation)
+	}
+	return store.ownerTransition(ctx, owner, qRecordHold, "hold turn", string(code))
 }
 
-// Fail stores the error code as the owner's turn's terminal payload.
-func (store *TableTurnRecordStore) Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string) error {
+// Fail stores the error code as the owner's turn's terminal payload, in one transaction with the
+// settlement: guarded touch, budget, usage events, failure. A reservation no longer held does
+// not keep the turn from failing; the turn fails and domain.ErrBudgetUnsettled says so.
+func (store *TableTurnRecordStore) Fail(ctx context.Context, owner domain.TurnOwner, status domain.TurnStatus, errorCode string, settlement domain.TurnSettlement) error {
 	if err := owner.Check(); err != nil {
 		return err
 	}
@@ -530,17 +542,49 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, owner domain.TurnOw
 	if err := store.validate(); err != nil {
 		return err
 	}
+	if err := store.Settlement.validate(); err != nil {
+		return err
+	}
 	ref, err := store.Objects.Dehydrate(ctx, turnFailureName(owner.TenantID, owner.RequestID, errorCode), []byte(errorCode))
 	if err != nil {
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	failed, err := store.queries(ctx).Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, owner.TenantID, owner.RequestID, owner.Fence, errorCode)
+	tx, err := store.DB.BeginTx(ctx, store.queryMap())
+	if err != nil {
+		return fmt.Errorf("fail turn: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	touched, err := tx.Query(ctx, qRecordOwnerTurn, owner.TenantID, owner.RequestID, owner.Fence)
+	if err != nil {
+		return fmt.Errorf("fail turn: guard turn owner: %w", err)
+	}
+	if len(touched.Rows) == 0 || len(touched.Rows[0]) < 2 {
+		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+	}
+	turnNo, conversationID := common.AsInt64(touched.Rows[0][0]), common.AsString(touched.Rows[0][1])
+	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, conversationID, turnNo, settlement)
+	if err != nil {
+		return err
+	}
+	failed, err := tx.Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, owner.TenantID, owner.RequestID, owner.Fence, errorCode)
 	if err != nil {
 		return fmt.Errorf("fail turn: %w", err)
 	}
 	if len(failed.Rows) == 0 {
 		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("fail turn: commit: %w", err)
+	}
+	committed = true
+	if unheld != nil {
+		return fmt.Errorf("%w: %w", domain.ErrBudgetUnsettled, unheld)
 	}
 	return nil
 }
@@ -596,8 +640,9 @@ func (store *TableTurnRecordStore) Suspend(ctx context.Context, owner domain.Tur
 	return store.ownerTransition(ctx, owner, qRecordSuspend, "suspend turn")
 }
 
-// ownerTransition applies one fenced transition of the owner's running turn and returns the new fence.
-func (store *TableTurnRecordStore) ownerTransition(ctx context.Context, owner domain.TurnOwner, query, operation string) (int64, error) {
+// ownerTransition applies one fenced transition of the owner's running turn and returns the new
+// fence; leading are the statement's arguments before the owner's.
+func (store *TableTurnRecordStore) ownerTransition(ctx context.Context, owner domain.TurnOwner, query, operation string, leading ...any) (int64, error) {
 	if err := owner.Check(); err != nil {
 		return 0, err
 	}
@@ -605,7 +650,7 @@ func (store *TableTurnRecordStore) ownerTransition(ctx context.Context, owner do
 		return 0, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	moved, err := store.queries(ctx).Query(ctx, query, owner.TenantID, owner.RequestID, owner.Fence)
+	moved, err := store.queries(ctx).Query(ctx, query, append(leading, owner.TenantID, owner.RequestID, owner.Fence)...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", operation, err)
 	}
@@ -648,49 +693,6 @@ func (store *TableTurnRecordStore) Resume(ctx context.Context, tenantID int64, r
 		return nil
 	}
 	return store.refusedParked(ctx, tenantID, requestID, domain.TurnQueued)
-}
-
-// RecordUsage writes the turn's settled usage events, one per model and one for the
-// part no model performed, in one transaction with the owner's guarded touch; a replay writes nothing.
-func (store *TableTurnRecordStore) RecordUsage(ctx context.Context, owner domain.TurnOwner, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, usage domain.Usage) error {
-	if err := owner.Check(); err != nil {
-		return err
-	}
-	tenantID := owner.TenantID
-	if strings.TrimSpace(conversationID) == "" || turnNo <= 0 || len(usage.Currency) != 3 ||
-		usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 {
-		return fmt.Errorf("%w: turn identity and non-negative priced usage are required", domain.ErrValidation)
-	}
-	if err := store.validate(); err != nil {
-		return err
-	}
-	lines, err := usageLines(usage)
-	if err != nil {
-		return err
-	}
-	ctx = context.WithoutCancel(ctx)
-	ledger := TurnLedger{UsageCategory: store.UsageCategory}
-	tx, err := store.DB.BeginTx(ctx, store.queryMap())
-	if err != nil {
-		return fmt.Errorf("record usage: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	if err = guardOwner(ctx, tx, qRecordOwnerGuard, owner); err != nil {
-		return err
-	}
-	if _, err = ledger.insertUsageLines(ctx, tx, tenantID, conversationID, turnNo, subjectRef, attribution, lines); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("record usage: commit: %w", err)
-	}
-	committed = true
-	return nil
 }
 
 func turnInputName(tenantID int64, requestID string) string {

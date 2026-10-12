@@ -19,19 +19,22 @@ const (
 // window (zero takes the evaluator's default); MinTurns the finished turns below which the
 // failure rate and latency are not judged; the Max fields are the thresholds a measurement must
 // exceed to open an alert; MaxSilenceMinutes the longest an active agent with a stable release
-// may go without a turn.
+// may go without a turn; MaxUnresolvedMinutes the longest any turn of the agent may stay held
+// with an open call outcome.
 type HealthAlertPolicy struct {
-	WindowMinutes       int64 `json:"window_minutes"`
-	MinTurns            int64 `json:"min_turns"`
-	MaxFailureRateBP    int64 `json:"max_failure_rate_bp"`
-	MaxP95LatencyMS     int64 `json:"max_p95_latency_ms"`
-	MaxHardSafetyEvents int64 `json:"max_hard_safety_events"`
-	MaxSilenceMinutes   int64 `json:"max_silence_minutes"`
+	WindowMinutes        int64 `json:"window_minutes"`
+	MinTurns             int64 `json:"min_turns"`
+	MaxFailureRateBP     int64 `json:"max_failure_rate_bp"`
+	MaxP95LatencyMS      int64 `json:"max_p95_latency_ms"`
+	MaxHardSafetyEvents  int64 `json:"max_hard_safety_events"`
+	MaxSilenceMinutes    int64 `json:"max_silence_minutes"`
+	MaxUnresolvedMinutes int64 `json:"max_unresolved_minutes"`
 }
 
 // Evaluates reports whether the policy sets any threshold.
 func (p HealthAlertPolicy) Evaluates() bool {
-	return p.MaxFailureRateBP > 0 || p.MaxP95LatencyMS > 0 || p.MaxHardSafetyEvents > 0 || p.MaxSilenceMinutes > 0
+	return p.MaxFailureRateBP > 0 || p.MaxP95LatencyMS > 0 || p.MaxHardSafetyEvents > 0 || p.MaxSilenceMinutes > 0 ||
+		p.MaxUnresolvedMinutes > 0
 }
 
 // SampleFloor is the fewest finished turns a rate or latency judgment needs; never below one.
@@ -46,11 +49,13 @@ const (
 	AlertSafety      AgentAlertKind = "H"
 	// AlertSilence is missing telemetry: an active agent served no turn for its silence span.
 	AlertSilence AgentAlertKind = "S"
+	// AlertUnresolved is a turn held longer than the policy allows with an open call outcome.
+	AlertUnresolved AgentAlertKind = "U"
 )
 
 // Valid reports whether the kind is a seeded agent_alert_kind code.
 func (kind AgentAlertKind) Valid() bool {
-	return kind == AlertFailureRate || kind == AlertLatency || kind == AlertSafety || kind == AlertSilence
+	return kind == AlertFailureRate || kind == AlertLatency || kind == AlertSafety || kind == AlertSilence || kind == AlertUnresolved
 }
 
 // AgentAlertStatus is an agent alert's lifecycle: an agent_alert_status code.
@@ -65,7 +70,8 @@ const (
 func (status AgentAlertStatus) Valid() bool { return status == AlertOpen || status == AlertResolved }
 
 // AgentAlert is one health alert of an agent. Observed and Threshold are in the kind's unit:
-// basis points, milliseconds, events, or, for silence, turns in the silence span and its minutes.
+// basis points, milliseconds, events, for silence turns in the silence span and its minutes, and
+// for unresolved outcomes the turns held that long with one and the minutes.
 type AgentAlert struct {
 	ID            int64
 	TenantID      int64
@@ -146,10 +152,12 @@ func (m AgentHealthMeasure) FailureRateBP() (int64, bool) {
 // AgentHealthReport is Studio's health detail of one agent. Policy is the effective
 // health_alerts setting, nil when none is bound or the chain does not compile (PolicyProblem
 // says why). InsufficientSamples reports fewer judged turns than the policy's sample floor,
-// so no rate or latency verdict may be read from the measure.
+// so no rate or latency verdict may be read from the measure. OpenOutcomes counts the in-flight,
+// accepted, and unknown calls of every live or ended turn of the agent, whenever queued.
 type AgentHealthReport struct {
 	AgentID             string
 	Measure             AgentHealthMeasure
+	OpenOutcomes        int64
 	Policy              *HealthAlertPolicy
 	PolicyProblem       string
 	InsufficientSamples bool

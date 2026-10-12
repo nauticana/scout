@@ -29,6 +29,7 @@ var errorClasses = []struct {
 	{domain.ErrInvalidModelOutput, "invalid_output"},
 	{domain.ErrCapabilityUnsupported, "capability_unsupported"},
 	{domain.ErrEffectViolated, "effect_violated"},
+	{domain.ErrOutcomeUnknown, "outcome_unknown"},
 	{domain.ErrEffectUnknown, "effect_unknown"},
 	{domain.ErrProposalRevised, "proposal_revised"},
 	{domain.ErrTurnHeld, "held"},
@@ -44,6 +45,10 @@ var errorClasses = []struct {
 	{domain.ErrNoRoute, "no_route"},
 	{domain.ErrStaleEvidence, "stale_evidence"},
 	{domain.ErrDegraded, "degraded"},
+	{domain.ErrBudgetUnsettled, "budget_unsettled"},
+	{domain.ErrNotSent, "not_sent"},
+	{domain.ErrNoEffect, "no_effect"},
+	{domain.ErrOutputWithheld, "output_withheld"},
 }
 
 // KnownErrorClass reports whether class is one ErrorClass returns.

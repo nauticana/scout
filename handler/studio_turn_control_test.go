@@ -20,7 +20,27 @@ type turnControlBackend struct {
 	filter  domain.LiveTurnFilter
 	hold    domain.TurnHoldRequest
 	release domain.TurnReleaseRequest
+	lookup  domain.TurnOutcomeRequest
+	attest  domain.TurnAttestRequest
 	err     error
+}
+
+var settledCall = domain.CallOutcome{
+	Key:  domain.CallOutcomeKey{TenantID: 7, RequestID: "request-1", ExecutionStepID: 11, CallID: "c1"},
+	Tool: domain.ToolReference{ToolID: "shop.write", Version: "2"}, Status: domain.CallCompleted, DispatchFence: 2,
+	DispatchedAt: time.Unix(1500, 0).UTC(), DeadlineAt: time.Unix(1600, 0).UTC(), DeadlinePassed: true,
+	Resolution: domain.ResolvedByAttestation, ResolvedFence: 3, Resolver: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"},
+	ResolvedAt: time.Unix(1700, 0).UTC(), Note: "order shows shipped", Evidence: domain.ObjectRef{URI: "scout://e/1", Digest: strings.Repeat("a", 64)},
+}
+
+func (backend *turnControlBackend) LookupOutcome(_ context.Context, _ domain.StudioActor, request domain.TurnOutcomeRequest) (domain.CallOutcome, error) {
+	backend.lookup = request
+	return settledCall, backend.err
+}
+
+func (backend *turnControlBackend) AttestOutcome(_ context.Context, _ domain.StudioActor, request domain.TurnAttestRequest) (domain.AttestationResult, error) {
+	backend.attest = request
+	return domain.AttestationResult{Outcome: settledCall, AwaitsSecond: true}, backend.err
 }
 
 var _ contract.StudioTurnControlBackend = (*turnControlBackend)(nil)
@@ -58,7 +78,7 @@ func TestStudioTurnControlRoutesMapRequestsAndResults(t *testing.T) {
 	backend := &turnControlBackend{}
 	handler := &StudioTurnControlHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
 	if feature := handler.Feature(); feature.ID != StudioFeatureTurnControl || feature.Object != domain.OperationAuthorizationObject ||
-		strings.Join(feature.Actions, ",") != "VIEW,OPERATE" {
+		strings.Join(feature.Actions, ",") != "VIEW,OPERATE,PREEMPT,RECONCILE" {
 		t.Fatalf("feature = %+v", feature)
 	}
 
@@ -82,10 +102,43 @@ func TestStudioTurnControlRoutesMapRequestsAndResults(t *testing.T) {
 		t.Fatalf("hold = %d %s, request %+v", recorder.Code, recorder.Body.String(), backend.hold)
 	}
 
+	recorder = serveTurnControl(handler, http.MethodPost, api.StudioTurnHoldPath, `{"agent_name":"writer-a","request_id":"request-1","mode":"preempt","reason":"runaway"}`)
+	if recorder.Code != http.StatusOK || backend.hold.Mode != domain.HoldModePreempt {
+		t.Fatalf("preempt = %d %s, request %+v", recorder.Code, recorder.Body.String(), backend.hold)
+	}
+
 	recorder = serveTurnControl(handler, http.MethodPost, api.StudioTurnReleasePath, `{"agent_name":"writer-a","request_id":"request-1","fence":3}`)
 	var released api.LiveTurn
 	if recorder.Code != http.StatusOK || envelopeData(recorder, &released) != nil || released.Status != "Q" || released.Fence != 4 || backend.release.Fence != 3 {
 		t.Fatalf("release = %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = serveTurnControl(handler, http.MethodPost, api.StudioTurnLookupPath,
+		`{"agent_name":"writer-a","request_id":"request-1","fence":3,"execution_step_id":11,"call_id":"c1"}`)
+	var looked api.CallOutcome
+	if recorder.Code != http.StatusOK || envelopeData(recorder, &looked) != nil ||
+		backend.lookup != (domain.TurnOutcomeRequest{AgentID: "writer-a", RequestID: "request-1", Fence: 3, ExecutionStepID: 11, CallID: "c1"}) ||
+		looked.Status != "C" || looked.Resolution != "T" || looked.ResolverID != "9" || looked.Evidence == nil || looked.ResolvedAt == nil {
+		t.Fatalf("lookup = %d %s, request %+v", recorder.Code, recorder.Body.String(), backend.lookup)
+	}
+
+	recorder = serveTurnControl(handler, http.MethodPost, api.StudioTurnAttestPath,
+		`{"agent_name":"writer-a","request_id":"request-1","fence":3,"execution_step_id":11,"call_id":"c1","outcome":"completed","note":"order shows shipped","evidence":{"uri":"scout://e/1","digest":"`+strings.Repeat("a", 64)+`"}}`)
+	var attested api.TurnAttestResult
+	if recorder.Code != http.StatusOK || envelopeData(recorder, &attested) != nil || !attested.AwaitsSecond ||
+		backend.attest.Outcome != domain.CallCompleted || backend.attest.Note != "order shows shipped" || backend.attest.CallID != "c1" ||
+		backend.attest.Evidence.URI != "scout://e/1" {
+		t.Fatalf("attest = %d %s, request %+v", recorder.Code, recorder.Body.String(), backend.attest)
+	}
+	if recorder := serveTurnControl(handler, http.MethodPost, api.StudioTurnAttestPath,
+		`{"agent_name":"writer-a","request_id":"request-1","fence":3,"execution_step_id":11,"call_id":"c1","outcome":"done","note":"x"}`); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown outcome word = %d, want 400", recorder.Code)
+	}
+
+	backend.err = fmt.Errorf("%w: AGENT_OPERATION RECONCILE", domain.ErrForbidden)
+	if recorder := serveTurnControl(handler, http.MethodPost, api.StudioTurnAttestPath,
+		`{"agent_name":"writer-a","request_id":"request-1","fence":3,"execution_step_id":11,"call_id":"c1","outcome":"failed","note":"x"}`); recorder.Code != http.StatusForbidden {
+		t.Fatalf("attest without RECONCILE = %d, want 403", recorder.Code)
 	}
 }
 

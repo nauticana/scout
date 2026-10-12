@@ -1,0 +1,31 @@
+table: turn_call_confirmation
+comment: The MCP confirmation a runtime tool call waits on; reconciling the confirmation settles the call
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: execution_step_id
+    type: BIGINT
+  - name: call_id
+    type: VARCHAR(200)
+  - name: mcp_confirmation_id
+    type: BIGINT
+  - name: linked_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, request_id, execution_step_id, call_id]
+foreign_keys:
+  - name: call_outcome_confirmations
+    columns: [partner_id, request_id, execution_step_id, call_id]
+    references:
+      table: turn_call_outcome
+      columns: [partner_id, request_id, execution_step_id, call_id]
+  - name: confirmation_call_links
+    columns: [partner_id, mcp_confirmation_id]
+    references:
+      table: mcp_confirmation
+      columns: [partner_id, id]
+indexes:
+  - name: turn_call_confirmation_link_ix
+    columns: [partner_id, mcp_confirmation_id]

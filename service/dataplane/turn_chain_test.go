@@ -32,7 +32,7 @@ func newChainHarness(t *testing.T) *chainHarness {
 		FindFunc: func(context.Context, int64, string) (domain.TurnRecord, error) {
 			return domain.TurnRecord{TurnNo: 1, Status: harness.status, Fence: 1}, nil
 		},
-		FailFunc: func(_ context.Context, _ domain.TurnOwner, status domain.TurnStatus, _ string) error {
+		FailFunc: func(_ context.Context, _ domain.TurnOwner, status domain.TurnStatus, _ string, _ domain.TurnSettlement) error {
 			harness.status = status
 			return nil
 		},

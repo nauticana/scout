@@ -181,6 +181,7 @@ const (
 	agent_run_trace_max_journal_bytes     = "agent_run_trace_max_journal_bytes"
 	agent_live_turn_page_size             = "agent_live_turn_page_size"
 	agent_live_turn_max_page_size         = "agent_live_turn_max_page_size"
+	agent_outcome_attest_grace            = "agent_outcome_attest_grace"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -373,6 +374,7 @@ type ScoutConfig struct {
 	AgentRunTraceMaxJournalBytes      int // agent_run_trace_max_journal_bytes 4194304 Cumulative loop journal payload bytes one run trace classifies (1024..67108864); 0 takes 4194304
 	AgentLiveTurnPageSize             int // agent_live_turn_page_size 50 Live turns one Studio page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50
 	AgentLiveTurnMaxPageSize          int // agent_live_turn_max_page_size 200 Largest live turn page a Studio caller may ask for (1..1000); 0 takes 200
+	AgentOutcomeAttestGrace           int // agent_outcome_attest_grace 60 Seconds added to a non-read-only tool call's dispatch window for its outcome deadline (1..86400); 0 takes 60
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -453,6 +455,7 @@ func (c *ScoutConfig) DataPlaneSettings() domain.DataPlaneSettings {
 		AuditPageSize: c.AgentAuditPageSize, AuditMaxPageSize: c.AgentAuditMaxPageSize, SafetyEventMaxPage: c.AgentSafetyEventMaxPage,
 		RestrictionCacheTTL:     time.Duration(c.AgentRestrictionCacheTTLMs) * time.Millisecond,
 		RestrictionCacheEntries: c.AgentRestrictionCacheEntries,
+		OutcomeAttestGrace:      seconds(c.AgentOutcomeAttestGrace),
 	}
 }
 
@@ -618,6 +621,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentRunTraceMaxJournalBytes = c.Int(rows, agent_run_trace_max_journal_bytes)
 	c.AgentLiveTurnPageSize = c.Int(rows, agent_live_turn_page_size)
 	c.AgentLiveTurnMaxPageSize = c.Int(rows, agent_live_turn_max_page_size)
+	c.AgentOutcomeAttestGrace = c.Int(rows, agent_outcome_attest_grace)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -630,13 +634,16 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors())
 }
 
+// maxOutcomeAttestGrace bounds agent_outcome_attest_grace: one day, in seconds.
+const maxOutcomeAttestGrace = 86400
+
 // LiveTurnLimits is what the agent_live_turn_* flags configure for dataplane.StudioTurnControl.
 func (c *ScoutConfig) LiveTurnLimits() domain.LiveTurnLimits {
 	return domain.LiveTurnLimits{PageSize: c.AgentLiveTurnPageSize, MaxPageSize: c.AgentLiveTurnMaxPageSize}
 }
 
-// liveTurnFlagErrors refuses a live turn page flag outside its range and a default page larger
-// than the largest page; zero takes each default.
+// liveTurnFlagErrors refuses a live turn page flag or agent_outcome_attest_grace outside its range
+// and a default page larger than the largest page; zero takes each default.
 func (c *ScoutConfig) liveTurnFlagErrors() error {
 	var errs []error
 	for _, flag := range []struct {
@@ -648,6 +655,9 @@ func (c *ScoutConfig) liveTurnFlagErrors() error {
 		if flag.value < 0 || flag.value > flag.max {
 			errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", flag.name, flag.value, flag.max))
 		}
+	}
+	if c.AgentOutcomeAttestGrace < 0 || c.AgentOutcomeAttestGrace > maxOutcomeAttestGrace {
+		errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", agent_outcome_attest_grace, c.AgentOutcomeAttestGrace, maxOutcomeAttestGrace))
 	}
 	size, maxSize := cmp.Or(c.AgentLiveTurnPageSize, dataplane.DefaultLiveTurnPageSize), cmp.Or(c.AgentLiveTurnMaxPageSize, dataplane.DefaultLiveTurnMaxPageSize)
 	if size > maxSize {

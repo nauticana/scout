@@ -52,6 +52,7 @@ seeds:
       - [agent_alert_kind, L, Latency]
       - [agent_alert_kind, H, Hard Safety Events]
       - [agent_alert_kind, S, Silence]
+      - [agent_alert_kind, U, Unresolved Outcome]
       - [agent_alert_status, O, Open]
       - [agent_alert_status, R, Resolved]
   - table: constant_lookup
@@ -218,6 +219,7 @@ seeds:
       - [agent_run_trace_max_journal_bytes, int, true, "4194304", "Cumulative loop journal payload bytes one Studio run trace classifies; past them the trace is truncated (1024..67108864); 0 takes 4194304"]
       - [agent_live_turn_page_size, int, true, "50", "Live turns one Studio turn control page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50"]
       - [agent_live_turn_max_page_size, int, true, "200", "Largest live turn page a Studio turn control caller may ask for (1..1000); 0 takes 200"]
+      - [agent_outcome_attest_grace, int, true, "60", "Seconds added to a non-read-only tool call's dispatch window for its outcome deadline, after which a person may attest an unknown outcome (1..86400); 0 takes 60"]
   - table: authorization_object
     columns: [id, caption]
     rows:

@@ -23,9 +23,29 @@ type runtimeRecorder struct {
 	failures  []string
 	audits    []string
 	snapshot  domain.SessionSnapshot
+	// settlements are the settlements every turn end carried.
+	settlements []domain.TurnSettlement
 }
 
 func (recorder *runtimeRecorder) record(call string) { recorder.calls = append(recorder.calls, call) }
+
+// settle records what a turn's end settles in its transaction: the reservation, then the usage.
+func (recorder *runtimeRecorder) settle(settlement domain.TurnSettlement) {
+	if settlement.Reservation.ReservationID != "" {
+		if settlement.Refund {
+			recorder.record("refund")
+			recorder.released++
+		} else {
+			recorder.record("settle")
+			recorder.committed++
+		}
+	}
+	if !settlement.Refund {
+		recorder.record("usage")
+		recorder.usage = append(recorder.usage, settlement.Usage)
+	}
+	recorder.settlements = append(recorder.settlements, settlement)
+}
 
 func runtimeGraph() domain.ExecutionGraph {
 	return domain.ExecutionGraph{
@@ -46,14 +66,10 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 				recorder.record("start")
 				return runtimeOwner, nil
 			},
-			FailFunc: func(_ context.Context, _ domain.TurnOwner, status domain.TurnStatus, errorCode string) error {
+			FailFunc: func(_ context.Context, _ domain.TurnOwner, status domain.TurnStatus, errorCode string, settlement domain.TurnSettlement) error {
+				recorder.settle(settlement)
 				recorder.record("fail")
 				recorder.failures = append(recorder.failures, string(status)+":"+errorCode)
-				return nil
-			},
-			RecordUsageFunc: func(_ context.Context, _ domain.TurnOwner, _ string, _ int64, _ string, _ domain.UsageAttribution, usage domain.Usage) error {
-				recorder.record("usage")
-				recorder.usage = append(recorder.usage, usage)
 				return nil
 			},
 		},
@@ -66,7 +82,8 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 				recorder.record("checkpoint")
 				return nil
 			},
-			CompleteFunc: func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error {
+			CompleteFunc: func(_ context.Context, _ domain.TurnOwner, _ string, _ int64, _ domain.TurnResult, settlement domain.TurnSettlement) error {
+				recorder.settle(settlement)
 				recorder.record("complete")
 				return nil
 			},
@@ -435,24 +452,21 @@ func TestTurnRuntimeAbandonFailsATurnTheBudgetNoLongerAdmits(t *testing.T) {
 	}
 }
 
-func TestTurnRuntimeSkipsSettlementWhenAlreadySettled(t *testing.T) {
+// Decision 18: a live turn's reservation is settled only with the turn's end, so a run that finds
+// it settled runs no step unheld: it fails closed, settling nothing again.
+func TestTurnRuntimeRunsNoStepOnASettledReservation(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
 	runtime.Budget = &fake.TenantBudgetManager{
 		ReserveFunc: func(context.Context, domain.BudgetRequest) (domain.BudgetReservation, error) {
 			return domain.BudgetReservation{}, domain.ErrBudgetSettled
 		},
-		CommitFunc:  func(context.Context, domain.BudgetReservation, domain.Usage) error { recorder.committed++; return nil },
-		ReleaseFunc: func(context.Context, domain.BudgetReservation) error { recorder.released++; return nil },
 	}
-	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
-		t.Fatal(err)
+	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); !errors.Is(err, domain.ErrBudgetSettled) {
+		t.Fatalf("error = %v, want ErrBudgetSettled", err)
 	}
-	if recorder.committed != 0 || recorder.released != 0 {
-		t.Fatalf("settled %d times, refunded %d", recorder.committed, recorder.released)
-	}
-	if len(recorder.usage) != 1 {
-		t.Fatalf("usage events = %+v", recorder.usage)
+	if len(recorder.executed) != 0 || recorder.committed != 0 || recorder.released != 0 || len(recorder.failures) != 1 {
+		t.Fatalf("executed %v, settled %d, refunded %d, failures %v", recorder.executed, recorder.committed, recorder.released, recorder.failures)
 	}
 }
 

@@ -16,7 +16,7 @@ Scout's schema is seventeen selectable modules declared in `schema/dependency.ym
 - `agent` is the waist of the platform: `catalog`, `tenancy`, `prompt`, and `model` sit under it, and every product-facing module above reaches them through it. Its only direct key into `prompt` is a draft comment anchored to a prompt section.
 - `agent_authorization` and `configuration` carry the principal and configuration-inheritance primitives; both sit directly on `agent` because they key on `agent_profile` and `agent_version`.
 - `skill` holds versioned procedures an agent loads on demand, and the platform catalog tenants copy them from. It sits on `tool` because a skill lists the tools its procedure uses. A skill version also names the golden set version that gates it, as plain columns: the reference is optional, so it is verified by the application, not by a foreign key.
-- `approval` holds the durable human-in-the-loop record of a turn; `mcp_confirmation` holds an MCP tool call a person confirms, linked to keel's maker-checker `approval_request` when one decides it. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
+- `approval` holds the durable human-in-the-loop record of a turn; `mcp_confirmation` holds an MCP tool call a person confirms, linked to keel's maker-checker `approval_request` when one decides it, and to the runtime tool call that waits on it, so it sits on `runtime`. `runtime` sits on `tool` because a call's outcome record names the tool version it called. `configuration` also owns `audit_event`, because every decision record is attributable to a scope and the runtime, the tool gateway, and guardrails all write one without the rollout schema.
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 30, "rankSpacing": 55, "diagramPadding": 12}, "themeVariables": {"fontSize": "12px"}}}%%
@@ -35,7 +35,7 @@ flowchart BT
     execution_graph_module --> agent
     agent_authorization_module --> agent
     knowledge_vector --> knowledge
-    runtime --> agent_authorization_module
+    runtime --> tool
     runtime --> configuration_module
     runtime --> execution_graph_module
     release --> runtime
@@ -44,7 +44,7 @@ flowchart BT
     approval --> agent_authorization_module
     approval --> configuration_module
     skill --> tool
-    mcp_confirmation --> tenancy
+    mcp_confirmation --> runtime
     mcp_confirmation --> keel_approval
     keel_approval --> tenant_management
 
@@ -60,19 +60,19 @@ flowchart BT
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>9 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
-    runtime["Runtime<br/>15 tables"]
+    runtime["Runtime<br/>17 tables"]
     release["Release<br/>16 tables"]
     evaluation["Evaluation<br/>20 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
     skill["Skill<br/>10 tables"]
-    mcp_confirmation["MCP Confirmation<br/>1 table"]
+    mcp_confirmation["MCP Confirmation<br/>2 tables"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 147. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 150. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -291,6 +291,8 @@ flowchart RL
         session_snapshot["session_snapshot"]
         step_idempotency["step_idempotency"]
         step_loop_entry["step_loop_entry"]
+        turn_call_outcome["turn_call_outcome"]
+        turn_call_attestation["turn_call_attestation"]
         turn_queue["turn_queue"]
         turn_dead_letter["turn_dead_letter"]
         budget_reservation["budget_reservation"]
@@ -314,6 +316,10 @@ flowchart RL
     agent_work_item --> agent_work_item
     step_idempotency --> conversation_turn
     step_loop_entry --> step_idempotency
+    turn_call_outcome --> conversation_turn
+    turn_call_outcome --> step_idempotency
+    turn_call_outcome --> tool_version
+    turn_call_attestation --> turn_call_outcome
     budget_reservation --> conversation_turn
 
     subgraph release["Release"]
@@ -419,6 +425,15 @@ flowchart RL
     skill_example --> skill_version
     skill_requirement --> skill_version
     agent_skill_binding --> skill_version
+
+    subgraph mcp_confirmation_module["MCP Confirmation"]
+        direction BT
+        mcp_confirmation["mcp_confirmation"]
+        turn_call_confirmation["turn_call_confirmation"]
+    end
+    mcp_confirmation --> agent_tenant
+    turn_call_confirmation --> mcp_confirmation
+    turn_call_confirmation --> turn_call_outcome
 
 ```
 
@@ -727,7 +742,7 @@ erDiagram
     }
 ```
 
-Agent, guardrail, and tool versions are immutable. A release's `guardrail_config` version is the digest of the rule set it froze, so releases with identical rules share one row. `safety_event` records one guardrail intervention — stage, layer, action, rule ids, and the release and policy versions — never the inspected content; `agent_id` is set when the inspected principal is an agent, which is how events are paged per agent (`safety_event_agent_ix`) and counted over an agent's health window (`safety_event_agent_time_ix`); `safety_event_request_ix` reads one request's events for a run trace. `agent_alert` is one health alert of an agent, `kind_code` `F` (failure rate), `L` (latency), `H` (hard safety events), or `S` (silence) and `status_code` `O` (open) or `R` (resolved), with the measurement that opened it and the threshold it exceeded; the partial unique index `agent_alert_open_uq` holds at most one open alert per agent and kind. The `agent` seed registers both code lists as keel constants. `agent_health_state` is the health evaluator's last measurement of an agent, replaced at every evaluation; its `evaluated_at` is how Studio tells fresh telemetry from stale. The evaluator reaches an agent's turns through `agent_conversation_agent_ix`. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
+Agent, guardrail, and tool versions are immutable. A release's `guardrail_config` version is the digest of the rule set it froze, so releases with identical rules share one row. `safety_event` records one guardrail intervention — stage, layer, action, rule ids, and the release and policy versions — never the inspected content; `agent_id` is set when the inspected principal is an agent, which is how events are paged per agent (`safety_event_agent_ix`) and counted over an agent's health window (`safety_event_agent_time_ix`); `safety_event_request_ix` reads one request's events for a run trace. `agent_alert` is one health alert of an agent, `kind_code` `F` (failure rate), `L` (latency), `H` (hard safety events), `S` (silence), or `U` (a turn held too long with an unresolved call outcome) and `status_code` `O` (open) or `R` (resolved), with the measurement that opened it and the threshold it exceeded; the partial unique index `agent_alert_open_uq` holds at most one open alert per agent and kind. The `agent` seed registers both code lists as keel constants. `agent_health_state` is the health evaluator's last measurement of an agent, replaced at every evaluation; its `evaluated_at` is how Studio tells fresh telemetry from stale. The evaluator reaches an agent's turns through `agent_conversation_agent_ix`. `agent_deployment` holds stable and canary pointers. The compiled graph is normalized into steps, one entry, and directed transitions so publication can validate references before runtime traffic arrives.
 
 ### Skills
 
@@ -1317,7 +1332,23 @@ erDiagram
     mcp_confirmation_status ||--o{ mcp_confirmation : status_mcp_confirmations
     approval_request |o--o{ mcp_confirmation : approval_mcp_confirmations
     outbox_event |o--o{ mcp_confirmation : notified_mcp_confirmations
+    mcp_confirmation ||--o{ turn_call_confirmation : confirmation_call_links
+    turn_call_outcome ||--o| turn_call_confirmation : call_outcome_confirmations
 
+    turn_call_confirmation {
+        bigint partner_id PK,FK
+        varchar request_id PK,FK
+        bigint execution_step_id PK,FK
+        varchar call_id PK,FK
+        bigint mcp_confirmation_id FK
+        timestamp linked_at
+    }
+    turn_call_outcome {
+        bigint partner_id PK
+        varchar request_id PK
+        bigint execution_step_id PK
+        varchar call_id PK
+    }
     mcp_confirmation {
         bigint id PK
         bigint partner_id FK
@@ -1349,6 +1380,12 @@ decide it; `approval_required` closes the setup window before that link exists. 
 names the keel outbox notice of an inbox confirmation. `client_ref`
 has no foreign key because the authorization server that issued it may be external. Purging after
 retention clears `payload`, `preview`, and `result` and keeps the digest and decision columns.
+
+`turn_call_confirmation` links a runtime tool call, accepted asynchronously with a `ToolAcceptance` naming a
+confirmation, to the `mcp_confirmation` it waits on. The unique `mcp_confirmation_partner_uq (partner_id, id)` is
+the target of its composite foreign key, so a call cannot link a confirmation of another tenant. When a person
+reconciles the confirmation, the same transaction settles the linked open calls (resolution `M`). The link lives
+in this module, so `mcp_confirmation` depends on `runtime`.
 
 ## Agent types, delegation, and work items
 
@@ -1630,6 +1667,10 @@ erDiagram
     step_idempotency }o--|| execution_step : execution_step_idempotencies
     step_idempotency }o--|| idempotency_status : status_step_idempotencies
     step_idempotency ||--o{ step_loop_entry : step_loop_entries
+    conversation_turn ||--o{ turn_call_outcome : turn_call_outcomes
+    step_idempotency ||--o{ turn_call_outcome : step_call_outcomes
+    tool_version ||--o{ turn_call_outcome : tool_call_outcomes
+    turn_call_outcome ||--o{ turn_call_attestation : call_outcome_attestations
     conversation_turn ||--o{ budget_reservation : budget_reservations
     budget_reservation }o--|| reservation_status : status_budget_reservations
     budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
@@ -1652,6 +1693,11 @@ erDiagram
     }
     execution_step {
         bigint id PK
+    }
+    tool_version {
+        bigint partner_id PK
+        varchar tool_id PK
+        varchar tool_version PK
     }
     agent_conversation {
         bigint partner_id PK,FK
@@ -1727,6 +1773,40 @@ erDiagram
         integer entry_no PK
         text entry_uri
         char entry_digest
+    }
+    turn_call_outcome {
+        bigint partner_id PK,FK
+        varchar request_id PK,FK
+        bigint execution_step_id PK,FK
+        varchar call_id PK
+        varchar idempotency_key UK
+        varchar tool_id FK
+        varchar tool_version FK
+        char origin_code
+        char status_code
+        bigint dispatch_fence
+        timestamp dispatched_at
+        timestamp deadline_at
+        text result_uri
+        char resolution_code
+        bigint resolved_fence
+        varchar resolver_kind
+        varchar resolver_id
+        timestamp resolved_at
+        varchar note
+        text evidence_uri
+    }
+    turn_call_attestation {
+        bigint partner_id PK,FK
+        varchar request_id PK,FK
+        bigint execution_step_id PK,FK
+        varchar call_id PK,FK
+        varchar attester_kind PK
+        varchar attester_id PK
+        char outcome_code
+        varchar note
+        text evidence_uri
+        timestamp attested_at
     }
     idempotency_status {
         char code PK
@@ -1836,7 +1916,9 @@ Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enf
 
 `turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. A claim also waits while any earlier turn of the conversation, by `turn_no`, is queued, running, streaming, suspended, or held, so the durable turn number, not queue time, orders a conversation. `acting_context` carries who the turn acts as — principal, authority chain, delegation bounds, work item — as references and bounds, never a credential. A delivery is requeued only when its turn is queued again — resumed after approval, released from a hold, or woken by a cancellation — whether it was acknowledged or is still leased by a worker that found the turn parked; that is how such a turn returns to a worker. `conversation_turn.cancel_requested_at` is the durable cancellation request a worker polls.
 
-`conversation_turn.fence` is the epoch of the turn's owner: every acquisition and ownership transition increments it, and every runtime write checks it ([persistence](persistence.md#turn-fence)); the check `conversation_turn_fence_ck` keeps it non-negative. `turn_status` `H` (held) is a non-terminal status no worker runs. `hold_requested_at` and `hold_reason` are a pending request that a running turn hold at its next durable checkpoint, both set or both null (`conversation_turn_hold_request_ck`); `hold_code` and `held_at` are set exactly while the turn is `H` (`conversation_turn_held_code_ck`, `conversation_turn_held_at_ck`). `hold_code` is `C` (held at a checkpoint on request) or `A` (held because its agent was suspended), checked by `conversation_turn_hold_code_ck`; the `runtime` seed registers the code list `turn_hold_code` beside `turn_queue_status` and `agent_run_status` as keel constants. `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
+`conversation_turn.fence` is the epoch of the turn's owner: every acquisition and ownership transition increments it, and every runtime write checks it ([persistence](persistence.md#turn-fence)); the check `conversation_turn_fence_ck` keeps it non-negative. `turn_status` `H` (held) is a non-terminal status no worker runs. `hold_requested_at` and `hold_reason` are a pending request that a running turn hold at its next durable checkpoint, both set or both null (`conversation_turn_hold_request_ck`); `hold_code` and `held_at` are set exactly while the turn is `H` (`conversation_turn_held_code_ck`, `conversation_turn_held_at_ck`). `hold_code` is `C` (held at a checkpoint on request), `A` (held because its agent was suspended), `P` (preempted by an operator), or `U` (held on a call whose outcome is unknown), checked by `conversation_turn_hold_code_ck`; the `runtime` seed registers the code list `turn_hold_code` beside `turn_queue_status` and `agent_run_status` as keel constants.
+
+`turn_call_outcome` records every non-read-only call of a tool-loop step before it leaves, keyed by the turn, the execution step, and the model's call id, with real foreign keys to the turn-scoped `step_idempotency` row and the `tool_version` it called ([persistence](persistence.md#call-outcomes)). `status_code` is `I` (in flight), `A` (accepted asynchronously), `C` (completed), `F` (failed), or `U` (unknown), keel constant list `turn_call_outcome_status`; `resolution_code` is `G` (gateway), `W` (late worker report), `E` (effect observation), `L` (outcome lookup), `T` (attestation), or `M` (MCP confirmation), list `turn_call_resolution`; and `origin_code` is `A` (the agent's loop), list `turn_call_origin`. Checks keep a resolution, `resolved_at`, and `resolved_fence` set exactly on `C` and `F`, a resolver and note on `T`, `deadline_at >= dispatched_at`, positive fences, the uri and digest pairs, and a result object on `A`. `dispatch_fence` is the turn fence the call was last sent under, and only that worker may report it late; `deadline_at`, from the store clock, is when the call can no longer be in flight. The unique `turn_call_outcome_key_uq (partner_id, idempotency_key)` keeps one key from naming two effects, `turn_call_outcome_turn_ix (partner_id, request_id, status_code)` serves the release gate and turn reads, and `turn_call_outcome_due_ix (status_code, deadline_at)` is there for reconciliation by deadline. `turn_call_attestation` holds one row per person attesting an open call, `outcome_code` `C` or `F` (list `turn_call_attested`) with a non-empty note and optional evidence; the call settles `T` once the required number of distinct people agree. `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
 
 ## Platform release safety and audit
 
@@ -2389,13 +2471,13 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
-| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
+| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_call_outcome`, `turn_call_attestation`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
 | `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison`, `golden_case_turn`, `golden_case_tool` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |
-| `mcp_confirmation` | `mcp_confirmation` |
+| `mcp_confirmation` | `mcp_confirmation`, `turn_call_confirmation` |
 | `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_tool`, `skill_catalog_example`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them

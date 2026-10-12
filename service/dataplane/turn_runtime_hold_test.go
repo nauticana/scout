@@ -53,7 +53,7 @@ func TestTurnRuntimeFailWritesNothingTerminalWhenItsRecordIsRefused(t *testing.T
 	} {
 		recorder := &runtimeRecorder{}
 		runtime := newTestRuntime(t, recorder)
-		runtime.Records.(*fake.TurnRecordStore).FailFunc = func(context.Context, domain.TurnOwner, domain.TurnStatus, string) error {
+		runtime.Records.(*fake.TurnRecordStore).FailFunc = func(context.Context, domain.TurnOwner, domain.TurnStatus, string, domain.TurnSettlement) error {
 			recorder.record("fail")
 			return refusal
 		}
@@ -120,14 +120,15 @@ func (fencedOutWatcher) Watch(ctx context.Context, owner domain.TurnOwner) (cont
 	return watch, nil
 }
 
-// G3: a stale settlement is refused, so the run that owns the turn next still finds a live hold
-// instead of a reservation another worker settled under it.
+// G3: a completion refused by a moved fence settles nothing, so the run that owns the turn next
+// still finds a live hold instead of a reservation another worker settled under it.
 func TestTurnRuntimeStaleSettlementLeavesTheReservationLive(t *testing.T) {
 	recorder := &runtimeRecorder{}
 	runtime := newTestRuntime(t, recorder)
-	budget := runtime.Budget.(*fake.TenantBudgetManager)
-	budget.CommitTurnFunc = func(_ context.Context, owner domain.TurnOwner, _ domain.BudgetReservation, _ domain.Usage) error {
-		recorder.record("settle-attempt")
+	sessions := runtime.Sessions.(*fake.SessionCoordinator)
+	complete := sessions.CompleteFunc
+	sessions.CompleteFunc = func(_ context.Context, owner domain.TurnOwner, _ string, _ int64, _ domain.TurnResult, _ domain.TurnSettlement) error {
+		recorder.record("complete-attempt")
 		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
 	}
 	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); !errors.Is(err, domain.ErrFenceLost) {
@@ -137,7 +138,8 @@ func TestTurnRuntimeStaleSettlementLeavesTheReservationLive(t *testing.T) {
 		t.Fatalf("a stale settlement wrote: calls %v, audits %v", recorder.calls, recorder.audits)
 	}
 	// The next owner reserves again and gets the same live hold, then settles it.
-	budget.CommitTurnFunc = nil
+	sessions.CompleteFunc = complete
+	budget := runtime.Budget.(*fake.TenantBudgetManager)
 	reserved := budget.ReserveFunc
 	budget.ReserveFunc = func(ctx context.Context, request domain.BudgetRequest) (domain.BudgetReservation, error) {
 		reservation, err := reserved(ctx, request)
@@ -169,17 +171,16 @@ func TestTurnRuntimePresentsItsOwnerOnEveryWrite(t *testing.T) {
 	}
 	records := runtime.Records.(*fake.TurnRecordStore)
 	records.AcquireFunc = func(context.Context, domain.TurnClaim) (domain.TurnOwner, error) { return owner, nil }
-	records.RecordUsageFunc = func(_ context.Context, got domain.TurnOwner, _ string, _ int64, _ string, _ domain.UsageAttribution, _ domain.Usage) error {
-		check("usage", got)
-		return nil
-	}
 	sessions := runtime.Sessions.(*fake.SessionCoordinator)
 	sessions.CheckpointFunc = func(_ context.Context, got domain.TurnOwner, _ int64, _ domain.StepCheckpoint) error {
 		check("checkpoint", got)
 		return nil
 	}
-	sessions.CompleteFunc = func(_ context.Context, got domain.TurnOwner, _ string, _ int64, _ domain.TurnResult) error {
+	sessions.CompleteFunc = func(_ context.Context, got domain.TurnOwner, _ string, _ int64, _ domain.TurnResult, settlement domain.TurnSettlement) error {
 		check("complete", got)
+		if settlement.Reservation.ReservationID == "" || settlement.Refund {
+			t.Errorf("the completion carries no settlement: %+v", settlement)
+		}
 		return nil
 	}
 	runtime.Idempotency = &fake.StepIdempotencyStore{
@@ -192,10 +193,6 @@ func TestTurnRuntimePresentsItsOwnerOnEveryWrite(t *testing.T) {
 			return nil
 		},
 	}
-	runtime.Budget.(*fake.TenantBudgetManager).CommitTurnFunc = func(_ context.Context, got domain.TurnOwner, _ domain.BudgetReservation, _ domain.Usage) error {
-		check("budget settle", got)
-		return nil
-	}
 	runtime.Executors = fake.StepExecutorRegistryFunc(func(context.Context, string) (contract.StepExecutor, error) {
 		return fake.StepExecutorFunc(func(_ context.Context, input domain.StepInput) (domain.StepResult, error) {
 			check("step input", input.Owner)
@@ -205,7 +202,7 @@ func TestTurnRuntimePresentsItsOwnerOnEveryWrite(t *testing.T) {
 	if _, err := runtime.HandleTurn(context.Background(), runtimeClaim()); err != nil {
 		t.Fatal(err)
 	}
-	for _, write := range []string{"step begin", "step input", "step commit", "checkpoint", "budget settle", "usage", "complete"} {
+	for _, write := range []string{"step begin", "step input", "step commit", "checkpoint", "complete"} {
 		if !slices.Contains(seen, write) {
 			t.Errorf("%s did not present the owner", write)
 		}
@@ -226,7 +223,7 @@ func TestTurnRuntimeHoldsAtTheNextStepCheckpointWhenAsked(t *testing.T) {
 	control := &MemoryTurnControl{}
 	runtime.Control = control
 	var held []domain.TurnOwner
-	runtime.Records.(*fake.TurnRecordStore).HoldFunc = func(_ context.Context, owner domain.TurnOwner) (int64, error) {
+	runtime.Records.(*fake.TurnRecordStore).HoldFunc = func(_ context.Context, owner domain.TurnOwner, _ domain.TurnHoldCode) (int64, error) {
 		recorder.record("hold")
 		held = append(held, owner)
 		return owner.Fence + 1, nil
@@ -271,7 +268,7 @@ func TestTurnRuntimeAbandonsTheStepItHoldsInside(t *testing.T) {
 		order = append(order, "abandon")
 		return nil
 	}}
-	runtime.Records.(*fake.TurnRecordStore).HoldFunc = func(_ context.Context, owner domain.TurnOwner) (int64, error) {
+	runtime.Records.(*fake.TurnRecordStore).HoldFunc = func(_ context.Context, owner domain.TurnOwner, _ domain.TurnHoldCode) (int64, error) {
 		order = append(order, "hold")
 		return owner.Fence + 1, nil
 	}
@@ -362,7 +359,7 @@ func TestTurnRuntimeFailsACancelledTurnInsteadOfHoldingIt(t *testing.T) {
 	runtime := newTestRuntime(t, recorder)
 	control := &MemoryTurnControl{}
 	runtime.Control = control
-	runtime.Records.(*fake.TurnRecordStore).HoldFunc = func(context.Context, domain.TurnOwner) (int64, error) {
+	runtime.Records.(*fake.TurnRecordStore).HoldFunc = func(context.Context, domain.TurnOwner, domain.TurnHoldCode) (int64, error) {
 		recorder.record("hold")
 		return 0, fmt.Errorf("%w: operator asked", domain.ErrTurnCanceled)
 	}

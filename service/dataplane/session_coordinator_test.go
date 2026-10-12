@@ -72,7 +72,7 @@ func TestSessionCoordinatorPersistsBeforeInvalidation(t *testing.T) {
 				calls = append(calls, "checkpoint")
 				return nil
 			},
-			CompleteFunc: func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error {
+			CompleteFunc: func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult, domain.TurnSettlement) error {
 				calls = append(calls, "complete")
 				return nil
 			},
@@ -87,7 +87,7 @@ func TestSessionCoordinatorPersistsBeforeInvalidation(t *testing.T) {
 	if err := coordinator.Checkpoint(context.Background(), coordinatorOwner, 0, checkpoint); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if err := coordinator.Complete(context.Background(), coordinatorOwner, "conversation", 1, domain.TurnResult{}); err != nil {
+	if err := coordinator.Complete(context.Background(), coordinatorOwner, "conversation", 1, domain.TurnResult{}, domain.TurnSettlement{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	want := []string{"checkpoint", "invalidate", "complete", "invalidate"}
@@ -102,7 +102,9 @@ func TestSessionCoordinatorInvalidatesAfterStoreFailure(t *testing.T) {
 	coordinator := &SessionCoordinator{
 		Store: &fake.DurableSessionStore{
 			CheckpointFunc: func(context.Context, domain.TurnOwner, int64, domain.StepCheckpoint) error { return want },
-			CompleteFunc:   func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult) error { return want },
+			CompleteFunc: func(context.Context, domain.TurnOwner, string, int64, domain.TurnResult, domain.TurnSettlement) error {
+				return want
+			},
 		},
 		Cache: &fake.HotSessionCache{InvalidateFunc: func(context.Context, int64, string) error {
 			invalidated = true
@@ -115,7 +117,7 @@ func TestSessionCoordinatorInvalidatesAfterStoreFailure(t *testing.T) {
 		t.Fatalf("checkpoint error = %v, invalidated = %v", err, invalidated)
 	}
 	invalidated = false
-	err = coordinator.Complete(context.Background(), coordinatorOwner, "conversation", 2, domain.TurnResult{})
+	err = coordinator.Complete(context.Background(), coordinatorOwner, "conversation", 2, domain.TurnResult{}, domain.TurnSettlement{})
 	if !errors.Is(err, want) || !invalidated {
 		t.Fatalf("complete error = %v, invalidated = %v", err, invalidated)
 	}
@@ -190,7 +192,7 @@ func (store *durableFake) Checkpoint(_ context.Context, _ domain.TurnOwner, expe
 	return nil
 }
 
-func (store *durableFake) Complete(_ context.Context, _ domain.TurnOwner, _ string, expected int64, _ domain.TurnResult) error {
+func (store *durableFake) Complete(_ context.Context, _ domain.TurnOwner, _ string, expected int64, _ domain.TurnResult, _ domain.TurnSettlement) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.revision != expected {
@@ -222,7 +224,7 @@ func TestSessionCoordinatorReadAfterWriteSeesNewRevision(t *testing.T) {
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 6 {
 		t.Fatalf("read after write = %+v, %v", snapshot, err)
 	}
-	if err := coordinator.Complete(ctx, coordinatorOwner, "conversation", 6, domain.TurnResult{}); err != nil {
+	if err := coordinator.Complete(ctx, coordinatorOwner, "conversation", 6, domain.TurnResult{}, domain.TurnSettlement{}); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot, err := coordinator.Load(ctx, 7, "conversation"); err != nil || snapshot.Revision != 6 {

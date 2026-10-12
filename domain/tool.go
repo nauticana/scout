@@ -56,4 +56,7 @@ type ToolResult struct {
 	Evidence []MCPResourceLink
 	// Effect is the observed postcondition of a tool that declares VerifyEffect.
 	Effect *EffectObservation
+	// Acceptance is set instead of output when the tool took the call asynchronously; only a tool
+	// whose composition declares lookup support may answer so.
+	Acceptance *ToolAcceptance
 }

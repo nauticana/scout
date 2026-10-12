@@ -44,6 +44,8 @@ const (
 	qHealthResolve         = "scout_health_resolve_alert"
 	qHealthResolveDisabled = "scout_health_resolve_disabled_alerts"
 	qHealthSaveState       = "scout_health_save_state"
+	qHealthOpenOutcomes    = "scout_health_open_outcomes"
+	qHealthUnresolved      = "scout_health_unresolved"
 
 	healthAlertColumns = `id, kind_code, status_code, opened_at, resolved_at, observed_value, threshold_value, window_minutes`
 	// healthTurnsOfAgent joins an agent's turns through their conversations; its window bound is the last argument.
@@ -124,8 +126,25 @@ UPDATE agent_alert
    SET status_code = ` + sqlAlertResolved + `, resolved_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlAlertOpen + `
    AND ((kind_code = ` + sqlAlertFailure + ` AND ? = 0) OR (kind_code = ` + sqlAlertLatency + ` AND ? = 0)
-     OR (kind_code = ` + sqlAlertSafety + ` AND ? = 0) OR (kind_code = ` + sqlAlertSilence + ` AND ? = 0))
+     OR (kind_code = ` + sqlAlertSafety + ` AND ? = 0) OR (kind_code = ` + sqlAlertSilence + ` AND ? = 0)
+     OR (kind_code = ` + sqlAlertUnresolved + ` AND ? = 0))
 RETURNING id`,
+	// Every open call of the agent's turns, whenever the turn was queued.
+	qHealthOpenOutcomes: `
+SELECT COUNT(*)
+  FROM turn_call_outcome o
+  JOIN conversation_turn t ON t.partner_id = o.partner_id AND t.request_id = o.request_id
+  JOIN agent_conversation c ON c.partner_id = t.partner_id AND c.conversation_id = t.conversation_id
+ WHERE o.partner_id = ? AND c.agent_id = ? AND o.status_code IN (` + sqlCallOpen + `)`,
+	// The agent's turns held at least the span with a call whose outcome is still open.
+	qHealthUnresolved: `
+SELECT COUNT(*)
+  FROM conversation_turn t
+  JOIN agent_conversation c ON c.partner_id = t.partner_id AND c.conversation_id = t.conversation_id
+ WHERE t.partner_id = ? AND c.agent_id = ? AND t.status_code = ` + sqlTurnHeld + `
+   AND t.held_at <= CURRENT_TIMESTAMP - make_interval(mins => ?)
+   AND EXISTS (SELECT 1 FROM turn_call_outcome o
+                WHERE o.partner_id = t.partner_id AND o.request_id = t.request_id AND o.status_code IN (` + sqlCallOpen + `))`,
 	qHealthSaveState: `
 INSERT INTO agent_health_state (partner_id, agent_id, evaluated_at, window_minutes, turns, judged_turns, failure_rate_bp, p95_latency_ms, hard_safety_events)
 VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
@@ -240,6 +259,9 @@ func (h *AgentHealth) Health(ctx context.Context, actor domain.StudioActor, agen
 		report.Telemetry = domain.TelemetryMissing
 	default:
 		report.Telemetry = domain.TelemetryFresh
+	}
+	if report.OpenOutcomes, err = h.count(ctx, qHealthOpenOutcomes, actor.TenantID, agentID); err != nil {
+		return domain.AgentHealthReport{}, fmt.Errorf("count open call outcomes of %q: %w", agentID, err)
 	}
 	open, err := h.qs.Query(ctx, qHealthOpenAlerts, actor.TenantID, agentID)
 	if err != nil {
@@ -403,6 +425,22 @@ func (h *AgentHealth) measure(ctx context.Context, tenantID int64, agentID strin
 		measure.SafetyBySeverity[severity] = count
 	}
 	return measure, nil
+}
+
+// count reads one non-negative count.
+func (h *AgentHealth) count(ctx context.Context, query string, args ...any) (int64, error) {
+	result, err := h.qs.Query(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	if len(result.Rows) != 1 || len(result.Rows[0]) != 1 {
+		return 0, fmt.Errorf("%w: a count returned %d rows", domain.ErrConflict, len(result.Rows))
+	}
+	count, ok := common.AsInt64OK(result.Rows[0][0])
+	if !ok || count < 0 {
+		return 0, fmt.Errorf("%w: a count does not decode", domain.ErrConflict)
+	}
+	return count, nil
 }
 
 func nullableMS(value any) (*int64, bool) {

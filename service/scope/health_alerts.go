@@ -22,6 +22,7 @@ func healthAlertFields(p domain.HealthAlertPolicy) []healthAlertField {
 		{"max_p95_latency_ms", p.MaxP95LatencyMS, domain.MaxHealthLatencyMS},
 		{"max_hard_safety_events", p.MaxHardSafetyEvents, domain.MaxHealthCount},
 		{"max_silence_minutes", p.MaxSilenceMinutes, domain.MaxHealthWindowMinutes},
+		{"max_unresolved_minutes", p.MaxUnresolvedMinutes, domain.MaxHealthWindowMinutes},
 	}
 }
 
@@ -55,8 +56,8 @@ func DecodeHealthAlerts(raw []byte) (domain.HealthAlertPolicy, error) {
 }
 
 // HealthAlertsMerger keeps the stricter of each inherited and child field: a child may lower a
-// threshold, the sample floor, or the silence span its parent sets and set one its parent leaves
-// at 0, and its 0 inherits. The window is the parent's once the parent sets one.
+// threshold, the sample floor, the silence span, or the unresolved-outcome span its parent sets
+// and set one its parent leaves at 0, and its 0 inherits. The window is the parent's once the parent sets one.
 type HealthAlertsMerger struct{}
 
 func (HealthAlertsMerger) Kind() domain.ResourceKind { return domain.ResourceHealthAlerts }
@@ -80,12 +81,13 @@ func (HealthAlertsMerger) Merge(_ context.Context, inherited []byte, override do
 		child.WindowMinutes = parent.WindowMinutes
 	}
 	return json.Marshal(domain.HealthAlertPolicy{
-		WindowMinutes:       child.WindowMinutes,
-		MinTurns:            tighterLimit(parent.MinTurns, child.MinTurns),
-		MaxFailureRateBP:    tighterLimit(parent.MaxFailureRateBP, child.MaxFailureRateBP),
-		MaxP95LatencyMS:     tighterLimit(parent.MaxP95LatencyMS, child.MaxP95LatencyMS),
-		MaxHardSafetyEvents: tighterLimit(parent.MaxHardSafetyEvents, child.MaxHardSafetyEvents),
-		MaxSilenceMinutes:   tighterLimit(parent.MaxSilenceMinutes, child.MaxSilenceMinutes),
+		WindowMinutes:        child.WindowMinutes,
+		MinTurns:             tighterLimit(parent.MinTurns, child.MinTurns),
+		MaxFailureRateBP:     tighterLimit(parent.MaxFailureRateBP, child.MaxFailureRateBP),
+		MaxP95LatencyMS:      tighterLimit(parent.MaxP95LatencyMS, child.MaxP95LatencyMS),
+		MaxHardSafetyEvents:  tighterLimit(parent.MaxHardSafetyEvents, child.MaxHardSafetyEvents),
+		MaxSilenceMinutes:    tighterLimit(parent.MaxSilenceMinutes, child.MaxSilenceMinutes),
+		MaxUnresolvedMinutes: tighterLimit(parent.MaxUnresolvedMinutes, child.MaxUnresolvedMinutes),
 	})
 }
 

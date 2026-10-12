@@ -113,27 +113,30 @@ When a measure alerts is the agent's `health_alerts` setting, compiled from the 
 bindings on its scope chain alone (see [scope hierarchy](authority.md#scope-hierarchy)):
 
 ```json
-{"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120}
+{"window_minutes":60,"min_turns":20,"max_failure_rate_bp":500,"max_p95_latency_ms":30000,"max_hard_safety_events":0,"max_silence_minutes":120,"max_unresolved_minutes":30}
 ```
 
 Every field is a non-negative integer and 0 is not evaluated. `window_minutes` (at most a week; 0
 takes `agent_health_window`) is the measurement window, and `min_turns` the sample floor: the
 fewest judged turns, never below one, on which a failure rate or latency is read. A measure must
 exceed a `max_*` threshold to open an alert; `max_silence_minutes` (at most a week) is the longest an
-active agent with a stable release may serve no turn. No release freezes the setting, so a change
+active agent with a stable release may serve no turn, and `max_unresolved_minutes` (at most a week) the
+longest any turn of the agent may stay held with a tool call whose outcome is open. No release freezes the setting, so a change
 applies at the next evaluation without a publish.
 
 Studio's `health` feature (`handler.StudioHealthHandler` over `AgentHealth`, `VIEW`) serves the
 health detail and the alert list. `GET health` returns the measure over the policy window, the
 effective `policy` or the `policy_problem` that keeps the chain from compiling, `insufficient_samples`
 when the judged turns are below the sample floor, so no rate or latency verdict may be read, the open
-alerts, `last_evaluated_at`, and `telemetry`: `stale` when the agent is active, its policy evaluates
+alerts, `open_outcomes` (the in-flight, accepted, and unknown tool calls of the agent's turns, whenever
+queued, so a turn held for reconciliation stays visible past the window), `last_evaluated_at`, and `telemetry`: `stale` when the agent is active, its policy evaluates
 something, and the evaluator has not measured it within `agent_health_stale_periods` ×
 `agent_health_period`; else `missing` when the window holds no turn; else `fresh`. `GET alerts` pages
 an agent's alerts newest first, optionally by status. An agent the actor cannot VIEW is not found.
 
 `agent_alert` holds the alerts: `kind_code` `F` (failure rate, in basis points), `L` (p95 latency, in
-milliseconds), `H` (hard safety events), or `S` (silence: turns in the span and the span's minutes),
+milliseconds), `H` (hard safety events), `S` (silence: turns in the span and the span's minutes), or `U` (unresolved
+outcome: turns held at least the span with an open call outcome, and the span's minutes),
 with the measured value, the threshold it exceeded, and the window. `AgentHealth.EvaluateAll` opens
 and resolves them in passes:
 
@@ -147,6 +150,9 @@ and resolves them in passes:
 - Removing a policy or disabling one threshold resolves any open alert for that threshold.
 - Silence is judged only for an agent with a stable release that has been serving, active under its
   current deployment, for the whole span: no turn queued in the span opens it, and a turn resolves it.
+- An unresolved-outcome alert opens while any turn of the agent has been held, by `held_at` and the
+  database clock, at least `max_unresolved_minutes` with a call outcome still `I`, `A`, or `U`, and
+  resolves once none has. The count is exact and read afresh each pass, so no sample floor applies.
 - Each write names one tenant and agent and is a conditional insert or update; nothing takes a lock.
   The measure is recorded in `agent_health_state`, whose `evaluated_at` decides staleness.
 

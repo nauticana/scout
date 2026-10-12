@@ -1,0 +1,110 @@
+table: turn_call_outcome
+comment: Outcome of one non-read-only tool call of a turn, recorded in flight before the call leaves and settled once its effect is known
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: execution_step_id
+    type: BIGINT
+  - name: call_id
+    type: VARCHAR(200)
+  - name: idempotency_key
+    type: VARCHAR(200)
+  - name: tool_id
+    type: VARCHAR(80)
+  - name: tool_version
+    type: VARCHAR(80)
+  - name: origin_code
+    type: CHAR(1)
+    default: A
+  - name: status_code
+    type: CHAR(1)
+    default: I
+  - name: dispatch_fence
+    type: BIGINT
+    comment: The turn fence the call was last sent under; only that worker may report it late
+  - name: dispatched_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+  - name: deadline_at
+    type: TIMESTAMP
+    comment: Store-clock time after which the call can no longer be in flight; attestation waits for it
+  - name: result_uri
+    type: TEXT
+    nullable: true
+  - name: result_digest
+    type: CHAR(64)
+    nullable: true
+  - name: resolution_code
+    type: CHAR(1)
+    nullable: true
+  - name: resolved_fence
+    type: BIGINT
+    nullable: true
+  - name: resolver_kind
+    type: VARCHAR(20)
+    nullable: true
+  - name: resolver_id
+    type: VARCHAR(120)
+    nullable: true
+  - name: resolved_at
+    type: TIMESTAMP
+    nullable: true
+  - name: note
+    type: VARCHAR(500)
+    nullable: true
+  - name: evidence_uri
+    type: TEXT
+    nullable: true
+  - name: evidence_digest
+    type: CHAR(64)
+    nullable: true
+primary_key: [partner_id, request_id, execution_step_id, call_id]
+foreign_keys:
+  - name: turn_call_outcomes
+    columns: [partner_id, request_id]
+    references:
+      table: conversation_turn
+      columns: [partner_id, request_id]
+  - name: step_call_outcomes
+    columns: [partner_id, request_id, execution_step_id]
+    references:
+      table: step_idempotency
+      columns: [partner_id, request_id, execution_step_id]
+  - name: tool_call_outcomes
+    columns: [partner_id, tool_id, tool_version]
+    references:
+      table: tool_version
+      columns: [partner_id, tool_id, tool_version]
+indexes:
+  - name: turn_call_outcome_key_uq
+    columns: [partner_id, idempotency_key]
+    unique: true
+  - name: turn_call_outcome_turn_ix
+    columns: [partner_id, request_id, status_code]
+  - name: turn_call_outcome_due_ix
+    columns: [status_code, deadline_at]
+checks:
+  - name: turn_call_outcome_status_ck
+    expression: status_code IN ('I', 'A', 'C', 'F', 'U')
+  - name: turn_call_outcome_resolution_code_ck
+    expression: resolution_code IN ('G', 'W', 'E', 'L', 'T', 'M')
+  - name: turn_call_outcome_origin_ck
+    expression: origin_code IN ('A')
+  - name: turn_call_outcome_resolved_ck
+    expression: (status_code IN ('C', 'F')) = (resolution_code IS NOT NULL) AND (resolution_code IS NULL) = (resolved_at IS NULL) AND (resolution_code IS NULL) = (resolved_fence IS NULL)
+  - name: turn_call_outcome_attested_ck
+    expression: resolution_code IS NULL OR resolution_code <> 'T' OR (resolver_kind IS NOT NULL AND note IS NOT NULL)
+  - name: turn_call_outcome_resolver_ck
+    expression: (resolver_kind IS NULL) = (resolver_id IS NULL)
+  - name: turn_call_outcome_deadline_ck
+    expression: deadline_at >= dispatched_at
+  - name: turn_call_outcome_fence_ck
+    expression: dispatch_fence > 0 AND (resolved_fence IS NULL OR resolved_fence > 0)
+  - name: turn_call_outcome_result_ck
+    expression: (result_uri IS NULL) = (result_digest IS NULL) AND (result_digest IS NULL OR CHAR_LENGTH(result_digest) = 64)
+  - name: turn_call_outcome_evidence_ck
+    expression: (evidence_uri IS NULL) = (evidence_digest IS NULL) AND (evidence_digest IS NULL OR CHAR_LENGTH(evidence_digest) = 64)
+  - name: turn_call_outcome_accepted_ck
+    expression: status_code <> 'A' OR result_uri IS NOT NULL

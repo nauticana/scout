@@ -27,7 +27,7 @@ const maxScriptToolID = 80
 
 // ErrSandboxToolFailed answers a call of a tool the script marks failing, as a live tool
 // failure reaches the model: as its class only.
-var ErrSandboxToolFailed = fmt.Errorf("%w: sandboxed tool failure", domain.ErrContractFailed)
+var ErrSandboxToolFailed = fmt.Errorf("%w: %w: sandboxed tool failure", domain.ErrContractFailed, domain.ErrNoEffect)
 
 // SandboxFactory returns the fresh sandbox one replay answers every tool call with, built from
 // the example's decoded script; an unscripted example has the zero script.

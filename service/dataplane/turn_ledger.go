@@ -1138,12 +1138,16 @@ func (l *TurnLedger) InsertUsageEvent(ctx context.Context, qs port.TxQueryServic
 	if err != nil {
 		return false, err
 	}
-	return l.insertUsageLines(ctx, qs, tenantID, conversationID, turnNo, subjectRef, attribution, lines)
+	return l.insertUsageLines(ctx, qs, true, tenantID, conversationID, turnNo, subjectRef, attribution, lines)
 }
 
-func (l *TurnLedger) insertUsageLines(ctx context.Context, qs port.TxQueryService, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, lines []usageLine) (bool, error) {
-	if _, err := qs.Query(ctx, qLedgerLock, fmt.Sprintf("usage:%d:%s:%d:%s", tenantID, conversationID, turnNo, l.UsageCategory)); err != nil {
-		return false, fmt.Errorf("lock usage events: %w", err)
+// insertUsageLines writes the lines once per turn and category; lock serializes concurrent
+// settlements of the turn, which a caller already holding the turn's row lock skips.
+func (l *TurnLedger) insertUsageLines(ctx context.Context, qs port.TxQueryService, lock bool, tenantID int64, conversationID string, turnNo int64, subjectRef string, attribution domain.UsageAttribution, lines []usageLine) (bool, error) {
+	if lock {
+		if _, err := qs.Query(ctx, qLedgerLock, fmt.Sprintf("usage:%d:%s:%d:%s", tenantID, conversationID, turnNo, l.UsageCategory)); err != nil {
+			return false, fmt.Errorf("lock usage events: %w", err)
+		}
 	}
 	settled, err := qs.Query(ctx, qLedgerUsageSettled, tenantID, conversationID, turnNo, l.UsageCategory)
 	if err != nil {

@@ -22,7 +22,7 @@ func (gateway *GovernedGateway) reconcile(ctx context.Context, call domain.ToolC
 		observation.Reconciled = true
 		return domain.ToolResult{Output: observation.Output, Effect: &observation}, true, nil
 	case domain.EffectViolated:
-		return domain.ToolResult{}, false, nil
+		return domain.ToolResult{Effect: &observation}, false, nil
 	default:
 		return domain.ToolResult{Effect: &observation}, false, err
 	}

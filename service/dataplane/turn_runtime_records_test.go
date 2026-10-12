@@ -17,6 +17,9 @@ func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 	if _, set := query.rows[qRecordOwnerGuard]; !set {
 		query.rows[qRecordOwnerGuard] = [][]any{{int64(4)}}
 	}
+	if _, set := query.rows[qRecordOwnerTurn]; !set {
+		query.rows[qRecordOwnerTurn] = [][]any{{int64(4), "conversation-1"}}
+	}
 	if _, set := query.rows[qRecordAdmits]; !set {
 		query.rows[qRecordAdmits] = [][]any{{true}}
 	}
@@ -24,9 +27,9 @@ func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 		query.rows[qReleaseGet] = [][]any{frozenRelease("v1")}
 	}
 	return &TableTurnRecordStore{
-		DB:            queueDBFake{query: query},
-		Objects:       &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20},
-		UsageCategory: "model_output",
+		DB:         queueDBFake{query: query},
+		Objects:    &ObjectStateStore{Storage: &fake.ObjectStorage{Name: "turns"}, MaxBytes: 1 << 20},
+		Settlement: TurnSettlementWriter{Budget: &settlerFake{}, UsageCategory: "model_output"},
 	}
 }
 
@@ -101,7 +104,12 @@ func TestTableTurnRecordStoreFindHydratesTerminalPayload(t *testing.T) {
 func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{qRecordFail: {{int64(4)}}, qLedgerInsertUsageEvent: {{int64(1)}}}}
 	store := newTestRecordStore(query)
-	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error"); err != nil {
+	usage := domain.Usage{InputTokens: 3, OutputTokens: 5, ToolCalls: 1, SearchQueries: 6, CostMinorUnits: 2, Currency: "USD"}
+	settlement := domain.TurnSettlement{Usage: usage, SubjectRef: "agent@v1", Attribution: domain.UsageAttribution{
+		Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "agent"}, ScopeID: "unit",
+		OnBehalfOf: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, WorkRef: "task-9",
+	}}
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error", settlement); err != nil {
 		t.Fatal(err)
 	}
 	failArgs := query.firstArgs(qRecordFail)
@@ -109,18 +117,11 @@ func TestTableTurnRecordStoreFailAndUsageArgumentOrder(t *testing.T) {
 		failArgs[5] != int64(3) || failArgs[6] != "model_error" {
 		t.Fatalf("fail args = %v", failArgs)
 	}
-	if err := store.Fail(context.Background(), recordOwner, domain.TurnCompleted, "x"); !errors.Is(err, domain.ErrValidation) {
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnCompleted, "x", settlement); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}
-	if err := store.Fail(context.Background(), domain.TurnOwner{}, domain.TurnFailed, "x"); !errors.Is(err, domain.ErrFenceLost) {
+	if err := store.Fail(context.Background(), domain.TurnOwner{}, domain.TurnFailed, "x", settlement); !errors.Is(err, domain.ErrFenceLost) {
 		t.Fatalf("missing owner = %v, want ErrFenceLost", err)
-	}
-	usage := domain.Usage{InputTokens: 3, OutputTokens: 5, ToolCalls: 1, SearchQueries: 6, CostMinorUnits: 2, Currency: "USD"}
-	if err := store.RecordUsage(context.Background(), recordOwner, "conversation-1", 4, "agent@v1", domain.UsageAttribution{
-		Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: "agent"}, ScopeID: "unit",
-		OnBehalfOf: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, WorkRef: "task-9",
-	}, usage); err != nil {
-		t.Fatal(err)
 	}
 	usageArgs := query.firstArgs(qLedgerInsertUsageEvent)
 	want := []any{int64(7), "conversation-1", int64(4), "model_output", "agent@v1", "agent", "agent", "unit", "human", "42", "task-9",
@@ -304,11 +305,11 @@ func TestTableTurnRecordStoreLateFailKeepsTheTerminalPayload(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{}}
 	store := newTestRecordStore(query)
 	store.Objects = &ObjectStateStore{Storage: storage, MaxBytes: 1 << 20}
-	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error"); !errors.Is(err, domain.ErrFenceLost) {
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "model_error", testSettlement); !errors.Is(err, domain.ErrFenceLost) {
 		t.Fatalf("late fail = %v, want ErrFenceLost", err)
 	}
 	first := query.firstArgs(qRecordFail)
-	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "rejected"); !errors.Is(err, domain.ErrFenceLost) {
+	if err := store.Fail(context.Background(), recordOwner, domain.TurnFailed, "rejected", testSettlement); !errors.Is(err, domain.ErrFenceLost) {
 		t.Fatalf("second late fail = %v, want ErrFenceLost", err)
 	}
 	second := query.args[qRecordFail][1]
@@ -346,7 +347,7 @@ func TestTableTurnRecordStoreFailsAParkedTurn(t *testing.T) {
 func TestTableTurnRecordStoreHoldAndSuspendYieldToAPendingCancellation(t *testing.T) {
 	for name, transition := range map[string]func(*TableTurnRecordStore) error{
 		"hold": func(store *TableTurnRecordStore) error {
-			_, err := store.Hold(context.Background(), recordOwner)
+			_, err := store.Hold(context.Background(), recordOwner, domain.HoldUnknownOutcome)
 			return err
 		},
 		"suspend": func(store *TableTurnRecordStore) error {

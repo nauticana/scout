@@ -116,6 +116,13 @@ func (h *AgentHealth) evaluate(ctx context.Context, settings domain.AgentHealthS
 		}
 		verdicts = append(verdicts, silence)
 	}
+	if policy.MaxUnresolvedMinutes > 0 {
+		unresolved, err := h.judgeUnresolved(ctx, tenantID, agentID, policy.MaxUnresolvedMinutes)
+		if err != nil {
+			return nil, err
+		}
+		verdicts = append(verdicts, unresolved)
+	}
 	var undelivered []error
 	for _, verdict := range verdicts {
 		switch {
@@ -165,11 +172,11 @@ func (h *AgentHealth) resolveDisabled(ctx context.Context, tenantID int64, agent
 		return 0
 	}
 	failure, latency := enabled(domain.AlertFailureRate), enabled(domain.AlertLatency)
-	safety, silence := enabled(domain.AlertSafety), enabled(domain.AlertSilence)
-	if failure+latency+safety+silence == 4 {
+	safety, silence, unresolved := enabled(domain.AlertSafety), enabled(domain.AlertSilence), enabled(domain.AlertUnresolved)
+	if failure+latency+safety+silence+unresolved == 5 {
 		return nil
 	}
-	resolved, err := h.qs.Query(ctx, qHealthResolveDisabled, tenantID, agentID, failure, latency, safety, silence)
+	resolved, err := h.qs.Query(ctx, qHealthResolveDisabled, tenantID, agentID, failure, latency, safety, silence, unresolved)
 	if err != nil {
 		return fmt.Errorf("resolve disabled alerts: %w", err)
 	}
@@ -190,6 +197,8 @@ func alertEnabled(policy *domain.HealthAlertPolicy, kind domain.AgentAlertKind) 
 		return policy.MaxHardSafetyEvents > 0
 	case domain.AlertSilence:
 		return policy.MaxSilenceMinutes > 0
+	case domain.AlertUnresolved:
+		return policy.MaxUnresolvedMinutes > 0
 	default:
 		return false
 	}
@@ -245,6 +254,17 @@ func (h *AgentHealth) judgeSilence(ctx context.Context, tenantID int64, agentID 
 	}
 	verdict.open = serving == 1
 	return verdict, nil
+}
+
+// judgeUnresolved opens an unresolved-outcome alert while any turn of the agent has been held at
+// least span minutes with an open call outcome, and resolves it once none has. The count is exact
+// and read afresh each pass, so no sample floor applies.
+func (h *AgentHealth) judgeUnresolved(ctx context.Context, tenantID int64, agentID string, span int64) (healthVerdict, error) {
+	turns, err := h.count(ctx, qHealthUnresolved, tenantID, agentID, span)
+	if err != nil {
+		return healthVerdict{}, fmt.Errorf("measure unresolved outcomes: %w", err)
+	}
+	return healthVerdict{kind: domain.AlertUnresolved, open: turns > 0, resolve: turns == 0, observed: turns, threshold: span, window: span}, nil
 }
 
 // openAlert inserts an open alert; false when one of its kind is already open.

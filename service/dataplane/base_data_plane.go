@@ -39,10 +39,12 @@ type BaseDataPlane struct {
 	DB    port.DatabaseRepository
 	Cache cache.CacheService
 	// Storage is bound to Settings.StateBucket; see NewStateStorage.
-	Storage     storage.ObjectStorage
-	Providers   contract.AgentProviderFactory
-	Transport   contract.ToolTransport
-	Budget      contract.TurnBudgetManager
+	Storage   storage.ObjectStorage
+	Providers contract.AgentProviderFactory
+	Transport contract.ToolTransport
+	// Budget must also be a TurnBudgetSettler, such as isolation.BudgetLedger, for the default
+	// turn and session stores, which settle a turn in the transaction that ends it.
+	Budget      contract.TenantBudgetManager
 	Pricer      contract.ModelPricer
 	RateLimiter contract.TenantRateLimiter
 	Capacity    contract.CapacityScheduler
@@ -64,6 +66,10 @@ type BaseDataPlane struct {
 	// irreversible_tool_approval rule; Weights is optional tenant fairness.
 	Effects   contract.ToolEffectVerifier
 	Approvals contract.ToolApprovalGate
+	// ToolOutcomes is the product's trusted declaration, by tool id, of which tools deduplicate by
+	// idempotency key and which OutcomeLookup answers; OutcomeLookup is required by the latter.
+	ToolOutcomes  map[string]domain.ToolOutcomeTraits
+	OutcomeLookup contract.ToolOutcomeLookup
 	// Knowledge and Entitlements put the documents a release binds whole into its
 	// turns; nil means no release binds knowledge whole.
 	Knowledge    contract.PinnedKnowledgeResolver
@@ -112,10 +118,14 @@ type BaseDataPlane struct {
 	Models          contract.ModelGateway
 	Requests        contract.ToolLoopRequestBuilder
 	Journal         contract.LoopJournal
-	Evidence        contract.EvidenceValidator
-	Executors       contract.StepExecutorRegistry
-	TurnRuntime     contract.ConversationRuntime
-	TurnIngress     contract.ConversationIngress
+	Outcomes        contract.CallOutcomeStore
+	// Reconciler settles calls met unobserved; nil takes the default governed gateway, and with a
+	// product's own ToolGateway no call is reconciled automatically.
+	Reconciler  contract.ToolOutcomeReconciler
+	Evidence    contract.EvidenceValidator
+	Executors   contract.StepExecutorRegistry
+	TurnRuntime contract.ConversationRuntime
+	TurnIngress contract.ConversationIngress
 	// Review offers completed turns to production review; nil offers none.
 	Review contract.ProductionReviewIntake
 
@@ -188,7 +198,7 @@ func (plane *BaseDataPlane) validate() error {
 	}
 	if settings.CostWindow < 0 || settings.ReplyRetention < 0 || settings.ReplyPollInterval < 0 || settings.ReplyRecordReadInterval < 0 ||
 		settings.CancelPollInterval < 0 || settings.CancelMaxReadFailures < 0 || settings.SessionRevisionMemory < 0 ||
-		settings.ResultCardMaxBytes < 0 || settings.RunPageMax < 0 || plane.Limits.MaxCallRevisions < 0 {
+		settings.ResultCardMaxBytes < 0 || settings.RunPageMax < 0 || plane.Limits.MaxCallRevisions < 0 || settings.OutcomeAttestGrace < 0 {
 		return fmt.Errorf("%w: data plane cost window, reply and cancel periods, cancel read failures, revision memory, result card size, run page, and call revisions must not be negative", domain.ErrValidation)
 	}
 	if settings.StepClaimLease <= plane.Limits.Deadline {
@@ -230,21 +240,36 @@ func (plane *BaseDataPlane) composeState() error {
 	if plane.Objects == nil {
 		plane.Objects = &ObjectStateStore{Storage: plane.Storage, MaxBytes: settings.StateMaxBytes}
 	}
+	settlement := func() (TurnSettlementWriter, error) {
+		settler, ok := plane.Budget.(TurnBudgetSettler)
+		if !ok {
+			return TurnSettlementWriter{}, fmt.Errorf("%w: the budget manager cannot settle a turn in the transaction that ends it; compose a TurnBudgetSettler such as isolation.BudgetLedger", domain.ErrValidation)
+		}
+		return TurnSettlementWriter{Budget: settler, UsageCategory: plane.UsageCategory}, nil
+	}
 	if plane.Records == nil {
+		writer, err := settlement()
+		if err != nil {
+			return err
+		}
 		if plane.Versions == nil {
 			plane.Versions = &release.PinnedTrafficManager{Deployments: &release.TableAgentDeploymentStore{DB: plane.DB}}
 		}
-		plane.Records = &TableTurnRecordStore{DB: plane.DB, Objects: plane.Objects, UsageCategory: plane.UsageCategory,
+		plane.Records = &TableTurnRecordStore{DB: plane.DB, Objects: plane.Objects, Settlement: writer,
 			TaskKind: plane.TaskKind, Versions: plane.Versions}
 	}
 	if plane.Sessions == nil {
+		writer, err := settlement()
+		if err != nil {
+			return err
+		}
 		sessions, err := NewMemorySessionCache(MemoryCacheConfig{Capacity: settings.SessionCacheSize, TTL: settings.SessionCacheTTL})
 		if err != nil {
 			return err
 		}
 		plane.closers = append(plane.closers, sessions)
 		plane.Sessions = &SessionCoordinator{
-			Store: &DurableSessionStore{DB: plane.DB, Objects: plane.Objects, MaxResultCardBytes: settings.ResultCardMaxBytes},
+			Store: &DurableSessionStore{DB: plane.DB, Objects: plane.Objects, MaxResultCardBytes: settings.ResultCardMaxBytes, Settlement: writer},
 			Cache: sessions, Metrics: plane.Metrics, RevisionMemory: settings.SessionRevisionMemory,
 		}
 	}
@@ -261,6 +286,9 @@ func (plane *BaseDataPlane) composeState() error {
 	}
 	if plane.Idempotency == nil {
 		plane.Idempotency = &StepIdempotencyStore{DB: plane.DB, Objects: plane.Objects, ClaimLease: settings.StepClaimLease}
+	}
+	if plane.Outcomes == nil {
+		plane.Outcomes = &TableCallOutcomeStore{DB: plane.DB, Objects: plane.Objects}
 	}
 	return nil
 }
@@ -379,12 +407,16 @@ func (plane *BaseDataPlane) composeTools() error {
 			RetryAttempts: settings.ToolMaxAttempts, RetryBaseDelay: 200 * time.Millisecond, RetryMaxDelay: 5 * time.Second,
 			Guardrails: plane.Guardrails, GuardrailConfigs: &toolgateway.ReleaseGuardrailConfigs{Configs: plane.GuardrailConfigs},
 			Limits: plane.PrincipalLimits, Approvals: plane.Approvals, Timeout: settings.ToolTimeout,
+			Outcomes: plane.ToolOutcomes, Lookup: plane.OutcomeLookup,
 		})
 		if err != nil {
 			return err
 		}
 		gateway.Audit = plane.Audit
 		plane.ToolGateway = gateway
+		if plane.Reconciler == nil {
+			plane.Reconciler = gateway
+		}
 	}
 	if plane.WrapToolGateway != nil {
 		wrapped, err := plane.WrapToolGateway(plane.ToolGateway)
@@ -437,6 +469,9 @@ func (plane *BaseDataPlane) composeLoop() error {
 			Revisions: revisions,
 			Requests:  plane.Requests, Router: plane.Router, Models: plane.Models, Registry: plane.Tools, Tools: plane.ToolGateway,
 			Journal: plane.Journal, Pricer: plane.Pricer, Evidence: plane.Evidence, Limits: plane.Limits,
+			Outcomes: plane.Outcomes, Reconciler: plane.Reconciler,
+			Dispatch: domain.ToolDispatchWindow{Timeout: plane.Settings.ToolTimeout, Attempts: plane.Settings.ToolMaxAttempts,
+				Grace: positiveOr(plane.Settings.OutcomeAttestGrace, DefaultOutcomeAttestGrace)},
 		})
 		if err != nil {
 			return err

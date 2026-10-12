@@ -45,7 +45,7 @@ indexes:
     columns: [partner_id, agent_id, id]
 checks:
   - name: agent_alert_kind_ck
-    expression: kind_code IN ('F', 'L', 'H', 'S')
+    expression: kind_code IN ('F', 'L', 'H', 'S', 'U')
   - name: agent_alert_status_ck
     expression: status_code IN ('O', 'R')
   - name: agent_alert_resolved_ck

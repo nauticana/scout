@@ -1,0 +1,42 @@
+table: turn_call_attestation
+comment: One person's attestation of an unknown call outcome; the call settles once enough distinct people agree
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+  - name: execution_step_id
+    type: BIGINT
+  - name: call_id
+    type: VARCHAR(200)
+  - name: attester_kind
+    type: VARCHAR(20)
+  - name: attester_id
+    type: VARCHAR(120)
+  - name: outcome_code
+    type: CHAR(1)
+  - name: note
+    type: VARCHAR(500)
+  - name: evidence_uri
+    type: TEXT
+    nullable: true
+  - name: evidence_digest
+    type: CHAR(64)
+    nullable: true
+  - name: attested_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, request_id, execution_step_id, call_id, attester_kind, attester_id]
+foreign_keys:
+  - name: call_outcome_attestations
+    columns: [partner_id, request_id, execution_step_id, call_id]
+    references:
+      table: turn_call_outcome
+      columns: [partner_id, request_id, execution_step_id, call_id]
+checks:
+  - name: turn_call_attestation_outcome_ck
+    expression: outcome_code IN ('C', 'F')
+  - name: turn_call_attestation_note_ck
+    expression: CHAR_LENGTH(note) > 0
+  - name: turn_call_attestation_evidence_ck
+    expression: (evidence_uri IS NULL) = (evidence_digest IS NULL) AND (evidence_digest IS NULL OR CHAR_LENGTH(evidence_digest) = 64)

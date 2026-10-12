@@ -3,6 +3,7 @@
 Reference implementations live in `service/dataplane/`: `ObjectStateStore` (`state_codec.go`),
 `DurableSessionStore` (`durable_session_store.go`), `StepIdempotencyStore`
 (`step_idempotency_store.go`), the turn fence (`turn_fence.go`, `turn_runtime_records.go`, `table_turn_control.go`),
+the turn settlement (`turn_settlement.go`), call outcomes (`call_outcome_store.go`, `tool_loop_outcomes.go`),
 and the cache discipline in `SessionCoordinator` (`session_coordinator.go`).
 
 ## DTO ↔ table identity
@@ -14,6 +15,7 @@ and the cache discipline in `SessionCoordinator` (`session_coordinator.go`).
 | `domain.SessionSnapshot` | `session_snapshot` + `agent_conversation.agent_version` + latest checkpoint's `execution_step.step_id` | `Revision` = `session_snapshot.revision`; `State` is hydrated from `state_uri`/`state_digest`, digest verified before return. A conversation with no checkpoint loads at revision 0 with empty state. |
 | `domain.TurnResult.Response` | `conversation_turn.response_uri`/`response_digest` | Written by `Complete` on the owner's turn, which must be the conversation's oldest non-terminal turn and `R` (running) or `S` (streaming) at the owner's fence. |
 | `domain.StepResult` (JSON) | `step_idempotency.result_uri`/`result_digest` | Keyed by `(partner_id, request_id, execution_step_id)`. |
+| `domain.CallOutcome` | `turn_call_outcome` (+ `turn_call_attestation`, `turn_call_confirmation`) | Keyed by `CallOutcomeKey` `(partner_id, request_id, execution_step_id, call_id)`; the `domain.CallRecord` (output, usage, evidence links, effect, or acceptance) is dehydrated to `result_uri`/`result_digest`. |
 | `domain.ObjectRef{URI, Digest}` | any `*_uri`/`*_digest` pair | URI `<scheme>://<bucket>/<key>`, digest lowercase SHA-256 hex. |
 
 The repository never invents a fingerprint, currency, or digest: `Checkpoint` rejects a checkpoint that lacks them
@@ -23,7 +25,8 @@ The repository never invents a fingerprint, currency, or digest: `Checkpoint` re
 
 `ObjectStateStore` writes `<KeyPrefix>/<name>/<sha256>` where `<name>` is deterministic:
 `checkpoint/<tenant>/<conversation>/<turn>/<step>`, `turn/<tenant>/<conversation>/<turn>/response`,
-`step/<tenant>/<request>/<execution_step_id>`, `loop/<tenant>/<request>/<execution_step_id>/<entry_no>`. Identical retries overwrite the same object; different content
+`step/<tenant>/<request>/<execution_step_id>`, `loop/<tenant>/<request>/<execution_step_id>/<entry_no>`,
+`call-outcome/<tenant>/<request>/<execution_step_id>/<call_id>`. Identical retries overwrite the same object; different content
 from a concurrent writer never collides, so a loser can never corrupt the winner's referenced bytes.
 
 Object upload always precedes the row write. On row failure the store deletes its upload only after confirming
@@ -41,14 +44,27 @@ is `ErrDigestMismatch`/download error, never empty state.
   revision 1 with `ON CONFLICT DO NOTHING`) } → commit. Zero touch rows is `domain.ErrFenceLost`; zero CAS rows is
   `domain.ErrRevisionConflict` and rolls the checkpoint insert back.
 - `Complete`: read the executing turn and current revision (autocommit) → the executing turn must be the owner's,
-  else `ErrFenceLost` → conflict early if the revision moved → upload response → single guarded
-  `UPDATE conversation_turn` (request and fence = the owner's AND status `R`/`S` AND snapshot revision = expected).
-  Zero rows is `ErrFenceLost` when the fence or status moved, else `ErrRevisionConflict`. Revision is not bumped by
-  `Complete`. Budget settlement and the `usage_event` insert are `TurnLedger`'s terminal transaction; a runtime
-  that composes both runs `Complete` inside that same terminal transaction or immediately before it, never after
-  the final frame. `TurnRuntime` instead runs `CommitTurn`, `RecordUsage`, and `Complete` as three fenced
-  transactions before the final frame; a fence move between settlement and completion is an open window
-  ([turn takeover](turn_takeover.md) §1.5, G3).
+  else `ErrFenceLost` → conflict early if the revision moved → upload response → **one tx** { guarded touch of the
+  owner's turn, which must be the executing turn; the settlement (below); guarded `UPDATE conversation_turn`
+  (request and fence = the owner's AND status `R`/`S` AND snapshot revision = expected) } → commit. Zero rows is
+  `ErrFenceLost` when the fence or status moved, else `ErrRevisionConflict`, and either rolls the settlement back.
+  A reservation no longer held refuses the completion. Revision is not bumped by `Complete`.
+- `Fail` (owner): upload the error code → **one tx** { guarded touch, which names the turn and conversation; the
+  settlement; the failing `UPDATE` with `AND fence = ?` } → commit. A reservation no longer held does not keep the
+  turn from failing: the failure and its usage events commit and `Fail` returns `ErrBudgetUnsettled`.
+- **Turn settlement** (`TurnSettlementWriter`, inside `Complete` and `Fail`): `BudgetLedger.SettleTurnTx` binds the
+  ledger's queries into the caller's transaction (keel `TxQueryCatalog`), takes the tenant advisory lock, and
+  commits the reservation at the turn's usage, or releases it when a failed turn spent nothing; then the turn's
+  `usage_event` lines are inserted once per turn and category, without the usage lock, because the guarded touch
+  already serializes the turn. Locks are taken in the order turn row, then tenant. A fence that moved before the
+  touch refuses the whole unit, and once the touch is taken the fence cannot move until commit, so a reservation
+  is never settled while its turn's end can still be refused. `TurnLedger`'s synchronous terminal transaction
+  remains the other settlement path.
+- **Call outcomes:** `SettleAndAppend` is **one tx** { guarded touch; settle the open row; insert the observation
+  entry first-writer-wins }; `Accept` is **one tx** { fenced `I`→`A`; the `turn_call_confirmation` link };
+  `Attest` is **one tx** { conditional touch of the outcome row; the attestation row; the settlement once enough
+  people agree }; `confirmation.TableStore.Reconcile` settles linked rows in the confirmation's own transaction.
+  Every other call-outcome write is one statement.
 - `StepIdempotencyStore`: every transition is one fenced statement, the owner's guarded touch plus a single-row
   CAS on `status_code` (autocommit); `updated_at` is written from the injected clock so lease arithmetic never
   mixes worker and database time.
@@ -61,7 +77,7 @@ is `ErrDigestMismatch`/download error, never empty state.
 2. Execute; `Commit` uploads the JSON result, then CAS `C` (claimed) → `M` (committed).
 3. `SessionCoordinator.Checkpoint` (durable checkpoint + snapshot CAS, then cache invalidation).
 4. Guardrail-approved *intermediate* frames publish (sequence-deduplicated by the reply hub, so replay republishes the same sequences).
-5. Terminal result + settlement persist (`CommitTurn`, `RecordUsage`, `Complete`, or the `TurnLedger` terminal tx; one `usage_event`).
+5. Terminal result + settlement persist in one transaction (`Complete` or `Fail` with its `TurnSettlement`, or the `TurnLedger` terminal tx; one `usage_event` set per turn).
 6. Final frame publishes. It is never client-visible before step 5 exists; a crash between 5 and 6 replays the frame from the durable result.
 7. Queue ack. Nothing is acked from cache state. A delivery refused with `ErrFenceLost` or `ErrTurnHeld` is acked,
    or dropped when its lease is already gone; it is never retried or dead-lettered.
@@ -84,8 +100,11 @@ stateDiagram-v2
     U --> Q: Resume (+1)
     Q --> H: RequestHold (+1)
     U --> H: RequestHold (+1)
-    R --> H: Hold at a checkpoint (+1)
-    H --> Q: Release at the held fence (+1, requeue)
+    R --> H: Hold at a checkpoint or on an unknown outcome (+1)
+    R --> H: Preempt (+1)
+    Q --> H: Preempt (+1)
+    U --> H: Preempt (+1)
+    H --> Q: Release at the held fence, no open outcome (+1, requeue)
     H --> Q: cancel wake (+1, requeue)
     U --> Q: cancel wake (+1, requeue)
     R --> C: Complete (fenced)
@@ -109,10 +128,10 @@ stateDiagram-v2
   re-evaluates `fence = ?` against the committed row, so each write lands entirely before or after the transition.
   A single-statement write reports two counts: zero owner rows is `ErrFenceLost`, an owned write that changed
   nothing is a key conflict.
-- **Fenced writes.** The loop journal append and every step idempotency transition use the single-statement form;
-  `Checkpoint`, `RecordUsage`, and the budget ledger's `CommitTurn` and `ReleaseTurn` open their transaction with
-  the touch (the ledger before its tenant advisory lock); `Complete`, `Suspend`, `Fail`, and `Hold` carry
-  `AND fence = ?` in their own update. A refused write leaves its uploaded object to the reconciliation sweep,
+- **Fenced writes.** The loop journal append, every step idempotency transition, and the owner's call-outcome
+  intent, redispatch, acceptance, and unknown marking use the single-statement form; `Checkpoint`, `Complete`,
+  `Fail`, and `SettleAndAppend` open their transaction with the touch (the turn settlement before its tenant
+  advisory lock); `Complete`, `Suspend`, `Fail`, and `Hold` also carry `AND fence = ?` in their own update. A refused write leaves its uploaded object to the reconciliation sweep,
   since the current owner may reference the same content-addressed object.
 - **On `ErrFenceLost`** the runtime stops the delivery with no terminal record, settlement, terminal audit, or final
   frame: the turn belongs to whoever moved the fence.
@@ -126,14 +145,20 @@ stateDiagram-v2
   checkpoint and frame when another step follows, before each loop iteration after the first, and before each
   non-read-only tool call once its decision is journaled — abandoning the open step claim under its fence, then
   `TurnRecordStore.Hold` moves the turn to `H` with `hold_code` `C`, clears the request, and keeps the budget
-  reservation. A hold or suspension yields to a cancellation requested before it: the transition is refused with
+  reservation. The worker holds the same way with `hold_code` `U` when a call's outcome is unknown
+  ([call outcomes](#call-outcomes)).
+- **Preempt.** `TableTurnControl.Preempt` moves a live, uncancelled `Q`, `U`, `R`, or `S` turn to `H` at once
+  (fence +1, `hold_code` `P`, pending hold request cleared) in one statement and wakes the watcher through the
+  cache, so a running worker's next fenced write is `ErrFenceLost`. A cancellation requested first wins; an
+  already held turn reports held. A hold or suspension yields to a cancellation requested before it: the transition is refused with
   `ErrTurnCanceled` and the worker ends the turn `X` instead of parking it out of the canceller's reach. A delivery
   that finds its turn `H` or `U` is acknowledged without running.
 - **Suspend and resume.** `Suspend` moves the owner's turn to `U` (fence +1) and keeps the reservation;
   `Resume` moves `U` to `Q` (fence +1), is a no-op on `Q`, and returns `ErrTurnHeld` for a held turn. `FailParked`
   fails a `Q` or `U` turn no worker runs; owner `Fail` applies to `R`/`S` only.
-- **Release.** `TableTurnControl.Release` moves `H` to `Q` only at the expected held fence (fence +1), clears every
-  hold column, and requeues the queue row in the same transaction; any other state or fence is `ErrConflict`.
+- **Release.** `TableTurnControl.Release` moves `H` to `Q` only at the expected held fence and only while no call
+  of the turn has an open outcome (fence +1), clears every hold column, and requeues the queue row in the same
+  transaction; any other state or fence, or an open outcome, is `ErrConflict`.
   Cancelling a `U` or `H` turn wakes it to `Q` the same way, and the worker that picks it up ends it `X`.
   `qQueueRequeue` requeues only a `Q` turn's row, including one still leased by a worker that found the turn
   parked.
@@ -145,9 +170,9 @@ stateDiagram-v2
   authority and never cancels on a fence move; the memory stores refuse the stale owner's writes instead.
 
 The CHECKs on `conversation_turn` keep the hold columns consistent: `fence >= 0`, the request columns both set or
-both null, `hold_code` in `C` or `A`, and `hold_code` and `held_at` set exactly while the status is `H`.
-[Turn takeover](turn_takeover.md) is the accepted design for what remains — unknown tool outcomes, preemption,
-takeover, and handback — and lists the open findings in its §1.5.
+both null, `hold_code` in `C`, `A`, `P`, or `U`, and `hold_code` and `held_at` set exactly while the status is `H`.
+[Turn takeover](turn_takeover.md) is the accepted design for what remains — takeover and handback — and lists
+the open findings in its §1.5.
 
 ## Idempotency state machine
 
@@ -178,9 +203,61 @@ pending approval            --Append--> approval_pending entry, step returns Err
 journals nothing: a concurrent worker gets the stored entry back and deletes its own upload; if the stored content differs from what it offered, the step fails with `ErrConflict` rather than
 continuing on a decision it did not make. On redelivery or approval resume the executor reads the journal and consumes it in order — a
 journaled decision is never re-asked, a journaled observation is never re-invoked — and appends only past its
-end. A crash between a tool effect and its entry is the one window where the call repeats; it carries the same
-`ToolCall.IdempotencyKey` (`loop:` + SHA-256 of tenant, request, execution step, and call id), which is what a transport dedupes on.
-The step result, not the journal, remains what `step_idempotency` replays once the step commits.
+end. A crash between a read-only tool's answer and its entry repeats that call, under the same
+`ToolCall.IdempotencyKey` (`loop:` + SHA-256 of tenant, request, execution step, and call id). A non-read-only call
+is never repeated that way: its outcome row decides ([call outcomes](#call-outcomes)). The step result, not the
+journal, remains what `step_idempotency` replays once the step commits.
+
+## Call outcomes
+
+`turn_call_outcome` records every non-read-only call of the tool loop, keyed by the call. The row is written before
+the call leaves, so a call with no row never left, and its status moves only toward resolution: once `C` or `F`
+it never changes again.
+
+```mermaid
+stateDiagram-v2
+    [*] --> I: Intend (fenced, before the call leaves)
+    I --> [*]: Retract (never left, by dispatch fence)
+    I --> A: Accept (validated ToolAcceptance)
+    I --> C: SettleAndAppend / Report / reconcile
+    I --> F: SettleAndAppend / Report / reconcile
+    I --> U: MarkUnknown, or cancel
+    A --> U: MarkUnknown past its deadline, or cancel
+    A --> C: lookup / Report / confirmation
+    A --> F: lookup / Report / confirmation
+    U --> I: Redispatch (declared deduplication)
+    A --> I: Redispatch
+    U --> C: lookup / attestation / Report / confirmation
+    U --> F: lookup / attestation / Report / confirmation
+```
+
+- **Intent.** `Intend` is the fenced CTE: the owner's guarded touch, then an insert of `I` with `dispatch_fence` =
+  the owner's fence, `dispatched_at = CURRENT_TIMESTAMP`, and `deadline_at = CURRENT_TIMESTAMP` plus the dispatch
+  window (tool timeout × attempts + `agent_outcome_attest_grace`), `ON CONFLICT DO NOTHING`. An idempotency key
+  already naming another call is `ErrConflict` (`turn_call_outcome_key_uq`).
+- **Owner transitions.** `Redispatch` (open → `I`, new fence and deadline), `Accept` (`I` → `A` at the owner's
+  dispatch fence; `deadline_at = GREATEST(deadline_at, now + LookupWithin + grace)`), and `MarkUnknown` (`I`/`A` →
+  `U`) are fenced CTEs. `SettleAndAppend` opens its transaction with the touch, settles the open row with resolution
+  and `resolved_fence`, and appends the observation; a repeat of the same settlement is accepted, any other is
+  `ErrConflict`.
+- **Late report.** A worker refused with `ErrFenceLost` reports its answer with one
+  `UPDATE ... SET resolution_code = 'W', resolved_fence = dispatch_fence WHERE status_code IN ('I','A','U') AND dispatch_fence = ?`.
+  It is evidence, not turn progress. `Retract` deletes only an `I` row at the worker's dispatch fence that carries
+  no attestation.
+- **Outcome-aware resume.** The next owner reads the row of an unobserved call at the journal cursor: a settled
+  row's observation is journaled from its result object with `LoopEntry.Outcome`; an open row is redispatched
+  under declared deduplication, or reconciled, or left `U` with the turn held again.
+- **By a person.** `Resolve` (lookup, `E`/`L`) and `Attest` (`T`) act only while the turn is held or ended at the
+  fence the person saw, a predicate inside the same statement; attestation also only once
+  `deadline_at <= CURRENT_TIMESTAMP`. Each person's statement is a `turn_call_attestation` row, and the row settles
+  when the required number of distinct people agree. The confirmation hook settles linked open rows `M` through
+  `turn_call_confirmation`, scoped by tenant.
+- **Cancel** moves the turn's `I` and `A` rows to `U` in the cancelling transaction.
+- **Release gate.** The release `UPDATE` carries
+  `AND NOT EXISTS (SELECT 1 FROM turn_call_outcome o WHERE ... AND o.status_code IN ('I','A','U'))`. After a hold no
+  fenced writer adds a row, and rows only settle or are retracted, so the gate needs no lock.
+
+Every statement is keyed by `partner_id` and uses the store clock; there is no `FOR UPDATE` and no advisory lock.
 
 ## Cache discipline (`SessionCoordinator`, `MemorySessionCache`)
 
