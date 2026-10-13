@@ -55,7 +55,7 @@ const (
 	qStudioGetSettings       = "scout_studio_get_settings"
 )
 
-var studioQueries = common.MergeMaps(scope.ReleaseWriteQueries, scope.CurrencyQueries, scheduleQueries, map[string]string{
+var studioQueries = common.MergeMaps(scope.ReleaseWriteQueries, scheduleQueries, map[string]string{
 	// Prompt bindings are temporal: an edit ends the open row and binds a new one. A row bound
 	// in this same instant was never in force, so it is dropped rather than ended at its own begda.
 	qStudioListBindings: `

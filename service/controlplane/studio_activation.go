@@ -295,7 +295,7 @@ func (s *ReleaseActivations) check(ctx context.Context, tx keelport.TxQueryServi
 	if refusal != nil || err != nil {
 		return refusal, err
 	}
-	if err = s.Studio.checkBudget(ctx, tx, settings.Resources, definition); err != nil {
+	if err = s.Studio.checkBudget(ctx, settings.Resources, definition); err != nil {
 		return refusalOr(err, domain.ActivationGuardRefused)
 	}
 	if err = s.Studio.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings, Activation: true}); err != nil {

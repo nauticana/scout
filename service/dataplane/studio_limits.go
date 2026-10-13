@@ -16,7 +16,7 @@ import (
 
 const qStudioLimitsRelease = "scout_studio_limits_release"
 
-var studioLimitsQueries = common.MergeMaps(scope.CurrencyQueries, map[string]string{
+var studioLimitsQueries = map[string]string{
 	// The stable release, and the agent's turns opened in the last minute by the database clock.
 	qStudioLimitsRelease: `
 SELECT d.stable_version,
@@ -27,7 +27,7 @@ SELECT d.stable_version,
            AND t.queued_at > CURRENT_TIMESTAMP - INTERVAL '1 minute')
   FROM agent_deployment d
  WHERE d.partner_id = ? AND d.agent_id = ?`,
-})
+}
 
 // StudioLimits reports the execution limits and budget frozen into an agent's stable release
 // with the agent's current use: the turns it opened in the last minute and its spend in the
@@ -39,6 +39,8 @@ type StudioLimits struct {
 	ReleaseLimits contract.PrincipalLimits
 	// Spend reads a period budget's use; pass the data plane's BudgetLedger.
 	Spend contract.PrincipalBudgetSpend
+	// Currencies checks a per-turn budget's unit; defaults to keel's catalog over DB.
+	Currencies scope.CurrencyCatalog
 
 	once sync.Once
 	qs   port.QueryService
@@ -55,7 +57,10 @@ func (s *StudioLimits) Limits(ctx context.Context, actor domain.StudioActor, age
 	if err := s.Authorizer.Authorize(ctx, actor, domain.StudioView, agentID); err != nil {
 		return domain.AgentLimitsReport{}, err
 	}
-	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, studioLimitsQueries) })
+	s.once.Do(func() {
+		s.qs = s.DB.GetQueryService(ctx, studioLimitsQueries)
+		s.Currencies = scope.Currencies(s.Currencies, s.DB)
+	})
 	stable, err := s.qs.Query(ctx, qStudioLimitsRelease, actor.TenantID, agentID)
 	if err != nil {
 		return domain.AgentLimitsReport{}, fmt.Errorf("read the stable release of %q: %w", agentID, err)
@@ -79,7 +84,7 @@ func (s *StudioLimits) Limits(ctx context.Context, actor domain.StudioActor, age
 	}
 	report.Budget = &budget
 	if budget.Period.Kind == domain.BudgetPerTurn {
-		_, err = scope.CheckBudgetUnit(ctx, s.qs, budget)
+		_, err = scope.CheckBudgetUnit(ctx, s.Currencies, budget)
 	} else {
 		var spend domain.BudgetSpend
 		if spend, err = s.Spend.Spend(ctx, actor.TenantID, domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: agentID}, budget); err == nil {

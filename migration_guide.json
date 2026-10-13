@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.15",
+      "title": "Currency catalog through keel geo",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "Budget unit checks read currency exponents through scope.CurrencyCatalog, implemented by keel's geo.Currencies, instead of a Scout-owned query merged into each service's query map.",
+      "body_markdown": "**Currency catalog (breaking).** `scope.CheckBudgetUnit(ctx, qs, budget)` becomes `CheckBudgetUnit(ctx, catalog scope.CurrencyCatalog, budget)`; `scope.QCurrencyExponent` and `scope.CurrencyQueries` are removed, so a composition that merged them into its own query map drops that merge. `scope.CurrencyCatalog` is `Exponent(ctx, code) (int, error)`, which keel's `geo.Currencies` implements; a code the catalog lacks is `geo.ErrUnknownCurrency` and maps to `domain.BudgetUnknownCurrency`.\n\n**Composition (additive).** `controlplane.StudioService`, `controlplane.AgentPublisher`, `isolation.BudgetLedger`, and `dataplane.StudioLimits` take `Currencies scope.CurrencyCatalog`; nil defaults to `&geo.Currencies{DB: DB}` (`scope.Currencies(catalog, db)`), so an existing composition needs no change. `AgentPublisher` with a cost budget needs a catalog or a database. Tests stand in `fake.CurrencyCatalog`, a map of code to exponent that records the codes read."
+    },
+    {
       "version": "v1.2.14",
       "title": "Turn history end-user mapping, job result cards, and display labels",
       "tags": [

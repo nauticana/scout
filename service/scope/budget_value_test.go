@@ -3,10 +3,11 @@ package scope
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
-	keelmodel "github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/geo"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -185,27 +186,26 @@ func TestBudgetMergerKeepsTheTighterValueOfOnePeriod(t *testing.T) {
 	}
 }
 
-type currencyQueryFake struct {
-	rows    map[string][][]any
-	queries int
+type currencyCatalogFake struct {
+	exponents map[string]int
+	reads     int
 }
 
-func (f *currencyQueryFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
-	f.queries++
-	if name != QCurrencyExponent {
-		return nil, errors.New("unexpected query " + name)
+func (f *currencyCatalogFake) Exponent(_ context.Context, code string) (int, error) {
+	f.reads++
+	exponent, ok := f.exponents[code]
+	if !ok {
+		return 0, fmt.Errorf("%w %q", geo.ErrUnknownCurrency, code)
 	}
-	return &keelmodel.QueryResult{Rows: f.rows[args[0].(string)]}, nil
+	return exponent, nil
 }
-
-func (*currencyQueryFake) GenID() int64 { return 0 }
 
 func exponent(value int) *int { return &value }
 
 func TestCheckBudgetUnitAgainstTheCatalog(t *testing.T) {
-	catalog := &currencyQueryFake{rows: map[string][][]any{"EUR": {{int16(2)}}, "JPY": {{int16(0)}}}}
-	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{Tokens: 10}); err != nil || got != 0 || catalog.queries != 0 {
-		t.Fatalf("tokens only = %d, %v after %d queries", got, err, catalog.queries)
+	catalog := &currencyCatalogFake{exponents: map[string]int{"EUR": 2, "JPY": 0}}
+	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{Tokens: 10}); err != nil || got != 0 || catalog.reads != 0 {
+		t.Fatalf("tokens only = %d, %v after %d reads", got, err, catalog.reads)
 	}
 	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{CostMinorUnits: 5, Currency: "JPY", Exponent: exponent(0)}); err != nil || got != 0 {
 		t.Fatalf("JPY = %d, %v", got, err)
@@ -223,5 +223,18 @@ func TestCheckBudgetUnitAgainstTheCatalog(t *testing.T) {
 		if !errors.As(err, &unenforceable) || unenforceable.Problem != problem || !errors.Is(err, domain.ErrDegraded) {
 			t.Errorf("%s: error = %v", problem, err)
 		}
+	}
+}
+
+func TestCurrenciesDefaultsToKeelsCatalog(t *testing.T) {
+	composed := &currencyCatalogFake{}
+	if Currencies(composed, nil) != composed {
+		t.Fatal("a composed catalog must be kept")
+	}
+	if _, ok := Currencies(nil, nil).(*geo.Currencies); !ok {
+		t.Fatal("no catalog must default to keel's")
+	}
+	if _, err := CheckBudgetUnit(context.Background(), nil, domain.ReleaseBudget{CostMinorUnits: 5, Currency: "EUR"}); err == nil {
+		t.Fatal("a cost ceiling without a catalog must fail closed")
 	}
 }

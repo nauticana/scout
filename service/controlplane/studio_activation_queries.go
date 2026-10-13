@@ -91,5 +91,4 @@ UPDATE agent_release_activation
 	qActivationAgentState: `SELECT state_code FROM agent_profile WHERE partner_id = ? AND agent_id = ?`,
 	qStudioAudit:          studioQueries[qStudioAudit],
 	qStudioGetSettings:    studioQueries[qStudioGetSettings],
-	qCurrencyExponent:     studioQueries[qCurrencyExponent],
 }

@@ -210,7 +210,7 @@ func (s *StudioService) freeze(ctx context.Context, tenantID int64, draft domain
 	if err = s.init(ctx); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
-	if err = s.checkBudget(ctx, s.qs, release.Resources, *definition); err != nil {
+	if err = s.checkBudget(ctx, release.Resources, *definition); err != nil {
 		return domain.EffectiveRelease{}, err
 	}
 	if s.Kinds != nil {

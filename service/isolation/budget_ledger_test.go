@@ -14,7 +14,6 @@ import (
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
-	"github.com/nauticana/scout/service/scope"
 )
 
 type budgetQueryFake struct {
@@ -68,15 +67,17 @@ func turnRows(rows map[string][][]any) map[string][][]any {
 	if _, set := rows[qGetTurnState]; !set {
 		rows[qGetTurnState] = [][]any{{false, dbNow}}
 	}
-	if _, set := rows[scope.QCurrencyExponent]; !set {
-		rows[scope.QCurrencyExponent] = [][]any{{int16(2)}}
-	}
 	return rows
+}
+
+// usdCatalog holds only USD at two decimals.
+func usdCatalog() *fake.CurrencyCatalog {
+	return &fake.CurrencyCatalog{Exponents: map[string]int{"USD": 2}}
 }
 
 func newBudgetLedger(query *budgetQueryFake) *BudgetLedger {
 	query.rows = turnRows(query.rows)
-	return &BudgetLedger{DB: budgetDBFake{query: query}, Policy: usdBudget, Releases: &fake.PrincipalLimits{}}
+	return &BudgetLedger{DB: budgetDBFake{query: query}, Policy: usdBudget, Releases: &fake.PrincipalLimits{}, Currencies: usdCatalog()}
 }
 
 func withBudget(ledger *BudgetLedger, budget domain.ReleaseBudget, read *domain.Principal) *BudgetLedger {
@@ -134,7 +135,7 @@ func TestBudgetLedgerReserveGrantsAndDenies(t *testing.T) {
 	if pin := query.args[qBudgetTurnPin]; pin[0] != int64(8) || pin[1] != "req-1" {
 		t.Fatalf("pin args = %v", pin)
 	}
-	if query.ran(qPrincipalPeriodUse) || query.ran(scope.QCurrencyExponent) {
+	if query.ran(qPrincipalPeriodUse) || len(ledger.Currencies.(*fake.CurrencyCatalog).Reads) != 0 {
 		t.Fatalf("an unbounded release budget read %v", query.names)
 	}
 
@@ -192,7 +193,8 @@ func TestBudgetLedgerCountsTheCurrentPeriodByTheDatabaseClock(t *testing.T) {
 		qReserveBudget:      {{"r", time.Now().Add(time.Minute)}},
 		qPrincipalPeriodUse: {{int64(100), int64(10), int64(50), int64(5)}},
 	}}
-	if _, err := withBudget(newBudgetLedger(query), dayUSD(1_000, 100), nil).Reserve(context.Background(), usd(100, 10)); err != nil {
+	ledger := withBudget(newBudgetLedger(query), dayUSD(1_000, 100), nil)
+	if _, err := ledger.Reserve(context.Background(), usd(100, 10)); err != nil {
 		t.Fatal(err)
 	}
 	args := query.args[qPrincipalPeriodUse]
@@ -201,8 +203,8 @@ func TestBudgetLedgerCountsTheCurrentPeriodByTheDatabaseClock(t *testing.T) {
 		!args[5].(time.Time).Equal(berlinDay) || args[5].(time.Time).Location() != time.UTC {
 		t.Fatalf("period use args = %v", args)
 	}
-	if exponent := query.args[scope.QCurrencyExponent]; exponent[0] != "USD" {
-		t.Fatalf("unit check args = %v", exponent)
+	if reads := ledger.Currencies.(*fake.CurrencyCatalog).Reads; len(reads) != 1 || reads[0] != "USD" {
+		t.Fatalf("unit check read %v", reads)
 	}
 
 	rolling := domain.ReleaseBudget{Tokens: 1_000, Source: domain.BudgetSourceRelease, Period: domain.BudgetPeriod{Kind: domain.BudgetRolling, Window: time.Hour}}
@@ -249,20 +251,21 @@ func TestBudgetLedgerFailsClosedOnAnUnenforceableBudget(t *testing.T) {
 	noCurrency.Currency = ""
 	cases := map[domain.BudgetProblem]struct {
 		budget  domain.ReleaseBudget
-		catalog [][]any
+		catalog map[string]int
 	}{
 		domain.BudgetInvalidPeriod:    {budget: domain.ReleaseBudget{Tokens: 10, Source: domain.BudgetSourceFallback, Period: domain.BudgetPeriod{Kind: domain.BudgetDaily, Timezone: "Mars/Olympus"}}},
 		domain.BudgetNoCurrency:       {budget: noCurrency},
 		domain.BudgetCurrencyMismatch: {budget: jpy},
-		domain.BudgetUnknownCurrency:  {budget: dayUSD(0, 100), catalog: [][]any{}},
-		domain.BudgetExponentChanged:  {budget: dayUSD(0, 100), catalog: [][]any{{int16(3)}}},
+		domain.BudgetUnknownCurrency:  {budget: dayUSD(0, 100), catalog: map[string]int{}},
+		domain.BudgetExponentChanged:  {budget: dayUSD(0, 100), catalog: map[string]int{"USD": 3}},
 	}
 	for problem, tc := range cases {
 		query := &budgetQueryFake{rows: map[string][][]any{qReserveBudget: {{"r", time.Now()}}}}
+		ledger := withBudget(newBudgetLedger(query), tc.budget, nil)
 		if tc.catalog != nil {
-			query.rows[scope.QCurrencyExponent] = tc.catalog
+			ledger.Currencies = &fake.CurrencyCatalog{Exponents: tc.catalog}
 		}
-		_, err := withBudget(newBudgetLedger(query), tc.budget, nil).Reserve(context.Background(), usd(10, 2))
+		_, err := ledger.Reserve(context.Background(), usd(10, 2))
 		var unenforceable *domain.BudgetUnenforceableError
 		if !errors.As(err, &unenforceable) || unenforceable.Problem != problem || !errors.Is(err, domain.ErrDegraded) {
 			t.Errorf("%s: error = %v", problem, err)
@@ -308,7 +311,8 @@ func TestBudgetLedgerReplaysALiveHoldButRechecksAnExpiredAttempt(t *testing.T) {
 		qFindBudget:         {storedBudget("r", "req", string(domain.ReservationHeld), 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
 		qPrincipalPeriodUse: exhausted,
 	}}
-	if reservation, err := withBudget(newBudgetLedger(live), dayUSD(1_000, 0), nil).Reserve(context.Background(), usd(10, 2)); err != nil || reservation.ReservationID != "r" {
+	replayed := withBudget(newBudgetLedger(live), dayUSD(1_000, 0), nil)
+	if reservation, err := replayed.Reserve(context.Background(), usd(10, 2)); err != nil || reservation.ReservationID != "r" {
 		t.Fatalf("live replay = %+v, %v", reservation, err)
 	}
 	expired := &budgetQueryFake{rows: map[string][][]any{
@@ -320,7 +324,7 @@ func TestBudgetLedgerReplaysALiveHoldButRechecksAnExpiredAttempt(t *testing.T) {
 	if _, err := withBudget(newBudgetLedger(expired), dayUSD(1_000, 0), nil).Reserve(context.Background(), usd(10, 2)); !errors.Is(err, domain.ErrBudgetExceeded) {
 		t.Fatalf("renewed attempt in an exhausted day = %v", err)
 	}
-	if live.ran(qPrincipalPeriodUse) || live.ran(scope.QCurrencyExponent) {
+	if live.ran(qPrincipalPeriodUse) || len(replayed.Currencies.(*fake.CurrencyCatalog).Reads) != 0 {
 		t.Fatalf("a live replay re-ran admission: %v", live.names)
 	}
 }
@@ -331,25 +335,27 @@ func TestBudgetLedgerRecoversALiveHoldOfAnUnenforceableBudget(t *testing.T) {
 	invalidPeriod := domain.ReleaseBudget{Tokens: 1_000, Source: domain.BudgetSourceRelease, Period: domain.BudgetPeriod{Kind: domain.BudgetRolling}}
 	for name, tc := range map[string]struct {
 		budget  domain.ReleaseBudget
-		catalog [][]any
+		catalog map[string]int
 	}{
-		"exponent drift": {budget: dayUSD(0, 100), catalog: [][]any{{int16(3)}}},
-		"unknown":        {budget: dayUSD(0, 100), catalog: [][]any{}},
+		"exponent drift": {budget: dayUSD(0, 100), catalog: map[string]int{"USD": 3}},
+		"unknown":        {budget: dayUSD(0, 100), catalog: map[string]int{}},
 		"invalid period": {budget: invalidPeriod},
 	} {
 		live := &budgetQueryFake{rows: map[string][][]any{
-			qFindBudget:             {storedBudget("r", "req", string(domain.ReservationHeld), 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
-			scope.QCurrencyExponent: tc.catalog,
+			qFindBudget: {storedBudget("r", "req", string(domain.ReservationHeld), 10, 2, 1, time.Now().Add(time.Minute), nil, nil, false)},
 		}}
-		if reservation, err := withBudget(newBudgetLedger(live), tc.budget, nil).Reserve(context.Background(), usd(10, 2)); err != nil || reservation.ReservationID != "r" {
+		ledger := withBudget(newBudgetLedger(live), tc.budget, nil)
+		ledger.Currencies = &fake.CurrencyCatalog{Exponents: tc.catalog}
+		if reservation, err := ledger.Reserve(context.Background(), usd(10, 2)); err != nil || reservation.ReservationID != "r" {
 			t.Errorf("%s: live replay = %+v, %v", name, reservation, err)
 		}
 		renewed := &budgetQueryFake{rows: map[string][][]any{
-			qFindBudget:             {storedBudget("old", "req", string(domain.ReservationExpired), 10, 2, 1, time.Now().Add(-time.Minute), int64(0), int64(0), false)},
-			scope.QCurrencyExponent: tc.catalog,
-			qReserveBudget:          {{"new", time.Now().Add(time.Minute)}},
+			qFindBudget:    {storedBudget("old", "req", string(domain.ReservationExpired), 10, 2, 1, time.Now().Add(-time.Minute), int64(0), int64(0), false)},
+			qReserveBudget: {{"new", time.Now().Add(time.Minute)}},
 		}}
-		if _, err := withBudget(newBudgetLedger(renewed), tc.budget, nil).Reserve(context.Background(), usd(10, 2)); !errors.Is(err, domain.ErrDegraded) {
+		ledger = withBudget(newBudgetLedger(renewed), tc.budget, nil)
+		ledger.Currencies = &fake.CurrencyCatalog{Exponents: tc.catalog}
+		if _, err := ledger.Reserve(context.Background(), usd(10, 2)); !errors.Is(err, domain.ErrDegraded) {
 			t.Errorf("%s: new attempt = %v, want degraded", name, err)
 		}
 		if renewed.ran(qReserveBudget) {

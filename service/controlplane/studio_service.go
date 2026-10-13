@@ -36,6 +36,8 @@ const StudioAuthorizationObject = "AGENT_STUDIO"
 // StudioService implements the shared authoring and release lifecycle.
 type StudioService struct {
 	DB keelport.DatabaseRepository
+	// Currencies checks a cost budget's unit; defaults to keel's catalog over DB.
+	Currencies scope.CurrencyCatalog
 	// Principals and Roles authorize every call at the agent's scope; both are required.
 	Principals contract.PrincipalResolver
 	Roles      contract.PrincipalAuthorizer
@@ -220,7 +222,10 @@ func (s *StudioService) init(ctx context.Context) error {
 	if s.DB == nil {
 		return fmt.Errorf("studio service: database is required")
 	}
-	s.once.Do(func() { s.qs = s.DB.GetQueryService(ctx, studioCreateQueries) })
+	s.once.Do(func() {
+		s.qs = s.DB.GetQueryService(ctx, studioCreateQueries)
+		s.Currencies = scope.Currencies(s.Currencies, s.DB)
+	})
 	return nil
 }
 
@@ -689,7 +694,7 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	if err = s.checkBudget(ctx, tx, settings.Resources, definition); err != nil {
+	if err = s.checkBudget(ctx, settings.Resources, definition); err != nil {
 		return domain.AgentRelease{}, err
 	}
 	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)

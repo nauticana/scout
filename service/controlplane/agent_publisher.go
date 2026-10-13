@@ -25,12 +25,12 @@ type AgentPublisher struct {
 	Releases  contract.EffectiveReleaseRepository
 	// ScopeID is the scope a published agent compiles against.
 	ScopeID string
-	// DB reads the currency catalog a cost budget is checked against; a release with a cost
-	// budget is refused without it.
-	DB keelport.DatabaseRepository
+	// Currencies checks a cost budget's unit; defaults to keel's catalog over DB, and a release
+	// with a cost budget is refused without either.
+	Currencies scope.CurrencyCatalog
+	DB         keelport.DatabaseRepository
 
 	once sync.Once
-	qs   keelport.QueryService
 }
 
 // Publish compiles and persists one immutable definition without activating traffic.
@@ -90,11 +90,11 @@ func (publisher *AgentPublisher) checkBudget(ctx context.Context, resources []do
 		if err != nil || budget.CostMinorUnits == 0 {
 			return err
 		}
-		if publisher.DB == nil {
-			return fmt.Errorf("agent publisher: a database is required to check a cost budget's currency")
+		if publisher.Currencies == nil && publisher.DB == nil {
+			return fmt.Errorf("agent publisher: a currency catalog or database is required to check a cost budget's currency")
 		}
-		publisher.once.Do(func() { publisher.qs = publisher.DB.GetQueryService(ctx, scope.CurrencyQueries) })
-		_, err = scope.CheckBudgetUnit(ctx, publisher.qs, budget)
+		publisher.once.Do(func() { publisher.Currencies = scope.Currencies(publisher.Currencies, publisher.DB) })
+		_, err = scope.CheckBudgetUnit(ctx, publisher.Currencies, budget)
 		var unenforceable *domain.BudgetUnenforceableError
 		if errors.As(err, &unenforceable) {
 			return fmt.Errorf("%w: %s", domain.ErrValidation, unenforceable.Detail)

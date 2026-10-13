@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
-	"github.com/nauticana/keel/common"
+	"github.com/nauticana/keel/geo"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
@@ -176,39 +177,43 @@ func mergeBudget(inherited, override []byte) ([]byte, error) {
 	return encodeBudget(merged)
 }
 
-// QCurrencyExponent reads a currency's catalog exponent; merge CurrencyQueries into the map of
-// whichever query service passes to CheckBudgetUnit.
-const QCurrencyExponent = "scout_scope_currency_exponent"
+// CurrencyCatalog reads a currency's minor-unit exponent; keel's geo.Currencies implements it,
+// and a code it does not hold is geo.ErrUnknownCurrency.
+type CurrencyCatalog interface {
+	Exponent(ctx context.Context, code string) (int, error)
+}
 
-var CurrencyQueries = map[string]string{QCurrencyExponent: `SELECT exponent FROM currency WHERE code = ?`}
+// Currencies returns catalog, or keel's catalog over db when none is composed.
+func Currencies(catalog CurrencyCatalog, db keelport.DatabaseRepository) CurrencyCatalog {
+	if catalog != nil {
+		return catalog
+	}
+	return &geo.Currencies{DB: db}
+}
 
 // CheckBudgetUnit verifies a cost ceiling's currency and frozen exponent against the catalog and
 // returns the exponent to report; a budget without a cost ceiling needs no lookup. A frozen
 // exponent the catalog no longer has fails closed rather than reinterpreting the ceiling.
-func CheckBudgetUnit(ctx context.Context, qs keelport.QueryService, budget domain.ReleaseBudget) (int, error) {
+func CheckBudgetUnit(ctx context.Context, catalog CurrencyCatalog, budget domain.ReleaseBudget) (int, error) {
 	if budget.CostMinorUnits == 0 {
 		return 0, nil
 	}
 	if budget.Currency == "" {
 		return 0, &domain.BudgetUnenforceableError{Problem: domain.BudgetNoCurrency, Detail: "the cost ceiling names no currency"}
 	}
-	if qs == nil {
-		return 0, fmt.Errorf("budget unit check: query service is required")
+	if catalog == nil {
+		return 0, fmt.Errorf("budget unit check: currency catalog is required")
 	}
-	result, err := qs.Query(ctx, QCurrencyExponent, budget.Currency)
+	exponent, err := catalog.Exponent(ctx, budget.Currency)
+	if errors.Is(err, geo.ErrUnknownCurrency) {
+		return 0, &domain.BudgetUnenforceableError{Problem: domain.BudgetUnknownCurrency, Detail: "currency " + budget.Currency + " is not in the currency catalog"}
+	}
 	if err != nil {
 		return 0, fmt.Errorf("read currency %s: %w", budget.Currency, err)
 	}
-	if len(result.Rows) == 0 {
-		return 0, &domain.BudgetUnenforceableError{Problem: domain.BudgetUnknownCurrency, Detail: "currency " + budget.Currency + " is not in the currency catalog"}
-	}
-	catalog, ok := common.AsInt64OK(result.Rows[0][0])
-	if !ok {
-		return 0, fmt.Errorf("read currency %s: invalid exponent %q", budget.Currency, common.AsString(result.Rows[0][0]))
-	}
-	if budget.Exponent != nil && int64(*budget.Exponent) != catalog {
+	if budget.Exponent != nil && *budget.Exponent != exponent {
 		return 0, &domain.BudgetUnenforceableError{Problem: domain.BudgetExponentChanged,
-			Detail: "currency " + budget.Currency + " has exponent " + strconv.FormatInt(catalog, 10) + ", not " + strconv.Itoa(*budget.Exponent)}
+			Detail: "currency " + budget.Currency + " has exponent " + strconv.Itoa(exponent) + ", not " + strconv.Itoa(*budget.Exponent)}
 	}
-	return int(catalog), nil
+	return exponent, nil
 }

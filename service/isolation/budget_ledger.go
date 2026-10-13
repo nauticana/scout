@@ -39,7 +39,7 @@ const (
 // Window accounting: held reservations count at their grant until they expire,
 // settled reservations count at actual usage for one budget window. The turn's agent is
 // counted against its release budget's period the same way; both must hold.
-var budgetQueries = common.MergeMaps(scope.CurrencyQueries, agentBudgetQueries, map[string]string{
+var budgetQueries = common.MergeMaps(agentBudgetQueries, map[string]string{
 	qLockBudget: "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
 	qGetTurnState: `
 SELECT status.is_terminal, CURRENT_TIMESTAMP
@@ -123,6 +123,8 @@ type BudgetLedger struct {
 	Releases contract.PrincipalLimits
 	// ReservationTTL bounds how long a hold counts before Expire reclaims it; default 15m.
 	ReservationTTL time.Duration
+	// Currencies checks a cost ceiling's unit; defaults to keel's catalog over DB.
+	Currencies scope.CurrencyCatalog
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -137,7 +139,10 @@ func (ledger *BudgetLedger) init(ctx context.Context) error {
 	if ledger.DB == nil {
 		return fmt.Errorf("budget ledger: database is required")
 	}
-	ledger.once.Do(func() { ledger.qs = ledger.DB.GetQueryService(ctx, budgetQueries) })
+	ledger.once.Do(func() {
+		ledger.qs = ledger.DB.GetQueryService(ctx, budgetQueries)
+		ledger.Currencies = scope.Currencies(ledger.Currencies, ledger.DB)
+	})
 	if ledger.qs == nil {
 		return fmt.Errorf("budget ledger: query service is required")
 	}
@@ -280,7 +285,7 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 	if err = enforceable(budget, currency); err != nil {
 		return domain.BudgetReservation{}, err
 	}
-	if _, err = scope.CheckBudgetUnit(ctx, tx, budget); err != nil {
+	if _, err = scope.CheckBudgetUnit(ctx, ledger.Currencies, budget); err != nil {
 		return domain.BudgetReservation{}, err
 	}
 	if err = ledger.checkPeriod(ctx, tx, tenantID, agent.ID, budget, now, tokens, costMinorUnits, currency); err != nil {

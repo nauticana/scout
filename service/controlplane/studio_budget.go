@@ -5,14 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	keelport "github.com/nauticana/keel/port"
-
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/service/scope"
 )
-
-// qCurrencyExponent is the catalog read scope.CheckBudgetUnit makes through Studio's query maps.
-const qCurrencyExponent = scope.QCurrencyExponent
 
 // checkSavedBudget refuses a cost ceiling whose currency the catalog does not hold or whose
 // exponent is not the catalog's, so a client that misreads a currency's decimals is caught.
@@ -24,7 +19,7 @@ func (s *StudioService) checkSavedBudget(ctx context.Context, value []byte) erro
 	if err = s.init(ctx); err != nil {
 		return err
 	}
-	_, err = scope.CheckBudgetUnit(ctx, s.qs, budget)
+	_, err = scope.CheckBudgetUnit(ctx, s.Currencies, budget)
 	var unenforceable *domain.BudgetUnenforceableError
 	if errors.As(err, &unenforceable) {
 		return validationError("value", unenforceable.Detail)
@@ -35,7 +30,7 @@ func (s *StudioService) checkSavedBudget(ctx context.Context, value []byte) erro
 // checkBudget refuses to freeze a cost ceiling the runtime could not enforce: one whose unit
 // the catalog no longer matches, or one over a selected model that is not priced in its currency.
 // A tokens-only budget needs neither.
-func (s *StudioService) checkBudget(ctx context.Context, qs keelport.QueryService, resources []domain.EffectiveResource, definition domain.AgentDefinition) error {
+func (s *StudioService) checkBudget(ctx context.Context, resources []domain.EffectiveResource, definition domain.AgentDefinition) error {
 	var budget domain.ReleaseBudget
 	for _, resource := range resources {
 		if resource.ResourceKind != domain.ResourceBudget {
@@ -50,7 +45,10 @@ func (s *StudioService) checkBudget(ctx context.Context, qs keelport.QueryServic
 	if budget.CostMinorUnits == 0 {
 		return nil
 	}
-	_, err := scope.CheckBudgetUnit(ctx, qs, budget)
+	if err := s.init(ctx); err != nil {
+		return err
+	}
+	_, err := scope.CheckBudgetUnit(ctx, s.Currencies, budget)
 	var unenforceable *domain.BudgetUnenforceableError
 	if errors.As(err, &unenforceable) {
 		message := "budget: " + unenforceable.Detail

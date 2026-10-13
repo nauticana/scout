@@ -8,7 +8,6 @@ import (
 
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
-	"github.com/nauticana/scout/service/scope"
 )
 
 func eurExponent() *int { value := 2; return &value }
@@ -24,6 +23,7 @@ func studioLimits(query *queueQueryFake, limits domain.ExecutionLimits, budget d
 	}
 	return &StudioLimits{
 		DB: queueDBFake{query: query}, Authorizer: allowStudio{domain.StudioView},
+		Currencies: &fake.CurrencyCatalog{Exponents: map[string]int{"EUR": 2}},
 		ReleaseLimits: &fake.PrincipalLimits{
 			ExecutionLimitsFunc: func(_ context.Context, principal domain.Principal) (domain.ExecutionLimits, error) {
 				*read = principal
@@ -80,13 +80,14 @@ func TestStudioLimitsReportsAPerTurnBudgetWithoutSpend(t *testing.T) {
 	var read domain.Principal
 	perTurn := domain.ReleaseBudget{Tokens: 4_000, CostMinorUnits: 30, Currency: "EUR", Exponent: eurExponent(),
 		Source: domain.BudgetSourceRelease, Period: domain.BudgetPeriod{Kind: domain.BudgetPerTurn}}
-	query := &queueQueryFake{rows: map[string][][]any{scope.QCurrencyExponent: {{int16(2)}}}}
+	query := &queueQueryFake{rows: map[string][][]any{}}
 	report, err := studioLimits(query, domain.ExecutionLimits{}, perTurn, noSpend, &read, nil).Limits(context.Background(), usageActor, "writer-a")
 	if err != nil || report.Budget == nil || report.Budget.Tokens != 4_000 || report.Spend != nil || report.BudgetProblem != "" {
 		t.Fatalf("report = %+v, error = %v", report, err)
 	}
-	query.rows[scope.QCurrencyExponent] = [][]any{{int16(3)}}
-	report, err = studioLimits(query, domain.ExecutionLimits{}, perTurn, noSpend, &read, nil).Limits(context.Background(), usageActor, "writer-a")
+	drifted := studioLimits(query, domain.ExecutionLimits{}, perTurn, noSpend, &read, nil)
+	drifted.Currencies = &fake.CurrencyCatalog{Exponents: map[string]int{"EUR": 3}}
+	report, err = drifted.Limits(context.Background(), usageActor, "writer-a")
 	if err != nil || report.BudgetProblem != domain.BudgetExponentChanged || report.Spend != nil {
 		t.Fatalf("drifted per-turn report = %+v, error = %v", report, err)
 	}

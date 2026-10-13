@@ -182,7 +182,7 @@ func (ledger *BudgetLedger) Spend(ctx context.Context, tenantID int64, principal
 	if err := ledger.init(ctx); err != nil {
 		return domain.BudgetSpend{}, err
 	}
-	exponent, err := scope.CheckBudgetUnit(ctx, ledger.qs, budget)
+	exponent, err := scope.CheckBudgetUnit(ctx, ledger.Currencies, budget)
 	if err != nil {
 		return domain.BudgetSpend{}, err
 	}
