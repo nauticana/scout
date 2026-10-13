@@ -115,8 +115,8 @@ type BaseDataPlane struct {
 	Skills           contract.SkillRegistry
 	Credentials      contract.ToolCredentialProvider
 	Egress           contract.ToolEgressPolicy
-	// Policy decides tool:invoke before guardrails; nil decides nothing, so standing denials reach
-	// the gateway only through policy.SetEvaluator over policy.RestrictedResolver composed here.
+	// Policy decides tool:invoke before guardrails; nil decides nothing. Standing denials reach the
+	// gateway only when the product sets a policy.SetEvaluator over policy.RestrictedResolver.
 	Policy      contract.PolicyDecisionPoint
 	ToolGateway contract.GovernedToolGateway
 	// WrapToolGateway, when set, wraps the composed gateway the tool loop calls, such as

@@ -97,7 +97,7 @@ func apiGuardrails(guardrails domain.AgentGuardrails, err error) (any, error) {
 func apiGuardrailRules(rules []domain.GuardrailRule) []api.GuardrailRule {
 	items := make([]api.GuardrailRule, 0, len(rules))
 	for _, rule := range rules {
-		item := api.GuardrailRule{ID: rule.ID, Kind: string(rule.Kind), Action: string(rule.Action), Severity: string(rule.Severity), Params: rule.Params}
+		item := api.GuardrailRule{ID: rule.ID, Kind: string(rule.Kind), Action: string(rule.Action), Severity: string(rule.Severity), Params: rule.Params, Reason: rule.Reason}
 		for _, stage := range rule.Stages {
 			item.Stages = append(item.Stages, string(stage))
 		}
@@ -111,7 +111,7 @@ func domainGuardrailRules(rules []api.GuardrailRule) []domain.GuardrailRule {
 	for _, rule := range rules {
 		item := domain.GuardrailRule{
 			ID: rule.ID, Kind: domain.GuardrailRuleKind(rule.Kind), Action: domain.GuardrailAction(rule.Action),
-			Severity: domain.GuardrailSeverity(rule.Severity), Params: rule.Params,
+			Severity: domain.GuardrailSeverity(rule.Severity), Params: absentIfNull(rule.Params), Reason: rule.Reason,
 		}
 		for _, stage := range rule.Stages {
 			item.Stages = append(item.Stages, domain.GuardrailStage(stage))

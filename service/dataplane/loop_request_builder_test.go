@@ -64,6 +64,31 @@ func TestReleaseLoopRequestBuilderRendersThePinnedReleaseAndTheTurnInput(t *test
 	}
 }
 
+type formatRenderer struct{}
+
+func (formatRenderer) Render(_ string, _ []domain.CompiledPromptSection, task domain.AgentTask) string {
+	return task.OutputFormat
+}
+
+func TestReleaseLoopRequestBuilderStatesTheEvidenceContract(t *testing.T) {
+	reader := &definitionReaderStub{definition: domain.AgentDefinition{
+		AgentID: "writer", Version: "v3", Languages: []domain.CompiledPrompt{{LanguageCode: "en-US"}},
+	}}
+	builder := &ReleaseLoopRequestBuilder{Definitions: reader, Renderer: formatRenderer{}, MaxOutputTokens: 500}
+	input := loopInput()
+	input.Input = []byte("price the kit")
+	if request, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{}); err != nil || len(request.Prompt) != 0 {
+		t.Fatalf("a loop without require_evidence states no contract: %q, %v", request.Prompt, err)
+	}
+	builder.Task = func(_ context.Context, input domain.StepInput) (domain.AgentTask, string, error) {
+		return domain.AgentTask{Task: string(input.Input), OutputFormat: "plain English"}, "", nil
+	}
+	request, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{RequireEvidence: true})
+	if err != nil || string(request.Prompt) != "plain English\n"+evidencedAnswerFormat {
+		t.Fatalf("prompt = %q, err = %v", request.Prompt, err)
+	}
+}
+
 type skillListStub struct {
 	contract.SkillRegistry
 	skills []domain.SkillDefinition

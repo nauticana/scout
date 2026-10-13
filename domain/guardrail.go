@@ -79,6 +79,7 @@ type GuardrailRule struct {
 	Action   GuardrailAction   `json:"action"`
 	Severity GuardrailSeverity `json:"severity"`
 	Params   json.RawMessage   `json:"params,omitempty"`
+	Reason   string            `json:"reason,omitempty"`
 }
 
 // GuardrailRuleSet is the typed, versioned envelope stored in GuardrailConfig.Rules.

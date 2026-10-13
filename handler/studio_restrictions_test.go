@@ -99,7 +99,7 @@ func TestStudioRestrictionsReplaceMapsTheWholeLayer(t *testing.T) {
 	newRestrictionHandler(backend)(recorder, authenticatedRequest(http.MethodPost, api.StudioRestrictionsPath, []byte(`{
 		"expected_digest":"d1",
 		"denials":[{"id":"no-refunds","actions":["tool:invoke"],"resources":["payments.refund"],"conditions":null,"reason":"finance freeze"}],
-		"guardrails":[{"id":"only-search","kind":"tool_allowlist","stages":["tool_input"],"action":"block","severity":"hard","params":{"tools":["search"]}}]
+		"guardrails":[{"id":"only-search","kind":"tool_allowlist","stages":["tool_input"],"action":"block","severity":"hard","params":{"tools":["search"]},"reason":"search only"}]
 	}`)))
 
 	if recorder.Code != http.StatusOK || backend.actor != restrictionPerson || backend.expected != "d1" {
@@ -110,12 +110,12 @@ func TestStudioRestrictionsReplaceMapsTheWholeLayer(t *testing.T) {
 		t.Fatalf("a restriction denial always denies and a null condition is none: %+v", denial)
 	}
 	if rule.Kind != domain.GuardrailKindToolAllowlist || rule.Stages[0] != domain.GuardrailStageToolInput || rule.Action != domain.GuardrailActionBlock ||
-		string(rule.Params) != `{"tools":["search"]}` {
+		string(rule.Params) != `{"tools":["search"]}` || rule.Reason != "search only" {
 		t.Fatalf("rule = %+v", rule)
 	}
 	var written api.RestrictionLayer
 	decodeRestrictionData(t, recorder, &written)
-	if written.Digest != "next" || len(written.Guardrails) != 1 || written.Guardrails[0].ID != "only-search" || written.Denials[0].Reason != "finance freeze" {
+	if written.Digest != "next" || len(written.Guardrails) != 1 || written.Guardrails[0].Reason != "search only" || written.Denials[0].Reason != "finance freeze" {
 		t.Fatalf("written = %s", recorder.Body.String())
 	}
 }

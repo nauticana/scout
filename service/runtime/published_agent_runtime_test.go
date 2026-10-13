@@ -81,13 +81,20 @@ func TestPublishedAgentRuntimeRequiresTextAndMediaCapabilities(t *testing.T) {
 		Providers:       &providerFactoryStub{provider: &modelProviderRecorder{}},
 		MaxOutputTokens: 100,
 	}
-	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", "", ""); !errors.Is(err, domain.ErrNotReady) {
+	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", "", ""); !notReady(err, base.AgentID, domain.AgentNotReadyNoTextModel) {
 		t.Fatalf("missing text error = %v", err)
+	}
+	base.Models.Text = &domain.ModelReference{ProviderID: "provider", ModelID: "text"}
+	base.Languages = nil
+	resolver.Definitions = &publishedResolverStub{definition: base}
+	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", "", ""); !notReady(err, base.AgentID, domain.AgentNotReadyNoLanguage) {
+		t.Fatalf("missing language error = %v", err)
 	}
 
 	text := domain.ModelReference{ProviderID: "provider", ModelID: "text"}
 	image := domain.ModelReference{ProviderID: "provider", ModelID: "image"}
 	base.Models = domain.AgentModelSelection{Text: &text, Image: &image}
+	base.Languages = []domain.CompiledPrompt{{LanguageCode: "en-US"}}
 	resolver.Definitions = &publishedResolverStub{definition: base}
 	if _, err := resolver.Resolve(context.Background(), 1, "writer", "", "", ""); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("missing media error = %v", err)

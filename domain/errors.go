@@ -122,3 +122,30 @@ func (e *BudgetUnenforceableError) Error() string {
 }
 
 func (e *BudgetUnenforceableError) Unwrap() error { return ErrDegraded }
+
+// AgentNotReadyReason says why an agent cannot serve.
+type AgentNotReadyReason string
+
+const (
+	AgentNotReadyInactive    AgentNotReadyReason = "inactive"
+	AgentNotReadyDisabled    AgentNotReadyReason = "disabled"
+	AgentNotReadyUnpublished AgentNotReadyReason = "unpublished"
+	AgentNotReadyNoTextModel AgentNotReadyReason = "no_text_model"
+	AgentNotReadyNoLanguage  AgentNotReadyReason = "no_language"
+)
+
+// AgentNotReadyError is ErrNotReady with the agent and the reason; AgentID is empty when an
+// alias has no published target.
+type AgentNotReadyError struct {
+	AgentID string
+	Reason  AgentNotReadyReason
+}
+
+func (e *AgentNotReadyError) Error() string {
+	if e.AgentID == "" {
+		return "agent not ready: " + string(e.Reason)
+	}
+	return "agent " + e.AgentID + " not ready: " + string(e.Reason)
+}
+
+func (e *AgentNotReadyError) Unwrap() error { return ErrNotReady }

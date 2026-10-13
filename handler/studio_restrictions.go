@@ -78,15 +78,8 @@ func (h *StudioRestrictionHandler) replace(ctx context.Context, actor domain.Stu
 			Conditions: absentIfNull(denial.Conditions), Reason: denial.Reason,
 		})
 	}
-	for _, rule := range request.Guardrails {
-		var stages []domain.GuardrailStage
-		for _, stage := range rule.Stages {
-			stages = append(stages, domain.GuardrailStage(stage))
-		}
-		layer.Guardrails = append(layer.Guardrails, domain.GuardrailRule{
-			ID: rule.ID, Kind: domain.GuardrailRuleKind(rule.Kind), Stages: stages, Action: domain.GuardrailAction(rule.Action),
-			Severity: domain.GuardrailSeverity(rule.Severity), Params: absentIfNull(rule.Params),
-		})
+	if len(request.Guardrails) > 0 {
+		layer.Guardrails = domainGuardrailRules(request.Guardrails)
 	}
 	written, err := h.Backend.ReplaceTenant(ctx, actor, layer, request.ExpectedDigest)
 	if err != nil {
@@ -97,22 +90,11 @@ func (h *StudioRestrictionHandler) replace(ctx context.Context, actor domain.Stu
 
 func apiRestrictionLayer(layer domain.RestrictionLayer) api.RestrictionLayer {
 	result := api.RestrictionLayer{
-		Digest: layer.Digest, Denials: make([]api.RestrictionDenial, 0, len(layer.Denials)),
-		Guardrails: make([]api.RestrictionGuardrail, 0, len(layer.Guardrails)),
+		Digest: layer.Digest, Denials: make([]api.RestrictionDenial, 0, len(layer.Denials)), Guardrails: apiGuardrailRules(layer.Guardrails),
 	}
 	for _, denial := range layer.Denials {
 		result.Denials = append(result.Denials, api.RestrictionDenial{
 			ID: denial.ID, Actions: denial.Actions, Resources: denial.Resources, Conditions: denial.Conditions, Reason: denial.Reason,
-		})
-	}
-	for _, rule := range layer.Guardrails {
-		var stages []string
-		for _, stage := range rule.Stages {
-			stages = append(stages, string(stage))
-		}
-		result.Guardrails = append(result.Guardrails, api.RestrictionGuardrail{
-			ID: rule.ID, Kind: string(rule.Kind), Stages: stages, Action: string(rule.Action),
-			Severity: string(rule.Severity), Params: rule.Params,
 		})
 	}
 	return result

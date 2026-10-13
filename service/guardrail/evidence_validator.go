@@ -20,22 +20,38 @@ type EvidenceValidator struct {
 	Objects contract.EvidenceObjectVerifier
 	Facts   contract.FactSource
 	Claims  contract.ClaimDetector
+	// Normalize, when set, rewrites claim text and fact values before matching, such as
+	// dropping thousands separators; matching always folds case.
+	Normalize func(string) string
 }
 
 func (validator *EvidenceValidator) Validate(ctx context.Context, scope domain.EvidenceScope, answer domain.EvidencedAnswer) (domain.EvidenceReport, error) {
 	if scope.TenantID <= 0 {
 		return domain.EvidenceReport{}, fmt.Errorf("%w: evidence scope needs a tenant", domain.ErrValidation)
 	}
+	var verified map[string]domain.VerifiedFact
+	if slices.ContainsFunc(answer.Evidence, func(evidence domain.EvidenceRef) bool {
+		return evidence.Source == domain.EvidenceFact && strings.TrimSpace(evidence.FactKey) != ""
+	}) {
+		facts, err := validator.verifiedFacts(ctx, scope.TenantID)
+		if err != nil {
+			return domain.EvidenceReport{}, err
+		}
+		verified = make(map[string]domain.VerifiedFact, len(facts))
+		for _, fact := range facts {
+			verified[fact.Key] = fact
+		}
+	}
 	rejected := make(map[string]string, len(answer.Evidence))
 	known := make(map[string]struct{}, len(answer.Evidence))
-	facts := map[string]string{}
+	cited := map[string]domain.VerifiedFact{}
 	for _, evidence := range answer.Evidence {
 		if _, duplicate := known[evidence.ID]; duplicate {
 			rejected[evidence.ID] = "evidence id is duplicated"
 			continue
 		}
 		known[evidence.ID] = struct{}{}
-		reason, err := validator.verify(ctx, scope, evidence, facts)
+		reason, err := validator.verify(ctx, scope, evidence, verified, cited)
 		if err != nil {
 			return domain.EvidenceReport{}, err
 		}
@@ -54,36 +70,116 @@ func (validator *EvidenceValidator) Validate(ctx context.Context, scope domain.E
 	if validator.Claims == nil {
 		return report, nil
 	}
-	detected, err := validator.Claims.Detect(ctx, scope.TenantID, answer.Answer)
+	detected, err := validator.detectClaims(ctx, scope.TenantID, answer.Answer)
 	if err != nil {
-		return domain.EvidenceReport{}, fmt.Errorf("detect claims: %w", err)
+		return domain.EvidenceReport{}, err
 	}
 	for _, span := range detected {
-		if !slices.ContainsFunc(report.Supported, func(claim domain.Claim) bool { return states(claim, span, facts) }) {
-			report.Unsupported = append(report.Unsupported, domain.ClaimFinding{ClaimIndex: -1, Claim: span, Reason: "claim is stated without supported evidence"})
+		if !slices.ContainsFunc(report.Supported, func(claim domain.Claim) bool { return validator.states(claim, span, cited) }) {
+			report.Unsupported = append(report.Unsupported, undeclared(span))
 		}
 	}
 	return report, nil
 }
 
-// states reports whether a supported claim carries span and, when it cites facts, one of them states it.
-func states(claim domain.Claim, span string, facts map[string]string) bool {
-	if !containsFold(claim.Text, span) {
-		return false
+// ValidateText checks text that declares no claims, such as generated copy: every claim Claims
+// detects must be stated by a verified fact of its kind. A supported claim cites the keys of
+// the facts that state it.
+func (validator *EvidenceValidator) ValidateText(ctx context.Context, scope domain.EvidenceScope, text string) (domain.EvidenceReport, error) {
+	if scope.TenantID <= 0 {
+		return domain.EvidenceReport{}, fmt.Errorf("%w: evidence scope needs a tenant", domain.ErrValidation)
 	}
-	cited := false
-	for _, id := range claim.EvidenceIDs {
-		if value, fact := facts[id]; fact {
-			if containsFold(value, span) {
-				return true
+	if validator.Claims == nil {
+		return domain.EvidenceReport{}, fmt.Errorf("%w: no claim detector is composed", domain.ErrDegraded)
+	}
+	detected, err := validator.detectClaims(ctx, scope.TenantID, text)
+	if err != nil || len(detected) == 0 {
+		return domain.EvidenceReport{}, err
+	}
+	facts, err := validator.verifiedFacts(ctx, scope.TenantID)
+	if err != nil {
+		return domain.EvidenceReport{}, err
+	}
+	report := domain.EvidenceReport{}
+	for _, span := range detected {
+		claim := domain.Claim{Text: span.Text}
+		for _, fact := range facts {
+			if validator.stated(fact, span) {
+				claim.EvidenceIDs = append(claim.EvidenceIDs, fact.Key)
 			}
-			cited = true
 		}
+		if len(claim.EvidenceIDs) == 0 {
+			report.Unsupported = append(report.Unsupported, undeclared(span))
+			continue
+		}
+		report.Supported = append(report.Supported, claim)
 	}
-	return !cited
+	return report, nil
 }
 
-func containsFold(text, part string) bool {
+func (validator *EvidenceValidator) detectClaims(ctx context.Context, tenantID int64, text string) ([]domain.DetectedClaim, error) {
+	detected, err := validator.Claims.Detect(ctx, tenantID, text)
+	if err != nil {
+		return nil, fmt.Errorf("detect claims: %w", err)
+	}
+	for _, claim := range detected {
+		if strings.TrimSpace(claim.Text) == "" {
+			return nil, fmt.Errorf("%w: claim detector returned an empty claim", domain.ErrValidation)
+		}
+	}
+	return detected, nil
+}
+
+func (validator *EvidenceValidator) verifiedFacts(ctx context.Context, tenantID int64) ([]domain.VerifiedFact, error) {
+	if validator.Facts == nil {
+		return nil, fmt.Errorf("%w: no fact source is composed", domain.ErrDegraded)
+	}
+	facts, err := validator.Facts.VerifiedFacts(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("read verified facts: %w", err)
+	}
+	seen := make(map[string]struct{}, len(facts))
+	for _, fact := range facts {
+		if fact.Key == "" || fact.Key != strings.TrimSpace(fact.Key) {
+			return nil, fmt.Errorf("%w: verified fact needs a key", domain.ErrValidation)
+		}
+		if _, duplicate := seen[fact.Key]; duplicate {
+			return nil, fmt.Errorf("%w: verified fact %q is duplicated", domain.ErrConflict, fact.Key)
+		}
+		seen[fact.Key] = struct{}{}
+	}
+	return facts, nil
+}
+
+func undeclared(span domain.DetectedClaim) domain.ClaimFinding {
+	return domain.ClaimFinding{ClaimIndex: -1, Claim: span.Text, Reason: "claim is stated without supported evidence"}
+}
+
+// states reports whether a supported claim carries span and, when it cites facts, one of them states it.
+func (validator *EvidenceValidator) states(claim domain.Claim, span domain.DetectedClaim, cited map[string]domain.VerifiedFact) bool {
+	if !validator.contains(claim.Text, span.Text) {
+		return false
+	}
+	citesFacts := false
+	for _, id := range claim.EvidenceIDs {
+		if fact, ok := cited[id]; ok {
+			if validator.stated(fact, span) {
+				return true
+			}
+			citesFacts = true
+		}
+	}
+	return !citesFacts
+}
+
+func (validator *EvidenceValidator) stated(fact domain.VerifiedFact, span domain.DetectedClaim) bool {
+	return (span.Kind == "" || fact.Kind == span.Kind) && validator.contains(fact.Value, span.Text)
+}
+
+func (validator *EvidenceValidator) contains(text, part string) bool {
+	if validator.Normalize != nil {
+		text, part = validator.Normalize(text), validator.Normalize(part)
+	}
 	return strings.Contains(strings.ToLower(text), strings.ToLower(part))
 }
 
@@ -103,7 +199,7 @@ func unsupported(claim domain.Claim, known map[string]struct{}, rejected map[str
 }
 
 // verify returns why the evidence does not count; an error means verification itself failed.
-func (validator *EvidenceValidator) verify(ctx context.Context, scope domain.EvidenceScope, evidence domain.EvidenceRef, facts map[string]string) (string, error) {
+func (validator *EvidenceValidator) verify(ctx context.Context, scope domain.EvidenceScope, evidence domain.EvidenceRef, verified, cited map[string]domain.VerifiedFact) (string, error) {
 	if strings.TrimSpace(evidence.ID) == "" {
 		return "evidence has no id", nil
 	}
@@ -135,17 +231,11 @@ func (validator *EvidenceValidator) verify(ctx context.Context, scope domain.Evi
 		if strings.TrimSpace(evidence.FactKey) == "" {
 			return "fact reference has no key", nil
 		}
-		if validator.Facts == nil {
-			return "", fmt.Errorf("%w: no fact source is composed", domain.ErrDegraded)
-		}
-		value, ok, err := validator.Facts.VerifiedFact(ctx, scope.TenantID, evidence.FactKey)
-		if err != nil {
-			return "", fmt.Errorf("read fact %q: %w", evidence.FactKey, err)
-		}
+		fact, ok := verified[evidence.FactKey]
 		if !ok {
 			return "fact is not verified for this tenant", nil
 		}
-		facts[evidence.ID] = value
+		cited[evidence.ID] = fact
 	default:
 		return fmt.Sprintf("source %q is not verifiable", evidence.Source), nil
 	}

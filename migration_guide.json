@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.16",
+      "title": "Guardrail reasons, typed not-ready errors, and text evidence",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "A guardrail rule carries a reason, a named agent that cannot serve says why, evidence matching honours claim kinds and optional normalization and validates plain text, a loop with require_evidence states its output contract, and the confirmation list maps its errors; adopts keel v1.2.114 and Charter v1.5.0.",
+      "body_markdown": "Adopts keel v1.2.114 and Charter v1.5.0.\n\n**Guardrails.** `domain.GuardrailRule.Reason` (`reason`) says why a rule exists; `guardrail.ViolationError.Reasons` carries those of the blocking rules and its message appends them. Studio guardrails and restriction layers read and write it.\n\n**Not ready.** `runtime.PublishedAgentResolver` and `PublishedAgentRuntime` answer `*domain.AgentNotReadyError{AgentID, Reason}`, still `ErrNotReady`, with `Reason` `inactive`, `disabled`, `unpublished`, `no_text_model`, or `no_language`; a named agent that exists but is not deployed is `unpublished`, no longer `ErrNotFound`.\n\n**Evidence (breaking).** `guardrail.EvidenceValidator.Normalize` rewrites claim text and fact values before the case-folded match; `ValidateText(ctx, scope, text)` checks text that declares no claims against the tenant's verified facts. `ReleaseLoopRequestBuilder` appends the `EvidencedAnswer` contract to the output format when `require_evidence` is set.\n\n**Confirmations.** `GET /api/approval/confirmations` maps the inbox's typed errors like the other confirmation routes, so a refusal is `403`, not `500`.\n\n| Before | After |\n|---|---|\n| `contract.FactSource.VerifiedFact(ctx, tenant, key) (string, bool, error)` | `VerifiedFacts(ctx, tenant) ([]domain.VerifiedFact{Key, Kind, Value}, error)`; a blank key is `ErrValidation`, a duplicate `ErrConflict` |\n| `contract.ClaimDetector.Detect` returns `[]string` | returns `[]domain.DetectedClaim{Text, Kind}`; a claim with a kind is stated only by a fact of that kind, and an empty claim is `ErrValidation` |\n| `api.RestrictionGuardrail` | `api.GuardrailRule` |"
+    },
+    {
       "version": "v1.2.15",
       "title": "Currency catalog through keel geo",
       "tags": [

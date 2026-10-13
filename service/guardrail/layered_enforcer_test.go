@@ -77,6 +77,18 @@ func TestBaselineCannotBeDisabledByReleaseRules(t *testing.T) {
 	}
 }
 
+func TestViolationCarriesTheBlockingRulesReasons(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	reasoned := rule("release.codename", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["ORION"]}`)
+	reasoned.Reason = "unannounced product"
+	_, err := h.enforcer.BeforeModel(context.Background(), rules(t, reasoned), request("TOPSECRET ORION"))
+	var violation *ViolationError
+	if !errors.As(err, &violation) || len(violation.RuleIDs) != 2 || len(violation.Reasons) != 1 || violation.Reasons[0] != "unannounced product" ||
+		!strings.HasSuffix(err.Error(), ": unannounced product") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestReleaseRulesStrengthenBaseline(t *testing.T) {
 	h := newHarness(t, EnforcerConfig{})
 	config := rules(t, rule("release.limit", domain.GuardrailKindMaxInputBytes, domain.GuardrailActionBlock, `{"max":4}`))

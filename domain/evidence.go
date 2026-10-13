@@ -38,6 +38,20 @@ type EvidencedAnswer struct {
 	Evidence []EvidenceRef `json:"evidence"`
 }
 
+// VerifiedFact is a value the tenant verified. Kind, when set, is the claim kind it states,
+// such as a price; a claim of a kind is stated only by a fact of that kind.
+type VerifiedFact struct {
+	Key   string `json:"key"`
+	Kind  string `json:"kind,omitempty"`
+	Value string `json:"value"`
+}
+
+// DetectedClaim is a factual statement found in a text; Kind is empty for a claim of no kind.
+type DetectedClaim struct {
+	Text string `json:"text"`
+	Kind string `json:"kind,omitempty"`
+}
+
 // ClaimFinding explains why one claim is unsupported; ClaimIndex is -1 for a claim
 // the answer states but does not declare.
 type ClaimFinding struct {

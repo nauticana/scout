@@ -19,7 +19,7 @@ func (recorder *versionRequestRecorder) ResolveVersion(_ context.Context, reques
 
 func TestPublishedAgentResolverAsksForTheServingAgentWithoutAPerson(t *testing.T) {
 	query := publishedQueryFake{rows: [][]any{{
-		true, "3", "4", int64(0), encodedDefinition(t, "3"), encodedDefinition(t, "4"), "writer-a",
+		true, "3", "4", int64(0), encodedDefinition(t, "3"), encodedDefinition(t, "4"), "writer-a", true,
 	}}}
 	versions := &versionRequestRecorder{versionManagerFake: "3"}
 	resolver := &PublishedAgentResolver{qs: query, Versions: versions}

@@ -118,7 +118,7 @@ func (h *ApprovalHandler) confirmations(ctx context.Context, session *keelmodel.
 	}
 	entries, err := h.Inbox.List(ctx, person, since, int(limit))
 	if err != nil {
-		return nil, err
+		return mapServiceError(nil, err)
 	}
 	items := make([]api.Confirmation, 0, len(entries))
 	for _, entry := range entries {

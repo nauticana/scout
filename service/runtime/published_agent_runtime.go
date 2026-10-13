@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -53,10 +54,13 @@ func (runtime *PublishedAgentRuntime) Resolve(ctx context.Context, tenantID int6
 	}
 	language, err := SelectLanguage(definition, languageCode, fallback)
 	if err != nil {
+		if errors.Is(err, domain.ErrNoPrompts) {
+			return nil, &domain.AgentNotReadyError{AgentID: definition.AgentID, Reason: domain.AgentNotReadyNoLanguage}
+		}
 		return nil, err
 	}
 	if definition.Models.Text == nil {
-		return nil, fmt.Errorf("%w: agent %s release %s has no text model", domain.ErrNotReady, definition.AgentID, definition.Version)
+		return nil, &domain.AgentNotReadyError{AgentID: definition.AgentID, Reason: domain.AgentNotReadyNoTextModel}
 	}
 
 	resolved := &ResolvedAgents{

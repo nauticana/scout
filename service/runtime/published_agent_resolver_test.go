@@ -44,7 +44,7 @@ func encodedDefinition(t *testing.T, version string) string {
 
 func TestPublishedAgentResolverStable(t *testing.T) {
 	resolver := &PublishedAgentResolver{qs: publishedQueryFake{rows: [][]any{{
-		true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a",
+		true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a", true,
 	}}}}
 	definition, err := resolver.Resolve(context.Background(), 8, "writer", "", "en-US", "conversation-a")
 	if err != nil || definition.Version != "3" {
@@ -54,7 +54,7 @@ func TestPublishedAgentResolverStable(t *testing.T) {
 
 func TestPublishedAgentResolverNamedAgentNeverFallsBack(t *testing.T) {
 	named := publishedQueryFake{rows: [][]any{{
-		true, "5", nil, int64(0), encodedDefinition(t, "5"), nil, "writer-b",
+		true, "5", nil, int64(0), encodedDefinition(t, "5"), nil, "writer-b", true,
 	}}, lastArgs: map[string][]any{}}
 	resolver := &PublishedAgentResolver{qs: named}
 	if _, err := resolver.Resolve(context.Background(), 8, "writer", "writer-b", "en-US", ""); err != nil {
@@ -68,25 +68,40 @@ func TestPublishedAgentResolverNamedAgentNeverFallsBack(t *testing.T) {
 		t.Fatalf("agent of another type err = %v, want not found", err)
 	}
 	disabled := &PublishedAgentResolver{qs: publishedQueryFake{rows: [][]any{{
-		false, "5", nil, int64(0), encodedDefinition(t, "5"), nil, "writer-b",
+		false, "5", nil, int64(0), encodedDefinition(t, "5"), nil, "writer-b", true,
 	}}}}
-	if _, err := disabled.Resolve(context.Background(), 8, "writer", "writer-b", "en-US", ""); !errors.Is(err, domain.ErrNotReady) {
-		t.Fatalf("disabled named agent err = %v, want not ready", err)
+	if _, err := disabled.Resolve(context.Background(), 8, "writer", "writer-b", "en-US", ""); !notReady(err, "writer-b", domain.AgentNotReadyInactive) {
+		t.Fatalf("inactive named agent err = %v, want not ready", err)
 	}
+}
+
+func notReady(err error, agentID string, reason domain.AgentNotReadyReason) bool {
+	var typed *domain.AgentNotReadyError
+	return errors.Is(err, domain.ErrNotReady) && errors.As(err, &typed) && typed.AgentID == agentID && typed.Reason == reason
 }
 
 func TestPublishedAgentResolverRejectsDisabledAndMissingLanguage(t *testing.T) {
 	disabled := &PublishedAgentResolver{qs: publishedQueryFake{rows: [][]any{{
-		false, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a",
+		true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a", false,
 	}}}}
-	if _, err := disabled.Resolve(context.Background(), 8, "writer", "", "en-US", ""); !errors.Is(err, domain.ErrNotReady) {
+	if _, err := disabled.Resolve(context.Background(), 8, "writer", "", "en-US", ""); !notReady(err, "writer-a", domain.AgentNotReadyDisabled) {
 		t.Fatalf("disabled err = %v", err)
+	}
+	unpublished := &PublishedAgentResolver{qs: publishedQueryFake{}}
+	if _, err := unpublished.Resolve(context.Background(), 8, "writer", "", "en-US", ""); !notReady(err, "", domain.AgentNotReadyUnpublished) {
+		t.Fatalf("unpublished err = %v", err)
+	}
+	namedUnpublished := &PublishedAgentResolver{qs: publishedQueryFake{rows: [][]any{{
+		true, nil, nil, int64(0), nil, nil, "writer-a", true,
+	}}}}
+	if _, err := namedUnpublished.Resolve(context.Background(), 8, "writer", "writer-a", "en-US", ""); !notReady(err, "writer-a", domain.AgentNotReadyUnpublished) {
+		t.Fatalf("named unpublished err = %v", err)
 	}
 
 	missing := &PublishedAgentResolver{qs: publishedQueryFake{rows: [][]any{{
-		true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a",
+		true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a", true,
 	}}}}
-	if _, err := missing.Resolve(context.Background(), 8, "writer", "", "fr-FR", ""); !errors.Is(err, domain.ErrNotReady) {
+	if _, err := missing.Resolve(context.Background(), 8, "writer", "", "fr-FR", ""); !notReady(err, "writer-a", domain.AgentNotReadyNoLanguage) {
 		t.Fatalf("missing language err = %v", err)
 	}
 }
@@ -111,7 +126,7 @@ func (versionManagerFake) Rollback(context.Context, int64, string) error        
 
 func TestPublishedAgentResolverDelegatesToTrafficManager(t *testing.T) {
 	query := publishedQueryFake{rows: [][]any{{
-		true, "3", "4", int64(0), encodedDefinition(t, "3"), encodedDefinition(t, "4"), "writer-a",
+		true, "3", "4", int64(0), encodedDefinition(t, "3"), encodedDefinition(t, "4"), "writer-a", true,
 	}}}
 	// Percentage zero would keep the reference hash on stable; the manager wins.
 	resolver := &PublishedAgentResolver{qs: query, Versions: versionManagerFake("4")}
@@ -121,7 +136,7 @@ func TestPublishedAgentResolverDelegatesToTrafficManager(t *testing.T) {
 	}
 
 	pinned := publishedQueryFake{
-		rows:     [][]any{{true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a"}},
+		rows:     [][]any{{true, "3", nil, int64(0), encodedDefinition(t, "3"), nil, "writer-a", true}},
 		byName:   map[string][][]any{qPublishedAgentVersion: {{encodedDefinition(t, "9")}}},
 		lastArgs: map[string][]any{},
 	}

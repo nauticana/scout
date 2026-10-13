@@ -14,7 +14,8 @@ its type's rules and the agent's own (see [agent rules](#agent-rules-in-studio))
 at every stage, so a later layer can only add hits — it can never disable, weaken, or shadow an earlier
 rule of the same id.
 
-Rules are a typed envelope (`domain.GuardrailRuleSet{SchemaVersion, Rules}`). `RuleSetCompiler`
+Rules are a typed envelope (`domain.GuardrailRuleSet{SchemaVersion, Rules}`); a rule's optional
+`reason` says why it exists, and `ViolationError.Reasons` carries those of the blocking rules. `RuleSetCompiler`
 validates at publication (`contract.GuardrailRuleCompiler.Validate`) and compiles once per digest at
 runtime into a bounded LRU. Publication stores `Digest(rules)` in `guardrail_config.rules_digest`;
 runtime recomputes it and fails closed with `domain.ErrValidation` on any mismatch, so a tampered or

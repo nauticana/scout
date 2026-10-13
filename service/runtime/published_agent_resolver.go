@@ -23,14 +23,14 @@ const (
 var publishedAgentQueries = map[string]string{
 	// An empty agent id serves the alias target; a named one must be of the alias's type.
 	qPublishedAgent: `
-SELECT p.state_code = ` + sqlAgentActive + ` AND d.enabled, dep.stable_version, dep.canary_version, dep.canary_percentage,
-       stable.definition, canary.definition, p.agent_id
+SELECT p.state_code = ` + sqlAgentActive + `, dep.stable_version, dep.canary_version, dep.canary_percentage,
+       stable.definition, canary.definition, p.agent_id, d.enabled
   FROM agent_alias a
   JOIN agent_profile p
     ON p.partner_id = a.partner_id AND p.agent_type_id = a.agent_type_id AND p.agent_id = COALESCE(NULLIF(?, ''), a.agent_id)
   JOIN agent_draft d ON d.partner_id = p.partner_id AND d.agent_id = p.agent_id
-  JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
-  JOIN agent_version stable
+  LEFT JOIN agent_deployment dep ON dep.partner_id = p.partner_id AND dep.agent_id = p.agent_id
+  LEFT JOIN agent_version stable
     ON stable.partner_id = dep.partner_id AND stable.agent_id = dep.agent_id AND stable.agent_version = dep.stable_version
   LEFT JOIN agent_version canary
     ON canary.partner_id = dep.partner_id AND canary.agent_id = dep.agent_id AND canary.agent_version = dep.canary_version
@@ -79,10 +79,19 @@ func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID in
 	if len(result.Rows) == 0 && agentID != "" {
 		return domain.AgentDefinition{}, fmt.Errorf("%w: no published agent %q of type %q", domain.ErrNotFound, agentID, aliasID)
 	}
-	if len(result.Rows) == 0 || !common.AsBool(result.Rows[0][0]) {
-		return domain.AgentDefinition{}, domain.ErrNotReady
+	if len(result.Rows) == 0 {
+		return domain.AgentDefinition{}, &domain.AgentNotReadyError{Reason: domain.AgentNotReadyUnpublished}
 	}
 	row := result.Rows[0]
+	if !common.AsBool(row[0]) {
+		return domain.AgentDefinition{}, &domain.AgentNotReadyError{AgentID: common.AsString(row[6]), Reason: domain.AgentNotReadyInactive}
+	}
+	if !common.AsBool(row[7]) {
+		return domain.AgentDefinition{}, &domain.AgentNotReadyError{AgentID: common.AsString(row[6]), Reason: domain.AgentNotReadyDisabled}
+	}
+	if common.AsString(row[1]) == "" || row[4] == nil {
+		return domain.AgentDefinition{}, &domain.AgentNotReadyError{AgentID: common.AsString(row[6]), Reason: domain.AgentNotReadyUnpublished}
+	}
 	version, encoded, err := resolver.selectVersion(ctx, tenantID, aliasID, conversationID, row)
 	if err != nil {
 		return domain.AgentDefinition{}, err
@@ -95,7 +104,7 @@ func (resolver *PublishedAgentResolver) Resolve(ctx context.Context, tenantID in
 		return domain.AgentDefinition{}, fmt.Errorf("%w: published definition identity mismatch", domain.ErrConflict)
 	}
 	if languageCode != "" && !definitionHasLanguage(definition, languageCode) {
-		return domain.AgentDefinition{}, domain.ErrNotReady
+		return domain.AgentDefinition{}, &domain.AgentNotReadyError{AgentID: definition.AgentID, Reason: domain.AgentNotReadyNoLanguage}
 	}
 	return definition, nil
 }

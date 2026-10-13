@@ -34,15 +34,21 @@ var ErrApprovalPending = fmt.Errorf("%w: tool approval pending", domain.ErrAppro
 
 // ViolationError is the typed outcome of a blocking rule; it unwraps to domain.ErrForbidden and carries no content.
 type ViolationError struct {
-	Stage         domain.GuardrailStage
-	RuleIDs       []string
+	Stage   domain.GuardrailStage
+	RuleIDs []string
+	// Reasons are the authored reasons of the blocking rules that have one.
+	Reasons       []string
 	Severity      domain.GuardrailSeverity
 	PolicyVersion string
 	Err           error
 }
 
 func (e *ViolationError) Error() string {
-	return fmt.Sprintf("guardrail %s blocked by rules %s (policy %s)", e.Stage, strings.Join(e.RuleIDs, ","), e.PolicyVersion)
+	message := fmt.Sprintf("guardrail %s blocked by rules %s (policy %s)", e.Stage, strings.Join(e.RuleIDs, ","), e.PolicyVersion)
+	if len(e.Reasons) > 0 {
+		message += ": " + strings.Join(e.Reasons, "; ")
+	}
+	return message
 }
 
 func (e *ViolationError) Unwrap() error { return e.Err }
@@ -256,6 +262,7 @@ type inspection struct {
 
 type outcome struct {
 	blocked  []string
+	reasons  []string
 	hits     []string
 	layer    domain.GuardrailLayer
 	action   domain.GuardrailAction
@@ -306,7 +313,7 @@ func (enforcer *LayeredEnforcer) inspectLayers(ctx context.Context, config domai
 		if result.pending {
 			cause = ErrApprovalPending
 		}
-		return nil, verdict, &ViolationError{Stage: in.stage, RuleIDs: result.blocked, Severity: result.severity, PolicyVersion: config.Version, Err: cause}
+		return nil, verdict, &ViolationError{Stage: in.stage, RuleIDs: result.blocked, Reasons: result.reasons, Severity: result.severity, PolicyVersion: config.Version, Err: cause}
 	}
 	return in.content, verdict, nil
 }
@@ -334,6 +341,9 @@ func (enforcer *LayeredEnforcer) applyRule(ctx context.Context, rule *compiledRu
 	switch rule.rule.Action {
 	case domain.GuardrailActionBlock:
 		result.blocked = append(result.blocked, rule.rule.ID)
+		if rule.rule.Reason != "" {
+			result.reasons = append(result.reasons, rule.rule.Reason)
+		}
 		result.action = domain.GuardrailActionBlock
 	case domain.GuardrailActionRedact:
 		var redacted int

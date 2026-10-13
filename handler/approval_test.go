@@ -161,6 +161,10 @@ func TestApprovalConfirmationRoutesActAsTheSessionPerson(t *testing.T) {
 	if recorder.Code != http.StatusOK || inbox.outcome != domain.MCPConfirmationExecuted {
 		t.Fatalf("reconcile status = %d, outcome = %q", recorder.Code, inbox.outcome)
 	}
+	inbox.err = domain.ErrForbidden
+	if recorder = serve(http.MethodGet, api.ConfirmationsPath, api.ConfirmationsPath, nil); recorder.Code != http.StatusForbidden {
+		t.Fatalf("forbidden list status = %d", recorder.Code)
+	}
 	inbox.err = domain.ErrNotFound
 	if recorder = serve(http.MethodPost, api.ConfirmationWithdrawPath, api.ConfirmationWithdrawPath, []byte(`{"tenant_id":8,"id":6}`)); recorder.Code != http.StatusNotFound || inbox.key.ID != 6 {
 		t.Fatalf("withdraw status = %d", recorder.Code)

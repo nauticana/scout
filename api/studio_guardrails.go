@@ -19,6 +19,7 @@ type GuardrailRule struct {
 	Action   string          `json:"action"`
 	Severity string          `json:"severity"`
 	Params   json.RawMessage `json:"params,omitempty"`
+	Reason   string          `json:"reason,omitempty"`
 }
 
 // InheritedGuardrails is one layer of rules an agent inherits: B (baseline), P (platform),

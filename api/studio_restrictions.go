@@ -17,22 +17,12 @@ type RestrictionDenial struct {
 	Reason     string          `json:"reason,omitempty"`
 }
 
-// RestrictionGuardrail is a guardrail rule that blocks or redacts; params is kind-specific.
-type RestrictionGuardrail struct {
-	ID       string          `json:"id"`
-	Kind     string          `json:"kind"`
-	Stages   []string        `json:"stages,omitempty"`
-	Action   string          `json:"action"`
-	Severity string          `json:"severity"`
-	Params   json.RawMessage `json:"params,omitempty"`
-}
-
 // RestrictionLayer is one layer in force, in canonical order; digest is empty for a layer
 // never written.
 type RestrictionLayer struct {
-	Digest     string                 `json:"digest"`
-	Denials    []RestrictionDenial    `json:"denials"`
-	Guardrails []RestrictionGuardrail `json:"guardrails"`
+	Digest     string              `json:"digest"`
+	Denials    []RestrictionDenial `json:"denials"`
+	Guardrails []GuardrailRule     `json:"guardrails"`
 }
 
 // RestrictedSetting is one effective setting of the agent a restriction overrides; members are
@@ -68,7 +58,7 @@ type StudioRestrictions struct {
 // RestrictionReplaceRequest replaces the tenant's layer as a whole when it is still at
 // expected_digest, empty before the first write; the response is the layer written.
 type RestrictionReplaceRequest struct {
-	ExpectedDigest string                 `json:"expected_digest"`
-	Denials        []RestrictionDenial    `json:"denials"`
-	Guardrails     []RestrictionGuardrail `json:"guardrails"`
+	ExpectedDigest string              `json:"expected_digest"`
+	Denials        []RestrictionDenial `json:"denials"`
+	Guardrails     []GuardrailRule     `json:"guardrails"`
 }

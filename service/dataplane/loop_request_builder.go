@@ -13,9 +13,15 @@ import (
 	"github.com/nauticana/scout/service/skill"
 )
 
+// evidencedAnswerFormat is the output contract of a loop with require_evidence, domain.EvidencedAnswer.
+const evidencedAnswerFormat = `Reply with only a JSON object {"answer": "...", "claims": [{"text": "...", "evidence_ids": ["..."]}], "evidence": [{"id": "...", "source": "..."}]}. ` +
+	`Every factual statement in answer is a claim citing evidence ids. An evidence source is tool_result with call_id, ` +
+	`mcp_resource with call_id and the uri the tool returned, fact with fact_key, or object with object {"uri", "digest"}.`
+
 // ReleaseLoopRequestBuilder opens a tool loop with the pinned release's compiled
 // prompt and the turn input as the task. Task is the hook for product context; the
 // tenant's memory, the documents the release binds whole, and the index of its skills follow it.
+// A loop with require_evidence appends the evidenced answer contract to the output format.
 type ReleaseLoopRequestBuilder struct {
 	Definitions contract.AgentDefinitionReader
 	Renderer    contract.PromptRenderer
@@ -66,6 +72,9 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	}
 	if task.Context, err = builder.withSkillIndex(ctx, principal.TenantID, definition, task.Context); err != nil {
 		return domain.ModelRequest{}, err
+	}
+	if config.RequireEvidence {
+		task.OutputFormat = strings.TrimSpace(task.OutputFormat + "\n" + evidencedAnswerFormat)
 	}
 	prompt, err := compiledLanguage(definition, languageCode)
 	if err != nil {
