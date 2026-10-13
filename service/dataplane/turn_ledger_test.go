@@ -2,8 +2,10 @@ package dataplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	keelmodel "github.com/nauticana/keel/model"
@@ -127,5 +129,26 @@ func TestTurnLedgerRecordsEverySettledTurnAsARun(t *testing.T) {
 		if run.Status != domain.RunFailed || run.RequestID != "r" || run.TaskKind != "draft" || run.Release.Version != "v1" {
 			t.Fatalf("run = %+v", run)
 		}
+	}
+}
+
+func TestCompleteJobTurnWritesTheResultCardWithTheCompletion(t *testing.T) {
+	ctx, digest := context.Background(), strings.Repeat("a", 64)
+	query := &queueQueryFake{rows: map[string][][]any{qLedgerCompleteJobTurn: {{int64(3)}}}}
+	done, err := CompleteJobTurn(ctx, query, 7, 11, "draft", "reservation-1", "app://draft/5", digest, json.RawMessage(`{"draft_id":5}`))
+	if err != nil || !done {
+		t.Fatalf("done = %v, err = %v", done, err)
+	}
+	if args := query.firstArgs(qLedgerCompleteJobTurn); args[len(args)-1] != `{"draft_id":5}` {
+		t.Fatalf("args = %v", args)
+	}
+	if _, err = CompleteJobTurn(ctx, query, 7, 11, "draft", "reservation-1", "app://draft/5", digest, nil); err != nil {
+		t.Fatal(err)
+	}
+	if args := query.args[qLedgerCompleteJobTurn][1]; args[len(args)-1] != nil {
+		t.Fatalf("no card must keep the turn's: %v", args)
+	}
+	if _, err = CompleteJobTurn(ctx, query, 7, 11, "draft", "reservation-1", "app://draft/5", digest, json.RawMessage(`{`)); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a malformed card: error = %v", err)
 	}
 }

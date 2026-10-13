@@ -4,10 +4,11 @@ import "time"
 
 const StudioDecisionsPath = StudioBasePath + "decisions"
 
-// PrincipalRef names a principal: kind agent, human, or service, and its id.
+// PrincipalRef names a principal and its optional display label.
 type PrincipalRef struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
+	Kind  string `json:"kind"`
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
 }
 
 // DecisionAuthority is the authority a decision exercised: a delegation grant and its grantor.
@@ -29,6 +30,7 @@ type DecisionRecord struct {
 	Principal      PrincipalRef       `json:"principal"`
 	Authority      *DecisionAuthority `json:"authority,omitempty"`
 	ClientRef      string             `json:"client_ref,omitempty"`
+	ClientLabel    string             `json:"client_label,omitempty"`
 	WorkRef        string             `json:"work_ref,omitempty"`
 	ScopeID        string             `json:"scope_id,omitempty"`
 	ReleaseVersion string             `json:"release_version,omitempty"`

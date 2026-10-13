@@ -17,13 +17,12 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// ApprovalHandler is the HTTP bridge to the approval desk: signed-in deciders list and
-// decide their requests, and a decision link is redeemed without a session. With an Inbox it
-// also serves the signed-in person's MCP confirmations.
+// ApprovalHandler serves approval requests, decision links, and an optional confirmation inbox.
 type ApprovalHandler struct {
 	keelhandler.AbstractHandler
-	Desk  contract.ApprovalDesk
-	Inbox contract.MCPConfirmationInbox
+	Desk   contract.ApprovalDesk
+	Inbox  contract.MCPConfirmationInbox
+	Labels contract.Labeler
 }
 
 // Routes returns the approval routes, and the confirmation routes when an Inbox is composed.
@@ -127,7 +126,7 @@ func (h *ApprovalHandler) confirmations(ctx context.Context, session *keelmodel.
 		item.CanDecide, item.CanWithdraw, item.CanReconcile = entry.CanDecide, entry.CanWithdraw, entry.CanReconcile
 		items = append(items, item)
 	}
-	return items, nil
+	return h.labeled(ctx, items...)
 }
 
 func (h *ApprovalHandler) decideConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
@@ -140,7 +139,7 @@ func (h *ApprovalHandler) decideConfirmation(ctx context.Context, session *keelm
 	if err != nil {
 		return mapServiceError(nil, err)
 	}
-	return apiConfirmation(decided), nil
+	return h.labeledOne(ctx, apiConfirmation(decided))
 }
 
 func (h *ApprovalHandler) withdrawConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
@@ -166,7 +165,26 @@ func (h *ApprovalHandler) reconcileConfirmation(ctx context.Context, session *ke
 	if err != nil {
 		return mapServiceError(nil, err)
 	}
-	return apiConfirmation(reconciled), nil
+	return h.labeledOne(ctx, apiConfirmation(reconciled))
+}
+
+func (h *ApprovalHandler) labeled(ctx context.Context, items ...api.Confirmation) ([]api.Confirmation, error) {
+	labels := newPageLabels()
+	for index := range items {
+		labels.confirmation(&items[index])
+	}
+	if err := labels.apply(ctx, h.Labels); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (h *ApprovalHandler) labeledOne(ctx context.Context, item api.Confirmation) (any, error) {
+	items, err := h.labeled(ctx, item)
+	if err != nil {
+		return nil, err
+	}
+	return items[0], nil
 }
 
 // sessionPerson is the signed-in person; the confirmation inbox spans tenants, so no partner is needed.

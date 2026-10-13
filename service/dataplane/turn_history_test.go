@@ -104,3 +104,29 @@ func TestTurnHistoryReturnsOnlyBoundedErrorCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestTurnHistoryReadsTheEndUserRefTheLedgerStored(t *testing.T) {
+	ctx, tenant := context.Background(), domain.TenantContext{TenantID: 7}
+	query := &queueQueryFake{}
+	mapperCalled := false
+	history := &TurnHistory{DB: queueDBFake{query: query}, EndUserRef: func(person domain.PrincipalRef) string {
+		mapperCalled = true
+		if person.ID == "41" {
+			return "workspace:41"
+		}
+		return ""
+	}}
+	if _, err := history.Turns(ctx, tenant, historyPerson, domain.TurnHistoryFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	if args := query.firstArgs(qTurnHistory); args[1] != "workspace:41" {
+		t.Fatalf("end user ref = %v", args[1])
+	}
+	if _, err := history.Turns(ctx, tenant, domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}, domain.TurnHistoryFilter{}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("an unmapped person: error = %v", err)
+	}
+	mapperCalled = false
+	if _, err := history.Turns(ctx, tenant, domain.PrincipalRef{Kind: domain.PrincipalHuman}, domain.TurnHistoryFilter{}); !errors.Is(err, domain.ErrForbidden) || mapperCalled {
+		t.Fatalf("an invalid person: error = %v, mapper called = %v", err, mapperCalled)
+	}
+}

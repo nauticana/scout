@@ -358,6 +358,7 @@ RETURNING turn_no`,
 
 	// Finalization is fenced by the settled reservation matching staged usage.
 	qLedgerCompleteJobTurn: `
+WITH completed AS (
 UPDATE conversation_turn runtime
    SET status_code = ` + sqlTurnCompleted + `, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
        response_uri = ?, response_digest = ?, completed_at = CURRENT_TIMESTAMP
@@ -374,7 +375,13 @@ UPDATE conversation_turn runtime
                   AND reservation.status_code = ` + sqlReservationSettled + `
                   AND reservation.settled_tokens = detail.staged_input_tokens + detail.staged_output_tokens
                   AND reservation.settled_cost_minor_units = detail.staged_cost_minor_units)
-RETURNING runtime.turn_no`,
+RETURNING runtime.partner_id, runtime.conversation_id, runtime.turn_no)
+UPDATE conversation_turn_detail detail
+   SET result_payload = COALESCE(?, detail.result_payload)
+  FROM completed
+ WHERE detail.partner_id = completed.partner_id AND detail.conversation_id = completed.conversation_id
+   AND detail.turn_no = completed.turn_no
+RETURNING detail.turn_no`,
 }
 
 // TurnLedgerQueries returns the ledger's named-SQL map, for workers that
@@ -1244,13 +1251,14 @@ func AttachJobArtifact(ctx context.Context, qs port.QueryService, tenantID, jobR
 	return len(result.Rows) > 0, nil
 }
 
-// CompleteJobTurn finalizes the job turn; fenced by the settled reservation.
-func CompleteJobTurn(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID, responseURI, responseDigest string) (bool, error) {
-	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || reservationID == "" || len(responseDigest) != 64 {
+// CompleteJobTurn finalizes a fenced job turn. A nil card preserves its result payload.
+func CompleteJobTurn(ctx context.Context, qs port.QueryService, tenantID, jobRef int64, taskKind, reservationID, responseURI, responseDigest string, card json.RawMessage) (bool, error) {
+	if qs == nil || tenantID <= 0 || jobRef <= 0 || taskKind == "" || reservationID == "" || len(responseDigest) != 64 ||
+		(card != nil && !json.Valid(card)) {
 		return false, fmt.Errorf("%w: invalid completed job", domain.ErrValidation)
 	}
 	result, err := qs.Query(ctx, qLedgerCompleteJobTurn,
-		responseURI, responseDigest, tenantID, jobRef, taskKind, reservationID)
+		responseURI, responseDigest, tenantID, jobRef, taskKind, reservationID, common.NullIfEmpty(string(card)))
 	if err != nil {
 		return false, err
 	}

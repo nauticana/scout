@@ -19,6 +19,7 @@ const StudioFeatureDecisions = "decisions"
 type StudioDecisionsHandler struct {
 	keelhandler.AbstractHandler
 	Backend contract.StudioDecisionsBackend
+	Labels  contract.Labeler
 }
 
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts this route.
@@ -43,9 +44,14 @@ func (h *StudioDecisionsHandler) decisions(ctx context.Context, actor domain.Stu
 	if err != nil {
 		return nil, err
 	}
-	result := api.DecisionPage{Records: make([]api.DecisionRecord, 0, len(page.Records)), NextBefore: page.NextBefore}
-	for _, record := range page.Records {
-		result.Records = append(result.Records, decisionRecordItem(record))
+	result := api.DecisionPage{Records: make([]api.DecisionRecord, len(page.Records)), NextBefore: page.NextBefore}
+	labels := newPageLabels()
+	for index, record := range page.Records {
+		result.Records[index] = decisionRecordItem(record)
+		labels.decision(actor.TenantID, &result.Records[index])
+	}
+	if err = labels.apply(ctx, h.Labels); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

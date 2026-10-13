@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.14",
+      "title": "Turn history end-user mapping, job result cards, and display labels",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "Turn history reads the end-user ref a product's ledger stores, a job turn completes with its result card, and the confirmation inbox and decision records carry product captions.",
+      "body_markdown": "**Turn history.** `dataplane.TurnHistory.EndUserRef func(domain.PrincipalRef) string` maps the person to the end-user ref the product passes `TurnLedger.Begin`; nil keeps the person's id, and an empty result is `ErrForbidden`.\n\n**Job result card (breaking).** `dataplane.CompleteJobTurn(ctx, qs, tenantID, jobRef, taskKind, reservationID, responseURI, responseDigest)` becomes `CompleteJobTurn(..., responseDigest, card json.RawMessage)`, writing `conversation_turn_detail.result_payload` in the same fenced statement; nil keeps the stored card and malformed JSON is `ErrValidation`.\n\n**Display labels.** `contract.Labeler` fills `domain.Labels`, whose principal and client refs are tenant-scoped. Set as `ApprovalHandler.Labels` or `StudioDecisionsHandler.Labels`, it adds `api.PrincipalRef.Label`, `api.Confirmation.TenantLabel` and `ClientLabel`, and `api.DecisionRecord.ClientLabel`; a labeler error fails the request."
+    },
+    {
       "version": "v1.2.13",
       "title": "Turn history, decision records, and the confirmation inbox over HTTP",
       "tags": [

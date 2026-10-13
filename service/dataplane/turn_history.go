@@ -53,6 +53,8 @@ type TurnHistory struct {
 	// for; zero takes DefaultTurnHistoryPageSize and DefaultTurnHistoryMaxPageSize.
 	PageSize    int
 	MaxPageSize int
+	// EndUserRef maps a person to the value given to TurnLedger.Begin. Nil uses the person's id.
+	EndUserRef func(domain.PrincipalRef) string
 
 	once sync.Once
 	qs   port.QueryService
@@ -69,9 +71,16 @@ func (h *TurnHistory) Turns(ctx context.Context, tenant domain.TenantContext, pe
 		return domain.TurnHistoryPage{}, fmt.Errorf("%w: turn history page size %d must lie within 1..%d and its maximum within 1..%d",
 			domain.ErrNotReady, pageSize, maxPageSize, maxTurnHistoryPageSize)
 	}
-	switch {
-	case tenant.TenantID <= 0 || person.Kind != domain.PrincipalHuman || strings.TrimSpace(person.ID) == "":
+	if tenant.TenantID <= 0 || person.Kind != domain.PrincipalHuman || strings.TrimSpace(person.ID) == "" {
 		return domain.TurnHistoryPage{}, fmt.Errorf("%w: turn history needs a tenant and a person", domain.ErrForbidden)
+	}
+	endUser := person.ID
+	if h.EndUserRef != nil {
+		endUser = h.EndUserRef(person)
+	}
+	switch {
+	case strings.TrimSpace(endUser) == "" || len([]rune(endUser)) > 200:
+		return domain.TurnHistoryPage{}, fmt.Errorf("%w: the person has no end-user ref", domain.ErrForbidden)
 	case filter.Limit < 0 || filter.Limit > maxPageSize:
 		return domain.TurnHistoryPage{}, fmt.Errorf("%w: limit must lie within 0..%d", domain.ErrValidation, maxPageSize)
 	case len(filter.WorkRef) > 200:
@@ -83,7 +92,7 @@ func (h *TurnHistory) Turns(ctx context.Context, tenant domain.TenantContext, pe
 	}
 	h.once.Do(func() { h.qs = h.DB.GetQueryService(ctx, turnHistoryQueries) })
 	limit := cmp.Or(filter.Limit, pageSize)
-	result, err := h.qs.Query(ctx, qTurnHistory, tenant.TenantID, person.ID, filter.WorkRef, filter.WorkRef,
+	result, err := h.qs.Query(ctx, qTurnHistory, tenant.TenantID, endUser, filter.WorkRef, filter.WorkRef,
 		filter.Before, beforeAt, beforeAt, beforeRequest, limit+1)
 	if err != nil {
 		return domain.TurnHistoryPage{}, fmt.Errorf("list turns: %w", err)

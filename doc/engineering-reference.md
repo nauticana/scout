@@ -944,7 +944,8 @@ Every limit in both services is a validated constructor input; [Configuration](c
 `handler.ConversationHandler` exposes the common HTTP transport over any composed
 `contract.DataPlane`: `POST <base>/turn`, `GET <base>/turn/stream?request_id=&cursor=`
 as SSE, `POST <base>/turn/cancel`, `GET <base>/agents?agent_type=`, and, with `History`
-(`dataplane.TurnHistory`), `GET <base>/turns`, the person's turn history. Inject its
+(`dataplane.TurnHistory`, with `EndUserRef` when the ledger keys conversations by the product's
+own end-user ref), `GET <base>/turns`, the person's turn history. Inject its
 `CallerResolver` to map the authenticated product session to the tenant context and the
 person a turn acts for (`handler.SessionCaller` takes the session's partner and user), and
 set `BasePath` when mounting it outside `/api/conversation/`. The data plane resolves the

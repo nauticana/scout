@@ -69,9 +69,11 @@ type ApprovalLinkRequest struct {
 // signed-in person may do now. Its stored payload stays server-side; preview is what a person reads.
 type Confirmation struct {
 	TenantID         int64           `json:"tenant_id"`
+	TenantLabel      string          `json:"tenant_label,omitempty"`
 	ID               int64           `json:"id"`
 	Maker            PrincipalRef    `json:"maker"`
 	ClientRef        string          `json:"client_ref,omitempty"`
+	ClientLabel      string          `json:"client_label,omitempty"`
 	Tool             string          `json:"tool"`
 	PayloadDigest    string          `json:"payload_digest"`
 	Preview          json.RawMessage `json:"preview,omitempty"`
