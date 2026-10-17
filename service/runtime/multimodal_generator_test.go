@@ -24,14 +24,14 @@ func (s *stubExecutor) Generate(_ context.Context, task domain.AgentTask) (domai
 	return s.result, s.err
 }
 
-func (s *stubExecutor) GenerateImage(_ context.Context, _ string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (s *stubExecutor) GenerateImage(_ context.Context, _ string, request domain.ImageRequest) (domain.MediaResult, error) {
 	s.imageRequest = request
-	return s.images, s.err
+	return domain.MediaResult{Media: s.images, Usage: domain.ModelUsage{Images: int64(len(s.images)), OutputTokens: 1000}}, s.err
 }
 
-func (s *stubExecutor) GenerateVideo(_ context.Context, _ string, request domain.VideoRequest) ([]domain.GeneratedMedia, error) {
+func (s *stubExecutor) GenerateVideo(_ context.Context, _ string, request domain.VideoRequest) (domain.MediaResult, error) {
 	s.videoRequest = request
-	return s.videos, s.err
+	return domain.MediaResult{Media: s.videos, Usage: domain.ModelUsage{VideoSeconds: int64(len(s.videos)) * int64(request.DurationSeconds)}}, s.err
 }
 
 func (s *stubExecutor) AgentID() string                                { return "writer-a" }
@@ -59,7 +59,7 @@ func TestGenerateTextOnly(t *testing.T) {
 	if result.Text != "<p>body</p>" || result.Usage.OutputTokens != 20 {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(result.Media) != 0 || result.ImageCount != 0 || result.VideoSeconds != 0 {
+	if len(result.Media) != 0 || result.Image != (domain.ModelUsage{}) || result.Video != (domain.ModelUsage{}) {
 		t.Fatalf("no media was requested but got %+v", result.Media)
 	}
 	if text.task.OutputFormat != "HTML" {
@@ -93,8 +93,8 @@ func TestGenerateWithMediaNamesAndStyles(t *testing.T) {
 			t.Errorf("media[%d] = %s, want %s", i, result.Media[i].FileName, name)
 		}
 	}
-	if result.ImageCount != 2 || result.VideoSeconds != 5 {
-		t.Errorf("billable quantities: images=%d videoSeconds=%d", result.ImageCount, result.VideoSeconds)
+	if result.Image != (domain.ModelUsage{Images: 2, OutputTokens: 1000}) || result.Video != (domain.ModelUsage{VideoSeconds: 5}) {
+		t.Errorf("media usage: image=%+v video=%+v", result.Image, result.Video)
 	}
 	if media.imageRequest.StyleHint != "tone: warm" || media.videoRequest.StyleHint != "tone: warm" {
 		t.Errorf("media must inherit the agent style: image=%q video=%q", media.imageRequest.StyleHint, media.videoRequest.StyleHint)

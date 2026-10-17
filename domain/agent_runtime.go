@@ -35,6 +35,10 @@ type ImageRequest struct {
 	Count          int32
 	AspectRatio    string
 	StyleHint      string
+	// Quality and OutputFormat are the vendor's own values, such as low, medium
+	// or high and png, jpeg or webp; empty leaves the vendor default.
+	Quality      string
+	OutputFormat string
 }
 
 // VideoRequest bounds one video generation call.
@@ -54,6 +58,13 @@ type GeneratedMedia struct {
 	MimeType string
 }
 
+// MediaResult is the media one generation call produced and the usage it
+// billed: the asset count or seconds, and the tokens of a token-priced model.
+type MediaResult struct {
+	Media []GeneratedMedia
+	Usage ModelUsage
+}
+
 // NamedMedia is generated media with a stable asset name for storage.
 type NamedMedia struct {
 	GeneratedMedia
@@ -70,14 +81,14 @@ type MultimodalTask struct {
 	AssetBaseName string
 }
 
-// MultimodalResult carries the text, its usage, and every produced asset.
-// ImageCount and VideoSeconds are the billable media quantities.
+// MultimodalResult carries the text, its usage, every produced asset, and the
+// usage of each media model, billed on that model's own prices.
 type MultimodalResult struct {
 	Text string
 	// Citations are the sources of a grounded answer, in the provider's order.
-	Citations    []Citation
-	Usage        Usage
-	Media        []NamedMedia
-	ImageCount   int
-	VideoSeconds int
+	Citations []Citation
+	Usage     Usage
+	Media     []NamedMedia
+	Image     ModelUsage
+	Video     ModelUsage
 }

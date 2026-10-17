@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -17,7 +19,7 @@ import (
 
 // OpenAI invokes Chat Completions for text and the Images API for image
 // generation; with ProviderID and BaseURL it serves an OpenAI-compatible
-// vendor. Video generation is not wired.
+// vendor, grounding xAI through its Responses API. Video generation is not wired.
 type OpenAI struct {
 	APIKey string
 	// Temperature is sent only when set; nil leaves sampling to the model.
@@ -51,7 +53,16 @@ func (p *OpenAI) client() (openai.Client, error) {
 	return openai.NewClient(options...), nil
 }
 
+// Generate answers through Chat Completions; a grounded xAI call goes through
+// the Responses API, the only one xAI grounds.
 func (p *OpenAI) Generate(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (domain.ModelResult, error) {
+	if request.Search != nil && p.id() == XAIProviderID {
+		return p.respond(ctx, selection, request)
+	}
+	return p.complete(ctx, selection, request)
+}
+
+func (p *OpenAI) complete(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (domain.ModelResult, error) {
 	client, err := p.client()
 	if err != nil {
 		return domain.ModelResult{}, err
@@ -112,9 +123,6 @@ func (p *OpenAI) completionParams(selection domain.ModelSelection, request domai
 		params.Tools = append(params.Tools, openai.ChatCompletionToolParam{Function: function})
 	}
 	if request.Search != nil {
-		if p.id() == XAIProviderID {
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("%w: %s adapter cannot ground a call", domain.ErrCapabilityUnsupported, p.id())
-		}
 		if err := checkSearchBound(p.id(), request.Search); err != nil {
 			return openai.ChatCompletionNewParams{}, err
 		}
@@ -315,23 +323,33 @@ func openAIStream(provider string, stream *ssestream.Stream[openai.ChatCompletio
 	}
 }
 
-func (p *OpenAI) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (p *OpenAI) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error) {
 	client, err := p.client()
 	if err != nil {
-		return nil, err
+		return domain.MediaResult{}, err
 	}
 	if model == "" {
-		return nil, fmt.Errorf("%w: no image model configured", domain.ErrValidation)
+		return domain.MediaResult{}, fmt.Errorf("%w: no image model configured", domain.ErrValidation)
 	}
+	size, err := openAIImageSize(request.AspectRatio)
+	if err != nil {
+		return domain.MediaResult{}, err
+	}
+	// GPT Image models refuse response_format and always return base64.
 	resp, err := client.Images.Generate(ctx, openai.ImageGenerateParams{
-		Model:          openai.ImageModel(model),
-		Prompt:         mediaPrompt(request.Prompt, request.StyleHint),
-		N:              openai.Int(int64(atLeastOne(request.Count))),
-		Size:           openai.ImageGenerateParamsSize1024x1024,
-		ResponseFormat: openai.ImageGenerateParamsResponseFormatB64JSON,
+		Model:        openai.ImageModel(model),
+		Prompt:       mediaPrompt(request.Prompt, request.StyleHint),
+		N:            openai.Int(int64(atLeastOne(request.Count))),
+		Size:         size,
+		Quality:      openai.ImageGenerateParamsQuality(request.Quality),
+		OutputFormat: openai.ImageGenerateParamsOutputFormat(request.OutputFormat),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openai Images.Generate: %w", err)
+		return domain.MediaResult{}, fmt.Errorf("openai Images.Generate: %w", err)
+	}
+	mimeType := "image/png"
+	if resp.OutputFormat != "" {
+		mimeType = "image/" + string(resp.OutputFormat)
 	}
 	results := make([]domain.GeneratedMedia, 0, len(resp.Data))
 	for _, image := range resp.Data {
@@ -340,16 +358,39 @@ func (p *OpenAI) GenerateImage(ctx context.Context, model string, request domain
 		}
 		data, decodeErr := base64.StdEncoding.DecodeString(image.B64JSON)
 		if decodeErr != nil {
-			return nil, fmt.Errorf("openai image base64 decode: %w", decodeErr)
+			return domain.MediaResult{}, fmt.Errorf("openai image base64 decode: %w", decodeErr)
 		}
-		results = append(results, domain.GeneratedMedia{Data: data, MimeType: "image/png"})
+		results = append(results, domain.GeneratedMedia{Data: data, MimeType: mimeType})
 	}
 	if len(results) == 0 {
-		return nil, fmt.Errorf("openai: no images generated")
+		return domain.MediaResult{}, fmt.Errorf("openai: no images generated")
 	}
-	return results, nil
+	return domain.MediaResult{Media: results, Usage: domain.ModelUsage{
+		Images: int64(len(results)), InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens,
+	}}, nil
 }
 
-func (p *OpenAI) GenerateVideo(context.Context, string, domain.VideoRequest) ([]domain.GeneratedMedia, error) {
-	return nil, fmt.Errorf("video generation is not supported by the openai adapter")
+// openAIImageSize maps an aspect ratio onto the landscape, portrait or square
+// size GPT Image renders; empty leaves the vendor's automatic choice.
+func openAIImageSize(aspectRatio string) (openai.ImageGenerateParamsSize, error) {
+	if aspectRatio == "" {
+		return "", nil
+	}
+	widthText, heightText, found := strings.Cut(aspectRatio, ":")
+	width, widthErr := strconv.Atoi(widthText)
+	height, heightErr := strconv.Atoi(heightText)
+	if !found || widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return "", fmt.Errorf("%w: aspect ratio %q is not w:h", domain.ErrValidation, aspectRatio)
+	}
+	switch {
+	case width > height:
+		return openai.ImageGenerateParamsSize1536x1024, nil
+	case width < height:
+		return openai.ImageGenerateParamsSize1024x1536, nil
+	}
+	return openai.ImageGenerateParamsSize1024x1024, nil
+}
+
+func (p *OpenAI) GenerateVideo(context.Context, string, domain.VideoRequest) (domain.MediaResult, error) {
+	return domain.MediaResult{}, fmt.Errorf("%w: video generation is not supported by the openai adapter", domain.ErrCapabilityUnsupported)
 }

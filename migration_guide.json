@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.18",
+      "title": "GPT Image generation and grounded xAI answers",
+      "tags": [
+        "breaking"
+      ],
+      "summary": "Media generation returns the usage it billed, the OpenAI image adapter speaks to GPT Image models, and a grounded xAI call goes through the Responses API; adopts keel v1.2.129.",
+      "body_markdown": "Adopts keel v1.2.129.\n\n**Media usage (breaking).** `contract.MediaProvider` and `contract.AgentExecutor` return `domain.MediaResult{Media, Usage}` from `GenerateImage` and `GenerateVideo`; `Usage` is a `domain.ModelUsage` with the asset count or seconds and, for a token-priced image model, its tokens. `domain.MultimodalResult.ImageCount` and `VideoSeconds` become `Image` and `Video` (`ModelUsage`). `dataplane.PriceModelUsage(ctx, text, image, video, textUsage, imageUsage, videoUsage)` prices each modality on its own agent; pass `MultimodalResult.Image` and `Video` where the image count and seconds were passed. `MediaGateway` releases its lease with the media call's tokens.\n\n**GPT Image.** `provider.OpenAI.GenerateImage` sends no `response_format`, maps `ImageRequest.AspectRatio` (`w:h`) onto the landscape, portrait or square size, empty to the vendor's automatic size, and passes the new `ImageRequest.Quality` and `OutputFormat` (vendor values; empty leaves the default). The media's content type follows the response's output format and the result carries the response's token usage. `GenerateVideo` on the OpenAI adapter is `ErrCapabilityUnsupported`.\n\n**xAI grounding.** A grounded `xai` call runs through the Responses API with the `web_search` tool, instructions, the conversation, function tools and JSON schema output; `url_citation` annotations and top-level `citations` become `Citations`, `SearchQueries` counts the search calls, and a streamed grounded call arrives as one frame. `MaxSearches` and `Location` remain `ErrCapabilityUnsupported` for `xai`."
+    },
+    {
       "version": "v1.2.17",
       "title": "Tool schema tool, OpenAI-compatible vendors, and model listing",
       "tags": [

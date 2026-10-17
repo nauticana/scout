@@ -379,13 +379,13 @@ func googleFold(aggregate, response *genai.GenerateContentResponse) string {
 	return text
 }
 
-func (p *Google) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (p *Google) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error) {
 	if model == "" {
-		return nil, fmt.Errorf("%w: no image model configured", domain.ErrValidation)
+		return domain.MediaResult{}, fmt.Errorf("%w: no image model configured", domain.ErrValidation)
 	}
 	client, err := p.newClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("genai.NewClient: %w", err)
+		return domain.MediaResult{}, fmt.Errorf("genai.NewClient: %w", err)
 	}
 	aspectRatio := request.AspectRatio
 	if aspectRatio == "" {
@@ -396,7 +396,7 @@ func (p *Google) GenerateImage(ctx context.Context, model string, request domain
 		AspectRatio:    aspectRatio,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("genai GenerateImages: %w", err)
+		return domain.MediaResult{}, fmt.Errorf("genai GenerateImages: %w", err)
 	}
 	results := make([]domain.GeneratedMedia, 0, len(resp.GeneratedImages))
 	for _, image := range resp.GeneratedImages {
@@ -405,18 +405,18 @@ func (p *Google) GenerateImage(ctx context.Context, model string, request domain
 		}
 	}
 	if len(results) == 0 {
-		return nil, fmt.Errorf("genai: no images generated")
+		return domain.MediaResult{}, fmt.Errorf("genai: no images generated")
 	}
-	return results, nil
+	return domain.MediaResult{Media: results, Usage: domain.ModelUsage{Images: int64(len(results))}}, nil
 }
 
-func (p *Google) GenerateVideo(ctx context.Context, model string, request domain.VideoRequest) ([]domain.GeneratedMedia, error) {
+func (p *Google) GenerateVideo(ctx context.Context, model string, request domain.VideoRequest) (domain.MediaResult, error) {
 	if model == "" {
-		return nil, fmt.Errorf("%w: no video model configured", domain.ErrValidation)
+		return domain.MediaResult{}, fmt.Errorf("%w: no video model configured", domain.ErrValidation)
 	}
 	client, err := p.newClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("genai.NewClient: %w", err)
+		return domain.MediaResult{}, fmt.Errorf("genai.NewClient: %w", err)
 	}
 	duration := request.DurationSeconds
 	if duration <= 0 {
@@ -427,7 +427,7 @@ func (p *Google) GenerateVideo(ctx context.Context, model string, request domain
 		NumberOfVideos:  atLeastOne(request.Count),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("genai GenerateVideos: %w", err)
+		return domain.MediaResult{}, fmt.Errorf("genai GenerateVideos: %w", err)
 	}
 	interval := p.VideoPollInterval
 	if interval <= 0 {
@@ -436,18 +436,18 @@ func (p *Google) GenerateVideo(ctx context.Context, model string, request domain
 	for !operation.Done {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return domain.MediaResult{}, ctx.Err()
 		case <-time.After(interval):
 		}
 		if operation, err = client.Operations.GetVideosOperation(ctx, operation, nil); err != nil {
-			return nil, fmt.Errorf("genai GetVideosOperation: %w", err)
+			return domain.MediaResult{}, fmt.Errorf("genai GetVideosOperation: %w", err)
 		}
 	}
 	if operation.Error != nil {
-		return nil, fmt.Errorf("genai video generation failed: %v", operation.Error)
+		return domain.MediaResult{}, fmt.Errorf("genai video generation failed: %v", operation.Error)
 	}
 	if operation.Response == nil || len(operation.Response.GeneratedVideos) == 0 {
-		return nil, fmt.Errorf("genai: no videos generated")
+		return domain.MediaResult{}, fmt.Errorf("genai: no videos generated")
 	}
 	results := make([]domain.GeneratedMedia, 0, len(operation.Response.GeneratedVideos))
 	for _, video := range operation.Response.GeneratedVideos {
@@ -455,5 +455,5 @@ func (p *Google) GenerateVideo(ctx context.Context, model string, request domain
 			results = append(results, domain.GeneratedMedia{Data: video.Video.VideoBytes, MimeType: "video/mp4"})
 		}
 	}
-	return results, nil
+	return domain.MediaResult{Media: results, Usage: domain.ModelUsage{VideoSeconds: int64(len(results)) * int64(duration)}}, nil
 }

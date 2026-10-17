@@ -129,16 +129,16 @@ type mediaProviderRecorder struct {
 	videoRequest domain.VideoRequest
 }
 
-func (provider *mediaProviderRecorder) GenerateImage(_ context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (provider *mediaProviderRecorder) GenerateImage(_ context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error) {
 	provider.imageModel = model
 	provider.imageRequest = request
-	return []domain.GeneratedMedia{{MimeType: "image/png"}}, nil
+	return domain.MediaResult{Media: []domain.GeneratedMedia{{MimeType: "image/png"}}}, nil
 }
 
-func (provider *mediaProviderRecorder) GenerateVideo(_ context.Context, model string, request domain.VideoRequest) ([]domain.GeneratedMedia, error) {
+func (provider *mediaProviderRecorder) GenerateVideo(_ context.Context, model string, request domain.VideoRequest) (domain.MediaResult, error) {
 	provider.videoModel = model
 	provider.videoRequest = request
-	return []domain.GeneratedMedia{{MimeType: "video/mp4"}}, nil
+	return domain.MediaResult{Media: []domain.GeneratedMedia{{MimeType: "video/mp4"}}}, nil
 }
 
 var _ contract.PromptRenderer = (*rendererRecorder)(nil)

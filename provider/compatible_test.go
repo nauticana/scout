@@ -58,18 +58,91 @@ func TestPerplexityAnswersWithItsSources(t *testing.T) {
 	}
 }
 
-func TestCompatibleVendorsRefuseGroundingTheyCannotHonour(t *testing.T) {
-	xai := compatibleVendors[XAIProviderID]
-	for _, adapter := range []*OpenAI{&xai, {ProviderID: XAIProviderID}} {
-		if _, err := adapter.completionParams(domain.ModelSelection{Model: "grok"}, groundedRequest(0)); !errors.Is(err, domain.ErrCapabilityUnsupported) {
-			t.Fatalf("xai grounded call = %v, want refusal", err)
+// xAI grounds through its Responses API: the web_search tool, the conversation
+// as input items, and sources from url_citation annotations and top-level citations.
+func TestXAIGroundsThroughResponses(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" || json.NewDecoder(r.Body).Decode(&body) != nil {
+			http.Error(w, r.URL.Path, http.StatusNotFound)
+			return
 		}
-		if _, err := adapter.completionParams(domain.ModelSelection{Model: "grok"}, domain.ModelRequest{Prompt: []byte("hi")}); err != nil {
-			t.Fatalf("xai ungrounded call: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"r","object":"response","status":"completed","model":"grok","output":[
+			{"type":"web_search_call","id":"ws1","status":"completed"},{"type":"web_search_call","id":"ws2","status":"completed"},
+			{"type":"message","id":"m","role":"assistant","status":"completed","content":[{"type":"output_text","text":"a ranks first",
+			 "annotations":[{"type":"url_citation","url":"https://a.example/p","title":"A","start_index":0,"end_index":1}]}]}],
+			"citations":["https://a.example/p","https://b.example/q"],
+			"usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}`))
+	}))
+	defer server.Close()
+	adapter := &OpenAI{APIKey: "key", ProviderID: XAIProviderID, BaseURL: server.URL}
+	request := groundedRequest(0)
+	request.Instructions = []byte("be brief")
+	request.Messages = []domain.ModelMessage{
+		{Role: domain.ModelRoleAssistant, ToolCalls: []domain.ModelToolCall{{CallID: "c1", Name: "lookup", Arguments: []byte(`{}`)}}},
+		{Role: domain.ModelRoleTool, Observations: []domain.ModelToolObservation{{CallID: "c1", Output: []byte("found")}}},
+	}
+	result, err := adapter.Generate(context.Background(), domain.ModelSelection{Model: "grok"}, request)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	tools, _ := body["tools"].([]any)
+	input, _ := body["input"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["type"] != "web_search" || body["instructions"] != "be brief" || len(input) != 3 {
+		t.Fatalf("request = %v", body)
+	}
+	requireCitation(t, result.Citations, 0, "https://a.example/p", "a.example", "A", "a")
+	requireCitation(t, result.Citations, 1, "https://b.example/q", "b.example", "", "")
+	if string(result.Output) != "a ranks first" || result.FinishReason != "stop" || result.Usage.InputTokens != 5 || result.Usage.OutputTokens != 7 || result.Usage.SearchQueries != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestCompatibleVendorsRefuseGroundingTheyCannotHonour(t *testing.T) {
+	xai := &OpenAI{APIKey: "key", ProviderID: XAIProviderID}
+	located := groundedRequest(0)
+	located.Search.Location = &domain.SearchLocation{Country: "US"}
+	for name, request := range map[string]domain.ModelRequest{"bounded": groundedRequest(2), "located": located} {
+		if _, err := xai.Generate(context.Background(), domain.ModelSelection{Model: "grok"}, request); !errors.Is(err, domain.ErrCapabilityUnsupported) {
+			t.Fatalf("xai %s grounded call = %v, want refusal", name, err)
 		}
 	}
 	if SupportsSearchLocation(PerplexityProviderID, domain.SearchLocation{Country: "US"}) {
 		t.Fatal("perplexity takes no OpenAI-shaped location")
+	}
+}
+
+// GPT Image models refuse response_format; the request carries the size the
+// aspect ratio implies, the quality and output format, and the response's token usage.
+func TestOpenAIGeneratesGPTImages(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" || json.NewDecoder(r.Body).Decode(&body) != nil {
+			http.Error(w, r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1,"output_format":"webp","data":[{"b64_json":"aGk="}],
+			"usage":{"input_tokens":20,"output_tokens":4000,"total_tokens":4020}}`))
+	}))
+	defer server.Close()
+	adapter := &OpenAI{APIKey: "key", BaseURL: server.URL}
+	result, err := adapter.GenerateImage(context.Background(), "gpt-image-2.5-flare", domain.ImageRequest{
+		Prompt: "a harbour", AspectRatio: "16:9", Quality: "high", OutputFormat: "webp",
+	})
+	if err != nil {
+		t.Fatalf("GenerateImage: %v", err)
+	}
+	if _, sent := body["response_format"]; sent || body["size"] != "1536x1024" || body["quality"] != "high" || body["output_format"] != "webp" || body["n"] != float64(1) {
+		t.Fatalf("request = %v", body)
+	}
+	if len(result.Media) != 1 || string(result.Media[0].Data) != "hi" || result.Media[0].MimeType != "image/webp" ||
+		result.Usage != (domain.ModelUsage{Images: 1, InputTokens: 20, OutputTokens: 4000}) {
+		t.Fatalf("result = %+v", result)
+	}
+	if _, err := adapter.GenerateImage(context.Background(), "gpt-image-2.5-flare", domain.ImageRequest{AspectRatio: "wide"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("malformed aspect ratio = %v, want validation", err)
 	}
 }
 

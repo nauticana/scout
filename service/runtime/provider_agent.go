@@ -132,13 +132,13 @@ func (agent *ProviderAgent) modelRequestID(ctx context.Context) (string, error) 
 
 // GenerateImage executes one image request, overriding any prompt already on
 // the request with the invocation prompt.
-func (agent *ProviderAgent) GenerateImage(ctx context.Context, prompt string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (agent *ProviderAgent) GenerateImage(ctx context.Context, prompt string, request domain.ImageRequest) (domain.MediaResult, error) {
 	if agent == nil || agent.media == nil {
-		return nil, fmt.Errorf("%w: image generation is not supported", domain.ErrNotReady)
+		return domain.MediaResult{}, fmt.Errorf("%w: image generation is not supported", domain.ErrNotReady)
 	}
 	requestID, err := agent.modelRequestID(ctx)
 	if err != nil {
-		return nil, err
+		return domain.MediaResult{}, err
 	}
 	request.TenantContext = agent.tenant
 	request.RequestID = requestID
@@ -149,13 +149,13 @@ func (agent *ProviderAgent) GenerateImage(ctx context.Context, prompt string, re
 
 // GenerateVideo executes one video request, overriding any prompt already on
 // the request with the invocation prompt.
-func (agent *ProviderAgent) GenerateVideo(ctx context.Context, prompt string, request domain.VideoRequest) ([]domain.GeneratedMedia, error) {
+func (agent *ProviderAgent) GenerateVideo(ctx context.Context, prompt string, request domain.VideoRequest) (domain.MediaResult, error) {
 	if agent == nil || agent.media == nil {
-		return nil, fmt.Errorf("%w: video generation is not supported", domain.ErrNotReady)
+		return domain.MediaResult{}, fmt.Errorf("%w: video generation is not supported", domain.ErrNotReady)
 	}
 	requestID, err := agent.modelRequestID(ctx)
 	if err != nil {
-		return nil, err
+		return domain.MediaResult{}, err
 	}
 	request.TenantContext = agent.tenant
 	request.RequestID = requestID

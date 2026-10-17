@@ -30,30 +30,30 @@ func NewMediaGateway(rateLimiter contract.TenantRateLimiter, provider contract.M
 	return &MediaGateway{RateLimiter: rateLimiter, Provider: provider, Capacity: capacity, ProviderID: providerID}, nil
 }
 
-func (gateway *MediaGateway) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (gateway *MediaGateway) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error) {
 	invocation := domain.ModelRequest{
 		TenantContext: request.TenantContext, RequestID: request.RequestID, ConversationID: request.ConversationID,
 		Prompt: []byte(request.Prompt), MaxOutputTokens: 1,
 	}
 	lease, err := gateway.acquire(ctx, model, invocation)
 	if err != nil {
-		return nil, err
+		return domain.MediaResult{}, err
 	}
-	media, callErr := gateway.Provider.GenerateImage(ctx, model, request)
-	return media, errors.Join(callErr, lease.Release(context.WithoutCancel(ctx), domain.Usage{}))
+	result, callErr := gateway.Provider.GenerateImage(ctx, model, request)
+	return result, errors.Join(callErr, lease.Release(context.WithoutCancel(ctx), domain.Usage{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens}))
 }
 
-func (gateway *MediaGateway) GenerateVideo(ctx context.Context, model string, request domain.VideoRequest) ([]domain.GeneratedMedia, error) {
+func (gateway *MediaGateway) GenerateVideo(ctx context.Context, model string, request domain.VideoRequest) (domain.MediaResult, error) {
 	invocation := domain.ModelRequest{
 		TenantContext: request.TenantContext, RequestID: request.RequestID, ConversationID: request.ConversationID,
 		Prompt: []byte(request.Prompt), MaxOutputTokens: 1,
 	}
 	lease, err := gateway.acquire(ctx, model, invocation)
 	if err != nil {
-		return nil, err
+		return domain.MediaResult{}, err
 	}
-	media, callErr := gateway.Provider.GenerateVideo(ctx, model, request)
-	return media, errors.Join(callErr, lease.Release(context.WithoutCancel(ctx), domain.Usage{}))
+	result, callErr := gateway.Provider.GenerateVideo(ctx, model, request)
+	return result, errors.Join(callErr, lease.Release(context.WithoutCancel(ctx), domain.Usage{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens}))
 }
 
 func (gateway *MediaGateway) acquire(ctx context.Context, model string, request domain.ModelRequest) (contract.CapacityLease, error) {

@@ -31,12 +31,12 @@ func (e *executorFake) Generate(context.Context, domain.AgentTask) (domain.Model
 		Usage: domain.Usage{InputTokens: e.in, OutputTokens: e.out}}, nil
 }
 
-func (e *executorFake) GenerateImage(context.Context, string, domain.ImageRequest) ([]domain.GeneratedMedia, error) {
-	return nil, nil
+func (e *executorFake) GenerateImage(context.Context, string, domain.ImageRequest) (domain.MediaResult, error) {
+	return domain.MediaResult{}, nil
 }
 
-func (e *executorFake) GenerateVideo(context.Context, string, domain.VideoRequest) ([]domain.GeneratedMedia, error) {
-	return nil, nil
+func (e *executorFake) GenerateVideo(context.Context, string, domain.VideoRequest) (domain.MediaResult, error) {
+	return domain.MediaResult{}, nil
 }
 
 func (e *executorFake) AgentID() string                                { return "writer" }

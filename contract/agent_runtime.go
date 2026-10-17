@@ -17,8 +17,8 @@ type PromptRenderer interface {
 // MediaProvider adapts a provider that generates images or video. Providers
 // that only serve text implement ModelProvider alone.
 type MediaProvider interface {
-	GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error)
-	GenerateVideo(ctx context.Context, model string, request domain.VideoRequest) ([]domain.GeneratedMedia, error)
+	GenerateImage(ctx context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error)
+	GenerateVideo(ctx context.Context, model string, request domain.VideoRequest) (domain.MediaResult, error)
 }
 
 // AgentProviderFactory supplies the configured provider adapters for one
@@ -52,8 +52,8 @@ type SamplingSupport interface {
 // quota accounting without reimplementing prompt and media execution.
 type AgentExecutor interface {
 	Generate(ctx context.Context, task domain.AgentTask) (domain.ModelResult, error)
-	GenerateImage(ctx context.Context, prompt string, request domain.ImageRequest) ([]domain.GeneratedMedia, error)
-	GenerateVideo(ctx context.Context, prompt string, request domain.VideoRequest) ([]domain.GeneratedMedia, error)
+	GenerateImage(ctx context.Context, prompt string, request domain.ImageRequest) (domain.MediaResult, error)
+	GenerateVideo(ctx context.Context, prompt string, request domain.VideoRequest) (domain.MediaResult, error)
 	AgentID() string
 	ModelReference() domain.ModelReference
 	PromptSections() []domain.CompiledPromptSection

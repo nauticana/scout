@@ -12,9 +12,10 @@ import (
 
 func TestMediaGatewayAppliesControlsAndReleasesCapacity(t *testing.T) {
 	var calls []string
-	provider := mediaProviderFunc(func(context.Context, string, domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+	var released domain.Usage
+	provider := mediaProviderFunc(func(context.Context, string, domain.ImageRequest) (domain.MediaResult, error) {
 		calls = append(calls, "generate")
-		return []domain.GeneratedMedia{{MimeType: "image/png"}}, nil
+		return domain.MediaResult{Media: []domain.GeneratedMedia{{MimeType: "image/png"}}, Usage: domain.ModelUsage{Images: 1, InputTokens: 20, OutputTokens: 4000}}, nil
 	})
 	gateway, err := NewMediaGateway(
 		&fake.TenantRateLimiter{AllowModelCallFunc: func(context.Context, domain.ModelRequest) error {
@@ -24,8 +25,9 @@ func TestMediaGatewayAppliesControlsAndReleasesCapacity(t *testing.T) {
 		provider,
 		fake.CapacitySchedulerFunc(func(context.Context, domain.ModelRequest, domain.ModelSelection) (contract.CapacityLease, error) {
 			calls = append(calls, "capacity")
-			return &fake.CapacityLease{PoolValue: "shared", ReleaseFunc: func(context.Context, domain.Usage) error {
+			return &fake.CapacityLease{PoolValue: "shared", ReleaseFunc: func(_ context.Context, usage domain.Usage) error {
 				calls = append(calls, "release")
+				released = usage
 				return nil
 			}}, nil
 		}),
@@ -43,16 +45,19 @@ func TestMediaGatewayAppliesControlsAndReleasesCapacity(t *testing.T) {
 	if want := []string{"rate", "capacity", "generate", "release"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
 	}
+	if released.InputTokens != 20 || released.OutputTokens != 4000 {
+		t.Fatalf("released usage = %+v, want the image tokens", released)
+	}
 }
 
-type mediaProviderFunc func(context.Context, string, domain.ImageRequest) ([]domain.GeneratedMedia, error)
+type mediaProviderFunc func(context.Context, string, domain.ImageRequest) (domain.MediaResult, error)
 
-func (provider mediaProviderFunc) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) ([]domain.GeneratedMedia, error) {
+func (provider mediaProviderFunc) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error) {
 	return provider(ctx, model, request)
 }
 
-func (mediaProviderFunc) GenerateVideo(context.Context, string, domain.VideoRequest) ([]domain.GeneratedMedia, error) {
-	return nil, nil
+func (mediaProviderFunc) GenerateVideo(context.Context, string, domain.VideoRequest) (domain.MediaResult, error) {
+	return domain.MediaResult{}, nil
 }
 
 var _ contract.MediaProvider = mediaProviderFunc(nil)

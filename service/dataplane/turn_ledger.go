@@ -504,28 +504,30 @@ func QuoteUsage(ctx context.Context, agent contract.PricedAgent, inputText strin
 	if inputTokens < 1000 {
 		inputTokens = 1000
 	}
-	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: 2000})
+	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: 2000}, domain.ModelUsage{}, domain.ModelUsage{})
 }
 
 // PriceUsage prices actual usage; work that ran never costs zero.
 func PriceUsage(ctx context.Context, agent contract.PricedAgent, inputTokens, outputTokens int64) (domain.Usage, error) {
-	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: outputTokens})
+	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: outputTokens}, domain.ModelUsage{}, domain.ModelUsage{})
 }
 
-// PriceModelUsage combines text and optional media pricing.
-func PriceModelUsage(ctx context.Context, text, image, video contract.PricedAgent, usage domain.ModelUsage) (domain.Usage, error) {
-	if text == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.SearchQueries < 0 ||
-		usage.InputTokens > math.MaxInt64-usage.OutputTokens {
-		return domain.Usage{}, fmt.Errorf("%w: priced agents and non-negative usage are required", domain.ErrValidation)
-	}
+// PriceModelUsage prices one turn: text usage on the text agent, and image and
+// video usage, when any, on their own agents. The returned token counts are the
+// text model's; media tokens are settled in the cost.
+func PriceModelUsage(ctx context.Context, text, image, video contract.PricedAgent, textUsage, imageUsage, videoUsage domain.ModelUsage) (domain.Usage, error) {
 	parts := []struct {
 		agent contract.PricedAgent
 		usage domain.ModelUsage
-	}{{text, domain.ModelUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries}},
-		{image, domain.ModelUsage{Images: usage.Images}}, {video, domain.ModelUsage{VideoSeconds: usage.VideoSeconds}}}
+	}{{text, textUsage}, {image, imageUsage}, {video, videoUsage}}
 	total, currency := int64(0), ""
 	for i, part := range parts {
-		if i > 0 && (i == 1 && usage.Images == 0 || i == 2 && usage.VideoSeconds == 0) {
+		usage := part.usage
+		if text == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.SearchQueries < 0 ||
+			usage.InputTokens > math.MaxInt64-usage.OutputTokens {
+			return domain.Usage{}, fmt.Errorf("%w: priced agents and non-negative usage are required", domain.ErrValidation)
+		}
+		if i > 0 && usage == (domain.ModelUsage{}) {
 			continue
 		}
 		if part.agent == nil {
@@ -545,7 +547,7 @@ func PriceModelUsage(ctx context.Context, text, image, video contract.PricedAgen
 		total = 1
 	}
 	return domain.Usage{
-		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries,
+		InputTokens: textUsage.InputTokens, OutputTokens: textUsage.OutputTokens, SearchQueries: textUsage.SearchQueries,
 		CostMinorUnits: total, Currency: currency,
 	}, nil
 }

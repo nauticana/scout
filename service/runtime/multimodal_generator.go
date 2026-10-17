@@ -58,8 +58,8 @@ func (g MultimodalGenerator) Generate(ctx context.Context, task domain.Multimoda
 		if videoErr != nil {
 			return domain.MultimodalResult{}, fmt.Errorf("generate video: %w", videoErr)
 		}
-		result.Media = append(result.Media, nameMedia(videos, task.AssetBaseName, "vid", "mp4")...)
-		result.VideoSeconds = len(videos) * int(request.DurationSeconds)
+		result.Media = append(result.Media, nameMedia(videos.Media, task.AssetBaseName, "vid", "mp4")...)
+		result.Video = videos.Usage
 	}
 	if task.Image != nil {
 		request := *task.Image
@@ -70,8 +70,8 @@ func (g MultimodalGenerator) Generate(ctx context.Context, task domain.Multimoda
 		if imageErr != nil {
 			return domain.MultimodalResult{}, fmt.Errorf("generate image: %w", imageErr)
 		}
-		result.Media = append(result.Media, nameMedia(images, task.AssetBaseName, "img", "png")...)
-		result.ImageCount = len(images)
+		result.Media = append(result.Media, nameMedia(images.Media, task.AssetBaseName, "img", "png")...)
+		result.Image = images.Usage
 	}
 	return result, nil
 }

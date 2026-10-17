@@ -68,12 +68,12 @@ func TestProviderRegistryBuildsTextAndMediaAdapters(t *testing.T) {
 
 type mediaProvider struct{}
 
-func (*mediaProvider) GenerateImage(context.Context, string, domain.ImageRequest) ([]domain.GeneratedMedia, error) {
-	return nil, nil
+func (*mediaProvider) GenerateImage(context.Context, string, domain.ImageRequest) (domain.MediaResult, error) {
+	return domain.MediaResult{}, nil
 }
 
-func (*mediaProvider) GenerateVideo(context.Context, string, domain.VideoRequest) ([]domain.GeneratedMedia, error) {
-	return nil, nil
+func (*mediaProvider) GenerateVideo(context.Context, string, domain.VideoRequest) (domain.MediaResult, error) {
+	return domain.MediaResult{}, nil
 }
 
 var _ contract.MediaProvider = (*mediaProvider)(nil)
