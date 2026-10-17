@@ -27,8 +27,9 @@ type ServerConfig struct {
 	// OnDenied observes each backend tool call refused before its executor runs:
 	// an unresolved caller, a tool outside the caller's catalog, or missing scopes.
 	OnDenied DeniedFunc
-	// OmitOutputSchemas lists backend tools without outputSchema. Results are
-	// still validated against it and returned as structured content.
+	// OmitOutputSchemas lists backend tools without outputSchema and registers
+	// ToolSchemaToolName to read one. Results are still validated against it and
+	// returned as structured content.
 	OmitOutputSchemas bool
 }
 
@@ -140,11 +141,24 @@ func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.M
 			return err
 		}
 	}
-	s.tools = backend
-	s.toolNames = make(map[string]bool, len(definitions))
+	tools := make([]mcpgo.Tool, len(definitions))
+	names := make(map[string]bool, len(definitions))
 	for i, definition := range definitions {
-		s.toolNames[definition.Name] = true
-		tool := toolFrom(definition)
+		if s.omitOutputs && definition.Name == ToolSchemaToolName {
+			return fmt.Errorf("%w: mcp tool %q is registered by the server", domain.ErrConflict, ToolSchemaToolName)
+		}
+		tools[i] = toolFrom(definition)
+		names[definition.Name] = true
+	}
+	var schemas toolSchemaTool
+	if s.omitOutputs {
+		if schemas, err = newToolSchemaTool(s.governed(), backend, tools); err != nil {
+			return err
+		}
+	}
+	s.tools, s.toolNames = backend, names
+	for i, definition := range definitions {
+		tool := tools[i]
 		if s.omitOutputs {
 			tool.RawOutputSchema = nil
 		}
@@ -157,6 +171,9 @@ func (s *BaseServer) RegisterToolBackend(ctx context.Context, backend contract.M
 			paged:      pages(definition.InputSchema),
 			onDenied:   s.onDenied,
 		})
+	}
+	if s.omitOutputs {
+		s.Register(schemas)
 	}
 	return nil
 }

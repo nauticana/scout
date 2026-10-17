@@ -41,6 +41,22 @@ func (p *Anthropic) Generate(ctx context.Context, selection domain.ModelSelectio
 	return anthropicResult(resp)
 }
 
+func (p *Anthropic) listModels(ctx context.Context) ([]string, error) {
+	if p.APIKey == "" {
+		return nil, fmt.Errorf("%w: anthropic API key is not set", domain.ErrNotReady)
+	}
+	client := anthropic.NewClient(option.WithAPIKey(p.APIKey))
+	var ids []string
+	pages := client.Models.ListAutoPaging(ctx, anthropic.ModelListParams{})
+	for pages.Next() {
+		ids = append(ids, pages.Current().ID)
+	}
+	if err := pages.Err(); err != nil {
+		return nil, fmt.Errorf("anthropic Models.List: %w", err)
+	}
+	return ids, nil
+}
+
 func (p *Anthropic) messageParams(selection domain.ModelSelection, request domain.ModelRequest) (anthropic.MessageNewParams, error) {
 	if err := checkOutputMode(AnthropicProviderID, request.Output); err != nil {
 		return anthropic.MessageNewParams{}, err

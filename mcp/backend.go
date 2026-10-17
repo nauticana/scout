@@ -56,7 +56,7 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 		}
 		return WrapError(err), nil
 	}
-	if err = provider.listed(ctx, caller); err != nil {
+	if err = admitted(ctx, provider.backend, caller, provider.definition.Name); err != nil {
 		if provider.onDenied != nil {
 			provider.onDenied(ctx, caller, provider.definition.Name, err)
 		}
@@ -114,11 +114,10 @@ func (provider backendTool) Handle(ctx context.Context, request mcpgo.CallToolRe
 	return wrapped, nil
 }
 
-// listed admits a call only to a tool in the caller's own catalog whose scopes
-// the caller holds; the client sees any refusal as an unknown tool.
-func (provider backendTool) listed(ctx context.Context, caller domain.MCPCaller) error {
-	name := provider.definition.Name
-	definition, found, err := lookupTool(ctx, provider.backend, caller, name)
+// admitted allows only a tool in the caller's own catalog whose scopes the
+// caller holds; the client sees any refusal as an unknown tool.
+func admitted(ctx context.Context, catalog contract.MCPToolCatalog, caller domain.MCPCaller, name string) error {
+	definition, found, err := lookupTool(ctx, catalog, caller, name)
 	if err != nil {
 		return fmt.Errorf("mcp tool catalog: %w", err)
 	}

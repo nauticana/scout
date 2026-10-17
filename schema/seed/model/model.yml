@@ -26,6 +26,8 @@ seeds:
       - [google, Google Vertex AI / Gemini, "https://generativelanguage.googleapis.com", google_api_key, true]
       - [openai, OpenAI, "https://api.openai.com", openai_api_key, true]
       - [anthropic, Anthropic, "https://api.anthropic.com", anthropic_api_key, true]
+      - [perplexity, Perplexity, "https://api.perplexity.ai", perplexity_api_key, true]
+      - [xai, xAI, "https://api.x.ai/v1", xai_api_key, true]
   - table: rest_api_header
     columns: [id, master_table]
     rows:

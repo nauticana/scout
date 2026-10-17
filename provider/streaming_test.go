@@ -81,7 +81,7 @@ func TestOpenAIStreamsContentDeltasThenOneTerminalFrame(t *testing.T) {
 	chunk := func(delta string) string {
 		return `{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"` + delta + `"}}]}`
 	}
-	stream := openAIStream(openaisse.NewStream[openai.ChatCompletionChunk](openaisse.NewDecoder(sseResponse(
+	stream := openAIStream(OpenAIProviderID, openaisse.NewStream[openai.ChatCompletionChunk](openaisse.NewDecoder(sseResponse(
 		event("", chunk("par")),
 		event("", chunk("tial")),
 		event("", `{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12}}`),

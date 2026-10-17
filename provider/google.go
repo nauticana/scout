@@ -56,6 +56,23 @@ func (p *Google) Generate(ctx context.Context, selection domain.ModelSelection, 
 	return googleResult(resp, request)
 }
 
+// listModels reads the base models: models/<id> on the Gemini API,
+// publishers/google/models/<id> on Vertex.
+func (p *Google) listModels(ctx context.Context) ([]string, error) {
+	client, err := p.newClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("genai.NewClient: %w", err)
+	}
+	var ids []string
+	for model, err := range client.Models.All(ctx) {
+		if err != nil {
+			return nil, fmt.Errorf("genai Models.List: %w", err)
+		}
+		ids = append(ids, model.Name[strings.LastIndex(model.Name, "/")+1:])
+	}
+	return ids, nil
+}
+
 func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *genai.GenerateContentConfig, error) {
 	if err := checkOutputMode(GoogleProviderID, request.Output); err != nil {
 		return nil, nil, err

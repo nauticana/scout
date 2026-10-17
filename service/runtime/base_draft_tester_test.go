@@ -37,6 +37,7 @@ func (q *quotaFake) GetPartnerQuota(_ context.Context, _ int64, _ string, def in
 }
 
 func (q *quotaFake) ReportAddonUsage(context.Context, int64, string, int64, string) error { return nil }
+func (q *quotaFake) InvalidatePartner(context.Context, int64)                             {}
 
 func testerFor(quota *quotaFake, cost int64) *BaseDraftTester {
 	reference := domain.ModelReference{ProviderID: "anthropic", ModelID: "opus"}

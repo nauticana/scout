@@ -20,6 +20,10 @@ const (
 	OpenAIProviderID = "openai"
 	// AnthropicProviderID is the canonical model-provider id for Anthropic's adapter.
 	AnthropicProviderID = "anthropic"
+	// PerplexityProviderID is the canonical model-provider id for Perplexity's OpenAI-compatible adapter.
+	PerplexityProviderID = "perplexity"
+	// XAIProviderID is the canonical model-provider id for xAI's OpenAI-compatible adapter.
+	XAIProviderID = "xai"
 
 	// DefaultMaxOutputTokens bounds provider calls whose request omits a limit.
 	DefaultMaxOutputTokens int64 = 8192

@@ -9,6 +9,15 @@
   },
   "migrations": [
     {
+      "version": "v1.2.17",
+      "title": "Tool schema tool, OpenAI-compatible vendors, and model listing",
+      "tags": [
+        "additive"
+      ],
+      "summary": "A server that omits output schemas answers them through get_tool_schema, the factory builds Perplexity and xAI on the OpenAI adapter, and Factory.ListModels reports the models a provider serves; adopts keel v1.2.125.",
+      "body_markdown": "Adopts keel v1.2.125.\n\n**MCP.** With `ServerConfig.OmitOutputSchemas`, `RegisterToolBackend` registers `get_tool_schema` (`mcp.ToolSchemaToolName`): one tool's `{name, input_schema, output_schema}` as `tools/list` would carry it, for a caller whose catalog lists the tool with its scopes held. A backend tool of that name is `ErrConflict`; drop a product's own copy.\n\n**OpenAI-compatible vendors.** `provider.OpenAI` gains `ProviderID` and `BaseURL`. `Factory.Build` resolves `perplexity` and `xai` (`PerplexityProviderID`, `XAIProviderID`) with the `<provider>_api_key` credential and no media adapter. Perplexity's `citations` and `search_results` become `Citations`; a grounded `xai` call is `ErrCapabilityUnsupported`, because xAI grounds only through its Responses API. The `model_provider` seed adds both rows.\n\n**Model listing.** `contract.ModelLister.ListModels(ctx, providerID)`, implemented by `provider.Factory`, returns `[]domain.ModelReference` from the vendor's models endpoint for `openai`, `xai`, `anthropic` and `google`; `perplexity` is `ErrCapabilityUnsupported`."
+    },
+    {
       "version": "v1.2.16",
       "title": "Guardrail reasons, typed not-ready errors, and text evidence",
       "tags": [

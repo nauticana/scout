@@ -77,7 +77,7 @@ func TestOpenAIGroundsAndRefusesAnUnboundableSearchLimit(t *testing.T) {
 		"usage":{"prompt_tokens":5,"completion_tokens":7}}`), &completion); err != nil {
 		t.Fatalf("decode completion: %v", err)
 	}
-	result, err := openAIResult(&completion, groundedRequest(0))
+	result, err := openAIResult(OpenAIProviderID, &completion, groundedRequest(0))
 	if err != nil {
 		t.Fatalf("openAIResult: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestOpenAIGroundsAndRefusesAnUnboundableSearchLimit(t *testing.T) {
 	if result.Usage.SearchQueries != 1 {
 		t.Fatalf("a grounded call is billed once, got %+v", result.Usage)
 	}
-	if ungrounded, _ := openAIResult(&completion, domain.ModelRequest{}); ungrounded.Usage.SearchQueries != 0 {
+	if ungrounded, _ := openAIResult(OpenAIProviderID, &completion, domain.ModelRequest{}); ungrounded.Usage.SearchQueries != 0 {
 		t.Fatalf("an ungrounded call must not be billed a search, got %+v", ungrounded.Usage)
 	}
 }

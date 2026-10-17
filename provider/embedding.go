@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
 	"google.golang.org/genai"
 
 	"github.com/nauticana/scout/contract"
@@ -58,8 +57,9 @@ func attributeEmbeddingUsage(inputs [][]byte, inputTokens int64) []domain.Usage 
 
 // Embed calls the OpenAI embeddings endpoint for the whole batch.
 func (p *OpenAI) Embed(ctx context.Context, selection domain.ModelSelection, request domain.EmbeddingRequest) ([]domain.Embedding, error) {
-	if p.APIKey == "" {
-		return nil, fmt.Errorf("%w: openai API key is not set", domain.ErrNotReady)
+	client, err := p.client()
+	if err != nil {
+		return nil, err
 	}
 	if err := checkEmbeddingRequest(request); err != nil {
 		return nil, err
@@ -75,7 +75,6 @@ func (p *OpenAI) Embed(ctx context.Context, selection domain.ModelSelection, req
 	if request.Dimensions > 0 {
 		params.Dimensions = openai.Int(int64(request.Dimensions))
 	}
-	client := openai.NewClient(option.WithAPIKey(p.APIKey))
 	resp, err := client.Embeddings.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("openai Embeddings: %w", err)

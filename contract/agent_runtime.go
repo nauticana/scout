@@ -34,6 +34,12 @@ type EmbeddingProviderFactory interface {
 	BuildEmbedder(ctx context.Context, reference domain.ModelReference) (EmbeddingProvider, error)
 }
 
+// ModelLister reports the models a provider still serves, read with the
+// credential its adapters call with, so a withdrawn model is found before a call fails.
+type ModelLister interface {
+	ListModels(ctx context.Context, providerID string) ([]domain.ModelReference, error)
+}
+
 // SamplingSupport says whether a model accepts sampling parameters such as
 // temperature. Several model families reject any non-default value, so a
 // parameter is sent only on a yes.
