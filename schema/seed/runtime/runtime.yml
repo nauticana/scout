@@ -88,3 +88,13 @@ seeds:
       - [AGENT_ADMIN, AGENT_OPERATION, RECONCILE, "*"]
       - [AGENT_OPER, AGENT_OPERATION, VIEW, "*"]
       - [AGENT_OPER, AGENT_OPERATION, OPERATE, "*"]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [budget_reservation, granted_cost_minor_units, currency_code]
+      - [budget_reservation, settled_cost_minor_units, currency_code]
+      - [conversation_turn_detail, staged_cost_minor_units, staged_currency_code]
+      - [step_checkpoint, cost_minor_units, currency_code]
+      - [usage_event, cost_minor_units, currency_code]
+      - [turn_operator_entry, cost_minor_units, currency_code]
+      - [agent_work_item, budget_minor_units, currency_code]

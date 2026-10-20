@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.2.19",
+      "title": "Money columns declare their currency",
+      "tags": [
+        "additive",
+        "schema"
+      ],
+      "summary": "Every Scout minor-units column is seeded with its currency_path and the agent roles read the currency catalog; adopts keel v1.2.133.",
+      "body_markdown": "Adopts keel v1.2.133 (worker captions at most 16 characters, `column_display_attribute.currency_path`, human verification, reCAPTCHA scores).\n\n**Currency paths (schema).** Each module seed adds a `column_display_attribute` block with columns `[table_name, column_name, currency_path]` for its `BIGINT` minor-units columns (`model_price`, `tenant_quota`, `tenant_runtime_policy`, `delegation_grant`, `budget_reservation`, `conversation_turn_detail`, `step_checkpoint`, `usage_event`, `turn_operator_entry`, `agent_work_item`, `evaluation_run`, `evaluation_result`, `evaluation_comparison`); every path names the row's own currency column. keel serves them as `TableColumn.CurrencyPath`. Regenerate both dialects so `column_display_attribute` carries the column; keel's repository `Init` now fails without it.\n\n**New seed group.** `agent_authorization` has a seed file, `schema/seed/agent_authorization/agent_authorization.yml` (order 27); pass it to `schemagen -seed` beside the module and add it to a downstream's seed list.\n\n**Grants.** `AGENT_ADMIN` and `AGENT_OPER` gain `TABLE SELECT` on `currency`, which keel's seed validation requires of a role reading `model_price`. A downstream seed that added the same grant must drop it.\n\n**Workers.** Pass the Scout worker constructors a `caption` of 1 to 16 characters; `Run` returns `worker.ErrCaption` otherwise, and a failed registry insert stops the worker instead of running unregistered."
+    },
+    {
       "version": "v1.2.18",
       "title": "GPT Image generation and grounded xAI answers",
       "tags": [

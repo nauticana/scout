@@ -14,3 +14,8 @@ seeds:
     columns: [constant_id, table_name, column_name]
     rows:
       - [capacity_class, tenant_runtime_policy, capacity_class_code]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [tenant_quota, cost_limit_minor_units, currency_code]
+      - [tenant_runtime_policy, max_cost_minor_units, cost_currency_code]

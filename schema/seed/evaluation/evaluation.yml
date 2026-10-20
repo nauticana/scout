@@ -68,3 +68,10 @@ seeds:
       - [golden_scope, golden_example, scope_code]
       - [golden_scope, golden_query, scope_code]
       - [rollout_health_verdict, gate_decision, verdict_code]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [evaluation_run, cost_minor_units, currency_code]
+      - [evaluation_result, cost_minor_units, currency_code]
+      - [evaluation_result, evaluator_cost_minor_units, currency_code]
+      - [evaluation_comparison, evaluator_cost_minor_units, currency_code]

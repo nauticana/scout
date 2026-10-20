@@ -659,7 +659,7 @@ for group in "${keel_groups[@]}"; do
   keel_seed="${keel_seed:+${keel_seed},}${keel}/seed/${group}.yml"
 done
 scout_in="schema/catalog,schema/tenancy,schema/prompt,schema/model,schema/agent,schema/agent_authorization,schema/configuration,schema/approval,schema/tool,schema/execution_graph,schema/knowledge,schema/knowledge_vector,schema/runtime,schema/release,schema/evaluation,schema/skill,schema/memory,schema/mcp_confirmation"
-scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/configuration,schema/seed/approval,schema/seed/execution_graph,schema/seed/knowledge,schema/seed/runtime,schema/seed/release,schema/seed/evaluation,schema/seed/mcp_confirmation"
+scout_seed="schema/seed/catalog,schema/seed/tenancy,schema/seed/prompt,schema/seed/model,schema/seed/agent,schema/seed/agent_authorization,schema/seed/configuration,schema/seed/approval,schema/seed/execution_graph,schema/seed/knowledge,schema/seed/runtime,schema/seed/release,schema/seed/evaluation,schema/seed/mcp_confirmation"
 
 go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_seed},${scout_seed}" -out build/scout_pgsql.sql
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
@@ -905,6 +905,8 @@ worker.Caption, worker.Interval, worker.HCPort = "agent-runtime", 1, 8105
 worker.LoadConfig = common.LoadConfig
 err = worker.Run(ctx)
 ```
+
+Every worker's `Caption` is its `service_registry` name: keel refuses an empty one or one longer than `worker.MaxServiceNameLen` (16 characters) with `worker.ErrCaption`, and a worker that cannot register does not run.
 
 The default model gateway and the default router share one `TableCandidateCatalog`, stamped
 with `agent_model_region`: a tool-bearing or schema-constrained request is confirmed against

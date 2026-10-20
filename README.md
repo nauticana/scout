@@ -52,7 +52,7 @@ Add released module versions; never use local filesystem replacements:
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.2.107
+go get github.com/nauticana/keel@v1.2.133
 ```
 
 Continue with [Create a downstream platform](doc/engineering-reference.md#create-a-downstream-platform) for composition, HTTP handlers, workers, MCP, and schema generation. HTTP clients use the [API surface](doc/api_surface.md).

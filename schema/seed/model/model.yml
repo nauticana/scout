@@ -40,3 +40,11 @@ seeds:
       - [model_capabilities, S, "*"]
       - [model_routes, S, "*"]
       - [model_prices, S, "*"]
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [model_price, input_minor_units_per_million, currency_code]
+      - [model_price, output_minor_units_per_million, currency_code]
+      - [model_price, image_minor_units, currency_code]
+      - [model_price, video_minor_units_per_second, currency_code]
+      - [model_price, search_minor_units, currency_code]

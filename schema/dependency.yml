@@ -88,7 +88,9 @@ groups:
 
   - name: agent_authorization
     path: agent_authorization
+    seed: seed/agent_authorization/agent_authorization.yml
     depends_on: [catalog, agent]
+    seed_depends_on: [core]
 
   - name: approval
     path: approval

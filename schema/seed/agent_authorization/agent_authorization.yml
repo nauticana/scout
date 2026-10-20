@@ -1,0 +1,7 @@
+comment: Money columns of agent authorization
+order: 27
+seeds:
+  - table: column_display_attribute
+    columns: [table_name, column_name, currency_path]
+    rows:
+      - [delegation_grant, budget_minor_units, currency_code]
