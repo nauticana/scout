@@ -124,10 +124,7 @@ func grant(slice StageSlice, want time.Duration, available *time.Duration) time.
 	if slice.Max <= 0 {
 		return 0
 	}
-	granted := slice.clamp(want)
-	if granted > *available {
-		granted = *available
-	}
+	granted := min(slice.clamp(want), *available)
 	if granted < slice.Min || granted <= 0 {
 		return 0
 	}

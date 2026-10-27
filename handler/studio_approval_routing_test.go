@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	keelhandler "github.com/nauticana/keel/handler"
+	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -18,7 +18,7 @@ import (
 
 func approvalRoutingHandler(view domain.ApprovalRoutingView, err error, asked *string) *StudioApprovalRoutingHandler {
 	return &StudioApprovalRoutingHandler{
-		AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}},
+		UserService: conversationUsers{},
 		Backend: fake.StudioApprovalRoutingBackendFunc(func(_ context.Context, actor domain.StudioActor, agentID string) (domain.ApprovalRoutingView, error) {
 			*asked = fmt.Sprintf("%d/%s:%s/%s", actor.TenantID, actor.Principal.Kind, actor.Principal.ID, agentID)
 			return view, err
@@ -34,7 +34,7 @@ func TestStudioApprovalRoutingRouteServesTheView(t *testing.T) {
 			ID: "pay", Match: domain.ApprovalRouteMatch{Tools: []string{"pay.*"}, Sources: []domain.ApprovalSource{domain.ApprovalSourcePolicy}, MinRiskTier: domain.RiskHigh},
 			Approver: domain.ApproverReference{Kind: domain.ApproverPosition, Ref: "controller"}, DeadlineSeconds: 3600,
 			Escalation:  []domain.ApprovalEscalation{{Approver: &cfo, ExtensionSeconds: 600}, {ExtensionSeconds: 60}},
-			OnExhausted: domain.ApprovalExhaustHold,
+			OnExhausted: domain.ApprovalExhaustHold, AuthenticatedOnly: true,
 		}}},
 		Coverage: []domain.ApprovalCoverage{
 			{ToolID: "pay.wire", Source: domain.ApprovalSourcePolicy, RiskTier: domain.RiskHigh, RouteID: "pay"},
@@ -49,7 +49,7 @@ func TestStudioApprovalRoutingRouteServesTheView(t *testing.T) {
 		t.Fatalf("status = %d, asked %q, body = %s", recorder.Code, asked, recorder.Body.String())
 	}
 	var envelope struct{ Data api.AgentApprovalRouting }
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+	if err := common.DecodeJSON(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
 	body := envelope.Data
@@ -57,7 +57,7 @@ func TestStudioApprovalRoutingRouteServesTheView(t *testing.T) {
 		t.Fatalf("body = %+v", body)
 	}
 	route := body.Routes[0]
-	if route.ID != "pay" || route.ScopeID != "t:writer" || !route.Inherited || route.OnExhausted != "hold" || route.Approver.Ref != "controller" ||
+	if route.ID != "pay" || route.ScopeID != "t:writer" || !route.Inherited || route.OnExhausted != "hold" || !route.AuthenticatedOnly || route.Approver.Ref != "controller" ||
 		route.Match.Sources[0] != "policy" || route.Match.MinRiskTier != "high" || len(route.Escalation) != 2 ||
 		route.Escalation[0].Approver == nil || route.Escalation[0].Approver.Ref != "cfo-office" || route.Escalation[1].Approver != nil {
 		t.Fatalf("route = %+v", route)

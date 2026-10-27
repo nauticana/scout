@@ -59,16 +59,30 @@ type RunTraceModelStep struct {
 	ToolCalls int              `json:"tool_calls,omitempty"`
 }
 
-// RunTraceToolCall is one tool observation with a bounded error class and observed effect.
+// RunTraceToolCall is one tool observation with a bounded error class and observed effect;
+// settlement is absent for a call that left no outcome record, such as a read-only one.
 type RunTraceToolCall struct {
-	Journal     RunTraceJournal  `json:"journal"`
-	ToolID      string           `json:"tool_id"`
-	ToolVersion string           `json:"tool_version,omitempty"`
-	Outcome     string           `json:"outcome"`
-	ErrorClass  string           `json:"error_class,omitempty"`
-	Effect      string           `json:"effect,omitempty"`
-	Reconciled  bool             `json:"reconciled,omitempty"`
-	Usage       *TrajectoryUsage `json:"usage,omitempty"`
+	Journal     RunTraceJournal         `json:"journal"`
+	CallID      string                  `json:"call_id,omitempty"`
+	ToolID      string                  `json:"tool_id"`
+	ToolVersion string                  `json:"tool_version,omitempty"`
+	Outcome     string                  `json:"outcome"`
+	ErrorClass  string                  `json:"error_class,omitempty"`
+	Effect      string                  `json:"effect,omitempty"`
+	Reconciled  bool                    `json:"reconciled,omitempty"`
+	Usage       *TrajectoryUsage        `json:"usage,omitempty"`
+	Settlement  *RunTraceCallSettlement `json:"settlement,omitempty"`
+}
+
+// RunTraceCallSettlement is the call's outcome record: status a turn_call_outcome_status code and
+// resolution a turn_call_resolution code once settled; evidence_digest names a person's cited evidence.
+type RunTraceCallSettlement struct {
+	Status         string     `json:"status"`
+	Resolution     string     `json:"resolution,omitempty"`
+	ResolverKind   string     `json:"resolver_kind,omitempty"`
+	ResolverID     string     `json:"resolver_id,omitempty"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	EvidenceDigest string     `json:"evidence_digest,omitempty"`
 }
 
 // RunTraceGuardrailHit is one guardrail intervention.
@@ -133,6 +147,18 @@ type RunTraceAction struct {
 	Reconciles           *RunTraceRef         `json:"reconciles,omitempty"`
 	SodException         *RunTraceRef         `json:"sod_exception,omitempty"`
 	MaterialInputsDigest string               `json:"material_inputs_digest,omitempty"`
+	Preconditions        []RunTraceCondition  `json:"preconditions,omitempty"`
+	Postconditions       []RunTraceCondition  `json:"postconditions,omitempty"`
+	// Effect is complete, partial, absent, or unobserved; unknown_cause says why an unobserved effect is unknown.
+	Effect       string `json:"effect,omitempty"`
+	UnknownCause string `json:"unknown_cause,omitempty"`
+}
+
+// RunTraceCondition is one Charter pre- or postcondition result; observed_at is absent when never observed.
+type RunTraceCondition struct {
+	ID         string     `json:"id"`
+	Result     string     `json:"result"`
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
 }
 
 // RunTraceRef is a Charter document reference.

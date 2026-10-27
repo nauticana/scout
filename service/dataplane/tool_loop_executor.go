@@ -19,6 +19,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/internal/jsonschema"
 	"github.com/nauticana/scout/internal/stage"
 )
@@ -105,10 +106,7 @@ type loopRun struct {
 }
 
 func (executor *ToolLoopExecutor) now() time.Time {
-	if executor.Now != nil {
-		return executor.Now()
-	}
-	return time.Now()
+	return clk.Now(executor.Now)
 }
 
 // Execute runs or resumes the loop for one step.
@@ -385,7 +383,7 @@ func (executor *ToolLoopExecutor) observe(ctx context.Context, run *loopRun, ite
 		TenantContext: run.request.TenantContext, Principal: run.input.Principal, OnBehalfOf: run.input.OnBehalfOf,
 		RequestID: run.input.RequestID, ConversationID: run.request.ConversationID,
 		ToolID: tool.ToolID, ToolVersion: tool.ToolVersion, Arguments: call.Arguments,
-		IdempotencyKey: callIdempotencyKey(run.key, call),
+		IdempotencyKey: callIdempotencyKey(run.key, call), Assurance: run.request.Assurance,
 	}
 	wasPending, maxRevisions := false, positiveOr(run.limits.MaxCallRevisions, defaultCallRevisions)
 	for revisions := 0; ; {

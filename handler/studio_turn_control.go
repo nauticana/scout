@@ -27,17 +27,19 @@ type StudioTurnControlHandler struct {
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts these routes.
 func (h *StudioTurnControlHandler) Feature() api.StudioFeature {
 	return api.StudioFeature{
-		ID: StudioFeatureTurnControl, Version: 1, Object: domain.OperationAuthorizationObject,
+		ID: StudioFeatureTurnControl, Version: 2, Object: domain.OperationAuthorizationObject,
 		Actions: []string{string(domain.OperationView), string(domain.OperationOperate), string(domain.OperationPreempt), string(domain.OperationReconcile)},
 	}
 }
 
 // Routes returns GET turns/live?agent_name=&before=&limit=, GET turn?agent_name=&request_id=,
-// POST turn/hold, POST turn/release, POST turn/outcome/lookup, POST turn/outcome/attest, and
-// POST turn/takeover, turn/act, turn/handback, and turn/finish.
+// GET outcomes/open?agent_name=&before=&limit=, POST turn/hold, POST turn/release, POST
+// turn/outcome/lookup, POST turn/outcome/attest, and POST turn/takeover, turn/act, turn/handback,
+// and turn/finish.
 func (h *StudioTurnControlHandler) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		api.StudioLiveTurnsPath:    query(&h.AbstractHandler, h.liveTurns),
+		api.StudioOpenOutcomesPath: query(&h.AbstractHandler, h.openOutcomes),
 		api.StudioTurnPath:         query(&h.AbstractHandler, h.turn),
 		api.StudioTurnHoldPath:     command(&h.AbstractHandler, h.hold),
 		api.StudioTurnReleasePath:  command(&h.AbstractHandler, h.release),
@@ -155,6 +157,26 @@ func (h *StudioTurnControlHandler) liveTurns(ctx context.Context, actor domain.S
 	result := api.LiveTurnPage{Turns: make([]api.LiveTurn, 0, len(page.Turns)), NextBefore: page.NextBefore}
 	for _, turn := range page.Turns {
 		result.Turns = append(result.Turns, apiLiveTurn(turn))
+	}
+	return result, nil
+}
+
+func (h *StudioTurnControlHandler) openOutcomes(ctx context.Context, actor domain.StudioActor, query url.Values) (any, error) {
+	limit, err := optionalInt(query.Get("limit"), 0)
+	if err != nil {
+		return nil, badRequest("limit must be an integer")
+	}
+	page, err := h.Backend.OpenOutcomes(ctx, actor, domain.OpenOutcomeFilter{AgentID: query.Get("agent_name"), Before: query.Get("before"), Limit: int(limit)})
+	if err != nil {
+		return nil, err
+	}
+	result := api.OpenOutcomePage{Outcomes: make([]api.OpenOutcome, 0, len(page.Outcomes)), NextBefore: page.NextBefore}
+	for _, outcome := range page.Outcomes {
+		result.Outcomes = append(result.Outcomes, api.OpenOutcome{
+			AgentName: outcome.AgentID, RequestID: outcome.Key.RequestID, ConversationID: outcome.ConversationID, TurnNo: outcome.TurnNo,
+			ExecutionStepID: outcome.Key.ExecutionStepID, CallID: outcome.Key.CallID, ToolID: outcome.Tool.ToolID, ToolVersion: outcome.Tool.Version,
+			Status: string(outcome.Status), DispatchedAt: outcome.DispatchedAt, DeadlineAt: outcome.DeadlineAt, DeadlinePassed: outcome.DeadlinePassed,
+		})
 	}
 	return result, nil
 }

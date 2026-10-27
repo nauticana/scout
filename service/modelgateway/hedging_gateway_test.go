@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,10 +81,8 @@ func hedgeRouter(alternative domain.ModelSelection, err error) fake.ModelRouterF
 		if err != nil {
 			return domain.ModelSelection{}, err
 		}
-		for _, excluded := range request.ExcludedRouteIDs {
-			if excluded == alternative.RouteID {
-				return domain.ModelSelection{}, domain.ErrNoRoute
-			}
+		if slices.Contains(request.ExcludedRouteIDs, alternative.RouteID) {
+			return domain.ModelSelection{}, domain.ErrNoRoute
 		}
 		return alternative, nil
 	}

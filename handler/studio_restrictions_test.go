@@ -2,15 +2,14 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/config"
-	keelhandler "github.com/nauticana/keel/handler"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -43,7 +42,7 @@ func (backend *restrictionBackend) ReplaceTenant(_ context.Context, actor domain
 }
 
 func newRestrictionHandler(backend *restrictionBackend) http.HandlerFunc {
-	handler := &StudioRestrictionHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioRestrictionHandler{UserService: conversationUsers{}, Backend: backend}
 	return handler.Routes()[api.StudioRestrictionsPath]
 }
 
@@ -53,7 +52,7 @@ func decodeRestrictionData(t *testing.T, recorder *httptest.ResponseRecorder, ta
 	envelope := struct {
 		Data any `json:"data"`
 	}{Data: target}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+	if err := common.DecodeJSON(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode %s: %v", recorder.Body.String(), err)
 	}
 }

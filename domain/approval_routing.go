@@ -80,6 +80,8 @@ type ApprovalRoute struct {
 	DeadlineSeconds int64                `json:"deadline_seconds"`
 	Escalation      []ApprovalEscalation `json:"escalation,omitempty"`
 	OnExhausted     ApprovalExhaustion   `json:"on_exhausted"`
+	// AuthenticatedOnly refuses decision links: the route's requests are decided in an authenticated view.
+	AuthenticatedOnly bool `json:"authenticated_only,omitempty"`
 }
 
 // ApprovalRouting is the approval_routing setting; the first matching route wins.
@@ -98,10 +100,11 @@ type ApprovalAsk struct {
 // ApprovalRouteAuthority is the routed authority a request is assigned under: the route, the
 // role or position at the current escalation step, and the resolver's evidence for the pick.
 type ApprovalRouteAuthority struct {
-	RouteID    string
-	Reference  ApproverReference
-	Step       int
-	Resolution string
+	RouteID           string
+	Reference         ApproverReference
+	Step              int
+	Resolution        string
+	AuthenticatedOnly bool
 }
 
 // ApprovalAssignment is a router's answer for one request. An empty Approver is a vacancy,

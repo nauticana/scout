@@ -384,7 +384,7 @@ func parseCursor(raw string) (int64, error) {
 }
 
 func writeSSE(w io.Writer, reply domain.TurnReply) error {
-	payload, err := json.Marshal(conversationReply(reply))
+	payload, err := common.MarshalJSON(conversationReply(reply))
 	if err != nil {
 		return err
 	}
@@ -407,7 +407,7 @@ func (h *ConversationHandler) writeSSEError(w io.Writer, r *http.Request, err er
 		}
 		detail = "internal server error — see request_id in your logs"
 	}
-	payload, marshalErr := json.Marshal(api.ConversationStreamError{Status: status, Detail: detail, RequestID: requestID})
+	payload, marshalErr := common.MarshalJSON(api.ConversationStreamError{Status: int32(status), Detail: detail, RequestID: requestID})
 	if marshalErr != nil {
 		return marshalErr
 	}
@@ -424,12 +424,10 @@ func conversationReply(reply domain.TurnReply) map[string]any {
 		"request_id": reply.RequestID, "conversation_id": reply.ConversationID,
 		"sequence": reply.Sequence, "events": events, "final": reply.Final,
 	}
-	if len(reply.Payload) > 0 {
-		var payload any
-		if json.Unmarshal(reply.Payload, &payload) != nil {
-			payload = string(reply.Payload)
-		}
-		frame["payload"] = payload
+	if json.Valid(reply.Payload) {
+		frame["payload"] = json.RawMessage(reply.Payload)
+	} else if len(reply.Payload) > 0 {
+		frame["payload"] = string(reply.Payload)
 	}
 	if reply.ErrorCode != "" {
 		frame["error_code"] = reply.ErrorCode
@@ -474,8 +472,7 @@ func (h *ConversationHandler) writeError(w http.ResponseWriter, r *http.Request,
 			}
 		}
 	}
-	var apiErr *keelhandler.APIError
-	if errors.As(mapped, &apiErr) {
+	if apiErr, ok := errors.AsType[*keelhandler.APIError](mapped); ok {
 		h.WriteRequestError(r, w, apiErr.Status, http.StatusText(apiErr.Status), apiErr.Msg)
 		return
 	}

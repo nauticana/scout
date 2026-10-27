@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -58,10 +59,7 @@ type ResultStore struct {
 var _ contract.EvaluationResultStore = (*ResultStore)(nil)
 
 func (store *ResultStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now()
-	}
-	return time.Now()
+	return clk.Now(store.Now)
 }
 
 // StartRun inserts a running row and returns its generated id.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -67,9 +68,7 @@ func (store *ObjectStorage) setAttributes(key string, attributes map[string]stri
 		store.Attributes = make(map[string]map[string]string)
 	}
 	copied := make(map[string]string, len(attributes))
-	for name, value := range attributes {
-		copied[name] = value
-	}
+	maps.Copy(copied, attributes)
 	store.Attributes[key] = copied
 }
 

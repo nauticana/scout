@@ -8,6 +8,7 @@ tables:
   - turn_call_outcome
   - turn_call_attestation
   - turn_operator_entry
+  - turn_working_set_item
   - budget_reservation
   - conversation_turn_detail
   - usage_event

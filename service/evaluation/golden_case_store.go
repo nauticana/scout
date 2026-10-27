@@ -17,6 +17,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -44,6 +45,10 @@ const (
 	qCaseDeleteTools = "scout_evaluation_case_delete_tools"
 	qCaseInsertTurn  = "scout_evaluation_case_insert_turn"
 	qCaseInsertTool  = "scout_evaluation_case_insert_tool"
+
+	qCaseEvidence       = "scout_evaluation_case_evidence"
+	qCaseDeleteEvidence = "scout_evaluation_case_delete_evidence"
+	qCaseInsertEvidence = "scout_evaluation_case_insert_evidence"
 )
 
 // Classification every frozen Studio case carries in golden_example.
@@ -54,7 +59,7 @@ const (
 )
 
 const caseColumns = `c.case_id, c.scope_code, c.name, c.input_text, c.language_code, c.expected_behavior, c.rubric_ref, c.risk_tier_code,
-       c.principal_kind, c.principal_id, c.modified_at, c.review_item_id, r.agent_id`
+       c.principal_kind, c.principal_id, c.modified_at, c.review_item_id, r.agent_id, c.execution_expected`
 
 // Reads take the caller scope twice: dev callers see only dev rows, gate callers every row.
 var caseQueries = map[string]string{
@@ -108,13 +113,14 @@ SELECT code FROM approval_risk_tier WHERE code = ?`,
 SELECT COUNT(*) FROM golden_case WHERE partner_id = ? AND golden_set_id = ? AND case_id <> ?`,
 	qCaseUpsert: `
 INSERT INTO golden_case (partner_id, golden_set_id, case_id, scope_code, name, input_text, language_code, expected_behavior,
-                         rubric_ref, risk_tier_code, principal_kind, principal_id, modified_at, review_item_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         rubric_ref, risk_tier_code, principal_kind, principal_id, modified_at, review_item_id, execution_expected)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, golden_set_id, case_id) DO UPDATE
    SET scope_code = EXCLUDED.scope_code, name = EXCLUDED.name, input_text = EXCLUDED.input_text,
        language_code = EXCLUDED.language_code, expected_behavior = EXCLUDED.expected_behavior,
        rubric_ref = EXCLUDED.rubric_ref, risk_tier_code = EXCLUDED.risk_tier_code,
        principal_kind = EXCLUDED.principal_kind, principal_id = EXCLUDED.principal_id, modified_at = EXCLUDED.modified_at,
+       execution_expected = EXCLUDED.execution_expected,
        review_item_id = COALESCE(golden_case.review_item_id, EXCLUDED.review_item_id)
  WHERE golden_case.scope_code = EXCLUDED.scope_code OR ? = ` + sqlScopeGate + `
 RETURNING case_id`,
@@ -147,6 +153,16 @@ DELETE FROM golden_case_tool WHERE partner_id = ? AND golden_set_id = ? AND case
 INSERT INTO golden_case_turn (partner_id, golden_set_id, case_id, turn_no, input_text) VALUES (?, ?, ?, ?, ?)`,
 	qCaseInsertTool: `
 INSERT INTO golden_case_tool (partner_id, golden_set_id, case_id, tool_id, output_json, is_error) VALUES (?, ?, ?, ?, ?, ?)`,
+	qCaseEvidence: `
+SELECT e.case_id, e.role_code, e.evidence_id
+  FROM golden_case_evidence e
+  JOIN golden_case c ON c.partner_id = e.partner_id AND c.golden_set_id = e.golden_set_id AND c.case_id = e.case_id
+ WHERE e.partner_id = ? AND e.golden_set_id = ? AND (c.scope_code = ? OR ? = ` + sqlScopeGate + `)
+ ORDER BY e.case_id, e.role_code, e.evidence_id`,
+	qCaseDeleteEvidence: `
+DELETE FROM golden_case_evidence WHERE partner_id = ? AND golden_set_id = ? AND case_id = ?`,
+	qCaseInsertEvidence: `
+INSERT INTO golden_case_evidence (partner_id, golden_set_id, case_id, role_code, evidence_id) VALUES (?, ?, ?, ?, ?)`,
 }
 
 var goldenIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -172,16 +188,15 @@ type GoldenCaseStore struct {
 	MaxTools int
 	// MaxToolOutputBytes bounds one scripted tool output; zero means DefaultCaseToolOutputSize.
 	MaxToolOutputBytes int
-	Now                func() time.Time
+	// MaxLabels bounds the ids one case labels in each evidence role; zero means DefaultCaseMaxLabels.
+	MaxLabels int
+	Now       func() time.Time
 }
 
 var _ contract.GoldenCaseStore = (*GoldenCaseStore)(nil)
 
 func (store *GoldenCaseStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(store.Now).UTC()
 }
 
 func orDefault(value, fallback int) int {
@@ -199,7 +214,7 @@ func validIdentifier(field, value string, maxLength int) error {
 }
 
 func (store *GoldenCaseStore) validateLimits() error {
-	if store.MaxInputBytes < 0 || store.MaxCases < 0 || store.VersionsShown < 0 || store.MaxTurns < 0 || store.MaxTools < 0 || store.MaxToolOutputBytes < 0 {
+	if store.MaxInputBytes < 0 || store.MaxCases < 0 || store.VersionsShown < 0 || store.MaxTurns < 0 || store.MaxTools < 0 || store.MaxToolOutputBytes < 0 || store.MaxLabels < 0 {
 		return fmt.Errorf("%w: golden case store limits cannot be negative", domain.ErrValidation)
 	}
 	return nil
@@ -360,8 +375,8 @@ func (store *GoldenCaseStore) list(ctx context.Context, qs keelport.QueryService
 	}
 	cases := make([]domain.GoldenCase, 0, len(result.Rows))
 	for _, row := range result.Rows {
-		if len(row) < 13 {
-			return nil, fmt.Errorf("golden case row: expected 13 columns, got %d", len(row))
+		if len(row) < 14 {
+			return nil, fmt.Errorf("golden case row: expected 14 columns, got %d", len(row))
 		}
 		hidden := common.AsString(row[1]) == string(domain.GoldenScopeGate)
 		if hidden && scope != domain.GoldenScopeGate {
@@ -377,12 +392,50 @@ func (store *GoldenCaseStore) list(ctx context.Context, qs keelport.QueryService
 		if expected := common.AsString(row[5]); expected != "" {
 			goldenCase.ExpectedBehavior = []byte(expected)
 		}
+		if row[13] != nil {
+			execution := common.AsBool(row[13])
+			goldenCase.Assurance.ExecutionExpected = &execution
+		}
 		cases = append(cases, goldenCase)
 	}
 	if err = attachScripts(ctx, qs, scope, tenantID, goldenSetID, cases); err != nil {
 		return nil, err
 	}
+	if err = attachEvidence(ctx, qs, scope, tenantID, goldenSetID, cases); err != nil {
+		return nil, err
+	}
 	return cases, nil
+}
+
+// attachEvidence reads the evidence and controlling-authority ids of the cases visible in scope.
+func attachEvidence(ctx context.Context, qs keelport.QueryService, scope domain.GoldenScope, tenantID int64, goldenSetID string, cases []domain.GoldenCase) error {
+	index := make(map[string]*domain.GoldenCase, len(cases))
+	for i := range cases {
+		index[cases[i].CaseID] = &cases[i]
+	}
+	evidence, err := qs.Query(ctx, qCaseEvidence, tenantID, goldenSetID, string(scope), string(scope))
+	if err != nil {
+		return fmt.Errorf("list golden case evidence: %w", err)
+	}
+	for _, row := range evidence.Rows {
+		if len(row) < 3 {
+			return fmt.Errorf("golden case evidence row: expected 3 columns, got %d", len(row))
+		}
+		goldenCase, found := index[common.AsString(row[0])]
+		if !found {
+			return fmt.Errorf("%w: evidence of a golden case outside the scope", domain.ErrForbidden)
+		}
+		labels := &goldenCase.Assurance
+		switch domain.GoldenEvidenceRole(strings.TrimSpace(common.AsString(row[1]))) {
+		case domain.GoldenEvidenceRequired:
+			labels.RequiredEvidence = append(labels.RequiredEvidence, common.AsString(row[2]))
+		case domain.GoldenEvidenceAuthority:
+			labels.ControllingAuthority = append(labels.ControllingAuthority, common.AsString(row[2]))
+		default:
+			return fmt.Errorf("%w: golden case %q labels an unknown evidence role", domain.ErrConflict, goldenCase.CaseID)
+		}
+	}
+	return nil
 }
 
 // attachScripts reads the follow-up turns and tool responses of the cases visible in scope.
@@ -470,14 +523,27 @@ func (store *GoldenCaseStore) validCase(scope domain.GoldenScope, goldenCase dom
 		return goldenCase, err
 	}
 	goldenCase.Script = script
+	if goldenCase.Assurance, err = validAssurance(goldenCase.Assurance, orDefault(store.MaxLabels, DefaultCaseMaxLabels)); err != nil {
+		return goldenCase, err
+	}
 	return goldenCase, nil
 }
 
-// writeScript replaces the case's follow-up turns and tool responses with its script.
-func writeScript(ctx context.Context, tx keelport.TxQueryService, goldenCase domain.GoldenCase) error {
+// writeChildren replaces the case's follow-up turns, tool responses, and evidence labels.
+func writeChildren(ctx context.Context, tx keelport.TxQueryService, goldenCase domain.GoldenCase) error {
 	key := []any{goldenCase.TenantID, goldenCase.GoldenSetID, goldenCase.CaseID}
-	if err := deleteScript(ctx, tx, key); err != nil {
+	if err := deleteChildren(ctx, tx, key); err != nil {
 		return err
+	}
+	for _, labeled := range []struct {
+		role domain.GoldenEvidenceRole
+		ids  []string
+	}{{domain.GoldenEvidenceRequired, goldenCase.Assurance.RequiredEvidence}, {domain.GoldenEvidenceAuthority, goldenCase.Assurance.ControllingAuthority}} {
+		for _, id := range labeled.ids {
+			if _, err := tx.Query(ctx, qCaseInsertEvidence, append(key, string(labeled.role), id)...); err != nil {
+				return fmt.Errorf("write golden case evidence: %w", err)
+			}
+		}
 	}
 	for i, turn := range goldenCase.Script.Turns {
 		if _, err := tx.Query(ctx, qCaseInsertTurn, append(key, i+2, turn.Input)...); err != nil {
@@ -496,12 +562,15 @@ func writeScript(ctx context.Context, tx keelport.TxQueryService, goldenCase dom
 	return nil
 }
 
-func deleteScript(ctx context.Context, tx keelport.TxQueryService, key []any) error {
+func deleteChildren(ctx context.Context, tx keelport.TxQueryService, key []any) error {
 	if _, err := tx.Query(ctx, qCaseDeleteTurns, key...); err != nil {
 		return fmt.Errorf("remove golden case turns: %w", err)
 	}
 	if _, err := tx.Query(ctx, qCaseDeleteTools, key...); err != nil {
 		return fmt.Errorf("remove golden case tools: %w", err)
+	}
+	if _, err := tx.Query(ctx, qCaseDeleteEvidence, key...); err != nil {
+		return fmt.Errorf("remove golden case evidence: %w", err)
 	}
 	return nil
 }
@@ -534,14 +603,14 @@ func (store *GoldenCaseStore) PutCase(ctx context.Context, scope domain.GoldenSc
 		written, err := tx.Query(ctx, qCaseUpsert,
 			goldenCase.TenantID, goldenCase.GoldenSetID, goldenCase.CaseID, string(scopeOf(goldenCase.Hidden)), goldenCase.Name,
 			string(goldenCase.Input), nullable(goldenCase.Language), nullable(string(goldenCase.ExpectedBehavior)), nullable(goldenCase.RubricRef),
-			goldenCase.RiskTier, kind, id, store.now(), nullableID(goldenCase.ReviewItemID), string(scope))
+			goldenCase.RiskTier, kind, id, store.now(), nullableID(goldenCase.ReviewItemID), nullableBool(goldenCase.Assurance.ExecutionExpected), string(scope))
 		if err != nil {
 			return fmt.Errorf("write golden case: %w", err)
 		}
 		if len(written.Rows) == 0 {
 			return fmt.Errorf("%w: case id %q is not available in this scope", domain.ErrConflict, goldenCase.CaseID)
 		}
-		return writeScript(ctx, tx, goldenCase)
+		return writeChildren(ctx, tx, goldenCase)
 	})
 }
 
@@ -554,7 +623,7 @@ func (store *GoldenCaseStore) RemoveCase(ctx context.Context, scope domain.Golde
 		return 0, fmt.Errorf("%w: tenant, golden set, and case are required", domain.ErrValidation)
 	}
 	return store.change(ctx, tenantID, goldenSetID, expectedRevision, func(tx keelport.TxQueryService) error {
-		if err := deleteScript(ctx, tx, []any{tenantID, goldenSetID, caseID}); err != nil {
+		if err := deleteChildren(ctx, tx, []any{tenantID, goldenSetID, caseID}); err != nil {
 			return err
 		}
 		removed, err := tx.Query(ctx, qCaseDelete, tenantID, goldenSetID, caseID, string(scope), string(scope))
@@ -686,6 +755,7 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 			Provenance: GoldenCaseProvenance, ConsentClass: GoldenCaseConsent, RetentionClass: GoldenCaseRetention,
 			RiskTier: goldenCase.RiskTier, Language: goldenCase.Language, RubricRef: goldenCase.RubricRef,
 			ExpectedBehavior: goldenCase.ExpectedBehavior, Payload: payloads[i], Hidden: goldenCase.Hidden, Script: scripts[i],
+			Assurance: goldenCase.Assurance,
 		}
 	}
 	version.DatasetRevision = DatasetRevision(examples)
@@ -693,12 +763,12 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 		return domain.GoldenSetVersion{}, 0, fmt.Errorf("insert golden set version: %w", err)
 	}
 	for _, example := range examples {
-		if _, err = tx.Query(ctx, qCaseExampleInsert,
+		if _, err = tx.Query(ctx, qCaseExampleInsert, append([]any{
 			tenantID, goldenSetID, version.SetVersion, example.ExampleID, string(scopeOf(example.Hidden)),
 			example.Provenance, example.ConsentClass, example.RetentionClass, example.RiskTier, nil, nullable(example.Language),
 			nullable(example.RubricRef), nullable(string(example.ExpectedBehavior)), example.Payload.URI, example.Payload.Digest, "[]",
 			nullable(example.Script.URI), nullable(example.Script.Digest),
-		); err != nil {
+		}, assuranceColumns(example.Assurance)...)...); err != nil {
 			return domain.GoldenSetVersion{}, 0, fmt.Errorf("insert golden example %q: %w", example.ExampleID, err)
 		}
 	}
@@ -729,6 +799,13 @@ func principalColumns(principal domain.PrincipalRef) (any, any) {
 // validText accepts UTF-8 without NUL, which PostgreSQL text columns refuse.
 func validText(value []byte) bool {
 	return utf8.Valid(value) && bytes.IndexByte(value, 0) < 0
+}
+
+func nullableBool(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func nullableID(id int64) any {

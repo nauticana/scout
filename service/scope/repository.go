@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -99,8 +100,8 @@ func (r *TableScopeRepository) Chain(ctx context.Context, tenantID int64, scopeI
 		current = parent
 	}
 	chain := make(domain.ScopeChain, 0, len(reversed))
-	for index := len(reversed) - 1; index >= 0; index-- {
-		chain = append(chain, reversed[index])
+	for _, r := range slices.Backward(reversed) {
+		chain = append(chain, r)
 	}
 	return chain, nil
 }

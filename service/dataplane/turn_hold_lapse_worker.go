@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/observability"
 )
 
@@ -113,10 +114,7 @@ func (w *TurnHoldLapseWorker) Sweep(ctx context.Context, db keelport.DatabaseRep
 }
 
 func (w *TurnHoldLapseWorker) now() time.Time {
-	if w.Now != nil {
-		return w.Now()
-	}
-	return time.Now()
+	return clk.Now(w.Now)
 }
 
 // compose builds the lapser once; a failed composition is retried at the next pass.

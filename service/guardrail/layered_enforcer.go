@@ -320,8 +320,7 @@ func (enforcer *LayeredEnforcer) inspectLayers(ctx context.Context, config domai
 
 func (enforcer *LayeredEnforcer) applyRule(ctx context.Context, rule *compiledRule, in *inspection, result *outcome) error {
 	spans, hit, err := enforcer.match(ctx, rule, in)
-	var approval *approvalOutcome
-	if errors.As(err, &approval) {
+	if approval, ok := errors.AsType[*approvalOutcome](err); ok {
 		hit, err = true, nil
 		result.pending = result.pending || approval.pending
 	}

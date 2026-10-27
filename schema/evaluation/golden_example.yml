@@ -48,6 +48,18 @@ columns:
     type: CHAR(64)
     nullable: true
     comment: With script_uri, the canonical JSON script of a scripted example's follow-up turns and sandboxed tool responses
+  - name: required_evidence_ids
+    type: TEXT
+    nullable: true
+    comment: JSON array of the evidence ids frozen from golden_case_evidence; an immutable snapshot, like reviews
+  - name: controlling_authority_ids
+    type: TEXT
+    nullable: true
+    comment: JSON array of the controlling-authority ids frozen from golden_case_evidence
+  - name: execution_expected
+    type: BOOLEAN
+    nullable: true
+    comment: Whether the example expects a mutating tool call; null leaves execution unlabeled
 primary_key: [partner_id, golden_set_id, set_version, example_id]
 foreign_keys:
   - name: golden_examples

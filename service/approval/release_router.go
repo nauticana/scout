@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -242,10 +243,7 @@ func (r *ReleaseRouter) pick(ctx context.Context, request domain.ApprovalRequest
 }
 
 func (r *ReleaseRouter) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
-	}
-	return time.Now()
+	return clk.Now(r.Now)
 }
 
 // referenceAt is the role or position deciding at step: the step's own, or the latest before it.
@@ -268,7 +266,7 @@ func stepDeadline(route domain.ApprovalRoute, step int) time.Duration {
 }
 
 func authority(route domain.ApprovalRoute, step int, reference domain.ApproverReference, resolution string) domain.ApprovalRouteAuthority {
-	return domain.ApprovalRouteAuthority{RouteID: route.ID, Reference: reference, Step: step, Resolution: resolution}
+	return domain.ApprovalRouteAuthority{RouteID: route.ID, Reference: reference, Step: step, Resolution: resolution, AuthenticatedOnly: route.AuthenticatedOnly}
 }
 
 // sanitizeResolution drops control characters and keeps at most maxResolutionBytes whole runes.

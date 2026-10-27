@@ -16,6 +16,7 @@ import (
 	"github.com/nauticana/charter/sdk/identity"
 	"github.com/nauticana/charter/sdk/information"
 	"github.com/nauticana/charter/sdk/organization"
+	"github.com/nauticana/charter/sdk/predicate"
 	"github.com/nauticana/charter/sdk/validate"
 	"github.com/nauticana/keel/guard"
 	"github.com/nauticana/keel/idempotency"
@@ -87,7 +88,7 @@ func (r Runtime) Compose(_ context.Context, documents corpus.Source, external va
 		sink = &charterkeel.PublishingSink{Next: sink, Publisher: r.Publisher, Topic: r.Topic, Redactor: redactor}
 	}
 	agents, org := agent.NewBaseProvider(documents), organization.NewBaseProvider(documents)
-	records := evidence.NewBaseProvider(store)
+	records, definitions := evidence.NewBaseProvider(store), information.NewBaseProvider(documents)
 	var grants authority.Evaluator = &authority.AbstractEvaluator{Source: authority.NewDocumentGrantSource(documents)}
 	if r.Keel != nil {
 		grants = &charterkeel.PermissionGate{Charter: grants, Keel: r.Keel, Identities: r.Identities, Permissions: r.Permissions}
@@ -98,7 +99,9 @@ func (r Runtime) Compose(_ context.Context, documents corpus.Source, external va
 		Authority:        grants,
 		Approvals:        &authority.AbstractApprovalGate{Source: authority.NewDocumentApprovalSource(documents)},
 		Sod:              capability.NewBaseSodChecker(documents, records),
-		Information:      &information.BaseEvaluator{Provider: information.NewBaseProvider(documents)},
+		Information:      &information.BaseEvaluator{Provider: definitions},
+		Definitions:      definitions,
+		Predicates:       &predicate.CEL{},
 		Bindings:         binding.NewBaseProvider(documents),
 		Transport:        transport,
 		Observer:         observer,

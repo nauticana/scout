@@ -292,8 +292,8 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 		return domain.PublishReview{}, fmt.Errorf("supersede open reviews: %w", err)
 	}
 	inserted, err := tx.Query(ctx, qReviewInsert, actor.TenantID, request.AgentID, review.DefinitionDigest, review.DraftRevision,
-		review.PromptProfileRevision, nullableString(review.BaseVersion), nullableString(review.RestoreVersion), string(encodedDiff),
-		encodedEvaluations, *requester, nullableString(note), nullableString(exception))
+		review.PromptProfileRevision, common.NullIfEmpty(review.BaseVersion), common.NullIfEmpty(review.RestoreVersion), string(encodedDiff),
+		encodedEvaluations, *requester, common.NullIfEmpty(note), common.NullIfEmpty(exception))
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("insert publish review: %w", err)
 	}
@@ -458,7 +458,7 @@ func (r *StudioPublishReviews) decide(ctx context.Context, actor domain.StudioAc
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	decided, err := tx.Query(ctx, qReviewDecide, string(status), decider, nullableString(note), actor.TenantID, review.AgentID, review.ReviewID, review.DefinitionDigest)
+	decided, err := tx.Query(ctx, qReviewDecide, string(status), decider, common.NullIfEmpty(note), actor.TenantID, review.AgentID, review.ReviewID, review.DefinitionDigest)
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("decide publish review: %w", err)
 	}

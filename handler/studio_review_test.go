@@ -96,7 +96,7 @@ func TestStudioReviewHandlerMapsItemsWithoutTurnIdentifiers(t *testing.T) {
 		t.Fatalf("turn = %+v, %v", turn, err)
 	}
 	if _, err = h.grade(context.Background(), domain.StudioActor{}, api.ReviewGradeRequest{ItemID: 12,
-		ReviewGrade: api.ReviewGrade{Score: 2, Verdict: string(domain.ReviewFail), ExpectedBehavior: "greets"}}); err != nil {
+		Score: 2, Verdict: string(domain.ReviewFail), ExpectedBehavior: "greets"}); err != nil {
 		t.Fatal(err)
 	}
 	if backend.grade.Score != 2 || backend.grade.Verdict != domain.ReviewFail || string(backend.grade.ExpectedBehavior) != "greets" {

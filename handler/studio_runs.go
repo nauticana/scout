@@ -24,7 +24,7 @@ type StudioRunsHandler struct {
 
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts this route.
 func (h *StudioRunsHandler) Feature() api.StudioFeature {
-	return api.StudioFeature{ID: StudioFeatureRuns, Version: 2, Actions: []string{string(domain.StudioView)}}
+	return api.StudioFeature{ID: StudioFeatureRuns, Version: 3, Actions: []string{string(domain.StudioView)}}
 }
 
 // Routes returns the runs route, ?agent_name=&status=&before=&limit=, and the trace route, ?agent_name=&run_id=.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -107,10 +108,7 @@ func (store *StepIdempotencyStore) validate(owner domain.TurnOwner, step domain.
 }
 
 func (store *StepIdempotencyStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(store.Now).UTC()
 }
 
 func (store *StepIdempotencyStore) queries(ctx context.Context) port.QueryService {

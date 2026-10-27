@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -94,7 +95,7 @@ func (g *Gate) Decide(ctx context.Context, call domain.ToolCall, ask domain.Appr
 		request.RevisesStepID, request.Evidence = call.RevisesProposal, revision.Arguments
 		request.Summary = "revised " + request.Summary
 	}
-	for index := 0; index < maxAsks; index++ {
+	for index := range maxAsks {
 		request.ExecutionStepID = stepIDAt(call, index)
 		key := domain.ApprovalKey{TenantID: request.TenantID, RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID}
 		stored, err := g.Store.Get(ctx, key)
@@ -263,10 +264,7 @@ func (g *Gate) class() domain.OutputClass {
 }
 
 func (g *Gate) now() time.Time {
-	if g.Now != nil {
-		return g.Now()
-	}
-	return time.Now()
+	return clk.Now(g.Now)
 }
 
 // ProposalDigest binds a verdict to the exact call. Changing any argument

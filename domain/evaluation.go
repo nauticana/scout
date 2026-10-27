@@ -63,7 +63,37 @@ const (
 	MetricIngestionLagMs     = "ingestion_lag_ms"
 	MetricTombstoneLagMs     = "tombstone_lag_ms"
 	MetricAuthorizationLeaks = "authorization_leaks"
+
+	// Preservation and assurance metrics after the Enterprise Authority Framework (sections 2.6
+	// and 2.7); a case whose labels leave a metric's denominator empty does not report it.
+	MetricRequiredEvidencePreservation     = "required_evidence_preservation"
+	MetricControllingAuthorityPreservation = "controlling_authority_preservation"
+	MetricUnauthorizedActionRate           = "unauthorized_action_rate"
+	MetricCriticalUnauthorizedActions      = "critical_unauthorized_actions"
+	MetricValidTaskCompletion              = "valid_task_completion"
 )
+
+// GoldenEvidenceRole classifies one id a golden case labels as needed by its decision.
+type GoldenEvidenceRole string
+
+const (
+	GoldenEvidenceRequired  GoldenEvidenceRole = "E"
+	GoldenEvidenceAuthority GoldenEvidenceRole = "A"
+)
+
+// AssuranceLabels name what a golden case's decision needs: the evidence and the controlling
+// authority ids that must reach the model, and whether a mutating tool call is expected. A nil
+// ExecutionExpected leaves execution unlabeled.
+type AssuranceLabels struct {
+	RequiredEvidence     []string `json:"required_evidence,omitempty"`
+	ControllingAuthority []string `json:"controlling_authority,omitempty"`
+	ExecutionExpected    *bool    `json:"execution_expected,omitempty"`
+}
+
+// Labeled reports whether any assurance label is set.
+func (labels AssuranceLabels) Labeled() bool {
+	return len(labels.RequiredEvidence) > 0 || len(labels.ControllingAuthority) > 0 || labels.ExecutionExpected != nil
+}
 
 // SliceAll is the aggregate slice every paired delta is reported under.
 const SliceAll = "all"
@@ -126,7 +156,8 @@ type GoldenExample struct {
 	Hidden  bool
 	Reviews []ExampleReview
 	// Script is the canonical JSON CaseScript in object storage; empty for an unscripted example.
-	Script ObjectRef
+	Script    ObjectRef
+	Assurance AssuranceLabels
 }
 
 // GoldenQuery is one retrieval example with the principal it must be answered for.
@@ -177,6 +208,10 @@ type TrajectoryEvent struct {
 	// Recovered marks an event that repaired an earlier failed step.
 	Recovered bool
 	Failed    bool
+	// Mutating marks an observation of a tool not declared read-only.
+	Mutating bool
+	// Evidence are the resource links an observation's tool returned to the model.
+	Evidence []string
 }
 
 // EvaluationCase is one arm's replayed output for one example.

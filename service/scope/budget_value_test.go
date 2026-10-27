@@ -200,14 +200,15 @@ func (f *currencyCatalogFake) Exponent(_ context.Context, code string) (int, err
 	return exponent, nil
 }
 
-func exponent(value int) *int { return &value }
+//go:fix inline
+func exponent(value int) *int { return new(value) }
 
 func TestCheckBudgetUnitAgainstTheCatalog(t *testing.T) {
 	catalog := &currencyCatalogFake{exponents: map[string]int{"EUR": 2, "JPY": 0}}
 	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{Tokens: 10}); err != nil || got != 0 || catalog.reads != 0 {
 		t.Fatalf("tokens only = %d, %v after %d reads", got, err, catalog.reads)
 	}
-	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{CostMinorUnits: 5, Currency: "JPY", Exponent: exponent(0)}); err != nil || got != 0 {
+	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{CostMinorUnits: 5, Currency: "JPY", Exponent: new(0)}); err != nil || got != 0 {
 		t.Fatalf("JPY = %d, %v", got, err)
 	}
 	if got, err := CheckBudgetUnit(context.Background(), catalog, domain.ReleaseBudget{CostMinorUnits: 5, Currency: "EUR", Source: domain.BudgetSourceFallback}); err != nil || got != 2 {
@@ -215,8 +216,8 @@ func TestCheckBudgetUnitAgainstTheCatalog(t *testing.T) {
 	}
 	for problem, budget := range map[domain.BudgetProblem]domain.ReleaseBudget{
 		domain.BudgetNoCurrency:      {CostMinorUnits: 5},
-		domain.BudgetUnknownCurrency: {CostMinorUnits: 5, Currency: "XXX", Exponent: exponent(2)},
-		domain.BudgetExponentChanged: {CostMinorUnits: 5, Currency: "EUR", Exponent: exponent(3)},
+		domain.BudgetUnknownCurrency: {CostMinorUnits: 5, Currency: "XXX", Exponent: new(2)},
+		domain.BudgetExponentChanged: {CostMinorUnits: 5, Currency: "EUR", Exponent: new(3)},
 	} {
 		_, err := CheckBudgetUnit(context.Background(), catalog, budget)
 		var unenforceable *domain.BudgetUnenforceableError

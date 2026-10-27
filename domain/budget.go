@@ -135,7 +135,7 @@ func (p BudgetPeriod) span(year int, month time.Month, day int, location *time.L
 func dayStart(year int, month time.Month, day int, location *time.Location) (time.Time, error) {
 	midnight := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 	at := midnight.Add(-30 * time.Hour)
-	for periods := 0; periods < 8; periods++ {
+	for range 8 {
 		local := at.In(location)
 		_, offset := local.Zone()
 		_, periodEnd := local.ZoneBounds()

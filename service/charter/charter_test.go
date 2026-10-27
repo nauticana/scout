@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -118,9 +119,7 @@ func clone(t *testing.T, c *corpus.Corpus, id, newID string, set map[string]any)
 		t.Fatal(err)
 	}
 	body["id"] = newID
-	for k, v := range set {
-		body[k] = v
-	}
+	maps.Copy(body, set)
 	raw, _ := json.Marshal(body)
 	copied := *doc
 	copied.ID, copied.Raw, copied.Value = newID, raw, body

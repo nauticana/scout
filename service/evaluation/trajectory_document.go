@@ -25,6 +25,8 @@ type trajectoryRecord struct {
 	OffsetMs  int64            `json:"offset_ms"`
 	Failed    bool             `json:"failed,omitempty"`
 	Recovered bool             `json:"recovered,omitempty"`
+	Mutating  bool             `json:"mutating,omitempty"`
+	Evidence  []string         `json:"evidence,omitempty"`
 	Usage     *trajectoryUsage `json:"usage,omitempty"`
 }
 
@@ -50,7 +52,7 @@ func encodeTrajectory(events []domain.TrajectoryEvent) ([]byte, error) {
 	for _, event := range events {
 		record := trajectoryRecord{
 			Sequence: event.Sequence, Kind: string(event.Kind), Name: event.Name, OffsetMs: event.Offset.Milliseconds(),
-			Failed: event.Failed, Recovered: event.Recovered,
+			Failed: event.Failed, Recovered: event.Recovered, Mutating: event.Mutating, Evidence: event.Evidence,
 		}
 		if len(bytes.TrimSpace(event.Payload)) > 0 {
 			if json.Valid(event.Payload) {
@@ -92,6 +94,7 @@ func decodeTrajectory(content []byte) ([]domain.TrajectoryEvent, error) {
 		event := domain.TrajectoryEvent{
 			Sequence: record.Sequence, Kind: domain.TrajectoryEventKind(record.Kind), Name: record.Name, Payload: record.Payload,
 			Offset: time.Duration(record.OffsetMs) * time.Millisecond, Failed: record.Failed, Recovered: record.Recovered,
+			Mutating: record.Mutating, Evidence: record.Evidence,
 		}
 		if usage := record.Usage; usage != nil {
 			event.Usage = domain.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, ToolCalls: usage.ToolCalls,

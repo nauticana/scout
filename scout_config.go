@@ -20,6 +20,7 @@ import (
 	"github.com/nauticana/scout/service/evaluation"
 	"github.com/nauticana/scout/service/observability"
 	"github.com/nauticana/scout/service/scope"
+	"github.com/nauticana/scout/service/workingset"
 )
 
 const (
@@ -190,6 +191,8 @@ const (
 	agent_operator_max_entries            = "agent_operator_max_entries"
 	agent_hold_lapse_batch                = "agent_hold_lapse_batch"
 	agent_hold_lapse_period               = "agent_hold_lapse_period"
+	agent_working_set_max_candidates      = "agent_working_set_max_candidates"
+	agent_working_set_max_tokens          = "agent_working_set_max_tokens"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -391,6 +394,8 @@ type ScoutConfig struct {
 	AgentOperatorMaxEntries           int // agent_operator_max_entries 64 Operator entries one turn may hold (1..4096); 0 takes 64
 	AgentHoldLapseBatch               int // agent_hold_lapse_batch 100 Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100
 	AgentHoldLapsePeriod              int // agent_hold_lapse_period 30 Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30
+	AgentWorkingSetMaxCandidates      int // agent_working_set_max_candidates 64 Candidates one turn's working set source may offer (1..1024); 0 takes 64
+	AgentWorkingSetMaxTokens          int // agent_working_set_max_tokens 8000 Token budget of one turn's working set (1..1048576); 0 takes 8000
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -646,6 +651,8 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentOperatorMaxEntries = c.Int(rows, agent_operator_max_entries)
 	c.AgentHoldLapseBatch = c.Int(rows, agent_hold_lapse_batch)
 	c.AgentHoldLapsePeriod = c.Int(rows, agent_hold_lapse_period)
+	c.AgentWorkingSetMaxCandidates = c.Int(rows, agent_working_set_max_candidates)
+	c.AgentWorkingSetMaxTokens = c.Int(rows, agent_working_set_max_tokens)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -655,7 +662,29 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 			judgeErr = fmt.Errorf("agent_evaluation_judge_*: %w", judgeErr)
 		}
 	}
-	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors(), c.operatorFlagErrors())
+	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors(), c.operatorFlagErrors(), c.workingSetFlagErrors())
+}
+
+// WorkingSetLimits is what the agent_working_set_* flags configure for workingset.Compiler.
+func (c *ScoutConfig) WorkingSetLimits() domain.WorkingSetLimits {
+	return domain.WorkingSetLimits{MaxCandidates: c.AgentWorkingSetMaxCandidates, MaxTokens: int64(c.AgentWorkingSetMaxTokens)}
+}
+
+// workingSetFlagErrors refuses a working set bound outside its range; zero takes the default.
+func (c *ScoutConfig) workingSetFlagErrors() error {
+	var errs []error
+	for _, flag := range []struct {
+		name       string
+		value, max int
+	}{
+		{agent_working_set_max_candidates, c.AgentWorkingSetMaxCandidates, workingset.MaxCandidates},
+		{agent_working_set_max_tokens, c.AgentWorkingSetMaxTokens, workingset.MaxTokens},
+	} {
+		if flag.value < 0 || flag.value > flag.max {
+			errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", flag.name, flag.value, flag.max))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // OperatorSettings is what the agent_takeover_lease, agent_operator_*, and agent_hold_lapse_*
@@ -772,7 +801,7 @@ func governanceFields(text string) ([]domain.GovernanceField, error) {
 		return []domain.GovernanceField{}, nil
 	}
 	fields := []domain.GovernanceField{}
-	for _, name := range strings.Split(text, ",") {
+	for name := range strings.SplitSeq(text, ",") {
 		field := domain.GovernanceField(strings.TrimSpace(name))
 		if !slices.Contains(domain.CharterGovernanceFields(), field) || slices.Contains(fields, field) {
 			return nil, fmt.Errorf("%s: %q is not a distinct Charter governance field", agent_governance_required_fields, field)

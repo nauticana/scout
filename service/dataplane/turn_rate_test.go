@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -49,9 +50,7 @@ func rateLimitedQuery(turnsPerMinute string, rows map[string][][]any) *queueQuer
 		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
 		qReleaseGet:        {frozenRelease("v1", turnLimits(`{"turns_per_minute":`+turnsPerMinute+`,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}`))},
 	}}
-	for name, answer := range rows {
-		query.rows[name] = answer
-	}
+	maps.Copy(query.rows, rows)
 	return query
 }
 

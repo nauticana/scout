@@ -48,7 +48,7 @@ func TestReplyHubOneSubscriberFailsEarly(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The slow subscriber never drains and overflows; the fast one drains each frame and survives.
-	for seq := int64(0); seq < 3; seq++ {
+	for seq := range int64(3) {
 		if err = hub.Publish(ctx, frame(seq, false)); err != nil {
 			t.Fatal(err)
 		}
@@ -130,9 +130,7 @@ func TestReplyHubCloseIsIdempotentAndReleasesReceivers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, receiveErr := subscription.Receive(ctx); !errors.Is(receiveErr, io.EOF) {
 				failures <- receiveErr
 			}
@@ -141,7 +139,7 @@ func TestReplyHubCloseIsIdempotentAndReleasesReceivers(t *testing.T) {
 				failures <- closeErr
 			}
 			_ = i
-		}()
+		})
 	}
 	if err := hub.Close(); err != nil {
 		t.Fatal(err)

@@ -179,37 +179,38 @@ func TestRoutingMergerKeepsParentRoutesFirst(t *testing.T) {
 func TestCheckRoutingRefusesEveryLoosening(t *testing.T) {
 	parent := routes(
 		route("pay", `{"tools":["pay.*"]}`, `"escalation":[{"approver":{"kind":"role","ref":"cfo"},"extension_seconds":600}]`),
-		route("ops", `{}`, `"on_exhausted":"hold"`),
+		route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`),
 	)
 	inherited, err := CanonicalValue(domain.ResourceApprovalRouting, []byte(parent))
 	if err != nil {
 		t.Fatal(err)
 	}
 	payStep := `"escalation":[{"approver":{"kind":"role","ref":"cfo"},"extension_seconds":600}]`
-	many := []string{route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`)}
+	many := []string{route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)}
 	for index := range domain.MaxApprovalRoutes - 1 {
 		many = append(many, route(fmt.Sprintf("c%d", index), fmt.Sprintf(`{"tools":["c%d"]}`, index)))
 	}
 	checker := &LatticeChecker{}
 	for name, candidate := range map[string]string{
-		"child route first":    routes(route("own", `{"tools":["x"]}`), route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`)),
+		"child route first":    routes(route("own", `{"tools":["x"]}`), route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)),
 		"parent route dropped": routes(route("pay", `{"tools":["pay.*"]}`, payStep)),
-		"match changed":        routes(route("pay", `{"tools":["pay.wire"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`)),
-		"approver changed":     strings.Replace(routes(route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`)), `"ref":"ops"`, `"ref":"intern"`, 1),
+		"match changed":        routes(route("pay", `{"tools":["pay.wire"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)),
+		"approver changed":     strings.Replace(routes(route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)), `"ref":"ops"`, `"ref":"intern"`, 1),
 		"step approver changed": routes(route("pay", `{"tools":["pay.*"]}`, `"escalation":[{"approver":{"kind":"role","ref":"cto"},"extension_seconds":600}]`),
-			route("ops", `{}`, `"on_exhausted":"hold"`)),
-		"step dropped":     routes(route("pay", `{"tools":["pay.*"]}`), route("ops", `{}`, `"on_exhausted":"hold"`)),
-		"longer extension": routes(route("pay", `{"tools":["pay.*"]}`, `"escalation":[{"approver":{"kind":"role","ref":"cfo"},"extension_seconds":601}]`), route("ops", `{}`, `"on_exhausted":"hold"`)),
-		"longer deadline":  strings.Replace(routes(route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`)), `"deadline_seconds":3600`, `"deadline_seconds":3601`, 1),
-		"expire made hold": routes(route("pay", `{"tools":["pay.*"]}`, payStep, `"on_exhausted":"hold"`), route("ops", `{}`, `"on_exhausted":"hold"`)),
+			route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)),
+		"step dropped":     routes(route("pay", `{"tools":["pay.*"]}`), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)),
+		"longer extension": routes(route("pay", `{"tools":["pay.*"]}`, `"escalation":[{"approver":{"kind":"role","ref":"cfo"},"extension_seconds":601}]`), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)),
+		"longer deadline":  strings.Replace(routes(route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)), `"deadline_seconds":3600`, `"deadline_seconds":3601`, 1),
+		"expire made hold": routes(route("pay", `{"tools":["pay.*"]}`, payStep, `"on_exhausted":"hold"`), route("ops", `{}`, `"on_exhausted":"hold"`, `"authenticated_only":true`)),
 		"over sixty-four":  routes(many...),
+		"links reopened":   routes(route("pay", `{"tools":["pay.*"]}`, payStep), route("ops", `{}`, `"on_exhausted":"hold"`)),
 	} {
 		if err := checker.CheckNarrowing(context.Background(), domain.ResourceApprovalRouting, inherited, []byte(candidate)); !errors.Is(err, domain.ErrAuthorityExceeded) {
 			t.Errorf("%s: %v, want authority exceeded", name, err)
 		}
 	}
 	tighter := strings.Replace(routes(route("pay", `{"tools":["pay.*"]}`, `"escalation":[{"approver":{"kind":"role","ref":"cfo"},"extension_seconds":60}]`),
-		route("ops", `{}`, `"on_exhausted":"expire"`), route("own", `{"tools":["x"]}`)), `"deadline_seconds":3600`, `"deadline_seconds":600`, 1)
+		route("ops", `{}`, `"on_exhausted":"expire"`, `"authenticated_only":true`), route("own", `{"tools":["x"]}`)), `"deadline_seconds":3600`, `"deadline_seconds":600`, 1)
 	if err := checker.CheckNarrowing(context.Background(), domain.ResourceApprovalRouting, inherited, []byte(tighter)); err != nil {
 		t.Fatalf("shorter durations, hold made expire, and an added route narrow: %v", err)
 	}

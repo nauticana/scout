@@ -3,6 +3,7 @@ package dataplane
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/observability"
 )
 
@@ -23,6 +25,7 @@ const (
 	qOperateTurn      = "scout_operate_turn"
 	qOperateDispatch  = "scout_operate_dispatch"
 	qOperateRelease   = "scout_operate_release"
+	qOperateOpenCalls = "scout_operate_open_calls"
 
 	// DefaultLiveTurnPageSize and DefaultLiveTurnMaxPageSize bound one Studio page of live turns.
 	DefaultLiveTurnPageSize    = 50
@@ -54,6 +57,17 @@ SELECT conversation_id, agent_id, COALESCE(acting_context, ''), reply_route
  WHERE partner_id = ? AND request_id = ?`,
 	qOperateRelease: `
 SELECT agent_version, COALESCE(end_user_ref, '') FROM agent_conversation WHERE partner_id = ? AND conversation_id = ?`,
+	// turn_call_outcome_open_ix serves the order; the cursor is the last row of the previous page.
+	qOperateOpenCalls: `
+SELECT o.request_id, o.execution_step_id, o.call_id, o.tool_id, o.tool_version, o.status_code, o.dispatched_at, o.deadline_at,
+       o.deadline_at <= CURRENT_TIMESTAMP, conv.agent_id, turn.conversation_id, turn.turn_no
+  FROM turn_call_outcome o
+  JOIN conversation_turn turn ON turn.partner_id = o.partner_id AND turn.request_id = o.request_id
+  JOIN agent_conversation conv ON conv.partner_id = turn.partner_id AND conv.conversation_id = turn.conversation_id
+ WHERE o.partner_id = ? AND o.status_code IN (` + sqlCallOpen + `) AND (? = '' OR conv.agent_id = ?)
+   AND (? = '' OR (o.deadline_at, o.request_id, o.execution_step_id, o.call_id) > (?, ?, ?, ?))
+ ORDER BY o.deadline_at, o.request_id, o.execution_step_id, o.call_id
+ LIMIT ?`,
 }
 
 // StudioTurnControl lets an operator see an agent's live turns, hold them, settle their unknown
@@ -117,10 +131,7 @@ func (s *StudioTurnControl) ready(ctx context.Context) (port.QueryService, error
 }
 
 func (s *StudioTurnControl) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return clk.Now(s.Now)
 }
 
 // authorize fails closed unless the actor may view the agent in Studio and holds every action
@@ -201,6 +212,112 @@ func (s *StudioTurnControl) LiveTurns(ctx context.Context, actor domain.StudioAc
 		page.Turns = append(page.Turns, turn)
 	}
 	return page, nil
+}
+
+// OpenOutcomes pages the tenant's in-flight, accepted, and unknown calls, oldest deadline first.
+// One agent's needs VIEW on it; every agent's needs a VIEW grant that bypasses the agent scope.
+func (s *StudioTurnControl) OpenOutcomes(ctx context.Context, actor domain.StudioActor, filter domain.OpenOutcomeFilter) (domain.OpenOutcomePage, error) {
+	qs, err := s.ready(ctx)
+	if err != nil {
+		return domain.OpenOutcomePage{}, err
+	}
+	limits, err := s.limits()
+	if err != nil {
+		return domain.OpenOutcomePage{}, err
+	}
+	if filter.Limit < 0 || filter.Limit > limits.MaxPageSize {
+		return domain.OpenOutcomePage{}, fmt.Errorf("%w: limit must lie within 0..%d", domain.ErrValidation, limits.MaxPageSize)
+	}
+	after, err := decodeOutcomeCursor(filter.Before)
+	if err != nil {
+		return domain.OpenOutcomePage{}, err
+	}
+	if filter.AgentID != "" {
+		err = s.authorize(ctx, actor, domain.OperationView, filter.AgentID)
+	} else {
+		err = s.authorizeEveryAgent(ctx, actor, domain.OperationView)
+	}
+	if err != nil {
+		return domain.OpenOutcomePage{}, err
+	}
+	limit := cmp.Or(filter.Limit, limits.PageSize)
+	result, err := qs.Query(ctx, qOperateOpenCalls, actor.TenantID, filter.AgentID, filter.AgentID,
+		filter.Before, after.DeadlineAt, after.Key.RequestID, after.Key.ExecutionStepID, after.Key.CallID, limit+1)
+	if err != nil {
+		return domain.OpenOutcomePage{}, fmt.Errorf("list open call outcomes: %w", err)
+	}
+	page := domain.OpenOutcomePage{Outcomes: make([]domain.OpenOutcome, 0, min(len(result.Rows), limit))}
+	for index, row := range result.Rows {
+		if index == limit {
+			page.NextBefore = encodeOutcomeCursor(page.Outcomes[limit-1])
+			break
+		}
+		outcome, err := decodeOpenOutcome(actor.TenantID, row)
+		if err != nil {
+			return domain.OpenOutcomePage{}, err
+		}
+		page.Outcomes = append(page.Outcomes, outcome)
+	}
+	return page, nil
+}
+
+// authorizeEveryAgent fails closed unless the actor holds the action on AGENT_OPERATION with a grant that bypasses the agent scope.
+func (s *StudioTurnControl) authorizeEveryAgent(ctx context.Context, actor domain.StudioActor, action domain.OperationAction) error {
+	principal, err := s.Principals.Resolve(ctx, actor.TenantID, actor.Principal)
+	if err != nil {
+		return err
+	}
+	grant, err := s.Roles.Authorize(ctx, principal, domain.OperationAuthorizationObject, string(action), "agent:*")
+	if err != nil {
+		return fmt.Errorf("authorize %s %s: %w", domain.OperationAuthorizationObject, action, err)
+	}
+	if !grant.Allowed || !grant.BypassScope {
+		return fmt.Errorf("%w: %s %s on every agent", domain.ErrForbidden, domain.OperationAuthorizationObject, action)
+	}
+	return nil
+}
+
+// encodeOutcomeCursor names the last call of a page as deadline nanos, step, base64url request id, and call id.
+func encodeOutcomeCursor(outcome domain.OpenOutcome) string {
+	return strconv.FormatInt(outcome.DeadlineAt.UnixNano(), 10) + ":" + strconv.FormatInt(outcome.Key.ExecutionStepID, 10) + ":" +
+		base64.RawURLEncoding.EncodeToString([]byte(outcome.Key.RequestID)) + ":" + outcome.Key.CallID
+}
+
+func decodeOutcomeCursor(before string) (domain.OpenOutcome, error) {
+	if before == "" {
+		return domain.OpenOutcome{DeadlineAt: time.Unix(0, 0).UTC()}, nil
+	}
+	parts := strings.SplitN(before, ":", 4)
+	if len(parts) == 4 {
+		nanos, nanosErr := strconv.ParseInt(parts[0], 10, 64)
+		step, stepErr := strconv.ParseInt(parts[1], 10, 64)
+		requestID, requestErr := base64.RawURLEncoding.DecodeString(parts[2])
+		if nanosErr == nil && stepErr == nil && requestErr == nil && step > 0 && len(requestID) > 0 && parts[3] != "" {
+			return domain.OpenOutcome{DeadlineAt: time.Unix(0, nanos).UTC(),
+				Key: domain.CallOutcomeKey{RequestID: string(requestID), ExecutionStepID: step, CallID: parts[3]}}, nil
+		}
+	}
+	return domain.OpenOutcome{}, fmt.Errorf("%w: before is not an open outcome cursor", domain.ErrValidation)
+}
+
+func decodeOpenOutcome(tenantID int64, row []any) (domain.OpenOutcome, error) {
+	if len(row) < 12 {
+		return domain.OpenOutcome{}, fmt.Errorf("decode open call outcome: expected 12 columns, got %d", len(row))
+	}
+	outcome := domain.OpenOutcome{
+		Key: domain.CallOutcomeKey{TenantID: tenantID, RequestID: common.AsString(row[0]), ExecutionStepID: common.AsInt64(row[1]),
+			CallID: common.AsString(row[2])},
+		Tool:   domain.ToolReference{ToolID: common.AsString(row[3]), Version: common.AsString(row[4])},
+		Status: domain.CallOutcomeStatus(common.AsString(row[5])), DeadlinePassed: common.AsBool(row[8]),
+		AgentID: common.AsString(row[9]), ConversationID: common.AsString(row[10]), TurnNo: common.AsInt64(row[11]),
+	}
+	var dispatched, deadline bool
+	outcome.DispatchedAt, dispatched = common.AsTimeOK(row[6])
+	outcome.DeadlineAt, deadline = common.AsTimeOK(row[7])
+	if !outcome.Status.Open() || !dispatched || !deadline {
+		return domain.OpenOutcome{}, fmt.Errorf("%w: open call outcome %q does not decode", domain.ErrConflict, outcome.Key.CallID)
+	}
+	return outcome, nil
 }
 
 // encodeTurnCursor names the last turn of a page ordered newest first by queue time, then request id.

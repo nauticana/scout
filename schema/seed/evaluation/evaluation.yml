@@ -14,6 +14,7 @@ seeds:
       - [evaluation_role, Evaluation Role]
       - [evaluation_subject, Evaluation Subject]
       - [golden_scope, Golden Set Scope]
+      - [golden_evidence_role, Golden Evidence Role]
       - [rollout_health_verdict, Rollout Health Verdict]
   - table: constant_value
     columns: [constant_id, value, caption]
@@ -46,6 +47,8 @@ seeds:
       - [evaluation_subject, B, Baseline]
       - [golden_scope, dev, Development]
       - [golden_scope, gate, Release Gate]
+      - [golden_evidence_role, E, Required Evidence]
+      - [golden_evidence_role, A, Controlling Authority]
       - [rollout_health_verdict, H, Healthy]
       - [rollout_health_verdict, U, Unhealthy]
       - [rollout_health_verdict, I, Inconclusive]
@@ -67,6 +70,7 @@ seeds:
       - [golden_scope, golden_case, scope_code]
       - [golden_scope, golden_example, scope_code]
       - [golden_scope, golden_query, scope_code]
+      - [golden_evidence_role, golden_case_evidence, role_code]
       - [rollout_health_verdict, gate_decision, verdict_code]
   - table: column_display_attribute
     columns: [table_name, column_name, currency_path]

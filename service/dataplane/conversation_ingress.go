@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/observability"
 )
 
@@ -51,10 +52,7 @@ func (ingress *TurnIngress) validate() error {
 }
 
 func (ingress *TurnIngress) now() time.Time {
-	if ingress.Now != nil {
-		return ingress.Now()
-	}
-	return time.Now()
+	return clk.Now(ingress.Now)
 }
 
 // OpenTurn returns the live reply subscription for the admitted turn. A repeat

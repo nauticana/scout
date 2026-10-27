@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -90,8 +91,8 @@ func TestHybridRetrieverRerankAndBudgetSkip(t *testing.T) {
 	})
 	reversed := rerankerFunc(func(_ context.Context, _ domain.KnowledgeQuery, fused []domain.KnowledgeMatch) ([]domain.KnowledgeMatch, error) {
 		out := make([]domain.KnowledgeMatch, 0, len(fused))
-		for i := len(fused) - 1; i >= 0; i-- {
-			out = append(out, fused[i])
+		for _, f := range slices.Backward(fused) {
+			out = append(out, f)
 		}
 		return out, nil
 	})

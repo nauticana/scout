@@ -34,6 +34,7 @@ var errorClasses = []struct {
 	{domain.ErrProposalRevised, "proposal_revised"},
 	{domain.ErrTurnHeld, "held"},
 	{domain.ErrFenceLost, "fence_lost"},
+	{domain.ErrWorkingSetUnassured, "unassured"},
 	{domain.ErrValidation, "validation"},
 	{domain.ErrNotFound, "not_found"},
 	{domain.ErrConflict, "conflict"},
@@ -104,8 +105,7 @@ func (span *Span) End(now time.Time, outcome domain.ObservationOutcome, usage do
 		outcome = derivedOutcome(observation.ErrorClass)
 	}
 	observation.Outcome = outcome
-	var stageErr *Error
-	if errors.As(err, &stageErr) {
+	if stageErr, ok := errors.AsType[*Error](err); ok {
 		observation.Stage = stageErr.Stage
 	}
 	return observation

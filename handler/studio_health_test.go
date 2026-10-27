@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/fake"
@@ -26,7 +24,7 @@ func TestStudioHealthRouteServesTheDetailWithNullsForMissingSamples(t *testing.T
 	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	p95 := int64(4000)
 	var asked string
-	handler := &StudioHealthHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: &fake.StudioHealthBackend{
+	handler := &StudioHealthHandler{UserService: conversationUsers{}, Backend: &fake.StudioHealthBackend{
 		HealthFunc: func(_ context.Context, actor domain.StudioActor, agentID string) (domain.AgentHealthReport, error) {
 			asked = agentID
 			if actor.TenantID != 7 {
@@ -59,7 +57,7 @@ func TestStudioHealthRouteServesTheDetailWithNullsForMissingSamples(t *testing.T
 
 func TestStudioAlertsRoutePassesTheFilterAndRefusesAMalformedCursor(t *testing.T) {
 	var asked domain.AgentAlertFilter
-	handler := &StudioHealthHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: &fake.StudioHealthBackend{
+	handler := &StudioHealthHandler{UserService: conversationUsers{}, Backend: &fake.StudioHealthBackend{
 		AlertsFunc: func(_ context.Context, _ domain.StudioActor, filter domain.AgentAlertFilter) (domain.AgentAlertPage, error) {
 			asked = filter
 			if filter.Status == "X" {

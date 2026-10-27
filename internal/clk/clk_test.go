@@ -37,3 +37,14 @@ func TestOfWaitsOnRealTime(t *testing.T) {
 	defer ticker.Stop()
 	<-ticker.C()
 }
+
+func TestNowFallsBackToTheSystemClock(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	if got := Now(func() time.Time { return at }); !got.Equal(at) {
+		t.Fatalf("Now(injected) = %v", got)
+	}
+	before := time.Now()
+	if got := Now(nil); got.Before(before) || got.After(time.Now()) {
+		t.Fatalf("Now(nil) = %v, not the system clock", got)
+	}
+}

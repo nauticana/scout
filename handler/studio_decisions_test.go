@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
@@ -22,7 +20,7 @@ func (function decisionsBackendFunc) Decisions(ctx context.Context, actor domain
 
 func TestStudioDecisionsPagesTheTenantsRecords(t *testing.T) {
 	var asked domain.DecisionQuery
-	handler := &StudioDecisionsHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}},
+	handler := &StudioDecisionsHandler{UserService: conversationUsers{},
 		Backend: decisionsBackendFunc(func(_ context.Context, actor domain.StudioActor, query domain.DecisionQuery) (domain.DecisionPage, error) {
 			if actor.TenantID != 7 || actor.Principal.ID != "42" {
 				return domain.DecisionPage{}, domain.ErrForbidden
@@ -50,7 +48,7 @@ func TestStudioDecisionsPagesTheTenantsRecords(t *testing.T) {
 		t.Fatalf("query = %+v", asked)
 	}
 	body := recorder.Body.String()
-	for _, want := range []string{`"next_before":54`, `"id":55`, `"outcome":"D"`, `"principal":{"kind":"agent","id":"writer"}`,
+	for _, want := range []string{`"next_before":"54"`, `"id":"55"`, `"outcome":"D"`, `"principal":{"kind":"agent","id":"writer"}`,
 		`"authority":{"subject":{"kind":"agent","id":"writer"},"grant_id":"g-1","grantor":{"kind":"agent","id":"lead"}}`,
 		`"obligations":["redact"]`, `"evidence_digest":"abc"`} {
 		if !strings.Contains(body, want) {

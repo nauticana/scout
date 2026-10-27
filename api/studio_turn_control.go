@@ -14,6 +14,8 @@ const (
 	StudioTurnReleasePath = StudioBasePath + "turn/release"
 	StudioTurnLookupPath  = StudioBasePath + "turn/outcome/lookup"
 	StudioTurnAttestPath  = StudioBasePath + "turn/outcome/attest"
+	// StudioOpenOutcomesPath serves GET outcomes/open?agent_name=&before=&limit=.
+	StudioOpenOutcomesPath = StudioBasePath + "outcomes/open"
 )
 
 // Attested outcomes of a call.
@@ -106,6 +108,31 @@ type TurnAttestResult struct {
 type LiveTurnPage struct {
 	Turns      []LiveTurn `json:"turns"`
 	NextBefore string     `json:"next_before,omitempty"`
+}
+
+// OpenOutcome is one in-flight (I), accepted (A), or unknown (U) call and the turn it holds;
+// deadline_passed is read by the store clock and says a person may attest the call now.
+type OpenOutcome struct {
+	AgentName       string    `json:"agent_name"`
+	RequestID       string    `json:"request_id"`
+	ConversationID  string    `json:"conversation_id"`
+	TurnNo          int64     `json:"turn_no"`
+	ExecutionStepID int64     `json:"execution_step_id"`
+	CallID          string    `json:"call_id"`
+	ToolID          string    `json:"tool_id"`
+	ToolVersion     string    `json:"tool_version"`
+	Status          string    `json:"status"`
+	DispatchedAt    time.Time `json:"dispatched_at"`
+	DeadlineAt      time.Time `json:"deadline_at"`
+	DeadlinePassed  bool      `json:"deadline_passed"`
+}
+
+// OpenOutcomePage is one page of open calls, oldest deadline first. next_before is an opaque
+// cursor naming the page's last call: passed as before, the next page starts strictly after it
+// in (deadline_at, request_id, execution_step_id, call_id) order. It is empty on the last page.
+type OpenOutcomePage struct {
+	Outcomes   []OpenOutcome `json:"outcomes"`
+	NextBefore string        `json:"next_before,omitempty"`
 }
 
 // TurnHoldRequest asks one turn to hold. mode checkpoint holds a queued or parked turn at once

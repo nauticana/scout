@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/nauticana/keel/config"
-	keelhandler "github.com/nauticana/keel/handler"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -24,7 +23,7 @@ func TestStudioCommandsAndApprovalsBoundTheirBodies(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest || backend.change.AgentID != "" {
 		t.Fatalf("an oversized Studio command: status = %d, change = %+v", recorder.Code, backend.change)
 	}
-	approvals := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}}
+	approvals := &ApprovalHandler{UserService: conversationUsers{}}
 	recorder = httptest.NewRecorder()
 	approvals.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
 	if recorder.Code != http.StatusBadRequest {

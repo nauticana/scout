@@ -48,6 +48,9 @@ type ModelRequest struct {
 	// Temperature overrides the adapter's configured sampling for this call; it
 	// requires CapabilitySampling, so a model that rejects sampling is never sent one.
 	Temperature *float64
+	// Assurance is the turn's working set assurance, empty when no working set is compiled; the tool
+	// loop gives it to every tool call, and adapters never forward it.
+	Assurance WorkingSetAssurance
 }
 
 // ModelCapability is a seeded model_capability code: one modality or feature a model serves.

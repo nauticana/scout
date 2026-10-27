@@ -3,6 +3,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/nauticana/scout/contract"
@@ -20,10 +21,8 @@ func registryOf(toolIDs ...string) *fake.ToolRegistry {
 			return tools, nil
 		},
 		GetFunc: func(_ context.Context, _ int64, toolID, version string) (domain.ToolDefinition, error) {
-			for _, known := range toolIDs {
-				if known == toolID {
-					return domain.ToolDefinition{ToolID: toolID, Version: version, InputSchema: []byte(`{"type":"object"}`)}, nil
-				}
+			if slices.Contains(toolIDs, toolID) {
+				return domain.ToolDefinition{ToolID: toolID, Version: version, InputSchema: []byte(`{"type":"object"}`)}, nil
 			}
 			return domain.ToolDefinition{}, domain.ErrNotFound
 		},

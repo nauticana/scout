@@ -47,13 +47,13 @@ func TestTenantHeavyHittersStableRankSlotsUnderChurn(t *testing.T) {
 	for tenant := int64(1); tenant <= 500; tenant++ {
 		hitters.RecordObservation(context.Background(), domain.Observation{TenantID: tenant})
 	}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		hitters.Record(7, 1)
 	}
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		hitters.Record(300, 1)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		hitters.Record(42, 1)
 	}
 	if forwarded != 500 {

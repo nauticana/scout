@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nauticana/keel/common"
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
@@ -519,7 +521,7 @@ func frozenDefinitionWithSettings(t *testing.T, settingsDigest string) (string, 
 }
 
 func activationRow(id int64, version, digest string, canary int, baseStable, baseCanary string, effective time.Time, state string, attempts int) []any {
-	return []any{id, int64(8), "writer-a", version, digest, int64(canary), nullableString(baseStable), nullableString(baseCanary),
+	return []any{id, int64(8), "writer-a", version, digest, int64(canary), common.NullIfEmpty(baseStable), common.NullIfEmpty(baseCanary),
 		effective, state, "human", "9", scheduledAt.Add(-time.Hour), int64(attempts), nil, nil, nil, nil, nil, nil}
 }
 
@@ -581,12 +583,12 @@ func (db *scriptedDB) BeginTx(context.Context, map[string]string) (keelport.TxQu
 func (db *scriptedDB) called(name string) bool { return db.last(name) != nil }
 
 func (db *scriptedDB) last(name string) []any {
-	for i := len(db.calls) - 1; i >= 0; i-- {
-		if db.calls[i].name == name {
-			if db.calls[i].args == nil {
+	for _, v := range slices.Backward(db.calls) {
+		if v.name == name {
+			if v.args == nil {
 				return []any{}
 			}
-			return db.calls[i].args
+			return v.args
 		}
 	}
 	return nil

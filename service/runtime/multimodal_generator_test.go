@@ -51,7 +51,7 @@ func textExecutor() *stubExecutor {
 func TestGenerateTextOnly(t *testing.T) {
 	text := textExecutor()
 	result, err := MultimodalGenerator{Text: text}.Generate(context.Background(), domain.MultimodalTask{
-		AgentTask: domain.AgentTask{Task: "Draft", OutputFormat: "HTML"},
+		Task: "Draft", OutputFormat: "HTML",
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -75,7 +75,7 @@ func TestGenerateWithMediaNamesAndStyles(t *testing.T) {
 		videos: []domain.GeneratedMedia{{Data: []byte("v1"), MimeType: "video/mp4"}},
 	}
 	result, err := MultimodalGenerator{Text: text, Image: media, Video: media}.Generate(context.Background(), domain.MultimodalTask{
-		AgentTask:     domain.AgentTask{Task: "Draft"},
+		Task:          "Draft",
 		Image:         &domain.ImageRequest{Count: 2, AspectRatio: "16:9"},
 		Video:         &domain.VideoRequest{Count: 1, DurationSeconds: 5},
 		AssetBaseName: "spring-pergolas",
@@ -105,7 +105,7 @@ func TestGenerateWithMediaNamesAndStyles(t *testing.T) {
 func TestGenerateKeepsCallerStyleHint(t *testing.T) {
 	media := &stubExecutor{images: []domain.GeneratedMedia{{MimeType: "image/png"}}}
 	_, err := MultimodalGenerator{Text: textExecutor(), Image: media}.Generate(context.Background(), domain.MultimodalTask{
-		AgentTask:     domain.AgentTask{Task: "Draft"},
+		Task:          "Draft",
 		Image:         &domain.ImageRequest{Count: 1, StyleHint: "monochrome"},
 		AssetBaseName: "asset",
 	})
@@ -153,7 +153,7 @@ func TestGenerateRequiresAssetBaseNameAndTextExecutor(t *testing.T) {
 func TestGenerateFailsWhenMediaFails(t *testing.T) {
 	broken := errors.New("provider down")
 	_, err := MultimodalGenerator{Text: textExecutor(), Video: &stubExecutor{err: broken}}.Generate(context.Background(), domain.MultimodalTask{
-		AgentTask: domain.AgentTask{Task: "Draft"}, Video: &domain.VideoRequest{Count: 1, DurationSeconds: 5}, AssetBaseName: "a",
+		Task: "Draft", Video: &domain.VideoRequest{Count: 1, DurationSeconds: 5}, AssetBaseName: "a",
 	})
 	if !errors.Is(err, broken) {
 		t.Fatalf("want the provider failure surfaced, got %v", err)

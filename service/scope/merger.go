@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/nauticana/scout/contract"
@@ -209,7 +209,7 @@ func (r *MergerRegistry) Kinds() []domain.ResourceKind {
 	for kind := range r.mergers {
 		kinds = append(kinds, kind)
 	}
-	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	slices.Sort(kinds)
 	return kinds
 }
 

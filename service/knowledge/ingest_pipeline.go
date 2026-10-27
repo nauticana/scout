@@ -468,9 +468,7 @@ func (pipeline *IngestPipeline) embed(ctx context.Context, job *ingestJob) {
 			failures[i] = docCtx.Err()
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-semaphore }()
 			embedding, err := pipeline.Embedder.Embed(docCtx, chunk.TenantContext, chunk.Content)
 			if err != nil {
@@ -484,7 +482,7 @@ func (pipeline *IngestPipeline) embed(ctx context.Context, job *ingestJob) {
 				return
 			}
 			embeddings[i] = domain.ChunkEmbedding{Chunk: chunk, Embedding: embedding}
-		}()
+		})
 	}
 	wg.Wait()
 	for i, err := range failures {

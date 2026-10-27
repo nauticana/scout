@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/nauticana/scout/contract"
@@ -182,9 +183,7 @@ func (metrics *BoundedRuntimeMetrics) recordUsage(ctx context.Context, observati
 	}
 	if usage.CostMinorUnits > 0 || observation.ReservedCost > 0 {
 		withCurrency := make(map[string]string, len(labels)+1)
-		for key, value := range labels {
-			withCurrency[key] = value
-		}
+		maps.Copy(withCurrency, labels)
 		withCurrency[LabelCurrency] = usage.Currency
 		if usage.CostMinorUnits > 0 {
 			metrics.observe(ctx, MetricUsageCost, withCurrency, float64(usage.CostMinorUnits))

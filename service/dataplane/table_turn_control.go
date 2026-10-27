@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -151,10 +152,7 @@ func (control *TableTurnControl) queries(ctx context.Context) (keelport.QuerySer
 }
 
 func (control *TableTurnControl) now() time.Time {
-	if control.Now != nil {
-		return control.Now()
-	}
-	return time.Now()
+	return clk.Now(control.Now)
 }
 
 func controlKey(tenantID int64, requestID string) string {

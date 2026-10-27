@@ -127,7 +127,7 @@ func (c *StudioDraftComments) Comment(ctx context.Context, actor domain.StudioAc
 	var section, language, kind, resource any
 	switch comment.Anchor {
 	case domain.CommentOnPromptSection:
-		section, language = comment.PromptSectionID, nullableString(comment.LanguageCode)
+		section, language = comment.PromptSectionID, common.NullIfEmpty(comment.LanguageCode)
 	case domain.CommentOnSetting:
 		kind, resource = string(comment.ResourceKind), comment.ResourceID
 	}

@@ -109,7 +109,7 @@ func testSampleStore(t *testing.T, storage *fake.ObjectStorage, query *queryFake
 		key[i] = byte(i * 3)
 	}
 	return &EncryptedSampleStore{
-		keelStore: keelStore{DB: dbFake{query: query}}, Storage: storage, Key: key,
+		DB: dbFake{query: query}, Storage: storage, Key: key,
 		RequireRedacted: true, Now: fixedClock(testClock),
 	}
 }

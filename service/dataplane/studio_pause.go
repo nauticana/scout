@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/observability"
 )
 
@@ -147,8 +148,5 @@ func (p *StudioPause) hold(ctx context.Context, actor domain.StudioActor, agentI
 }
 
 func (p *StudioPause) now() time.Time {
-	if p.Now != nil {
-		return p.Now()
-	}
-	return time.Now()
+	return clk.Now(p.Now)
 }

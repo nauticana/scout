@@ -2,14 +2,13 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
+	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -18,7 +17,7 @@ import (
 
 func limitsHandler(report domain.AgentLimitsReport, err error, asked *string) *StudioLimitsHandler {
 	return &StudioLimitsHandler{
-		AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}},
+		UserService: conversationUsers{},
 		Backend: fake.StudioLimitsBackendFunc(func(_ context.Context, actor domain.StudioActor, agentID string) (domain.AgentLimitsReport, error) {
 			*asked = fmt.Sprintf("%d/%s:%s/%s", actor.TenantID, actor.Principal.Kind, actor.Principal.ID, agentID)
 			return report, err
@@ -45,7 +44,7 @@ func TestStudioLimitsRouteServesTheReport(t *testing.T) {
 		t.Fatalf("status = %d, asked %q, body = %s", recorder.Code, asked, recorder.Body.String())
 	}
 	var envelope struct{ Data api.AgentLimits }
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+	if err := common.DecodeJSON(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
 	body := envelope.Data
@@ -80,12 +79,12 @@ func TestStudioLimitsRouteKeepsAZeroExponentAndReportsAProblem(t *testing.T) {
 			Spend  map[string]any `json:"spend"`
 		}
 	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+	if err := common.DecodeJSON(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
 	budget := envelope.Data.Budget
-	if exponent, present := budget["exponent"]; !present || exponent != float64(0) || budget["period"] != "rolling" ||
-		budget["window_seconds"] != float64(3600) || budget["problem"] != "exponent_changed" || envelope.Data.Spend != nil {
+	if exponent, present := budget["exponent"]; !present || exponent != "0" || budget["period"] != "rolling" ||
+		budget["window_seconds"] != "3600" || budget["problem"] != "exponent_changed" || envelope.Data.Spend != nil {
 		t.Fatalf("body = %s", recorder.Body.String())
 	}
 }
@@ -103,7 +102,7 @@ func TestStudioLimitsRouteOmitsAnAbsentBudgetAndMapsRefusals(t *testing.T) {
 	limitsHandler(domain.AgentLimitsReport{AgentID: "writer-a", Release: "4"}, nil, &asked).Routes()[api.StudioLimitsPath](recorder,
 		authenticatedRequest(http.MethodGet, api.StudioLimitsPath+"?agent_name=writer-a", nil))
 	var envelope struct{ Data map[string]any }
-	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil || envelope.Data["budget"] != nil || envelope.Data["spend"] != nil || envelope.Data["limits"] == nil {
+	if err := common.DecodeJSON(recorder.Body.Bytes(), &envelope); err != nil || envelope.Data["budget"] != nil || envelope.Data["spend"] != nil || envelope.Data["limits"] == nil {
 		t.Fatalf("body = %s, error = %v", recorder.Body.String(), err)
 	}
 	for status, err := range map[int]error{

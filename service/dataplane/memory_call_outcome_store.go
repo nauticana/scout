@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // MemoryCallOutcomeStore is the single-process CallOutcomeStore for tests and embedded runtimes.
@@ -32,10 +33,7 @@ type MemoryCallOutcomeStore struct {
 var _ contract.CallOutcomeStore = (*MemoryCallOutcomeStore)(nil)
 
 func (store *MemoryCallOutcomeStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now()
-	}
-	return time.Now()
+	return clk.Now(store.Now)
 }
 
 func (store *MemoryCallOutcomeStore) checkOwner(owner domain.TurnOwner, key domain.CallOutcomeKey) error {

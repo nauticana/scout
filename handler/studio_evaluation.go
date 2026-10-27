@@ -107,6 +107,10 @@ func (h *StudioEvaluationHandler) changeCases(ctx context.Context, actor domain.
 			CaseID: request.Case.CaseID, Name: request.Case.Name, Input: []byte(request.Case.Input), Language: request.Case.Language,
 			ExpectedBehavior: optionalBytes(request.Case.ExpectedBehavior), RubricRef: request.Case.Rubric, RiskTier: request.Case.RiskTier,
 			Script: caseScript(request.Case),
+			Assurance: domain.AssuranceLabels{
+				RequiredEvidence: request.Case.RequiredEvidence, ControllingAuthority: request.Case.ControllingAuthority,
+				ExecutionExpected: request.Case.ExecutionExpected,
+			},
 		},
 	}))
 }
@@ -188,6 +192,8 @@ func toCaseSet(set domain.GoldenCaseSet) api.GoldenCaseSet {
 			CaseID: goldenCase.CaseID, Name: goldenCase.Name, Input: string(goldenCase.Input), Language: goldenCase.Language,
 			ExpectedBehavior: string(goldenCase.ExpectedBehavior), Rubric: goldenCase.RubricRef, RiskTier: goldenCase.RiskTier,
 			ModifiedAt: goldenCase.ModifiedAt, ReviewItemID: goldenCase.ReviewItemID, InputWithheld: goldenCase.InputWithheld,
+			RequiredEvidence: goldenCase.Assurance.RequiredEvidence, ControllingAuthority: goldenCase.Assurance.ControllingAuthority,
+			ExecutionExpected: goldenCase.Assurance.ExecutionExpected,
 		}
 		for _, turn := range goldenCase.Script.Turns {
 			item.Turns = append(item.Turns, turn.Input)

@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -60,9 +61,7 @@ func studioPilots(rows map[string][][]any, allowed domain.StudioAction) (*Studio
 		qPilotCount:   {{int64(0)}},
 		qPilotInsert:  {{pilotBegda}},
 	}
-	for name, value := range rows {
-		defaults[name] = value
-	}
+	maps.Copy(defaults, rows)
 	tx := &pilotTx{queryFake: newQueryFake(defaults)}
 	return &StudioPilots{
 		DB: pilotDB{tx: tx}, MaxMembers: 3,

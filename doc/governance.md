@@ -82,6 +82,16 @@ policy. A release with no mode is `human_only`. For Charter work, `charter.Parti
 modes to `observes`, `recommends`, `prepares`, `performs`, and `executes`, and `Admission` refuses a
 task needing more than the agent's mode reaches.
 
+## Working set assurance
+
+A turn whose runtime composes a working set compiler carries its assurance on every tool call
+([engineering reference](engineering-reference.md#working-set)). Before authorization and policy,
+`GovernedGateway` refuses a call to a non-read-only tool unless the assurance is `V` (verified) or
+`B` (bounded): `ErrForbidden`, recorded as a denied `tool_invoke` decision with reason `unassured`,
+and the model sees that class. A `C` (conflicted) or `I` (insufficient evidence) set never reaches the
+model: the runtime holds the turn with hold code `E` for a person. A call without an assurance, such
+as a turn with no compiler or a person's call in a turn they operate, is governed as before.
+
 ## Durable approvals
 
 An irreversible action does not fail for lack of a human — it waits.
@@ -132,7 +142,8 @@ steps rather than leaving the last one to a caller. It is the decider's whole de
 only what the decider may decide now, `Resolve` takes `A` (approved), `X` (rejected), or `E` (edited), and a
 single-use decision link from keel's `actiontoken` lets a person approve or reject from email or
 chat. A link is bound to one person, request, verdict, and proposal digest, is refused above
-`LinkMaxRisk`, and authorizes its person again when redeemed.
+`LinkMaxRisk` or under an `authenticated_only` route with `domain.ErrAuthenticatedView`, so the
+notifier links the authenticated view instead, and authorizes its person again when redeemed.
 
 An edit substitutes the tool call. It carries revised arguments — one JSON object within
 `MaxRevisedArgumentBytes` (64 KiB by default) — and is accepted only for a pending or escalated tool
@@ -165,12 +176,14 @@ rule `routing`, at agent or type scope) is an ordered list of routes:
   seconds to 30 days, a whole route at most 90 days, over at most three steps. A step naming an
   approver hands the request on; one without extends the current approver's deadline.
   `on_exhausted` is `expire` (the default) or `hold`.
+- **Authenticated only.** `authenticated_only: true` refuses decision links for the route's
+  requests, which carry the flag from opening on.
 - **Bounds.** At most 32 routes per binding and 64 per agent.
 
 A child scope overlays its parent: parent routes keep their places, replaced in place by a child
 route of the same id, and the child's own routes follow; merge mode `I` (intersect) is refused. The child may only
 tighten: each parent route keeps its id, order, match, approvers, and step count, deadlines and
-extensions may only shrink, and `hold` may become `expire`, never the reverse.
+extensions may only shrink, `hold` may become `expire`, and `authenticated_only` may be set, never the reverse.
 
 `approval.ReleaseRouter`, composed as `Gate.Router` and `Sweeper.Policy`, reads the routing frozen
 into the asking agent's release, picks the first matching route, and asks the product's

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const auditCategoryGateDecision = "evaluation.gate_decision"
@@ -78,10 +79,7 @@ func verdictOutcome(verdict domain.RolloutVerdict) domain.DecisionOutcome {
 }
 
 func (issuer *GateIssuer) now() time.Time {
-	if issuer.Now != nil {
-		return issuer.Now()
-	}
-	return time.Now()
+	return clk.Now(issuer.Now)
 }
 
 func (issuer *GateIssuer) validate() error {

@@ -2,14 +2,13 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
-	keelhandler "github.com/nauticana/keel/handler"
+	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -35,7 +34,7 @@ func (f *governanceBackendFake) SaveGovernance(_ context.Context, actor domain.S
 }
 
 func governanceHandler(backend *governanceBackendFake) http.HandlerFunc {
-	handler := &StudioGovernanceHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioGovernanceHandler{UserService: conversationUsers{}, Backend: backend}
 	return handler.Routes()[api.StudioGovernancePath]
 }
 
@@ -71,7 +70,7 @@ func TestStudioGovernanceGetReturnsCharterFragments(t *testing.T) {
 	var response struct {
 		Data api.AgentGovernance `json:"data"`
 	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+	if err := common.DecodeJSON(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
 	got := response.Data

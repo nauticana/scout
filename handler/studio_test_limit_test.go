@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -28,8 +26,8 @@ func (f *testDraftBackendFake) TestDraft(context.Context, domain.StudioActor, do
 // names the limit only, never the wrapped detail.
 func TestStudioTestRouteMapsTheDraftsExecutionLimit(t *testing.T) {
 	h := &StudioHandler{
-		AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}},
-		Backend:         &testDraftBackendFake{err: fmt.Errorf("%w: draft exceeded its 5s duration: provider detail", domain.ErrExecutionLimit)},
+		UserService: conversationUsers{},
+		Backend:     &testDraftBackendFake{err: fmt.Errorf("%w: draft exceeded its 5s duration: provider detail", domain.ErrExecutionLimit)},
 	}
 	recorder := httptest.NewRecorder()
 	h.Routes()[api.StudioTestPath](recorder, authenticatedRequest(http.MethodPost, api.StudioTestPath, []byte(`{"agent_name":"writer-a","task":"long"}`)))

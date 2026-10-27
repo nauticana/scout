@@ -233,7 +233,7 @@ func apiApproval(request domain.ApprovalRequest) api.ApprovalRequest {
 		OutputClass: string(request.Class), RiskTier: string(request.RiskTier), Summary: request.Summary,
 		ProposedDigest: request.ProposedDigest, Status: string(request.Status), CreatedAt: request.CreatedAt,
 		RevisesStepID: request.RevisesStepID, RuleSource: string(request.Source),
-		RouteID: request.Route.RouteID, RouteStep: request.Route.Step,
+		RouteID: request.Route.RouteID, RouteStep: request.Route.Step, AuthenticatedOnly: request.Route.AuthenticatedOnly,
 	}
 	if request.Route.RouteID != "" {
 		item.ApproverReference = &api.ApproverReference{Kind: string(request.Route.Reference.Kind), Ref: request.Route.Reference.Ref}

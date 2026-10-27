@@ -19,3 +19,4 @@ tables:
   - evaluation_comparison
   - golden_case_turn
   - golden_case_tool
+  - golden_case_evidence

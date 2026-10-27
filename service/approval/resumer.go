@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // Resumer is the reviewer's side of human-in-the-loop: it lists what a decider may
@@ -27,8 +28,8 @@ type Resumer struct {
 	Audit contract.AuditSink
 	// Links mints and redeems single-use decision links for email and chat; nil offers none.
 	Links *actiontoken.Service
-	// LinkMaxRisk is the riskiest tier a link may decide; riskier requests are decided only
-	// in an authenticated view. Empty allows no link.
+	// LinkMaxRisk is the riskiest tier a link may decide; riskier requests, and those of an
+	// authenticated-only route, are decided only in an authenticated view. Empty allows no link.
 	LinkMaxRisk domain.RiskTier
 	// Archive keeps an edited verdict's revised arguments where evidence lives; nil refuses edits.
 	Archive contract.EvidenceArchive
@@ -160,7 +161,8 @@ func fenceOf(request domain.ApprovalRequest) domain.ApprovalFence {
 }
 
 // MintLink returns a single-use token by which one person decides one request with one
-// verdict, for the product's notifier to deliver. It lapses at the request's deadline.
+// verdict, for the product's notifier to deliver. It lapses at the request's deadline;
+// domain.ErrAuthenticatedView tells the notifier to link the authenticated view instead.
 func (r *Resumer) MintLink(ctx context.Context, key domain.ApprovalKey, userID int64, status domain.ApprovalStatus, ttl time.Duration) (string, error) {
 	request, binding, err := r.linkBinding(ctx, key, status)
 	if err != nil {
@@ -203,8 +205,7 @@ func (r *Resumer) RedeemLink(ctx context.Context, token string, key domain.Appro
 		return []byte(status), err
 	}
 	_, err = r.Links.Redeem(ctx, token, binding, run)
-	var unknown *actiontoken.UnknownOutcome
-	if errors.As(err, &unknown) {
+	if unknown, ok := errors.AsType[*actiontoken.UnknownOutcome](err); ok {
 		// Resolve replays to the stored verdict, so settling the claim at once is safe.
 		_, err = r.Links.Reconcile(ctx, unknown.ClaimID, run)
 	}
@@ -237,8 +238,8 @@ func (r *Resumer) linkBinding(ctx context.Context, key domain.ApprovalKey, statu
 	if err := awaitsApprover(request); err != nil {
 		return domain.ApprovalRequest{}, actiontoken.Binding{}, err
 	}
-	if limit, ok := riskRank[r.LinkMaxRisk]; !ok || riskRank[request.RiskTier] > limit {
-		return domain.ApprovalRequest{}, actiontoken.Binding{}, fmt.Errorf("%w: a %s-risk decision is made in an authenticated view", domain.ErrForbidden, request.RiskTier)
+	if limit, ok := riskRank[r.LinkMaxRisk]; !ok || riskRank[request.RiskTier] > limit || request.Route.AuthenticatedOnly {
+		return domain.ApprovalRequest{}, actiontoken.Binding{}, fmt.Errorf("%w: route %q, %s risk", domain.ErrAuthenticatedView, request.Route.RouteID, request.RiskTier)
 	}
 	return request, actiontoken.Binding{
 		Action:      "approval/" + string(status),
@@ -267,10 +268,7 @@ func recordVerdict(ctx context.Context, audit contract.AuditSink, request domain
 }
 
 func (r *Resumer) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
-	}
-	return time.Now()
+	return clk.Now(r.Now)
 }
 
 func humanRef(userID int64) domain.PrincipalRef {

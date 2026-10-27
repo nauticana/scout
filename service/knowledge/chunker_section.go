@@ -205,10 +205,7 @@ func splitSpans(text []byte, within span, separator []byte) []span {
 // hardSplit cuts a unit into byte windows sized from its own bytes-per-token ratio, never inside a rune.
 func (chunker *SectionChunker) hardSplit(text []byte, unit span, grainTokens int) []span {
 	unitTokens := chunker.tokens(text[unit.start:unit.end])
-	limit := (unit.end - unit.start) * grainTokens / unitTokens
-	if limit < utf8.UTFMax {
-		limit = utf8.UTFMax
-	}
+	limit := max((unit.end-unit.start)*grainTokens/unitTokens, utf8.UTFMax)
 	var spans []span
 	start := unit.start
 	for start < unit.end {

@@ -198,10 +198,7 @@ func (policy *weightPolicy) PrincipalCeiling(_ context.Context, _ int64, princip
 }
 
 func (policy *weightPolicy) SchedulingWeight(_ context.Context, tenantID int64) (int, int, error) {
-	weight := policy.weights[tenantID]
-	if weight < 1 {
-		weight = 1
-	}
+	weight := max(policy.weights[tenantID], 1)
 	return weight, policy.maxConcurrent[tenantID], nil
 }
 

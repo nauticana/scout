@@ -87,15 +87,27 @@ type RunTraceModelStep struct {
 	ToolCalls int
 }
 
-// RunTraceToolCall is one journaled tool observation.
+// RunTraceToolCall is one journaled tool observation. Settlement is nil when the call left no
+// outcome record, as a read-only call does.
 type RunTraceToolCall struct {
 	Journal    RunTraceJournalRef
+	CallID     string
 	Tool       ToolReference
 	Outcome    RunTraceToolOutcome
 	ErrorClass string
 	Effect     EffectStatus
 	Reconciled bool
 	Usage      Usage
+	Settlement *RunTraceCallSettlement
+}
+
+// RunTraceCallSettlement is where a call's outcome record stands and what settled it, without its note or result.
+type RunTraceCallSettlement struct {
+	Status         CallOutcomeStatus
+	Resolution     CallResolution
+	Resolver       PrincipalRef
+	ResolvedAt     time.Time
+	EvidenceDigest string
 }
 
 // RunTraceGuardrailHit is one recorded guardrail intervention.
@@ -156,13 +168,25 @@ type CharterAction struct {
 	Reconciles           *CharterRef
 	SodException         *CharterRef
 	MaterialInputsDigest string
-	At                   time.Time
+	Preconditions        []CharterCondition
+	Postconditions       []CharterCondition
+	// Effect classifies the observed required postconditions; UnknownCause says why an unobserved one is unknown.
+	Effect       string
+	UnknownCause string
+	At           time.Time
 }
 
 // CharterEvaluation is one evaluation result and its source record.
 type CharterEvaluation struct {
 	Ref    *CharterRef
 	Result string
+}
+
+// CharterCondition is one declared pre- or postcondition's result when it was observed; its reason stays in Charter.
+type CharterCondition struct {
+	ID         string
+	Result     string
+	ObservedAt time.Time
 }
 
 // RunTraceLimits bound returned events and journal classification; zero takes the default.

@@ -11,12 +11,12 @@ import (
 )
 
 func caseRow(caseID, scope, input string) []any {
-	return []any{caseID, scope, "Name " + caseID, input, "en-US", "polite refusal", "rubric://tone", "low", "human", "9", testClock, nil, nil}
+	return []any{caseID, scope, "Name " + caseID, input, "en-US", "polite refusal", "rubric://tone", "low", "human", "9", testClock, nil, nil, nil}
 }
 
 func caseStore(query *queryFake) (*GoldenCaseStore, *fake.ObjectStorage) {
 	objects := &fake.ObjectStorage{Name: "cases"}
-	return &GoldenCaseStore{keelStore: keelStore{DB: dbFake{query: query}}, Storage: objects, Now: fixedClock(testClock)}, objects
+	return &GoldenCaseStore{DB: dbFake{query: query}, Storage: objects, Now: fixedClock(testClock)}, objects
 }
 
 func studioCase(caseID string) domain.GoldenCase {
@@ -69,7 +69,7 @@ func TestGoldenCaseStoreKeepsGateCasesOutOfTheDevScope(t *testing.T) {
 		t.Fatalf("put = %d, %v", revision, err)
 	}
 	args := query.args[qCaseUpsert]
-	if len(args) != 15 || args[3] != "dev" || args[9] != "low" || args[10] != "human" || args[11] != "9" || args[13] != nil || args[14] != "dev" {
+	if len(args) != 16 || args[3] != "dev" || args[9] != "low" || args[10] != "human" || args[11] != "9" || args[13] != nil || args[14] != nil || args[15] != "dev" {
 		t.Fatalf("upsert args = %v", args)
 	}
 	if args := query.args[qCaseBumpRevision]; args[2] != int64(4) {
@@ -273,7 +273,7 @@ func TestGoldenCaseStoreFreezeSnapshotsBothScopes(t *testing.T) {
 	if _, _, err := emptyStore.Freeze(ctx, 7, "support", 4); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("freezing no cases = %v", err)
 	}
-	unbound := &GoldenCaseStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	unbound := &GoldenCaseStore{DB: dbFake{query: query}}
 	if _, _, err := unbound.Freeze(ctx, 7, "support", 4); err == nil {
 		t.Fatal("freeze without object storage must fail")
 	}

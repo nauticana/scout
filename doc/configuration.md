@@ -242,6 +242,8 @@ validates them at load.
 | `agent_knowledge_max_source_bytes` | int | 33554432 | 0 | — | Bytes of one knowledge source object the ingestion loader reads (`knowledge.ObjectStorageLoader.MaxBytes`); 0 uses the default 33554432. |
 | `agent_memory_section_max_chars` | int | 8000 | 0 | — | Characters of one tenant memory section (`memory.TableStore.MaxSectionChars`); an append past it drops the oldest whole lines; 0 uses the default 8000. |
 | `agent_knowledge_rrf_offset` | int | 60 | 0 | — | Reciprocal rank fusion constant k of hybrid retrieval (`knowledge.HybridRetriever.RRFOffset`), scoring rank r as 1/(k+r); a larger k flattens the advantage of top ranks; 0 uses the default 60. |
+| `agent_working_set_max_candidates` | int | 64 | 0, else 1 | 1024 | Candidates one turn's working set source may offer (`workingset.Compiler.Limits.MaxCandidates`, through `ScoutConfig.WorkingSetLimits()`); more fails the step with an execution limit; 0 uses the default 64. |
+| `agent_working_set_max_tokens` | int | 8000 | 0, else 1 | 1048576 | Token budget of one turn's working set (`Limits.MaxTokens`); required, controlling, and conflicted context beyond it fails the step rather than being cut, and optional context past it is left out and recorded as excluded; 0 uses the default 8000. |
 
 ### Agent health and alerts
 

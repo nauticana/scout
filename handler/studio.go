@@ -1,11 +1,9 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -346,8 +344,7 @@ func sessionQuery(h *keelhandler.AbstractHandler, call func(context.Context, *ke
 			common.WriteJSON(w, http.StatusOK, result)
 			return
 		}
-		var apiErr *keelhandler.APIError
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*keelhandler.APIError](err); ok {
 			for key, values := range apiErr.Header {
 				for _, value := range values {
 					w.Header().Add(key, value)
@@ -381,8 +378,7 @@ func mapServiceError(result any, err error) (any, error) {
 	if err == nil {
 		return result, nil
 	}
-	var validation *controlplane.StudioValidationError
-	if errors.As(err, &validation) {
+	if validation, ok := errors.AsType[*controlplane.StudioValidationError](err); ok {
 		fields := make([]api.AgentFieldError, 0, len(validation.Fields))
 		for _, field := range validation.Fields {
 			fields = append(fields, api.AgentFieldError{Field: field.Field, Message: field.Message})
@@ -539,9 +535,7 @@ func sessionActor(session *keelmodel.UserSession) (domain.StudioActor, error) {
 }
 
 func decode(body json.RawMessage, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if len(body) == 0 || decoder.Decode(target) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+	if len(body) == 0 || common.DecodeStrictJSON(body, target) != nil {
 		return keelhandler.NewAPIError(http.StatusBadRequest, "invalid JSON request body")
 	}
 	return nil

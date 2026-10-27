@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -70,10 +71,10 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 			return &keelmodel.QueryResult{}, nil
 		}
 		table.nextID++
-		row := make([]any, 33)
+		row := make([]any, 34)
 		copy(row[1:18], args[1:18])
 		row[0], row[18], row[19], row[23] = table.nextID, string(domain.ApprovalStatusPending), args[18], args[19]
-		copy(row[24:33], args[20:29])
+		copy(row[24:34], args[20:30])
 		table.rows[requestKey(args[1], args[3])] = row
 		return &keelmodel.QueryResult{Rows: [][]any{{table.nextID}}}, nil
 	case qApprovalGet:
@@ -147,9 +148,7 @@ func (tx *approvalTx) Query(_ context.Context, name string, args ...any) (*keelm
 func (tx *approvalTx) GenID() int64 { return 900 + int64(len(tx.table.events)) }
 func (tx *approvalTx) Commit(context.Context) error {
 	tx.table.commits++
-	for id, payload := range tx.pending {
-		tx.table.events[id] = payload
-	}
+	maps.Copy(tx.table.events, tx.pending)
 	for _, row := range tx.table.rows {
 		if eventID, ok := tx.linked[row[0].(int64)]; ok {
 			row[22] = eventID
@@ -273,5 +272,21 @@ func TestOpenAcceptsOnlySeededOutputClassCodes(t *testing.T) {
 		if err := validateOpen(request); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("class %q: want ErrValidation, got %v", class, err)
 		}
+	}
+}
+
+func TestOpenKeepsAnAuthenticatedOnlyRoute(t *testing.T) {
+	_, store := newApprovalStore(false)
+	ctx := context.Background()
+	request := routedOwed("turn-1", "77", 0)
+	request.Route.AuthenticatedOnly = true
+	opened, err := store.Open(ctx, request)
+	if err != nil || !opened.Route.AuthenticatedOnly {
+		t.Fatalf("Open = %+v, %v", opened.Route, err)
+	}
+	unrouted := owed("turn-2", "alex")
+	unrouted.Route.AuthenticatedOnly = true
+	if _, err := store.Open(ctx, unrouted); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("an unrouted request cannot be authenticated-only: %v", err)
 	}
 }

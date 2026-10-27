@@ -588,7 +588,7 @@ func (g *StudioEvaluationGate) score(ctx context.Context, tenantID int64, agentI
 	if len(runs.Rows) == 0 {
 		return scoredRun{}, false, nil
 	}
-	run := scoredRun{EvaluationGateRun: domain.EvaluationGateRun{RunID: common.AsInt64(runs.Rows[0][0]), Scope: golden}}
+	run := scoredRun{RunID: common.AsInt64(runs.Rows[0][0]), Scope: golden}
 	limit := g.maxResults()
 	results, err := g.qs.Query(ctx, qGateResults, tenantID, run.RunID, limit+1)
 	if err != nil {
@@ -690,7 +690,7 @@ func (g *StudioEvaluationGate) record(ctx context.Context, actor domain.StudioAc
 		setID, setVersion = decision.GoldenSetID, decision.SetVersion
 	}
 	inserted, err := tx.Query(ctx, qGateInsert, actor.TenantID, decision.AgentID, decision.DefinitionDigest, string(decision.Verdict),
-		nullableString(decision.Reason), decision.PolicyDigest, string(policy), inputs, nullableString(decision.BaseVersion),
+		common.NullIfEmpty(decision.Reason), decision.PolicyDigest, string(policy), inputs, common.NullIfEmpty(decision.BaseVersion),
 		setID, setVersion, string(actor.Principal.Kind), actor.Principal.ID)
 	if err != nil {
 		return domain.EvaluationGateDecision{}, fmt.Errorf("insert gate decision: %w", err)

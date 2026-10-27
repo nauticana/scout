@@ -67,8 +67,8 @@ func heldCallFixture(t *testing.T, actions ...domain.OperationAction) *turnContr
 }
 
 func attestRequest(outcome domain.CallOutcomeStatus, note string) domain.TurnAttestRequest {
-	return domain.TurnAttestRequest{TurnOutcomeRequest: domain.TurnOutcomeRequest{AgentID: "writer-a", RequestID: "request-1", Fence: 3,
-		ExecutionStepID: 11, CallID: "b"}, Outcome: outcome, Note: note}
+	return domain.TurnAttestRequest{AgentID: "writer-a", RequestID: "request-1", Fence: 3,
+		ExecutionStepID: 11, CallID: "b", Outcome: outcome, Note: note}
 }
 
 func (fixture *turnControlFixture) passDeadline() {

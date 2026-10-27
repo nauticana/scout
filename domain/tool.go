@@ -48,6 +48,8 @@ type ToolCall struct {
 	IdempotencyKey string
 	// RevisesProposal is the approval step a decider edited into this call; zero for a call the model proposed.
 	RevisesProposal int64
+	// Assurance is the turn's working set assurance; empty when the turn compiled none.
+	Assurance WorkingSetAssurance
 }
 
 // ToolResult contains validated output and usage from a tool.

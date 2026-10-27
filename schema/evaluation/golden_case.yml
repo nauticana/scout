@@ -38,6 +38,10 @@ columns:
     type: BIGINT
     nullable: true
     comment: The production review item the case was promoted from; its input is production content only REVIEW holders read
+  - name: execution_expected
+    type: BOOLEAN
+    nullable: true
+    comment: Whether the case expects a mutating tool call; null leaves execution unlabeled
 primary_key: [partner_id, golden_set_id, case_id]
 foreign_keys:
   - name: golden_cases

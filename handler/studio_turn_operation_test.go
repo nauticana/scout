@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
@@ -51,7 +49,7 @@ func (backend *turnControlBackend) Finish(_ context.Context, _ domain.StudioActo
 
 func TestStudioTurnOperationRoutesMapRequestsAndResults(t *testing.T) {
 	backend := &turnControlBackend{}
-	handler := &StudioTurnControlHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioTurnControlHandler{UserService: conversationUsers{}, Backend: backend}
 
 	recorder := serveTurnControl(handler, http.MethodPost, api.StudioTurnTakeoverPath, `{"agent_name":"writer-a","request_id":"request-1","fence":3}`)
 	var taken api.LiveTurn
@@ -110,7 +108,7 @@ func TestStudioTurnOperationMapsRefusals(t *testing.T) {
 		{domain.ErrDegraded, http.StatusServiceUnavailable}, {domain.ErrForbidden, http.StatusForbidden},
 	} {
 		backend := &turnControlBackend{err: fmt.Errorf("%w: turn request-1", tc.err)}
-		handler := &StudioTurnControlHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+		handler := &StudioTurnControlHandler{UserService: conversationUsers{}, Backend: backend}
 		turn := `"agent_name":"writer-a","request_id":"request-1","fence":4`
 		for path, body := range map[string]string{
 			api.StudioTurnTakeoverPath: `{` + turn + `}`, api.StudioTurnActPath: `{` + turn + `,"kind":"note","text":"x"}`,

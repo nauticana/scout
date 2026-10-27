@@ -16,6 +16,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/confirmation"
 )
 
@@ -30,10 +31,7 @@ type Store struct {
 }
 
 func (s *Store) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return clk.Now(s.Now)
 }
 
 func (s *Store) find(key domain.MCPConfirmationKey) *domain.MCPConfirmation {

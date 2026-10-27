@@ -95,8 +95,7 @@ func (publisher *AgentPublisher) checkBudget(ctx context.Context, resources []do
 		}
 		publisher.once.Do(func() { publisher.Currencies = scope.Currencies(publisher.Currencies, publisher.DB) })
 		_, err = scope.CheckBudgetUnit(ctx, publisher.Currencies, budget)
-		var unenforceable *domain.BudgetUnenforceableError
-		if errors.As(err, &unenforceable) {
+		if unenforceable, ok := errors.AsType[*domain.BudgetUnenforceableError](err); ok {
 			return fmt.Errorf("%w: %s", domain.ErrValidation, unenforceable.Detail)
 		}
 		return err

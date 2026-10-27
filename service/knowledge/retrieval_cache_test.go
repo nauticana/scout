@@ -155,7 +155,7 @@ func TestCachedRetrieverBypassesWhenKeyCannotBeFormed(t *testing.T) {
 			cached := newCached(t, inner, tc.keyer, nil)
 			q := entitledQuery("user:a")
 			tc.edit(&q)
-			for i := 0; i < 2; i++ {
+			for range 2 {
 				result, err := cached.Retrieve(context.Background(), q)
 				if err != nil || len(result.Degradations) != 1 || result.Degradations[0] != domain.KnowledgeDegradationCacheBypassed {
 					t.Fatalf("bypass = %+v, %v", result, err)
@@ -183,7 +183,7 @@ func TestCachedRetrieverPropagatesInnerErrorsAndSkipsDegraded(t *testing.T) {
 		return domain.KnowledgeResult{Degradations: []string{domain.KnowledgeDegradationPartialRetrieval}}, nil
 	}}
 	cached = newCached(t, degraded, testScope, nil)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := cached.Retrieve(context.Background(), entitledQuery("user:a")); err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +198,7 @@ func TestCachedRetrieverInvalidateAndTTL(t *testing.T) {
 	inner := staticResult("a")
 	cached := newCached(t, inner, testScope, func() time.Time { return now })
 	q := entitledQuery("user:a")
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := cached.Retrieve(context.Background(), q); err != nil {
 			t.Fatal(err)
 		}
@@ -238,18 +238,14 @@ func TestCachedRetrieverCoalescesConcurrentMisses(t *testing.T) {
 	cached := newCached(t, inner, testScope, nil)
 	var wg sync.WaitGroup
 	results := make([]error, 6)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, results[0] = cached.Retrieve(context.Background(), entitledQuery("user:a"))
-	}()
+	})
 	<-started
 	for i := 1; i < len(results); i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, results[i] = cached.Retrieve(context.Background(), entitledQuery("user:a"))
-		}()
+		})
 	}
 	time.Sleep(20 * time.Millisecond)
 	close(release)

@@ -42,6 +42,8 @@ type caseReplay struct {
 	// fences grants each replayed turn the owner its journal writes present.
 	fences *dataplane.MemoryTurnFences
 	graph  domain.ExecutionGraph
+	// readOnly holds the tool ids the subject binds read-only; an observation of any other tool is mutating.
+	readOnly map[string]bool
 	// enforcer applies guardrails to every step's output; nil applies none.
 	enforcer       contract.GuardrailEnforcer
 	guardrails     domain.GuardrailConfig
@@ -276,11 +278,25 @@ func (replay *caseReplay) record(ctx context.Context, requestID string, step dom
 			}
 			toolID, observation := entry.Tool.ToolID, entry.Observation
 			replay.event(domain.TrajectoryEvent{Kind: domain.TrajectoryObservation, Name: toolID, Payload: observation.Output, Offset: entry.Offset,
-				Usage: entry.Usage, Failed: observation.IsError, Recovered: !observation.IsError && failed[toolID]})
+				Usage: entry.Usage, Failed: observation.IsError, Recovered: !observation.IsError && failed[toolID],
+				Mutating: !replay.readOnly[toolID], Evidence: entry.ResourceURIs})
 			failed[toolID] = observation.IsError
 		}
 	}
 	return nil
+}
+
+// readOnlyTools lists the tool ids an agent version binds read-only, as the tool loop sees them.
+func readOnlyTools(ctx context.Context, registry contract.ToolRegistry, tenantID int64, agentID, version string) (map[string]bool, error) {
+	tools, err := registry.List(ctx, tenantID, agentID, version)
+	if err != nil {
+		return nil, fmt.Errorf("list tools of %s@%s: %w", agentID, version, err)
+	}
+	readOnly := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		readOnly[tool.ToolID] = tool.ReadOnly
+	}
+	return readOnly, nil
 }
 
 func (replay *caseReplay) event(event domain.TrajectoryEvent) {

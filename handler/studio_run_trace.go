@@ -31,9 +31,14 @@ func runTraceEventItem(event domain.RunTraceEvent) api.RunTraceEvent {
 		}
 	case event.Tool != nil:
 		call := event.Tool
-		item.ToolCall = &api.RunTraceToolCall{Journal: journalItem(call.Journal), ToolID: call.Tool.ToolID, ToolVersion: call.Tool.Version,
+		item.ToolCall = &api.RunTraceToolCall{Journal: journalItem(call.Journal), CallID: call.CallID, ToolID: call.Tool.ToolID, ToolVersion: call.Tool.Version,
 			Outcome: string(call.Outcome), ErrorClass: call.ErrorClass, Effect: string(call.Effect), Reconciled: call.Reconciled,
 			Usage: trajectoryUsage(call.Usage)}
+		if settled := call.Settlement; settled != nil {
+			item.ToolCall.Settlement = &api.RunTraceCallSettlement{Status: string(settled.Status), Resolution: string(settled.Resolution),
+				ResolverKind: string(settled.Resolver.Kind), ResolverID: settled.Resolver.ID, ResolvedAt: optionalTime(settled.ResolvedAt),
+				EvidenceDigest: settled.EvidenceDigest}
+		}
 	case event.Guardrail != nil:
 		hit := event.Guardrail
 		item.Guardrail = &api.RunTraceGuardrailHit{Stage: string(hit.Stage), Layer: string(hit.Layer), Action: string(hit.Action),
@@ -65,9 +70,19 @@ func runTraceDecisionItem(decision domain.RunTraceDecisionEvent) *api.RunTraceDe
 			OperationClass: action.OperationClass, Disposition: action.Disposition, Outcome: action.Outcome,
 			Assignment: optionalTraceRef(action.Assignment), Authority: traceEvaluations(action.Authority),
 			Approvals: traceEvaluations(action.Approvals), Reconciles: optionalTraceRef(action.Reconciles),
-			SodException: optionalTraceRef(action.SodException), MaterialInputsDigest: action.MaterialInputsDigest}
+			SodException: optionalTraceRef(action.SodException), MaterialInputsDigest: action.MaterialInputsDigest,
+			Preconditions: traceConditions(action.Preconditions), Postconditions: traceConditions(action.Postconditions),
+			Effect: action.Effect, UnknownCause: action.UnknownCause}
 	}
 	return item
+}
+
+func traceConditions(conditions []domain.CharterCondition) []api.RunTraceCondition {
+	var items []api.RunTraceCondition
+	for _, condition := range conditions {
+		items = append(items, api.RunTraceCondition{ID: condition.ID, Result: condition.Result, ObservedAt: optionalTime(condition.ObservedAt)})
+	}
+	return items
 }
 
 func journalItem(ref domain.RunTraceJournalRef) api.RunTraceJournal {

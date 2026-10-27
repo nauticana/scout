@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
+	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -54,7 +54,7 @@ func (f *reviewBackendFake) Reject(_ context.Context, actor domain.StudioActor, 
 
 func TestPublishReviewRoutesDispatchByMethodAndMapTheWire(t *testing.T) {
 	backend := &reviewBackendFake{}
-	handler := &StudioPublishReviewHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioPublishReviewHandler{UserService: conversationUsers{}, Backend: backend}
 	routes := handler.Routes()
 	if len(routes) != 3 || handler.Feature().ID != StudioFeaturePublishReview {
 		t.Fatalf("routes = %v", routes)
@@ -95,7 +95,7 @@ func TestPublishReviewRoutesDispatchByMethodAndMapTheWire(t *testing.T) {
 
 func TestRestoreReviewTravelsAsRestoreVersionAndKind(t *testing.T) {
 	backend := &reviewBackendFake{}
-	handler := &StudioPublishReviewHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioPublishReviewHandler{UserService: conversationUsers{}, Backend: backend}
 	routes := handler.Routes()
 	if actions := handler.Feature().Actions; !slices.Contains(actions, string(domain.StudioRestore)) {
 		t.Fatalf("feature actions = %v", actions)
@@ -130,10 +130,10 @@ func unwrapData(body []byte, target any) error {
 	envelope := struct {
 		Data json.RawMessage `json:"data"`
 	}{}
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	if err := common.DecodeJSON(body, &envelope); err != nil {
 		return err
 	}
-	return json.Unmarshal(envelope.Data, target)
+	return common.DecodeJSON(envelope.Data, target)
 }
 
 type commentBackendFake struct {
@@ -160,7 +160,7 @@ func (f *commentBackendFake) Resolve(_ context.Context, actor domain.StudioActor
 
 func TestDraftCommentRoutesMapTheAnchor(t *testing.T) {
 	backend := &commentBackendFake{}
-	handler := &StudioDraftCommentHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioDraftCommentHandler{UserService: conversationUsers{}, Backend: backend}
 	routes := handler.Routes()
 
 	recorder := httptest.NewRecorder()

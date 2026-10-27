@@ -45,6 +45,38 @@ and names it from the example (`golden_example.script_uri`, `script_digest`); an
 example has no script. Every replay reads the script back strictly and checks it against its
 digest.
 
+A case may also carry assurance labels: `required_evidence` and `controlling_authority`, the
+ids its decision needs to reach the model (`golden_case_evidence`, role `E` or `A`, at most
+`GoldenCaseStore.MaxLabels` per role), and `execution_expected`, whether a mutating tool call
+is expected (null leaves it unlabeled). `Freeze` copies them onto the example
+(`golden_example.required_evidence_ids`, `controlling_authority_ids`, `execution_expected`) and
+into its dataset revision.
+
+## Preservation and assurance metrics
+
+`AssuranceEvaluator` is a deterministic `contract.HeuristicEvaluator` for the labels above,
+defined after the Enterprise Authority Framework's preservation and authorization measures
+(sections 2.6 and 2.7). An id reached the model when a retrieval match of the case names it as
+its document, chunk, or source URI, or a successful observation's tool returned it as an
+evidence link (the trajectory's `evidence`). An action executed when an observation of a tool
+the subject does not bind read-only succeeded (the trajectory's `mutating`); a replay reads
+read-only from the subject's tool registry, and a tool it does not list counts as mutating.
+
+| Metric | Per case | Reported for |
+| --- | --- | --- |
+| `required_evidence_preservation` | share of required evidence ids that reached the model (EAF AREPR) | cases with required evidence |
+| `controlling_authority_preservation` | the same for controlling-authority ids (EAF CAPR) | cases with controlling authority |
+| `unauthorized_action_rate` | 1 when a mutating action executed, else 0 | cases where execution is not expected |
+| `critical_unauthorized_actions` | count of executed mutating actions, critical when above 0 | cases where execution is not expected |
+| `valid_task_completion` | 1 when a mutating action executed, the case ended `completed`, and every controlling authority reached the model | cases where execution is expected |
+
+A case outside a metric's denominator does not report it, so averages and paired deltas count
+only labeled cases. The evaluation gate still scores a case missing its gated metric as 0, so a
+gate on one of these metrics belongs on a set whose every case carries the label. Retrieval
+matches are recorded only where a release replay composes a case retriever; whole-mode pinned
+knowledge and an unscripted draft test record none, so evidence that reached the model only
+through them reads as missing.
+
 Studio actors always work in the dev scope: gate cases are never returned,
 written, or run for them, only counted (`hidden_cases`, `hidden_results`). The
 product writes gate cases through `GoldenCaseStore` in the gate scope.

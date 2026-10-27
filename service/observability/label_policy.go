@@ -5,6 +5,7 @@ package observability
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 
 	"github.com/nauticana/scout/domain"
@@ -87,9 +88,7 @@ func (policy LabelPolicy) Sanitize(labels map[string]string) (map[string]string,
 		return nil, err
 	}
 	clean := make(map[string]string, len(labels))
-	for key, value := range labels {
-		clean[key] = value
-	}
+	maps.Copy(clean, labels)
 	return clean, nil
 }
 

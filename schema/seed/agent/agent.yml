@@ -228,6 +228,8 @@ seeds:
       - [agent_operator_max_entries, int, true, "64", "Operator entries one turn may hold (1..4096); 0 takes 64"]
       - [agent_hold_lapse_batch, int, true, "100", "Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100"]
       - [agent_hold_lapse_period, int, true, "30", "Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30"]
+      - [agent_working_set_max_candidates, int, true, "64", "Candidates one turn's working set source may offer; more fails the turn (1..1024); 0 takes 64"]
+      - [agent_working_set_max_tokens, int, true, "8000", "Token budget of one turn's working set; required context beyond it fails the turn (1..1048576); 0 takes 8000"]
   - table: authorization_object
     columns: [id, caption]
     rows:

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -203,10 +205,7 @@ func (s *AgentTypeStore) init(ctx context.Context) error {
 }
 
 func (s *AgentTypeStore) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return clk.Now(s.Now)
 }
 
 // Publish stores an immutable type version and its capability requirements.
@@ -608,12 +607,7 @@ func allowedTransition(from, to domain.AgentState) bool {
 	if from == to {
 		return false
 	}
-	for _, candidate := range agentStateTransitions[from] {
-		if candidate == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(agentStateTransitions[from], to)
 }
 
 func validateQuarantine(quarantine domain.AgentQuarantine) error {

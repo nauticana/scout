@@ -54,7 +54,7 @@ func TestCodeListsAgreeWithSeedAndSchema(t *testing.T) {
 		},
 		{
 			constantID: "turn_hold_code",
-			codes:      codes(HoldCheckpoint, HoldAgentPaused, HoldPreempted, HoldUnknownOutcome),
+			codes:      codes(HoldCheckpoint, HoldAgentPaused, HoldPreempted, HoldUnknownOutcome, HoldEvidence),
 			valid:      func(code string) bool { return TurnHoldCode(code).Valid() },
 			seed:       "runtime/runtime.yml", schema: "runtime/conversation_turn.yml",
 			column: "hold_code", columnType: "CHAR(1)", check: "conversation_turn_hold_code_ck",
@@ -87,6 +87,13 @@ func TestCodeListsAgreeWithSeedAndSchema(t *testing.T) {
 			valid:      func(code string) bool { return OperatorEntryKind(code).Valid() },
 			seed:       "runtime/runtime.yml", schema: "runtime/turn_operator_entry.yml",
 			column: "kind_code", columnType: "CHAR(1)", check: "turn_operator_entry_kind_ck",
+		},
+		{
+			constantID: "working_set_assurance",
+			codes:      codes(AssuranceVerified, AssuranceBounded, AssuranceConflicted, AssuranceInsufficient, AssuranceUnverified),
+			valid:      func(code string) bool { return WorkingSetAssurance(code).Valid() },
+			seed:       "runtime/runtime.yml", schema: "runtime/conversation_turn.yml",
+			column: "working_set_code", columnType: "CHAR(1)", check: "conversation_turn_working_set_code_ck",
 		},
 		{
 			constantID: "turn_call_attested",

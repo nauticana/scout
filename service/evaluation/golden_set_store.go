@@ -23,7 +23,7 @@ const (
 
 const goldenExampleColumns = `partner_id, golden_set_id, set_version, example_id, scope_code, provenance, consent_class, retention_class,
        approval_risk_tier, domain_code, language_code, rubric_ref, expected_behavior, payload_uri, payload_digest, reviews,
-       script_uri, script_digest`
+       script_uri, script_digest, required_evidence_ids, controlling_authority_ids, execution_expected`
 
 // The list queries take the caller scope twice: dev callers see only dev rows,
 // gate callers see every row. Authorization is in the predicate, never post-filtered.
@@ -33,7 +33,7 @@ INSERT INTO golden_set_version (partner_id, golden_set_id, set_version, dataset_
 VALUES (?, ?, ?, ?, ?, ?)`,
 	qGoldenExampleInsert: `
 INSERT INTO golden_example (` + goldenExampleColumns + `)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGoldenExampleGet: `
 SELECT ` + goldenExampleColumns + `
   FROM golden_example
@@ -124,16 +124,19 @@ func (store *GoldenSetStore) PutExample(ctx context.Context, scope domain.Golden
 	if err != nil {
 		return fmt.Errorf("encode reviews: %w", err)
 	}
+	if example.Assurance, err = validAssurance(example.Assurance, DefaultCaseMaxLabels); err != nil {
+		return err
+	}
 	qs, err := store.queries(ctx, "golden set store", goldenQueries)
 	if err != nil {
 		return err
 	}
-	if _, err := qs.Query(ctx, qGoldenExampleInsert,
+	if _, err := qs.Query(ctx, qGoldenExampleInsert, append([]any{
 		example.TenantID, example.GoldenSetID, example.SetVersion, example.ExampleID, string(scopeOf(example.Hidden)),
 		example.Provenance, example.ConsentClass, example.RetentionClass, example.RiskTier, nullable(example.Domain), nullable(example.Language),
 		nullable(example.RubricRef), nullable(string(example.ExpectedBehavior)), example.Payload.URI, example.Payload.Digest, string(reviews),
 		nullable(example.Script.URI), nullable(example.Script.Digest),
-	); err != nil {
+	}, assuranceColumns(example.Assurance)...)...); err != nil {
 		return fmt.Errorf("insert golden example: %w", err)
 	}
 	return nil
@@ -266,8 +269,8 @@ func (store *GoldenSetStore) ListQueries(ctx context.Context, scope domain.Golde
 }
 
 func decodeGoldenExample(row []any) (domain.GoldenExample, error) {
-	if len(row) < 18 {
-		return domain.GoldenExample{}, fmt.Errorf("golden example row: expected 18 columns, got %d", len(row))
+	if len(row) < 21 {
+		return domain.GoldenExample{}, fmt.Errorf("golden example row: expected 21 columns, got %d", len(row))
 	}
 	example := domain.GoldenExample{
 		TenantID: common.AsInt64(row[0]), GoldenSetID: common.AsString(row[1]), SetVersion: common.AsInt64(row[2]), ExampleID: common.AsString(row[3]),
@@ -283,6 +286,20 @@ func decodeGoldenExample(row []any) (domain.GoldenExample, error) {
 		if err := json.Unmarshal([]byte(reviews), &example.Reviews); err != nil {
 			return domain.GoldenExample{}, fmt.Errorf("decode example reviews: %w", err)
 		}
+	}
+	for _, ids := range []struct {
+		column any
+		into   *[]string
+	}{{row[18], &example.Assurance.RequiredEvidence}, {row[19], &example.Assurance.ControllingAuthority}} {
+		if raw := common.AsString(ids.column); raw != "" && raw != "null" {
+			if err := json.Unmarshal([]byte(raw), ids.into); err != nil {
+				return domain.GoldenExample{}, fmt.Errorf("decode example assurance labels: %w", err)
+			}
+		}
+	}
+	if row[20] != nil {
+		expected := common.AsBool(row[20])
+		example.Assurance.ExecutionExpected = &expected
 	}
 	return example, nil
 }

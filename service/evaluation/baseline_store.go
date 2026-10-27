@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -75,10 +76,7 @@ type EvaluationBaselineStore struct {
 var _ contract.EvaluationBaselineStore = (*EvaluationBaselineStore)(nil)
 
 func (store *EvaluationBaselineStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(store.Now).UTC()
 }
 
 // Record stores the outputs as a new baseline after checking they answer exactly the

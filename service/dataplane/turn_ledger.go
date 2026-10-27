@@ -500,10 +500,7 @@ func DigestStrings(values ...string) string {
 
 // QuoteUsage estimates reservation-worthy usage, priced on the agent's model.
 func QuoteUsage(ctx context.Context, agent contract.PricedAgent, inputText string) (domain.Usage, error) {
-	inputTokens := int64(len([]rune(inputText))/4) + 1000
-	if inputTokens < 1000 {
-		inputTokens = 1000
-	}
+	inputTokens := max(int64(len([]rune(inputText))/4)+1000, 1000)
 	return PriceModelUsage(ctx, agent, nil, nil, domain.ModelUsage{InputTokens: inputTokens, OutputTokens: 2000}, domain.ModelUsage{}, domain.ModelUsage{})
 }
 

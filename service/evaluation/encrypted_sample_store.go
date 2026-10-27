@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -60,10 +61,7 @@ type EncryptedSampleStore struct {
 var _ contract.SampleStore = (*EncryptedSampleStore)(nil)
 
 func (store *EncryptedSampleStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now()
-	}
-	return time.Now()
+	return clk.Now(store.Now)
 }
 
 func (store *EncryptedSampleStore) validate() error {

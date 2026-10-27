@@ -287,7 +287,7 @@ func (s *TableStore) Prepare(ctx context.Context, draft domain.MCPConfirmationDr
 		return domain.MCPConfirmation{}, false, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	args := []any{draft.TenantID, string(draft.Maker.Kind), draft.Maker.ID, nullable(draft.ClientRef), draft.Tool,
+	args := []any{draft.TenantID, string(draft.Maker.Kind), draft.Maker.ID, common.NullIfEmpty(draft.ClientRef), draft.Tool,
 		string(draft.Payload), draft.Digest, string(draft.Preview), string(requirements), string(draft.Channel),
 		draft.ApprovalRequired, int64(draft.TTL / time.Second)}
 	var id int64
@@ -401,7 +401,7 @@ func (s *TableStore) AttachApproval(ctx context.Context, key domain.MCPConfirmat
 
 // Abandon fails a pending confirmation that can never be decided.
 func (s *TableStore) Abandon(ctx context.Context, key domain.MCPConfirmationKey, reason string) error {
-	return s.guarded(ctx, "abandon", key, qConfirmAbandon, nullable(truncate(reason)), key.TenantID, key.ID)
+	return s.guarded(ctx, "abandon", key, qConfirmAbandon, common.NullIfEmpty(truncate(reason)), key.TenantID, key.ID)
 }
 
 // Decide records a decision on a confirmation no maker-checker request owns.
@@ -411,7 +411,7 @@ func (s *TableStore) Decide(ctx context.Context, key domain.MCPConfirmationKey, 
 		return fmt.Errorf("%w: decider is required", domain.ErrPrincipalUnknown)
 	}
 	return s.guarded(ctx, "decide", key, qConfirmDecide, string(decisionStatus(approve)), string(decider.Kind), decider.ID,
-		nullable(truncate(note)), key.TenantID, key.ID)
+		common.NullIfEmpty(truncate(note)), key.TenantID, key.ID)
 }
 
 // DecideApprovalTx applies keel's maker-checker decision inside keel's
@@ -439,7 +439,7 @@ func (s *TableStore) DecideApprovalTx(ctx context.Context, tx keelport.TxQuerySe
 	}
 	decided, err := qs.Query(ctx, qConfirmDecideApproval,
 		string(decisionStatus(approve)), string(domain.PrincipalHuman), strconv.FormatInt(request.CheckerID, 10),
-		nullable(truncate(request.DecisionNote)), request.PartnerID, request.ObjectID, request.ID)
+		common.NullIfEmpty(truncate(request.DecisionNote)), request.PartnerID, request.ObjectID, request.ID)
 	if err != nil {
 		return fmt.Errorf("decide confirmation %d: %w", request.ObjectID, err)
 	}
@@ -539,7 +539,7 @@ func (s *TableStore) Complete(ctx context.Context, key domain.MCPConfirmationKey
 		}
 		stored = string(result)
 	}
-	return s.guarded(ctx, "complete", key, qConfirmComplete, string(status), stored, nullable(truncate(reason)),
+	return s.guarded(ctx, "complete", key, qConfirmComplete, string(status), stored, common.NullIfEmpty(truncate(reason)),
 		string(status), key.TenantID, key.ID, fence)
 }
 
@@ -567,9 +567,9 @@ func (s *TableStore) ExpireDue(ctx context.Context, limit int) ([]domain.Expired
 	out := make([]domain.ExpiredMCPConfirmation, 0, len(expired.Rows))
 	for _, row := range expired.Rows {
 		out = append(out, domain.ExpiredMCPConfirmation{
-			MCPConfirmationKey: domain.MCPConfirmationKey{ID: common.AsInt64(row[0]), TenantID: common.AsInt64(row[1])},
-			Maker:              domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[2])), ID: common.AsString(row[3])},
-			Tool:               common.AsString(row[4]), ApprovalID: common.AsInt64(row[5]),
+			ID: common.AsInt64(row[0]), TenantID: common.AsInt64(row[1]),
+			Maker: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[2])), ID: common.AsString(row[3])},
+			Tool:  common.AsString(row[4]), ApprovalID: common.AsInt64(row[5]),
 		})
 	}
 	return out, nil
@@ -767,13 +767,6 @@ func truncate(note string) string {
 		return note
 	}
 	return string([]rune(note)[:MaxNoteRunes])
-}
-
-func nullable(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
 }
 
 func scanConfirmation(row []any) domain.MCPConfirmation {

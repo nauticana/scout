@@ -58,7 +58,7 @@ type ConversationCancelRequest struct {
 // ConversationStreamError is the data of an SSE `error` event: a failure after the
 // stream's 200 was committed, carrying the status it would otherwise have had.
 type ConversationStreamError struct {
-	Status    int    `json:"status"`
+	Status    int32  `json:"status"`
 	Detail    string `json:"detail"`
 	RequestID string `json:"request_id,omitempty"`
 }

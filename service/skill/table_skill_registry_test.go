@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -37,12 +38,8 @@ func (tables *skillTables) clone() *skillTables {
 		examples: map[string][]string{}, requires: map[string][][2]string{}, bindings: map[string]string{},
 		toolIDs: tables.toolIDs, useSkill: tables.useSkill, catalog: tables.catalog,
 	}
-	for k, v := range tables.profiles {
-		copied.profiles[k] = v
-	}
-	for k, v := range tables.versions {
-		copied.versions[k] = v
-	}
+	maps.Copy(copied.profiles, tables.profiles)
+	maps.Copy(copied.versions, tables.versions)
 	for k, v := range tables.tools {
 		copied.tools[k] = slices.Clone(v)
 	}
@@ -52,9 +49,7 @@ func (tables *skillTables) clone() *skillTables {
 	for k, v := range tables.requires {
 		copied.requires[k] = slices.Clone(v)
 	}
-	for k, v := range tables.bindings {
-		copied.bindings[k] = v
-	}
+	maps.Copy(copied.bindings, tables.bindings)
 	return copied
 }
 

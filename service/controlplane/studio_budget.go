@@ -20,8 +20,7 @@ func (s *StudioService) checkSavedBudget(ctx context.Context, value []byte) erro
 		return err
 	}
 	_, err = scope.CheckBudgetUnit(ctx, s.Currencies, budget)
-	var unenforceable *domain.BudgetUnenforceableError
-	if errors.As(err, &unenforceable) {
+	if unenforceable, ok := errors.AsType[*domain.BudgetUnenforceableError](err); ok {
 		return validationError("value", unenforceable.Detail)
 	}
 	return err
@@ -49,8 +48,7 @@ func (s *StudioService) checkBudget(ctx context.Context, resources []domain.Effe
 		return err
 	}
 	_, err := scope.CheckBudgetUnit(ctx, s.Currencies, budget)
-	var unenforceable *domain.BudgetUnenforceableError
-	if errors.As(err, &unenforceable) {
+	if unenforceable, ok := errors.AsType[*domain.BudgetUnenforceableError](err); ok {
 		message := "budget: " + unenforceable.Detail
 		if unenforceable.Problem == domain.BudgetExponentChanged {
 			message += "; re-save the budget"

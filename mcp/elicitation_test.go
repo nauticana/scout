@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -46,9 +47,7 @@ func modernParams(capabilities map[string]any, extra map[string]any) map[string]
 			mcpgo.MetaKeyClientCapabilities: capabilities,
 		},
 	}
-	for key, value := range extra {
-		params[key] = value
-	}
+	maps.Copy(params, extra)
 	return params
 }
 
@@ -170,9 +169,8 @@ type acceptingClient struct{ asked mcpgo.ElicitationParams }
 
 func (client *acceptingClient) Elicit(_ context.Context, request mcpgo.ElicitationRequest) (*mcpgo.ElicitationResult, error) {
 	client.asked = request.Params
-	return &mcpgo.ElicitationResult{ElicitationResponse: mcpgo.ElicitationResponse{
-		Action: mcpgo.ElicitationResponseActionAccept, Content: map[string]any{"ok": true},
-	}}, nil
+	return &mcpgo.ElicitationResult{
+		Action: mcpgo.ElicitationResponseActionAccept, Content: map[string]any{"ok": true}}, nil
 }
 
 // A client on an earlier protocol is asked through elicitation/create and the

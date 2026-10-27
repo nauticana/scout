@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // Capacity outcome labels the gateway reports as serving samples.
@@ -47,10 +48,7 @@ func NewGateway(rateLimiter contract.TenantRateLimiter, providers contract.Model
 }
 
 func (gateway *Gateway) now() time.Time {
-	if gateway.Now == nil {
-		return time.Now()
-	}
-	return gateway.Now()
+	return clk.Now(gateway.Now)
 }
 
 // Generate performs one governed model invocation and settles its capacity lease.

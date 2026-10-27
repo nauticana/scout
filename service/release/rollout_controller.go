@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // Bypass scopes name the gate a waiver removes.
@@ -131,10 +132,7 @@ func (controller *RolloutController) validate() error {
 }
 
 func (controller *RolloutController) now() time.Time {
-	if controller.Now != nil {
-		return controller.Now()
-	}
-	return time.Now()
+	return clk.Now(controller.Now)
 }
 
 // Start records a release at the build stage with generation one.

@@ -49,10 +49,7 @@ type Runner struct {
 var _ contract.EvaluationRunner = (*Runner)(nil)
 
 func (runner *Runner) now() time.Time {
-	if runner.Now != nil {
-		return runner.Now()
-	}
-	return time.Now()
+	return clk.Now(runner.Now)
 }
 
 func (runner *Runner) validate(manifest domain.EvaluationManifest, examples []domain.GoldenExample) error {

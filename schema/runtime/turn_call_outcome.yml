@@ -85,6 +85,9 @@ indexes:
     columns: [partner_id, request_id, status_code]
   - name: turn_call_outcome_due_ix
     columns: [status_code, deadline_at]
+  - name: turn_call_outcome_open_ix
+    columns: [partner_id, deadline_at, request_id, execution_step_id, call_id]
+    where: status_code IN ('I', 'A', 'U')
 checks:
   - name: turn_call_outcome_status_ck
     expression: status_code IN ('I', 'A', 'C', 'F', 'U')

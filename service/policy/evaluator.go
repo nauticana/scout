@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // SetEvaluator decides against the policy set bound to a principal's effective
@@ -150,10 +151,7 @@ func reasonOr(statement *domain.PolicyStatement, fallback string) string {
 }
 
 func (e *SetEvaluator) now() time.Time {
-	if e.Now != nil {
-		return e.Now()
-	}
-	return time.Now()
+	return clk.Now(e.Now)
 }
 
 var _ contract.PolicyDecisionPoint = (*SetEvaluator)(nil)

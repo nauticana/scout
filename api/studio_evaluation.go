@@ -32,6 +32,11 @@ type GoldenCase struct {
 	Turns []string `json:"turns,omitempty"`
 	// Tools are the sandboxed responses tool calls get while the case replays.
 	Tools []GoldenCaseTool `json:"tools,omitempty"`
+	// RequiredEvidence and ControllingAuthority are the ids the case's decision needs to reach the
+	// model; ExecutionExpected says whether a mutating tool call is expected, absent when unlabeled.
+	RequiredEvidence     []string `json:"required_evidence,omitempty"`
+	ControllingAuthority []string `json:"controlling_authority,omitempty"`
+	ExecutionExpected    *bool    `json:"execution_expected,omitempty"`
 }
 
 // GoldenCaseTool answers every call of one tool: output is JSON; a failure (is_error) carries

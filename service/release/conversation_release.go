@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -214,10 +215,7 @@ type StickyReleaseResolver struct {
 }
 
 func (resolver *StickyReleaseResolver) now() time.Time {
-	if resolver.Now != nil {
-		return resolver.Now()
-	}
-	return time.Now()
+	return clk.Now(resolver.Now)
 }
 
 // Resolve returns the conversation's identities. agentVersion is the version the
@@ -273,10 +271,7 @@ type SessionDrainer struct {
 }
 
 func (drainer *SessionDrainer) now() time.Time {
-	if drainer.Now != nil {
-		return drainer.Now()
-	}
-	return time.Now()
+	return clk.Now(drainer.Now)
 }
 
 func (drainer *SessionDrainer) validate() error {

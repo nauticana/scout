@@ -768,7 +768,7 @@ func (s *StudioService) plantSeed(ctx context.Context, tx keelport.TxQueryServic
 			catalogID, catalogVersion = origin.templateID, origin.templateVersion
 		}
 		source := origin.derived.Source
-		if _, err := tx.Query(ctx, qSeedPutOrigin, actor.TenantID, agentID, source.Kind, source.ID, nullableString(source.Namespace), source.External,
+		if _, err := tx.Query(ctx, qSeedPutOrigin, actor.TenantID, agentID, source.Kind, source.ID, common.NullIfEmpty(source.Namespace), source.External,
 			origin.derived.Version, origin.derived.Digest, templateTenant, templateID, templateVersion, catalogID, catalogVersion,
 			string(actor.Principal.Kind), actor.Principal.ID); err != nil {
 			return fmt.Errorf("record draft origin: %w", err)

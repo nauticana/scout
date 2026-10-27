@@ -66,13 +66,11 @@ func TestMemoryLoopDetectorConcurrentObservations(t *testing.T) {
 	detector := &MemoryLoopDetector{Threshold: 101, MaxConversations: 4096}
 	var wait sync.WaitGroup
 	for range 100 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			if err := detector.Observe(context.Background(), 1, "c", "f"); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	if err := detector.Observe(context.Background(), 1, "c", "f"); !errors.Is(err, domain.ErrLoopDetected) {

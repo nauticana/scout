@@ -134,7 +134,7 @@ func studioCheckedCodes(t *testing.T, schema, check, column string) []string {
 		return studioCheckedEqualities(block[1], column)
 	}
 	var codes []string
-	for _, item := range strings.Split(list[1], ",") {
+	for item := range strings.SplitSeq(list[1], ",") {
 		codes = append(codes, strings.Trim(strings.TrimSpace(item), "'"))
 	}
 	return codes

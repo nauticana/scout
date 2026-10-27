@@ -18,6 +18,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/service/isolation"
 	"github.com/nauticana/scout/service/scope"
 )
@@ -202,10 +203,7 @@ func orDefault[T ~int | ~int64](value, fallback T) T {
 }
 
 func (s *StudioService) now() time.Time {
-	if s.Now != nil {
-		return s.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(s.Now).UTC()
 }
 
 func (s *StudioService) init(ctx context.Context) error {
@@ -547,7 +545,7 @@ func (s *StudioService) TestDraft(ctx context.Context, actor domain.StudioActor,
 	}
 	// The lifecycle audit is Studio's, not the product tester's.
 	if _, auditErr := s.qs.Query(ctx, qStudioAudit, actor.TenantID, request.AgentID, "TEST",
-		nullableString("language "+result.LanguageCode), string(actor.Principal.Kind), actor.Principal.ID); auditErr != nil {
+		common.NullIfEmpty("language "+result.LanguageCode), string(actor.Principal.Kind), actor.Principal.ID); auditErr != nil {
 		return domain.AgentTestResult{}, fmt.Errorf("record studio test audit: %w", auditErr)
 	}
 	return result, nil
@@ -620,7 +618,7 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 	}
 	if _, err = tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
 		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
-		nullableString(definition.ChangeSummary), actorUser(actor), nil); err != nil {
+		common.NullIfEmpty(definition.ChangeSummary), actorUser(actor), nil); err != nil {
 		return domain.AgentRelease{}, fmt.Errorf("insert agent version: %w", err)
 	}
 	if err = storeSettings(ctx, tx, settings, version); err != nil {
@@ -1193,7 +1191,7 @@ func validatePromptDraft(draft domain.AgentDraft) []domain.AgentFieldError {
 }
 
 func auditStudio(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, agentID, event, detail string) error {
-	if _, err := tx.Query(ctx, qStudioAudit, actor.TenantID, agentID, event, nullableString(detail), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
+	if _, err := tx.Query(ctx, qStudioAudit, actor.TenantID, agentID, event, common.NullIfEmpty(detail), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
 		return fmt.Errorf("record studio audit: %w", err)
 	}
 	return nil
@@ -1275,13 +1273,6 @@ func modelID(reference *domain.ModelReference) any {
 		return nil
 	}
 	return reference.ModelID
-}
-
-func nullableString(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
 }
 
 func nullableJSON(value json.RawMessage) any {

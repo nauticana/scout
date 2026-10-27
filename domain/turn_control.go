@@ -14,7 +14,7 @@ const OperationAuthorizationObject = "AGENT_OPERATION"
 type OperationAction string
 
 const (
-	// OperationView shows an agent's live turns.
+	// OperationView shows an agent's live turns and open call outcomes.
 	OperationView OperationAction = "VIEW"
 	// OperationOperate holds, takes over, acts in, hands back, finishes, and releases them, and
 	// looks up their calls' outcomes.
@@ -37,11 +37,13 @@ const (
 	HoldPreempted TurnHoldCode = "P"
 	// HoldUnknownOutcome is a hold the worker took on a call whose outcome it could not establish.
 	HoldUnknownOutcome TurnHoldCode = "U"
+	// HoldEvidence is a hold the worker took on a working set that is conflicted or lacks required evidence.
+	HoldEvidence TurnHoldCode = "E"
 )
 
 // Valid reports whether the code is a seeded turn_hold_code code.
 func (code TurnHoldCode) Valid() bool {
-	return code == HoldCheckpoint || code == HoldAgentPaused || code == HoldPreempted || code == HoldUnknownOutcome
+	return code == HoldCheckpoint || code == HoldAgentPaused || code == HoldPreempted || code == HoldUnknownOutcome || code == HoldEvidence
 }
 
 // HoldMode is how an operator asks a turn to hold.
@@ -145,6 +147,35 @@ type LiveTurnFilter struct {
 // LiveTurnPage is one page of live turns; NextBefore is empty on the last page.
 type LiveTurnPage struct {
 	Turns      []LiveTurn
+	NextBefore string
+}
+
+// OpenOutcomeFilter pages a tenant's in-flight, accepted, and unknown calls, oldest deadline
+// first; an empty AgentID lists every agent's. Before is the previous page's NextBefore, the
+// last call that page returned, and the next page starts strictly after it; empty starts at the
+// first. Limit zero takes the default page size.
+type OpenOutcomeFilter struct {
+	AgentID string
+	Before  string
+	Limit   int
+}
+
+// OpenOutcome is one open call and the turn it holds; DeadlinePassed is read by the store clock.
+type OpenOutcome struct {
+	AgentID        string
+	Key            CallOutcomeKey
+	ConversationID string
+	TurnNo         int64
+	Tool           ToolReference
+	Status         CallOutcomeStatus
+	DispatchedAt   time.Time
+	DeadlineAt     time.Time
+	DeadlinePassed bool
+}
+
+// OpenOutcomePage is one page of open calls; NextBefore is empty on the last page.
+type OpenOutcomePage struct {
+	Outcomes   []OpenOutcome
 	NextBefore string
 }
 

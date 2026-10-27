@@ -116,9 +116,9 @@ func (s *TableWorkItemStore) Assign(ctx context.Context, item domain.WorkItem) (
 	ctx = context.WithoutCancel(ctx)
 	inserted, err := s.qs.Query(ctx, qWorkAssign, item.TenantID,
 		string(item.Assignee.Kind), item.Assignee.ID, string(item.Requester.Kind), item.Requester.ID,
-		nullableString(item.GrantID), nullableID(item.ParentID), item.Depth, nullableString(item.ScopeID),
+		common.NullIfEmpty(item.GrantID), nullableID(item.ParentID), item.Depth, common.NullIfEmpty(item.ScopeID),
 		item.TaskKind, item.Input.URI, item.Input.Digest, item.RequestID,
-		nullableAmount(item.BudgetMinorUnits), nullableString(item.Currency))
+		nullableAmount(item.BudgetMinorUnits), common.NullIfEmpty(item.Currency))
 	if err != nil {
 		return domain.WorkItem{}, fmt.Errorf("assign work item: %w", err)
 	}
@@ -220,13 +220,6 @@ func scanWorkItem(tenantID int64, row []any) domain.WorkItem {
 		BudgetMinorUnits: common.AsInt64(row[14]), Currency: common.AsString(row[15]),
 		CreatedAt: common.AsTime(row[16]), CompletedAt: completed,
 	}
-}
-
-func nullableString(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
 }
 
 func nullableID(value int64) any {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // GateHealthEvaluator answers rollout health from the latest verified, unexpired
@@ -28,10 +29,7 @@ type GateHealthEvaluator struct {
 var _ contract.RolloutHealthEvaluator = (*GateHealthEvaluator)(nil)
 
 func (evaluator *GateHealthEvaluator) now() time.Time {
-	if evaluator.Now != nil {
-		return evaluator.Now()
-	}
-	return time.Now()
+	return clk.Now(evaluator.Now)
 }
 
 // Evaluate returns the three-state verdict with the evidence behind it.

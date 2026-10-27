@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,9 +56,7 @@ func addVariant(t *testing.T, c *corpus.Corpus, doc *model.Document, set map[str
 	if err := json.Unmarshal(doc.Raw, &body); err != nil {
 		t.Fatal(err)
 	}
-	for key, value := range set {
-		body[key] = value
-	}
+	maps.Copy(body, set)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -132,12 +131,8 @@ func TestGovernanceSourceChoosesTheOneDefinitionInForce(t *testing.T) {
 	v2 := map[string]any{"id": "AGENTDEF-ORDER-EXCEPTION-COORDINATOR-2", "definitionVersion": "2", "purpose": "Resolve blocked customer orders"}
 	with := func(base map[string]any, set map[string]any) map[string]any {
 		out := map[string]any{}
-		for k, v := range base {
-			out[k] = v
-		}
-		for k, v := range set {
-			out[k] = v
-		}
+		maps.Copy(out, base)
+		maps.Copy(out, set)
 		return out
 	}
 	original, _, err := harborGovernance(harbor(t)).Snapshot(context.Background(), 7, oecAgent)

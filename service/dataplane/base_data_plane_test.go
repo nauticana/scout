@@ -144,7 +144,7 @@ func (*catalogTableFake) GenID() int64 { return 0 }
 func toolCapablePlane(t *testing.T, capabilities ...domain.ModelCapability) *BaseDataPlane {
 	t.Helper()
 	plane := composablePlane()
-	plane.DB = catalogTableDB{loopTableDB: loopTableDB{table: &loopTableFake{rows: map[string][]any{}}}, capabilities: capabilities}
+	plane.DB = catalogTableDB{table: &loopTableFake{rows: map[string][]any{}}, capabilities: capabilities}
 	plane.Providers = planeProviderFactoryFunc(func(context.Context, domain.ModelReference) (contract.ModelProvider, contract.MediaProvider, error) {
 		return &fake.ModelProvider{GenerateFunc: func(context.Context, domain.ModelSelection, domain.ModelRequest) (domain.ModelResult, error) {
 			return domain.ModelResult{Output: []byte("answer"), FinishReason: "stop"}, nil

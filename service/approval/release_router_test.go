@@ -327,3 +327,12 @@ func TestSanitizeResolutionKeepsWholeRunes(t *testing.T) {
 		t.Fatalf("cleaned = %q (%d bytes)", cleaned, len(cleaned))
 	}
 }
+
+func TestReleaseRouterCarriesAnAuthenticatedOnlyRoute(t *testing.T) {
+	f, router := newRouterFixture(t, strings.Replace(paymentsRouting, `"on_exhausted":"hold"`, `"on_exhausted":"hold","authenticated_only":true`, 1))
+	f.holders[controller] = []domain.EligibleApprover{person("77")}
+	assignment, err := router.Route(context.Background(), newAsk(), domain.PrincipalRef{})
+	if err != nil || !assignment.Authority.AuthenticatedOnly || assignment.Authority.RouteID != "payments" {
+		t.Fatalf("assignment = %+v, %v", assignment, err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/nauticana/scout/service/knowledge"
 	"github.com/nauticana/scout/service/memory"
 	"github.com/nauticana/scout/service/skill"
+	"github.com/nauticana/scout/service/workingset"
 )
 
 // evidencedAnswerFormat is the output contract of a loop with require_evidence, domain.EvidencedAnswer.
@@ -19,8 +20,9 @@ const evidencedAnswerFormat = `Reply with only a JSON object {"answer": "...", "
 	`mcp_resource with call_id and the uri the tool returned, fact with fact_key, or object with object {"uri", "digest"}.`
 
 // ReleaseLoopRequestBuilder opens a tool loop with the pinned release's compiled
-// prompt and the turn input as the task. Task is the hook for product context; the
-// tenant's memory, the documents the release binds whole, and the index of its skills follow it.
+// prompt and the turn input as the task. Task is the hook for product context; the turn's
+// working set, the tenant's memory, the documents the release binds whole, and the index of its
+// skills follow it.
 // A loop with require_evidence appends the evidenced answer contract to the output format.
 type ReleaseLoopRequestBuilder struct {
 	Definitions contract.AgentDefinitionReader
@@ -34,6 +36,11 @@ type ReleaseLoopRequestBuilder struct {
 	KnowledgeMaxBytes int
 	// Memory is the tenant's memory; nil reads none, and a read failure fails the turn.
 	Memory contract.MemoryStore
+	// WorkingSet compiles the turn's authority-aware context, which WorkingSetRecords then keeps
+	// with what it left out; nil compiles none. A conflicted or insufficient set stops the turn
+	// before the model with domain.ErrWorkingSetUnassured.
+	WorkingSet        contract.WorkingSetCompiler
+	WorkingSetRecords contract.WorkingSetRecorder
 	// LanguageCode selects the compiled prompt; empty takes the release's only language.
 	LanguageCode    string
 	MaxOutputTokens int64
@@ -63,6 +70,10 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	}
 	if strings.TrimSpace(task.Task) == "" {
 		return domain.ModelRequest{}, fmt.Errorf("%w: the turn has no input to act on", domain.ErrValidation)
+	}
+	assurance, err := builder.withWorkingSet(ctx, input, &task)
+	if err != nil {
+		return domain.ModelRequest{}, err
 	}
 	if task.Context, err = builder.withMemory(ctx, principal.TenantID, task.Context); err != nil {
 		return domain.ModelRequest{}, err
@@ -94,7 +105,40 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 		AffinityKey:     input.Snapshot.ConversationID,
 		Output:          task.Output,
 		Search:          search,
+		Assurance:       assurance,
 	}, nil
+}
+
+// withWorkingSet compiles and records the turn's working set and appends what it selected. The
+// record precedes the verdict, so a held turn keeps what it left out in the evidence plane.
+func (builder *ReleaseLoopRequestBuilder) withWorkingSet(ctx context.Context, input domain.StepInput, task *domain.AgentTask) (domain.WorkingSetAssurance, error) {
+	if builder.WorkingSet == nil {
+		return "", nil
+	}
+	if builder.WorkingSetRecords == nil {
+		return "", fmt.Errorf("%w: a working set compiler needs a working set recorder", domain.ErrNotReady)
+	}
+	principal := input.Principal
+	set, err := builder.WorkingSet.Compile(ctx, domain.WorkingSetRequest{
+		TenantContext: domain.TenantContext{TenantID: principal.TenantID, ScopeID: principal.ScopeID}, Principal: principal,
+		RequestID: input.RequestID, ConversationID: input.Snapshot.ConversationID, Task: task.Task,
+	})
+	if err != nil {
+		return "", fmt.Errorf("compile working set: %w", err)
+	}
+	if !set.Assurance.Valid() {
+		return "", fmt.Errorf("%w: working set compiler returned assurance %q", domain.ErrValidation, set.Assurance)
+	}
+	if err = builder.WorkingSetRecords.RecordWorkingSet(ctx, input.Owner, set); err != nil {
+		return "", fmt.Errorf("record working set: %w", err)
+	}
+	if set.Assurance.Unsettled() {
+		return "", fmt.Errorf("%w: the working set is %s", domain.ErrWorkingSetUnassured, set.Assurance)
+	}
+	if rendered := workingset.Context(set); rendered != "" {
+		task.Context = strings.TrimSpace(task.Context + "\n\n" + rendered)
+	}
+	return set.Assurance, nil
 }
 
 func (builder *ReleaseLoopRequestBuilder) withMemory(ctx context.Context, tenantID int64, taskContext string) (string, error) {

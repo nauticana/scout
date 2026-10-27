@@ -26,10 +26,11 @@ func (catalog promptCatalog) ListPrompts(context.Context, domain.MCPCaller) ([]d
 	return catalog, nil
 }
 
-func hint(value bool) *bool { return &value }
+//go:fix inline
+func hint(value bool) *bool { return new(value) }
 
 func TestToolProblems(t *testing.T) {
-	readOnly := domain.MCPToolAnnotations{ReadOnlyHint: hint(true)}
+	readOnly := domain.MCPToolAnnotations{ReadOnlyHint: new(true)}
 	clean := toolCatalog{
 		{Name: "search", Description: "search", Annotations: readOnly, InputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Name: "submit", Description: "submit", Policy: domain.MCPToolPolicy{RequiredScopes: []string{"write"}}},
@@ -38,7 +39,7 @@ func TestToolProblems(t *testing.T) {
 		t.Fatalf("clean catalog problems = %v", problems)
 	}
 	broken := toolCatalog{
-		{Name: "search", Description: "search", Annotations: domain.MCPToolAnnotations{ReadOnlyHint: hint(true), DestructiveHint: hint(true)}},
+		{Name: "search", Description: "search", Annotations: domain.MCPToolAnnotations{ReadOnlyHint: new(true), DestructiveHint: new(true)}},
 		{Name: "search", Annotations: readOnly, OutputSchema: json.RawMessage(`{"type":"array"}`)},
 		{Name: "submit", Description: "submit"},
 	}

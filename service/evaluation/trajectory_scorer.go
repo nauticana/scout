@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -193,10 +194,8 @@ func toolArgumentScore(calls []domain.TrajectoryEvent, expectation TrajectoryExp
 // policyScore fails critically on any forbidden tool call.
 func policyScore(calls []domain.TrajectoryEvent, expectation TrajectoryExpectation) (float64, bool) {
 	for _, call := range calls {
-		for _, forbidden := range expectation.ForbiddenTools {
-			if call.Name == forbidden {
-				return 0, true
-			}
+		if slices.Contains(expectation.ForbiddenTools, call.Name) {
+			return 0, true
 		}
 	}
 	return 1, false
@@ -224,9 +223,9 @@ func recoverabilityScore(failures, recovered int) float64 {
 }
 
 func finalState(events []domain.TrajectoryEvent) string {
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Kind == domain.TrajectoryState {
-			return events[i].Name
+	for _, event := range slices.Backward(events) {
+		if event.Kind == domain.TrajectoryState {
+			return event.Name
 		}
 	}
 	return ""

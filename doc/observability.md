@@ -86,10 +86,13 @@ events. It stores nothing and takes no lock.
 The trace is payload-free: names, codes, timing, usage, error classes, and digests, never model output, tool
 arguments, or tool results. Journal objects are read through the `EvidenceArchive` only to classify entries
 and are checked against their digest; a mismatch or malformed entry fails the trace. A model entry becomes `model_step` (models
-from `Usage.Models`, finish, tool-call count), an observation becomes `tool_call` (outcome, observed effect,
-and the error class only when `stage.KnownErrorClass` accepts it), and approval-pending and revision entries
+from `Usage.Models`, finish, tool-call count), an observation becomes `tool_call` (call id, outcome, observed effect,
+and the error class only when `stage.KnownErrorClass` accepts it, plus the settlement of the call's
+`turn_call_outcome` record matched by execution step and call id: status, resolution, resolver, resolution time,
+and evidence digest, read once per trace and bounded at 4096 records), and approval-pending and revision entries
 produce no event because the approval source records the same pause. Safety events become `guardrail`,
-approval requests `approval`, and audit records and Charter dispositions `decision`.
+approval requests `approval`, and audit records and Charter dispositions `decision`; a Charter decision keeps
+the pre- and postcondition results with their observation times, the effect, and the unknown cause, never a reason.
 
 Events order by time, then by the fixed source order journal, guardrail, approval, audit, Charter, then by
 each source's own order. The sources are stamped by different clocks (journal creation, guardrail and audit

@@ -12,7 +12,7 @@ import (
 var reviewer = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}
 
 func reviewQueue(query *queryFake) *ReviewQueueStore {
-	return &ReviewQueueStore{keelStore: keelStore{DB: dbFake{query: query}}, Now: fixedClock(testClock)}
+	return &ReviewQueueStore{DB: dbFake{query: query}, Now: fixedClock(testClock)}
 }
 
 // reviewRow is a human_review_item row joined to its turn, in reviewColumns order.

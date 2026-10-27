@@ -20,6 +20,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -50,7 +51,7 @@ const (
        risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code,
        deadline_at, created_at, resolved_at, notification_event_id, revises_step_id, release_version,
        requester_kind, requester_id, rule_source_code, approval_route_id, approver_reference_kind,
-       approver_reference, route_step, route_resolution`
+       approver_reference, route_step, route_resolution, authenticated_only`
 
 	sqlApprovalPending = "'" + string(domain.ApprovalStatusPending) + "'"
 	sqlApprovalEdited  = "'" + string(domain.ApprovalStatusEdited) + "'"
@@ -66,9 +67,9 @@ INSERT INTO turn_approval_request
         approver_kind, approver_id, scope_id, rule_id, requested_action, resource_ref, output_class_code,
         risk_tier_code, summary, evidence_uri, evidence_digest, proposed_digest, status_code, deadline_at, revises_step_id,
         release_version, requester_kind, requester_id, rule_source_code, approval_route_id, approver_reference_kind,
-        approver_reference, route_step, route_resolution)
+        approver_reference, route_step, route_resolution, authenticated_only)
 VALUES (nextval('turn_approval_request_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlApprovalPending + `, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, request_id, execution_step_id) DO NOTHING
 RETURNING id`,
 	qApprovalGet: `
@@ -198,10 +199,7 @@ func (s *TableStore) init(ctx context.Context) error {
 }
 
 func (s *TableStore) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return clk.Now(s.Now)
 }
 
 // Open records what is owed. A replayed turn re-attaches to the request it
@@ -283,14 +281,14 @@ func insertRequest(ctx context.Context, qs keelport.QueryService, request domain
 	inserted, err := qs.Query(ctx, qApprovalOpen,
 		request.TenantID, request.RequestID, request.ConversationID, request.ExecutionStepID,
 		string(request.Principal.Kind), request.Principal.ID,
-		nullable(string(request.Approver.Kind)), nullable(request.Approver.ID),
-		nullable(request.ScopeID), request.RuleID, request.Action, request.Resource,
+		common.NullIfEmpty(string(request.Approver.Kind)), common.NullIfEmpty(request.Approver.ID),
+		common.NullIfEmpty(request.ScopeID), request.RuleID, request.Action, request.Resource,
 		string(request.Class), string(request.RiskTier), request.Summary,
-		nullable(request.Evidence.URI), nullable(request.Evidence.Digest), request.ProposedDigest,
+		common.NullIfEmpty(request.Evidence.URI), common.NullIfEmpty(request.Evidence.Digest), request.ProposedDigest,
 		nullableTime(request.DeadlineAt), nullableID(request.RevisesStepID),
-		nullable(request.ReleaseVersion), nullable(string(request.Requester.Kind)), nullable(request.Requester.ID),
-		string(request.Source), nullable(request.Route.RouteID), nullable(string(request.Route.Reference.Kind)),
-		nullable(request.Route.Reference.Ref), request.Route.Step, nullable(request.Route.Resolution))
+		common.NullIfEmpty(request.ReleaseVersion), common.NullIfEmpty(string(request.Requester.Kind)), common.NullIfEmpty(request.Requester.ID),
+		string(request.Source), common.NullIfEmpty(request.Route.RouteID), common.NullIfEmpty(string(request.Route.Reference.Kind)),
+		common.NullIfEmpty(request.Route.Reference.Ref), request.Route.Step, common.NullIfEmpty(request.Route.Resolution), request.Route.AuthenticatedOnly)
 	if err != nil {
 		return 0, fmt.Errorf("open approval: %w", err)
 	}
@@ -344,7 +342,7 @@ func (s *TableStore) Resolve(ctx context.Context, verdict domain.ApprovalVerdict
 	fence := verdict.Assignment
 	updated, err := tx.Query(ctx, qApprovalResolve, string(verdict.Status), decidedAt,
 		key.TenantID, key.RequestID, key.ExecutionStepID, verdict.ProposedDigest,
-		fence.Step, nullable(string(fence.Approver.Kind)), nullable(fence.Approver.ID))
+		fence.Step, common.NullIfEmpty(string(fence.Approver.Kind)), common.NullIfEmpty(fence.Approver.ID))
 	if err != nil {
 		return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: %w", err)
 	}
@@ -378,9 +376,9 @@ func (s *TableStore) Resolve(ctx context.Context, verdict domain.ApprovalVerdict
 		deciderService = verdict.Decider.ID
 	}
 	if _, err = tx.Query(ctx, qApprovalDecision, id, key.TenantID, string(verdict.Status),
-		string(verdict.Decider.Kind), deciderUser, deciderAgent, deciderService, nullable(verdict.Authority.GrantID),
-		verdict.ProposedDigest, nullable(verdict.Reason), decidedAt,
-		nullable(verdict.Revision.URI), nullable(verdict.Revision.Digest)); err != nil {
+		string(verdict.Decider.Kind), deciderUser, deciderAgent, deciderService, common.NullIfEmpty(verdict.Authority.GrantID),
+		verdict.ProposedDigest, common.NullIfEmpty(verdict.Reason), decidedAt,
+		common.NullIfEmpty(verdict.Revision.URI), common.NullIfEmpty(verdict.Revision.Digest)); err != nil {
 		return domain.ApprovalRequest{}, fmt.Errorf("record approval decision: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -552,9 +550,9 @@ func (s *TableStore) Reassign(ctx context.Context, request domain.ApprovalReques
 	if request.Route.RouteID == "" {
 		route = domain.ApprovalRouteAuthority{}
 	}
-	args := []any{string(status), nullable(string(backup.Kind)), nullable(backup.ID), deadline, route.Step,
-		nullable(string(route.Reference.Kind)), nullable(route.Reference.Ref), nullable(route.Resolution),
-		request.TenantID, request.ID, request.Route.Step, nullable(string(request.Approver.Kind)), nullable(request.Approver.ID)}
+	args := []any{string(status), common.NullIfEmpty(string(backup.Kind)), common.NullIfEmpty(backup.ID), deadline, route.Step,
+		common.NullIfEmpty(string(route.Reference.Kind)), common.NullIfEmpty(route.Reference.Ref), common.NullIfEmpty(route.Resolution),
+		request.TenantID, request.ID, request.Route.Step, common.NullIfEmpty(string(request.Approver.Kind)), common.NullIfEmpty(request.Approver.ID)}
 	ctx = context.WithoutCancel(ctx)
 	if !s.NotifyThroughOutbox || backup.ID == "" || backup == request.Approver {
 		updated, err := s.qs.Query(ctx, qApprovalEscalate, args...)
@@ -811,7 +809,7 @@ func scanRequest(tenantID int64, row []any) domain.ApprovalRequest {
 		Requester: domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[25])), ID: common.AsString(row[26])},
 		Source:    domain.ApprovalSource(common.AsString(row[27])),
 		Route: domain.ApprovalRouteAuthority{
-			RouteID: common.AsString(row[28]), Step: int(step), Resolution: common.AsString(row[32]),
+			RouteID: common.AsString(row[28]), Step: int(step), Resolution: common.AsString(row[32]), AuthenticatedOnly: common.AsBool(row[33]),
 			Reference: domain.ApproverReference{Kind: domain.ApproverReferenceKind(common.AsString(row[29])), Ref: common.AsString(row[30])},
 		},
 	}
@@ -831,13 +829,6 @@ func validRisk(risk domain.RiskTier) bool {
 	default:
 		return false
 	}
-}
-
-func nullable(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
 }
 
 func nullableID(value int64) any {

@@ -198,9 +198,7 @@ func (d *AgentDocuments) render(namespace, enterprise, spec string, agent domain
 		return nil, fmt.Errorf("%w: agent %q version %q does not form a Charter identifier", domain.ErrConflict, release.AgentID, release.Version)
 	}
 	definition := model.AgentDefinition{
-		Envelope: model.Envelope{
-			CharterSpecVersion: spec, Namespace: namespace, ID: id, Kind: model.KindAgentDefinition, Name: agent.DisplayName,
-		},
+		CharterSpecVersion: spec, Namespace: namespace, ID: id, Kind: model.KindAgentDefinition, Name: agent.DisplayName,
 		AgentIdentityID: model.Ref{ID: identity}, DefinitionVersion: release.Version,
 	}
 	if enterprise != "" {

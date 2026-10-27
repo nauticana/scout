@@ -56,7 +56,7 @@ func scheduleActivation(ctx context.Context, tx keelport.TxQueryService, actor d
 	}
 	var baseStable, baseCanary any
 	if len(deployment.Rows) > 0 {
-		baseStable, baseCanary = nullableString(common.AsString(deployment.Rows[0][0])), nullableString(common.AsString(deployment.Rows[0][1]))
+		baseStable, baseCanary = common.NullIfEmpty(common.AsString(deployment.Rows[0][0])), common.NullIfEmpty(common.AsString(deployment.Rows[0][1]))
 	}
 	if canary > 0 && baseStable == nil {
 		return nil, validationError("canary_percentage", "the first release of an agent deploys as stable")

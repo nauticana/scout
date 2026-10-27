@@ -520,12 +520,12 @@ func refusedAcquisition(requestID string, status domain.TurnStatus, currentLease
 	return fmt.Errorf("%w: turn %q is %s", domain.ErrConflict, requestID, status)
 }
 
-// Hold takes the owner's running turn to held under code, a checkpoint or an unknown call
-// outcome, and returns the held fence; a cancellation requested before it is
-// domain.ErrTurnCanceled, for the owner to end the turn.
+// Hold takes the owner's running turn to held under code, a checkpoint, an unknown call
+// outcome, or an unassured working set, and returns the held fence; a cancellation requested
+// before it is domain.ErrTurnCanceled, for the owner to end the turn.
 func (store *TableTurnRecordStore) Hold(ctx context.Context, owner domain.TurnOwner, code domain.TurnHoldCode) (int64, error) {
-	if code != domain.HoldCheckpoint && code != domain.HoldUnknownOutcome {
-		return 0, fmt.Errorf("%w: a worker holds its turn at a checkpoint or on an unknown outcome", domain.ErrValidation)
+	if code != domain.HoldCheckpoint && code != domain.HoldUnknownOutcome && code != domain.HoldEvidence {
+		return 0, fmt.Errorf("%w: a worker holds its turn at a checkpoint, on an unknown outcome, or on an unassured working set", domain.ErrValidation)
 	}
 	return store.ownerTransition(ctx, owner, qRecordHold, "hold turn", string(code))
 }

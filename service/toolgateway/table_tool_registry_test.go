@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
@@ -25,15 +26,9 @@ func newToolTables() *toolTables {
 
 func (tables *toolTables) clone() *toolTables {
 	copied := newToolTables()
-	for k, v := range tables.profiles {
-		copied.profiles[k] = v
-	}
-	for k, v := range tables.versions {
-		copied.versions[k] = v
-	}
-	for k, v := range tables.bindings {
-		copied.bindings[k] = v
-	}
+	maps.Copy(copied.profiles, tables.profiles)
+	maps.Copy(copied.versions, tables.versions)
+	maps.Copy(copied.bindings, tables.bindings)
 	return copied
 }
 

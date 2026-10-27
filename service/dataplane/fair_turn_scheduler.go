@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // ErrNoReadyTurn is returned by Claim when nothing is claimable right now.
@@ -189,10 +190,7 @@ func (scheduler *QueueTurnScheduler) queries(ctx context.Context) port.QueryServ
 }
 
 func (scheduler *QueueTurnScheduler) now() time.Time {
-	if scheduler.Now != nil {
-		return scheduler.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(scheduler.Now).UTC()
 }
 
 func (scheduler *QueueTurnScheduler) partitions() (int, int) {
@@ -525,10 +523,7 @@ func (scheduler *QueueTurnScheduler) LeaseFromClaimRow(ctx context.Context, row 
 // the query names in the order QueueQueries reports them. The loop-driven path
 // orders by priority and age only; weighted fairness needs Claim.
 func TurnQueueWorkerQueries(workerID string, lease time.Duration, batch, maxAttempts int) (queries map[string]string, pending, claim, reclaim string) {
-	leaseSeconds := int(lease / time.Second)
-	if leaseSeconds < 1 {
-		leaseSeconds = 1
-	}
+	leaseSeconds := max(int(lease/time.Second), 1)
 	if batch < 1 {
 		batch = 1
 	}

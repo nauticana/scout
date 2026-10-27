@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // HMACSnapshotSigner authenticates snapshots with HMAC-SHA256 over the payload.
@@ -106,10 +107,7 @@ func (cache *SnapshotCache) validate() error {
 }
 
 func (cache *SnapshotCache) now() time.Time {
-	if cache.Now == nil {
-		return time.Now()
-	}
-	return cache.Now()
+	return clk.Now(cache.Now)
 }
 
 func entryKey(kind, scope string) string { return kind + "/" + scope }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // BackupEscalation routes an overdue request to a configured backup and then
@@ -199,10 +200,7 @@ func (s *Sweeper) record(ctx context.Context, request domain.ApprovalRequest, ac
 }
 
 func (s *Sweeper) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return clk.Now(s.Now)
 }
 
 // platformPrincipal attributes an expiry or escalation the platform performed.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -53,10 +54,7 @@ type Reconciler struct {
 var _ contract.KnowledgeReconciler = (*Reconciler)(nil)
 
 func (reconciler *Reconciler) now() time.Time {
-	if reconciler.Now != nil {
-		return reconciler.Now()
-	}
-	return time.Now()
+	return clk.Now(reconciler.Now)
 }
 
 func (reconciler *Reconciler) init(ctx context.Context) error {
@@ -92,10 +90,7 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context, tenantID int64, kno
 	}
 	if len(oldest.Rows) > 0 && oldest.Rows[0][0] != nil {
 		if occurredAt, ok := common.AsTimeOK(oldest.Rows[0][0]); ok {
-			report.FreshnessLag = report.CheckedAt.Sub(occurredAt)
-			if report.FreshnessLag < 0 {
-				report.FreshnessLag = 0
-			}
+			report.FreshnessLag = max(report.CheckedAt.Sub(occurredAt), 0)
 		}
 	}
 	orphans, err := reconciler.qs.Query(ctx, qReconcileOrphans, tenantID, knowledgeBaseID)

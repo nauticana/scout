@@ -105,8 +105,8 @@ func (plane *conversationPlane) StoredReply(_ context.Context, _ int64, _ string
 
 func newConversationHandler(plane contract.DataPlane) *ConversationHandler {
 	return &ConversationHandler{
-		AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}},
-		Plane:           plane,
+		UserService: conversationUsers{},
+		Plane:       plane,
 		Callers: conversationCallerFunc(func(_ context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 			if session.PartnerId != 7 {
 				return domain.TenantContext{}, domain.PrincipalRef{}, errors.New("wrong session")
@@ -196,7 +196,7 @@ func TestConversationStreamReportsAFailureAfterTheStreamOpened(t *testing.T) {
 				authenticatedRequest(http.MethodGet, "/api/wingmate/turn/stream?request_id=request-1&cursor=5", nil))
 
 			body := recorder.Body.String()
-			if !strings.Contains(body, `"sequence":5`) || !strings.Contains(body, "event: error") || !strings.Contains(body, test.want) || !subscription.closed {
+			if !strings.Contains(body, `"sequence":"5"`) || !strings.Contains(body, "event: error") || !strings.Contains(body, test.want) || !subscription.closed {
 				t.Fatalf("SSE body = %s, closed = %v", body, subscription.closed)
 			}
 			if test.storedErr != nil && plane.storedCursor != 6 {
@@ -315,8 +315,8 @@ func TestConversationTurnsListsThePersonsHistory(t *testing.T) {
 		t.Fatalf("status = %d, filter = %+v, body = %s", recorder.Code, asked, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	for _, want := range []string{`"next_before":"c"`, `"agent_name":"writer"`, `"release_version":"3"`, `"cost_minor":0`, `"currency":"JPY"`,
-		`"exponent":0`, `"result":{"ok":true}`, `"completed_at":"2026-10-01T12:00:00Z"`} {
+	for _, want := range []string{`"next_before":"c"`, `"agent_name":"writer"`, `"release_version":"3"`, `"cost_minor":"0"`, `"currency":"JPY"`,
+		`"exponent":"0"`, `"result":{"ok":true}`, `"completed_at":"2026-10-01T12:00:00Z"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body lacks %s: %s", want, body)
 		}

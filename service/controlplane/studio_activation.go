@@ -100,7 +100,7 @@ func (s *ReleaseActivations) Cancel(ctx context.Context, actor domain.StudioActo
 		}
 	}()
 	res, err := tx.Query(ctx, qActivationCancel, string(actor.Principal.Kind), actor.Principal.ID,
-		nullableString(strings.TrimSpace(request.Reason)), actor.TenantID, request.AgentID, request.ActivationID)
+		common.NullIfEmpty(strings.TrimSpace(request.Reason)), actor.TenantID, request.AgentID, request.ActivationID)
 	if err != nil {
 		return domain.ReleaseActivation{}, fmt.Errorf("cancel release activation: %w", err)
 	}
@@ -248,7 +248,7 @@ func (s *ReleaseActivations) settle(ctx context.Context, tx keelport.TxQueryServ
 		}
 		return domain.ActivationRefused, nil
 	}
-	done, err := tx.Query(ctx, qActivationDone, nullableString(detail), activation.ID)
+	done, err := tx.Query(ctx, qActivationDone, common.NullIfEmpty(detail), activation.ID)
 	if err != nil {
 		return "", fmt.Errorf("record activation %d: %w", activation.ID, err)
 	}
@@ -335,7 +335,7 @@ func (s *ReleaseActivations) swap(ctx context.Context, tx keelport.TxQueryServic
 		res *keelmodel.QueryResult
 		err error
 	)
-	baseCanary := nullableString(activation.BaseCanary)
+	baseCanary := common.NullIfEmpty(activation.BaseCanary)
 	switch {
 	case activation.CanaryPercentage > 0:
 		res, err = tx.Query(ctx, qActivationCanary, activation.Version, activation.CanaryPercentage,
@@ -375,7 +375,7 @@ func (s *ReleaseActivations) swap(ctx context.Context, tx keelport.TxQueryServic
 
 func (s *ReleaseActivations) refuse(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, activation domain.ReleaseActivation, refusal activationRefusal, attempt int) error {
 	detail := truncate(refusal.detail, 400)
-	res, err := tx.Query(ctx, qActivationRefuse, string(refusal.reason), nullableString(detail), attempt, activation.ID)
+	res, err := tx.Query(ctx, qActivationRefuse, string(refusal.reason), common.NullIfEmpty(detail), attempt, activation.ID)
 	if err != nil {
 		return fmt.Errorf("refuse activation %d: %w", activation.ID, err)
 	}

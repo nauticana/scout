@@ -45,7 +45,7 @@ func (h *StudioApprovalRoutingHandler) routing(ctx context.Context, actor domain
 		route := origin.Route
 		item := api.ApprovalRouteView{
 			ID: route.ID, Approver: apiReference(route.Approver), DeadlineSeconds: route.DeadlineSeconds,
-			OnExhausted: string(route.OnExhausted), ScopeID: origin.ScopeID, Inherited: origin.Inherited,
+			OnExhausted: string(route.OnExhausted), AuthenticatedOnly: route.AuthenticatedOnly, ScopeID: origin.ScopeID, Inherited: origin.Inherited,
 			Match: api.ApprovalRouteMatch{Tools: route.Match.Tools, MinRiskTier: string(route.Match.MinRiskTier)},
 		}
 		for _, source := range route.Match.Sources {

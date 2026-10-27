@@ -32,6 +32,8 @@ func evaluationCodeDomains() []evaluationCodeDomain {
 			"human_review_item", "verdict_code", "human_review_item_verdict_ck"},
 		{"evaluation_comparison_verdict", []string{string(ComparisonPrefersA), string(ComparisonPrefersB), string(ComparisonTie)},
 			"evaluation_comparison", "verdict_code", "evaluation_comparison_verdict_ck"},
+		{"golden_evidence_role", []string{string(GoldenEvidenceRequired), string(GoldenEvidenceAuthority)},
+			"golden_case_evidence", "role_code", "golden_case_evidence_role_ck"},
 	}
 }
 
@@ -74,7 +76,7 @@ func TestEvaluationCodesMatchTheSeedAndTheChecks(t *testing.T) {
 				t.Fatalf("table %s has no check %s listing %s", code.table, code.check, code.column)
 			}
 			var checked []string
-			for _, literal := range strings.Split(check[1], ",") {
+			for literal := range strings.SplitSeq(check[1], ",") {
 				checked = append(checked, strings.Trim(strings.TrimSpace(literal), "'"))
 			}
 			if !sameCodes(checked, code.codes) {

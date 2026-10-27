@@ -397,3 +397,37 @@ func TestRunTraceRefusesACharterWindowThatMayOmitTheRunsStart(t *testing.T) {
 		t.Fatalf("a full Charter window = %v, want ErrExecutionLimit", err)
 	}
 }
+
+// A journaled call carries its outcome record matched by step and call id; a call without one, such as a read, carries none.
+func TestRunTraceAttachesEachCallsSettlementByStepAndCallID(t *testing.T) {
+	fixture := newTraceFixture(t)
+	evidence := strings.Repeat("e", 64)
+	fixture.source(qRunTraceOutcomes, []any{int64(11), "c2", "C", "T", "human", "9", traceAt(8), evidence})
+	fixture.source(qRunTraceOutcomes, []any{int64(12), "c1", "U", "", "", "", nil, ""})
+	trace, err := fixture.store.Trace(context.Background(), 7, "writer-a", 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, settled := trace.Events[3].Tool, trace.Events[6].Tool
+	if read.CallID != "c1" || read.Settlement != nil {
+		t.Fatalf("a call without an outcome record of its step = %+v", read)
+	}
+	want := domain.RunTraceCallSettlement{Status: domain.CallCompleted, Resolution: domain.ResolvedByAttestation,
+		Resolver: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}, ResolvedAt: traceAt(8), EvidenceDigest: evidence}
+	if settled.CallID != "c2" || settled.Settlement == nil || *settled.Settlement != want {
+		t.Fatalf("settled call = %+v", settled)
+	}
+
+	fixture.table.sources[qRunTraceOutcomes]["7 "+traceRequest][0][2] = "X"
+	if _, err := fixture.store.Trace(context.Background(), 7, "writer-a", 31); err == nil || !strings.Contains(err.Error(), "malformed call outcome") {
+		t.Fatalf("an unknown outcome status = %v", err)
+	}
+	many := make([][]any, maxTurnOutcomes+1)
+	for index := range many {
+		many[index] = []any{int64(11), fmt.Sprintf("c%d", index), "C", "G", "", "", traceAt(8), ""}
+	}
+	fixture.table.sources[qRunTraceOutcomes]["7 "+traceRequest] = many
+	if _, err := fixture.store.Trace(context.Background(), 7, "writer-a", 31); !errors.Is(err, domain.ErrExecutionLimit) {
+		t.Fatalf("an unbounded outcome read = %v, want ErrExecutionLimit", err)
+	}
+}

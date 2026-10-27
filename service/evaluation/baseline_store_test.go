@@ -12,7 +12,7 @@ import (
 
 func baselineStore(rows map[string][][]any) (*EvaluationBaselineStore, *loggedQuery, *fake.ObjectStorage) {
 	query, objects := newLoggedQuery(rows), &fake.ObjectStorage{Name: "baselines"}
-	return &EvaluationBaselineStore{keelStore: keelStore{DB: loggedDB{query: query}}, Storage: objects, Now: fixedClock(testClock)}, query, objects
+	return &EvaluationBaselineStore{DB: loggedDB{query: query}, Storage: objects, Now: fixedClock(testClock)}, query, objects
 }
 
 func baselineRows() map[string][][]any {

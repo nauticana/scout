@@ -12,6 +12,7 @@ seeds:
       - [turn_call_origin, Tool Call Origin]
       - [turn_call_attested, Attested Tool Call Outcome]
       - [turn_operator_entry_kind, Operator Entry Kind]
+      - [working_set_assurance, Working Set Assurance]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
@@ -19,6 +20,12 @@ seeds:
       - [turn_hold_code, A, Held because its agent was suspended]
       - [turn_hold_code, P, Held at once by an operator]
       - [turn_hold_code, U, Held on a call whose outcome is unknown]
+      - [turn_hold_code, E, Held on conflicted or insufficient evidence]
+      - [working_set_assurance, V, Verified]
+      - [working_set_assurance, B, Bounded]
+      - [working_set_assurance, C, Conflicted]
+      - [working_set_assurance, I, Insufficient Evidence]
+      - [working_set_assurance, U, Unverified]
       - [turn_call_outcome_status, I, In Flight]
       - [turn_call_outcome_status, A, Accepted]
       - [turn_call_outcome_status, C, Completed]
@@ -57,6 +64,7 @@ seeds:
       - [turn_call_origin, turn_call_outcome, origin_code]
       - [turn_call_attested, turn_call_attestation, outcome_code]
       - [turn_operator_entry_kind, turn_operator_entry, kind_code]
+      - [working_set_assurance, conversation_turn, working_set_code]
   - table: foreign_key_lookup
     columns: [constraint_name, lookup_style, display_column]
     rows:
@@ -72,7 +80,7 @@ seeds:
     rows:
       - [AGENT_CONVERSATION, USE, Converse with an agent]
       - [AGENT_CONVERSATION, PIN_RELEASE, Pin a conversation to one agent release]
-      - [AGENT_OPERATION, VIEW, View an agent's live turns]
+      - [AGENT_OPERATION, VIEW, View an agent's live turns and open call outcomes]
       - [AGENT_OPERATION, OPERATE, Hold and take over an agent's live turns]
       - [AGENT_OPERATION, PREEMPT, Hold a running turn at once]
       - [AGENT_OPERATION, RECONCILE, Attest an unknown tool call outcome]

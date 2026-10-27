@@ -50,10 +50,7 @@ type sampleWindow struct {
 var _ contract.ProductionSampler = (*SamplingPolicyEnforcer)(nil)
 
 func (enforcer *SamplingPolicyEnforcer) now() time.Time {
-	if enforcer.Now != nil {
-		return enforcer.Now()
-	}
-	return time.Now()
+	return clk.Now(enforcer.Now)
 }
 
 func (enforcer *SamplingPolicyEnforcer) init() error {

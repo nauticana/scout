@@ -104,6 +104,11 @@ func (executor *DraftCaseExecutor) ExecuteDraft(ctx context.Context, tenantID in
 			graph.Steps[i].ExecutionStepID = int64(i + 1)
 		}
 	}
+	tools := frozenTools{ToolRegistry: executor.Registry, draft: frozen}
+	readOnly, err := readOnlyTools(ctx, tools, tenantID, frozen.AgentID, frozen.Version)
+	if err != nil {
+		return domain.EvaluationCase{}, err
+	}
 	sandbox, err := executor.Sandboxes(ctx, example, script)
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("sandbox for example %q: %w", example.ExampleID, err)
@@ -116,7 +121,7 @@ func (executor *DraftCaseExecutor) ExecuteDraft(ctx context.Context, tenantID in
 	journal := &dataplane.MemoryLoopJournal{Fences: fences}
 	loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
 		Requests: executor.Requests(frozenDefinition{draft: frozen}, skills),
-		Router:   executor.Router, Models: executor.Models, Registry: frozenTools{ToolRegistry: executor.Registry, draft: frozen},
+		Router:   executor.Router, Models: executor.Models, Registry: tools,
 		Tools: sandbox, Journal: journal, Pricer: executor.Pricer, Evidence: executor.Evidence, Limits: executor.Limits, Now: executor.Now,
 		Outcomes: &dataplane.MemoryCallOutcomeStore{Fences: fences, Journal: journal, Now: executor.Now}, Dispatch: sandboxDispatch(executor.Limits),
 	})
@@ -124,7 +129,7 @@ func (executor *DraftCaseExecutor) ExecuteDraft(ctx context.Context, tenantID in
 		return domain.EvaluationCase{}, err
 	}
 	replay := &caseReplay{
-		loop: loop, journal: journal, fences: fences, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails,
+		loop: loop, journal: journal, fences: fences, graph: graph, readOnly: readOnly, enforcer: executor.Guardrails, guardrails: guardrails,
 		limits: limits, budget: budget, maxSteps: executor.MaxSteps, now: executor.Now,
 		principal:      domain.Principal{Kind: domain.PrincipalAgent, ID: draft.AgentID, TenantID: tenantID, Release: frozen.Version},
 		conversationID: "evaluation/" + frozen.Version + "/" + example.ExampleID,

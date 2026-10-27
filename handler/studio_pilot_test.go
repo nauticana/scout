@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
+	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -41,7 +41,7 @@ func (backend *pilotBackendFake) Remove(_ context.Context, actor domain.StudioAc
 }
 
 func pilotHandler(backend *pilotBackendFake) *StudioPilotHandler {
-	return &StudioPilotHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	return &StudioPilotHandler{UserService: conversationUsers{}, Backend: backend}
 }
 
 // pilotData decodes the data of keel's response envelope.
@@ -50,7 +50,7 @@ func pilotData(t *testing.T, recorder *httptest.ResponseRecorder, target any) {
 	envelope := struct {
 		Data json.RawMessage `json:"data"`
 	}{}
-	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &envelope) != nil || json.Unmarshal(envelope.Data, target) != nil {
+	if recorder.Code != http.StatusOK || common.DecodeJSON(recorder.Body.Bytes(), &envelope) != nil || common.DecodeJSON(envelope.Data, target) != nil {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }

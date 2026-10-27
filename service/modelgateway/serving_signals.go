@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // ServingSignalCollector aggregates route-attributed samples into one
@@ -68,10 +69,7 @@ func (collector *ServingSignalCollector) validate() error {
 }
 
 func (collector *ServingSignalCollector) now() time.Time {
-	if collector.Now == nil {
-		return time.Now()
-	}
-	return collector.Now()
+	return clk.Now(collector.Now)
 }
 
 // ObserveServing folds one sample into its route's current window.
@@ -219,9 +217,6 @@ func percentile(samples []time.Duration, p int) time.Duration {
 	}
 	sorted := slices.Clone(samples)
 	slices.Sort(sorted)
-	rank := (len(sorted)*p + 99) / 100
-	if rank < 1 {
-		rank = 1
-	}
+	rank := max((len(sorted)*p+99)/100, 1)
 	return sorted[rank-1]
 }

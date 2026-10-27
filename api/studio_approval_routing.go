@@ -16,14 +16,15 @@ type AgentApprovalRouting struct {
 // ApprovalRouteView is one effective route; scope_id is the widest scope declaring it, and
 // inherited marks a route the agent's own scope did not declare first.
 type ApprovalRouteView struct {
-	ID              string                   `json:"id"`
-	Match           ApprovalRouteMatch       `json:"match"`
-	Approver        ApproverReference        `json:"approver"`
-	DeadlineSeconds int64                    `json:"deadline_seconds"`
-	Escalation      []ApprovalEscalationView `json:"escalation,omitempty"`
-	OnExhausted     string                   `json:"on_exhausted"`
-	ScopeID         string                   `json:"scope_id"`
-	Inherited       bool                     `json:"inherited"`
+	ID                string                   `json:"id"`
+	Match             ApprovalRouteMatch       `json:"match"`
+	Approver          ApproverReference        `json:"approver"`
+	DeadlineSeconds   int64                    `json:"deadline_seconds"`
+	Escalation        []ApprovalEscalationView `json:"escalation,omitempty"`
+	OnExhausted       string                   `json:"on_exhausted"`
+	AuthenticatedOnly bool                     `json:"authenticated_only"`
+	ScopeID           string                   `json:"scope_id"`
+	Inherited         bool                     `json:"inherited"`
 }
 
 // ApprovalRouteMatch selects the asks a route serves; an empty field matches any.

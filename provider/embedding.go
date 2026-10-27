@@ -124,7 +124,7 @@ func (p *Google) Embed(ctx context.Context, selection domain.ModelSelection, req
 	}
 	var config *genai.EmbedContentConfig
 	if request.Dimensions > 0 {
-		config = &genai.EmbedContentConfig{OutputDimensionality: genai.Ptr(int32(request.Dimensions))}
+		config = &genai.EmbedContentConfig{OutputDimensionality: new(int32(request.Dimensions))}
 	}
 	resp, err := client.Models.EmbedContent(ctx, selection.Model, contents, config)
 	if err != nil {

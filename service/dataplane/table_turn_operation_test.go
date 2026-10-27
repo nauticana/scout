@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -224,8 +225,8 @@ func (table *operatorTable) Query(_ context.Context, name string, args ...any) (
 		}
 		result.Rows = [][]any{{count, in, out, tools, int64(0), cost, int64(len(currencies)), currency}}
 	case qSettleOperatorActor:
-		for index := len(s.entries) - 1; index >= 0; index-- {
-			if row := s.entries[index]; row[4] == string(domain.OperatorTool) {
+		for _, row := range slices.Backward(s.entries) {
+			if row[4] == string(domain.OperatorTool) {
 				result.Rows = [][]any{{row[5], row[6]}}
 				break
 			}
@@ -559,12 +560,8 @@ func TestTableFinishSettlesTheAgentAndTheOperatorsInOneUnit(t *testing.T) {
 // Every new statement stays inside its tenant, and only the sweeper locks rows it skips.
 func TestOperatorStatementsStayInTheirTenant(t *testing.T) {
 	statements := map[string]string{}
-	for name, sql := range operatorQueries {
-		statements[name] = sql
-	}
-	for name, sql := range turnSettlementQueries {
-		statements[name] = sql
-	}
+	maps.Copy(statements, operatorQueries)
+	maps.Copy(statements, turnSettlementQueries)
 	for name, sql := range statements {
 		if name == qOperatorLapse {
 			if !strings.Contains(sql, "turn.partner_id = lapsed.partner_id") || !strings.Contains(sql, "c.partner_id = turn.partner_id") {

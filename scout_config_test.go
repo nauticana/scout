@@ -3,6 +3,7 @@ package scout
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -353,6 +354,8 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_operator_max_entries:            "64",
 		agent_hold_lapse_batch:                "100",
 		agent_hold_lapse_period:               "30",
+		agent_working_set_max_candidates:      "64",
+		agent_working_set_max_tokens:          "8000",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {
@@ -367,9 +370,7 @@ func allConfigQueryRows(t *testing.T) [][]any {
 	if err != nil {
 		t.Fatalf("keel config defaults: %v", err)
 	}
-	for id, row := range scoutConfigRows() {
-		rows[id] = row
-	}
+	maps.Copy(rows, scoutConfigRows())
 	queryRows := make([][]any, 0, len(rows))
 	for id, row := range rows {
 		queryRows = append(queryRows, []any{id, row.Value, row.Default, "default"})
@@ -876,6 +877,34 @@ func TestOperatorFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
 		agent_hold_lapse_batch: "10001", agent_hold_lapse_period: "3601", "agent_takeover_lease ": "-1",
 	} {
 		flag = strings.TrimSpace(flag)
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s=%s: Apply error = %v, want a refusal naming the flag", flag, value, err)
+		}
+	}
+}
+
+// The working set flags reach workingset.Compiler; zero takes each default, and a value outside
+// its range is refused naming the flag.
+func TestWorkingSetFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(scoutConfigRows()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.WorkingSetLimits(), (domain.WorkingSetLimits{MaxCandidates: 64, MaxTokens: 8000}); got != want {
+		t.Fatalf("WorkingSetLimits() = %+v, want the seeded defaults %+v", got, want)
+	}
+	zero := scoutConfigRows()
+	for _, flag := range []string{agent_working_set_max_candidates, agent_working_set_max_tokens} {
+		zero[flag] = keelconfig.ConfigRow{Value: "0"}
+	}
+	if err := (&ScoutConfig{}).Apply(zero); err != nil {
+		t.Fatalf("zero takes the default: %v", err)
+	}
+	for flag, value := range map[string]string{
+		agent_working_set_max_candidates: "1025", agent_working_set_max_tokens: "-1",
+	} {
 		rows := scoutConfigRows()
 		rows[flag] = keelconfig.ConfigRow{Value: value}
 		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {

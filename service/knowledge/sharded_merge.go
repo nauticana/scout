@@ -64,12 +64,10 @@ func (retriever *ShardedRetriever) Retrieve(ctx context.Context, query domain.Kn
 			failures[i] = ctx.Err()
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-semaphore }()
 			results[i], failures[i] = shard.Retrieve(ctx, query)
-		}()
+		})
 	}
 	wg.Wait()
 

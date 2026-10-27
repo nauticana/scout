@@ -190,7 +190,7 @@ func TestProviderAgentAsksForGroundingAndReturnsItsSources(t *testing.T) {
 	if len(result.Citations) != 1 || result.Citations[0].URL != citations[0].URL {
 		t.Fatalf("the sources must reach the caller, got %+v", result.Citations)
 	}
-	multimodal, err := MultimodalGenerator{Text: agent}.Generate(context.Background(), domain.MultimodalTask{AgentTask: domain.AgentTask{Task: "Ask"}})
+	multimodal, err := MultimodalGenerator{Text: agent}.Generate(context.Background(), domain.MultimodalTask{Task: "Ask"})
 	if err != nil || len(multimodal.Citations) != 1 {
 		t.Fatalf("multimodal result = %+v, %v", multimodal, err)
 	}

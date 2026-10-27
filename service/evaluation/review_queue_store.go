@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -107,10 +108,7 @@ type ReviewQueueStore struct {
 var _ contract.HumanReviewQueue = (*ReviewQueueStore)(nil)
 
 func (store *ReviewQueueStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(store.Now).UTC()
 }
 
 func (store *ReviewQueueStore) validate() error {

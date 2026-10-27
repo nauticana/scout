@@ -128,8 +128,7 @@ func (session *outputSession) advance(ctx context.Context, payload []byte, final
 }
 
 func asViolation(err error) (*ViolationError, bool) {
-	var violation *ViolationError
-	if errors.As(err, &violation) {
+	if violation, ok := errors.AsType[*ViolationError](err); ok {
 		return violation, true
 	}
 	return nil, false

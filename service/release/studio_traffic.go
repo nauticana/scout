@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -127,10 +128,7 @@ func (s *StudioTraffic) change(ctx context.Context, actor domain.StudioActor, ag
 }
 
 func (s *StudioTraffic) now() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
+	return clk.Now(s.Now)
 }
 
 // Explain reports the release a conversation runs on, why it was chosen, and its digest.

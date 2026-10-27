@@ -24,6 +24,7 @@ const (
 	qRunTraceSafety    = "scout_run_trace_safety"
 	qRunTraceApprovals = "scout_run_trace_approvals"
 	qRunTraceDecisions = "scout_run_trace_decisions"
+	qRunTraceOutcomes  = "scout_run_trace_outcomes"
 
 	// DefaultRunTrace* apply to zero limits; MaxRunTrace* are hard ceilings.
 	DefaultRunTraceEvents         = 500
@@ -71,6 +72,13 @@ SELECT id, category, performed_action, resource_ref, outcome_code, policy_id, po
   FROM audit_event
  WHERE partner_id = ? AND request_id = ?
  ORDER BY occurred_at, id
+ LIMIT ?`,
+	qRunTraceOutcomes: `
+SELECT execution_step_id, call_id, status_code, COALESCE(resolution_code, ''), COALESCE(resolver_kind, ''),
+       COALESCE(resolver_id, ''), resolved_at, COALESCE(evidence_digest, '')
+  FROM turn_call_outcome
+ WHERE partner_id = ? AND request_id = ?
+ ORDER BY execution_step_id, call_id
  LIMIT ?`,
 }
 
@@ -143,6 +151,9 @@ func (store *TableRunTrace) Trace(ctx context.Context, tenantID int64, agentID s
 		if err := read(ctx, tenantID, run.RequestID, limits, collector); err != nil {
 			return domain.RunTrace{}, err
 		}
+	}
+	if err := store.settlements(ctx, tenantID, run.RequestID, collector); err != nil {
+		return domain.RunTrace{}, err
 	}
 	trace.Events, trace.Truncated = collector.ordered()
 	return trace, nil
@@ -324,7 +335,7 @@ func (store *TableRunTrace) decisions(ctx context.Context, tenantID int64, reque
 			},
 			EvidenceDigest: strings.TrimSpace(common.AsString(row[14])),
 		}
-		for _, obligation := range strings.Split(common.AsString(row[13]), ",") {
+		for obligation := range strings.SplitSeq(common.AsString(row[13]), ",") {
 			if obligation != "" {
 				decision.Obligations = append(decision.Obligations, domain.ObligationKind(obligation))
 			}
@@ -355,6 +366,49 @@ func (store *TableRunTrace) charterActions(ctx context.Context, tenantID int64, 
 				Source: domain.RunTraceDecisionCharter, Action: action.Capability.ID, Charter: action,
 			},
 		})
+	}
+	return nil
+}
+
+type traceCallKey struct {
+	step   int64
+	callID string
+}
+
+// settlements attaches each journaled call's outcome record, matched by execution step and call id.
+func (store *TableRunTrace) settlements(ctx context.Context, tenantID int64, requestID string, collector *traceCollector) error {
+	calls := map[traceCallKey][]*domain.RunTraceToolCall{}
+	for _, keyed := range collector.events {
+		if call := keyed.event.Tool; call != nil && call.CallID != "" {
+			key := traceCallKey{step: call.Journal.ExecutionStepID, callID: call.CallID}
+			calls[key] = append(calls[key], call)
+		}
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	result, err := store.qs.Query(ctx, qRunTraceOutcomes, tenantID, requestID, maxTurnOutcomes+1)
+	if err != nil {
+		return fmt.Errorf("read the run's call outcomes: %w", err)
+	}
+	if len(result.Rows) > maxTurnOutcomes {
+		return fmt.Errorf("%w: turn %q has more than %d call outcomes", domain.ErrExecutionLimit, requestID, maxTurnOutcomes)
+	}
+	for _, row := range result.Rows {
+		if len(row) < 8 {
+			return malformedTraceRow("call outcome")
+		}
+		settlement := &domain.RunTraceCallSettlement{
+			Status: domain.CallOutcomeStatus(common.AsString(row[2])), Resolution: domain.CallResolution(common.AsString(row[3])),
+			Resolver:   domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[4])), ID: common.AsString(row[5])},
+			ResolvedAt: common.AsTime(row[6]), EvidenceDigest: strings.TrimSpace(common.AsString(row[7])),
+		}
+		if !settlement.Status.Valid() || settlement.Resolution != "" && !settlement.Resolution.Valid() {
+			return malformedTraceRow("call outcome")
+		}
+		for _, call := range calls[traceCallKey{step: common.AsInt64(row[0]), callID: common.AsString(row[1])}] {
+			call.Settlement = settlement
+		}
 	}
 	return nil
 }

@@ -61,6 +61,9 @@ type StudioTurnControlBackend interface {
 	// Finish completes a turn the actor operates with their guarded reply.
 	Finish(ctx context.Context, actor domain.StudioActor, request domain.TurnFinishRequest) (domain.LiveTurn, error)
 	LiveTurns(ctx context.Context, actor domain.StudioActor, filter domain.LiveTurnFilter) (domain.LiveTurnPage, error)
+	// OpenOutcomes pages the tenant's open calls across turns, oldest deadline first; without an
+	// agent it needs AGENT_OPERATION VIEW granted on every agent.
+	OpenOutcomes(ctx context.Context, actor domain.StudioActor, filter domain.OpenOutcomeFilter) (domain.OpenOutcomePage, error)
 	// Turn reads one turn with its call outcomes.
 	Turn(ctx context.Context, actor domain.StudioActor, agentID, requestID string) (domain.LiveTurn, error)
 	Hold(ctx context.Context, actor domain.StudioActor, request domain.TurnHoldRequest) (domain.TurnHoldOutcome, error)

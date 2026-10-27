@@ -10,6 +10,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // Adjudicator is an in-process FailureAdjudicator: failures with the same
@@ -27,10 +28,7 @@ type Adjudicator struct {
 var _ contract.FailureAdjudicator = (*Adjudicator)(nil)
 
 func (adjudicator *Adjudicator) now() time.Time {
-	if adjudicator.Now != nil {
-		return adjudicator.Now()
-	}
-	return time.Now()
+	return clk.Now(adjudicator.Now)
 }
 
 func (adjudicator *Adjudicator) capacity() int {

@@ -10,6 +10,7 @@ import (
 	"github.com/nauticana/keel/clock"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/internal/stage"
 )
 
@@ -113,10 +114,7 @@ func (gateway *ResilientGateway) validate() error {
 }
 
 func (gateway *ResilientGateway) now() time.Time {
-	if gateway.Now == nil {
-		return time.Now()
-	}
-	return gateway.Now()
+	return clk.Now(gateway.Now)
 }
 
 func (gateway *ResilientGateway) sleep(ctx context.Context, delay time.Duration) error {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // AuditCategoryModelRoute labels the audit event written for every routing decision.
@@ -76,10 +77,7 @@ func (router *PolicyRouter) validate() error {
 }
 
 func (router *PolicyRouter) now() time.Time {
-	if router.Now == nil {
-		return time.Now()
-	}
-	return router.Now()
+	return clk.Now(router.Now)
 }
 
 type scoredCandidate struct {

@@ -216,11 +216,9 @@ type race[T any] struct {
 func (r *race[T]) run(current *attempt, work func(*attempt) T) {
 	r.attempts = append(r.attempts, current)
 	r.running++
-	r.gateway.inFlight.Add(1)
-	go func() {
-		defer r.gateway.inFlight.Done()
+	r.gateway.inFlight.Go(func() {
 		r.outcomes <- work(current)
-	}()
+	})
 }
 
 // abandonOthers cancels every attempt but the winner and settles the losers as they finish.
@@ -231,11 +229,9 @@ func (r *race[T]) abandonOthers(ctx context.Context, winner *attempt, discard fu
 		}
 	}
 	for ; r.running > 0; r.running-- {
-		r.gateway.inFlight.Add(1)
-		go func() {
-			defer r.gateway.inFlight.Done()
+		r.gateway.inFlight.Go(func() {
 			discard(<-r.outcomes)
-		}()
+		})
 	}
 }
 

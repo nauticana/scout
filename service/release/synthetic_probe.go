@@ -7,6 +7,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // SyntheticProbe is one scripted request with its assertions; Holdout probes
@@ -29,10 +30,7 @@ type ProbeRunner struct {
 var _ contract.SyntheticProber = (*ProbeRunner)(nil)
 
 func (runner *ProbeRunner) now() time.Time {
-	if runner.Now != nil {
-		return runner.Now()
-	}
-	return time.Now()
+	return clk.Now(runner.Now)
 }
 
 func (runner *ProbeRunner) Probe(ctx context.Context, platformVersion string) ([]domain.SyntheticProbeResult, error) {

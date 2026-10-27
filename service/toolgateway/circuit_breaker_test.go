@@ -37,14 +37,14 @@ func TestCircuitBreakerStateMachine(t *testing.T) {
 		outcome   *bool
 		wantState string
 	}{
-		{name: "first failure", outcome: ptr(false), wantState: "closed"},
-		{name: "threshold opens", outcome: ptr(false), wantState: "open"},
+		{name: "first failure", outcome: new(false), wantState: "closed"},
+		{name: "threshold opens", outcome: new(false), wantState: "open"},
 		{name: "open rejects", allowErr: true, wantState: "open"},
 		{name: "probe admitted after open duration", advance: 10 * time.Second, wantState: "half-open"},
 		{name: "second concurrent probe rejected", allowErr: true, wantState: "half-open"},
-		{name: "probe fails reopens", skipAllow: true, outcome: ptr(false), wantState: "open"},
+		{name: "probe fails reopens", skipAllow: true, outcome: new(false), wantState: "open"},
 		{name: "probe admitted again", advance: 10 * time.Second, wantState: "half-open"},
-		{name: "probe succeeds closes", skipAllow: true, outcome: ptr(true), wantState: "closed"},
+		{name: "probe succeeds closes", skipAllow: true, outcome: new(true), wantState: "closed"},
 		{name: "closed admits", wantState: "closed"},
 	}
 	for _, step := range steps {
@@ -76,7 +76,8 @@ func TestCircuitBreakerStateMachine(t *testing.T) {
 	}
 }
 
-func ptr(value bool) *bool { return &value }
+//go:fix inline
+func ptr(value bool) *bool { return new(value) }
 
 func TestCircuitBreakerFencesStaleProbe(t *testing.T) {
 	clock := time.Unix(0, 0)

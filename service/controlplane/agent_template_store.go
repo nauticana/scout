@@ -346,8 +346,8 @@ func (s *TableAgentTemplateStore) Save(ctx context.Context, actor domain.StudioA
 		return domain.AgentTemplate{}, fmt.Errorf("%w: template %s already has %d versions, the limit is %d", domain.ErrConflict, templateID, next-1, limits.MaxVersions)
 	}
 	if _, err = tx.Query(ctx, qTemplateInsertVersion, actor.TenantID, templateID, next, version.AgentTypeID, version.DisplayName,
-		nullableString(version.Description), nullableString(version.TypeVersion), string(payload), digest, nullableString(version.ChangeSummary),
-		nullableString(version.SourceAgentID), sourceRevision(version), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
+		common.NullIfEmpty(version.Description), common.NullIfEmpty(version.TypeVersion), string(payload), digest, common.NullIfEmpty(version.ChangeSummary),
+		common.NullIfEmpty(version.SourceAgentID), sourceRevision(version), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
 		return domain.AgentTemplate{}, fmt.Errorf("insert template version: %w", err)
 	}
 	if version.SourceAgentID != "" {
@@ -540,8 +540,8 @@ func (s *TableAgentTemplateStore) RegisterPlatform(ctx context.Context, version 
 	if max := common.AsInt64(newest.Rows[0][0]); version.Version != max+1 {
 		return fmt.Errorf("%w: platform template %s is at version %d, so the next is %d", domain.ErrConflict, version.TemplateID, max, max+1)
 	}
-	if _, err = tx.Query(ctx, qTemplateCatalogNewVersion, version.TemplateID, version.Version, version.DisplayName, nullableString(version.Description),
-		nullableString(version.TypeVersion), nullableString(version.TypeDigest), string(payload), digest, nullableString(version.ChangeSummary)); err != nil {
+	if _, err = tx.Query(ctx, qTemplateCatalogNewVersion, version.TemplateID, version.Version, version.DisplayName, common.NullIfEmpty(version.Description),
+		common.NullIfEmpty(version.TypeVersion), common.NullIfEmpty(version.TypeDigest), string(payload), digest, common.NullIfEmpty(version.ChangeSummary)); err != nil {
 		return fmt.Errorf("insert platform template version: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {

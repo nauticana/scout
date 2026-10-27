@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -121,10 +122,7 @@ func (store *TableRolloutStateStore) init(ctx context.Context) error {
 }
 
 func (store *TableRolloutStateStore) now() time.Time {
-	if store.Now != nil {
-		return store.Now()
-	}
-	return time.Now()
+	return clk.Now(store.Now)
 }
 
 func (store *TableRolloutStateStore) Get(ctx context.Context, platformVersion string) (domain.RolloutState, error) {

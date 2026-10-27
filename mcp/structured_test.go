@@ -174,7 +174,7 @@ func TestToolErrorRefusesMalformedErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			definition := domain.MCPToolDefinition{Name: "count"}
-			tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: definition,
+			tool := backendTool{callers: BaseCallerResolver{}, definition: definition,
 				backend: &toolErrorBackend{definedSchemaBackend: &definedSchemaBackend{definition: definition}, result: result}}
 			out, err := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{})
 			if err != nil || !out.IsError || out.StructuredContent != nil || !strings.Contains(out.Content[0].(mcpgo.TextContent).Text, domain.ErrContractFailed.Error()) {

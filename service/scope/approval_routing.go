@@ -431,7 +431,8 @@ func (RoutingMerger) Merge(_ context.Context, inherited []byte, override domain.
 }
 
 // checkRouting holds a candidate to its parent's routes: each in its place with the same match
-// and approvers, deadlines no longer, and an exhausted request never held where it expired.
+// and approvers, deadlines no longer, an exhausted request never held where it expired, and an
+// authenticated-only route never opened to decision links.
 func checkRouting(kind domain.ResourceKind, inherited, candidate []byte) error {
 	parent, err := decodeRouting(inherited, domain.MaxApprovalRoutes)
 	if err != nil {
@@ -473,6 +474,9 @@ func checkRouting(kind domain.ResourceKind, inherited, candidate []byte) error {
 		}
 		if want.OnExhausted == domain.ApprovalExhaustExpire && got.OnExhausted != domain.ApprovalExhaustExpire {
 			return fmt.Errorf("%w: %s holds exhausted requests parent route %q expires", domain.ErrAuthorityExceeded, kind, want.ID)
+		}
+		if want.AuthenticatedOnly && !got.AuthenticatedOnly {
+			return fmt.Errorf("%w: %s opens authenticated-only parent route %q to decision links", domain.ErrAuthorityExceeded, kind, want.ID)
 		}
 	}
 	return nil

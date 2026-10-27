@@ -331,7 +331,7 @@ Both scheduler claim paths and `qSessionActiveTurn` order by the durable turn nu
 - `conversation_turn` columns:
   - `fence BIGINT NOT NULL DEFAULT 0` (CHECK `>= 0`)
   - `hold_requested_at`, `hold_reason VARCHAR(200)` (both null or both set)
-  - `hold_code CHAR(1)`: C = checkpoint request (an operator's hold, or any cooperative hold), A = agent paused, P = preempted by an operator, U = held on an unknown outcome. The CHECKs are `IN ('C','A','P','U')` and `(status_code IN ('H','O')) = (hold_code IS NOT NULL)`. A cooperative hold always records `C`, also when pause asked for it; `A` marks a `Q` or `U` turn pause held at once.
+  - `hold_code CHAR(1)`: C = checkpoint request (an operator's hold, or any cooperative hold), A = agent paused, P = preempted by an operator, U = held on an unknown outcome, E = held on a conflicted or insufficient working set. The CHECKs are `IN ('C','A','P','U','E')` and `(status_code IN ('H','O')) = (hold_code IS NOT NULL)`. A cooperative hold always records `C`, also when pause asked for it; `A` marks a `Q` or `U` turn pause held at once.
   - `held_at`, CHECK `(status_code IN ('H','O')) = (held_at IS NOT NULL)`
   - `holder_kind VARCHAR(20)`, `holder_id VARCHAR(120)`: `conversation_turn_holder_ck` keeps the pair together, and `conversation_turn_operated_ck` requires the holder in `O` and allows it only in `O` or `C`, where it names the person who finished the turn
   - `hold_until`, CHECK `conversation_turn_hold_until_ck` `(status_code = 'O') = (hold_until IS NOT NULL)`
@@ -383,6 +383,7 @@ Both scheduler claim paths and `qSessionActiveTurn` order by the durable turn nu
 |---|---|
 | `GET turns/live?agent_name=&before=&limit=` | VIEW |
 | `GET turn?agent_name=&request_id=` (status, fence, holder, lease, outcomes, operator entries) | VIEW |
+| `GET outcomes/open?agent_name=&before=&limit=` (the tenant's `I`, `A`, and `U` calls across turns, oldest deadline first) | VIEW on the agent; without `agent_name`, VIEW on every agent (`*`) |
 | `POST turn/hold {agent_name, request_id, mode: checkpoint\|preempt, reason}` | OPERATE; preempt also needs PREEMPT |
 | `POST turn/outcome/lookup {agent_name, request_id, fence, execution_step_id, call_id}` | OPERATE |
 | `POST turn/outcome/attest {…, outcome: completed\|failed, note, evidence?}` | RECONCILE |
@@ -392,7 +393,7 @@ Both scheduler claim paths and `qSessionActiveTurn` order by the durable turn nu
 | `POST turn/release {…, fence}` | OPERATE |
 | `POST turn/finish {…, fence, reply}` | OPERATE |
 
-`turns/live` pages newest first (`before` is the previous page's `next_before`, `<queued_at unix nanos>:<request_id>`); `turn` returns status, fence, hold code, hold request and reason, cancel request, times, holder and `hold_until`, the call outcomes, and the operator entries; `turn/outcome/attest` returns the call's outcome and `awaits_second`; `turn/act` returns the entry, a tool call's outcome, the turn, and `published`; takeover, handback, and finish return the turn. Pause's `policy` also accepts `suspend`. A stale `fence` or a lapsed lease returns 409, and so do `ErrFenceLost`, `ErrTurnHeld`, an open outcome or an earlier live turn, an attestation before the deadline, and a conflicting attestation. On the operator routes a call awaiting approval is 409, a reply claim the turn's evidence does not support 400, and an evidence rule that cannot be evaluated 503; an operation the composition cannot serve (tool calls or replies without their services) is 503.
+`turns/live` pages newest first (`before` is the previous page's `next_before`, `<queued_at unix nanos>:<request_id>`); `outcomes/open` pages oldest deadline first through `turn_call_outcome_open_ix` (`before` is the previous page's last call, `<deadline_at unix nanos>:<execution_step_id>:<base64url request_id>:<call_id>`, and the next page starts strictly after it), each call with its agent, turn, tool, status, and `deadline_passed` by the store clock; `turn` returns status, fence, hold code, hold request and reason, cancel request, times, holder and `hold_until`, the call outcomes, and the operator entries; `turn/outcome/attest` returns the call's outcome and `awaits_second`; `turn/act` returns the entry, a tool call's outcome, the turn, and `published`; takeover, handback, and finish return the turn. Pause's `policy` also accepts `suspend`. A stale `fence` or a lapsed lease returns 409, and so do `ErrFenceLost`, `ErrTurnHeld`, an open outcome or an earlier live turn, an attestation before the deadline, and a conflicting attestation. On the operator routes a call awaiting approval is 409, a reply claim the turn's evidence does not support 400, and an evidence rule that cannot be evaluated 503; an operation the composition cannot serve (tool calls or replies without their services) is 503.
 
 **Flags**
 

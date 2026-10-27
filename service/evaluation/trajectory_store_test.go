@@ -13,7 +13,7 @@ import (
 func TestAgentEvaluationStoreRecordsAndReadsATrajectoryReference(t *testing.T) {
 	ctx := context.Background()
 	query := newQueryFake(map[string][][]any{qAgentEvalRenew: {{"support", int64(3)}}})
-	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &AgentEvaluationStore{DB: dbFake{query: query}}
 	lease := domain.AgentEvaluationLease{TenantID: 7, RunID: 11, Token: 99, TTL: 90 * time.Second}
 	ref := domain.ObjectRef{URI: "object://outputs/evaluation/trajectory/7/11/x", Digest: sha256Hex([]byte("x"))}
 	result := domain.EvaluationResult{ExampleID: "refund", Role: domain.RoleCandidate, Trajectory: ref}
@@ -53,7 +53,7 @@ func TestAgentEvaluationStoreRecordsAndReadsATrajectoryReference(t *testing.T) {
 func TestAgentEvaluationStoreRecordsComparisonArmTrajectories(t *testing.T) {
 	ctx := context.Background()
 	query := newQueryFake(map[string][][]any{qAgentEvalRenew: {{"support", int64(3)}}, qAgentEvalPutComparison: {{"refund"}}, qAgentEvalAddTotals: {{int64(11)}}})
-	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &AgentEvaluationStore{DB: dbFake{query: query}}
 	lease := domain.AgentEvaluationLease{TenantID: 7, RunID: 11, Token: 99, TTL: 90 * time.Second}
 	ref := domain.ObjectRef{URI: "object://outputs/t", Digest: sha256Hex([]byte("t"))}
 	comparison := domain.CaseComparison{ExampleID: "refund", Verdict: domain.ComparisonTie,

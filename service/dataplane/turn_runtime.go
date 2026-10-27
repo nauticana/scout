@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 	"github.com/nauticana/scout/internal/stage"
 	"github.com/nauticana/scout/service/observability"
 )
@@ -85,10 +86,7 @@ func (runtime *TurnRuntime) validate() error {
 }
 
 func (runtime *TurnRuntime) now() time.Time {
-	if runtime.Now != nil {
-		return runtime.Now()
-	}
-	return time.Now()
+	return clk.Now(runtime.Now)
 }
 
 // turnExecution is the mutable state of one HandleTurn call.
@@ -216,6 +214,9 @@ func (runtime *TurnRuntime) HandleTurn(ctx context.Context, claim domain.TurnCla
 		return domain.TurnResult{}, runtime.hold(ctx, execution, domain.HoldUnknownOutcome, err)
 	case errors.Is(err, domain.ErrTurnHeld):
 		return domain.TurnResult{}, runtime.hold(ctx, execution, domain.HoldCheckpoint, err)
+	case errors.Is(err, domain.ErrWorkingSetUnassured):
+		// A conflicted or insufficient working set goes to a person before the model infers a missing fact.
+		return domain.TurnResult{}, runtime.hold(ctx, execution, domain.HoldEvidence, err)
 	default:
 		return domain.TurnResult{}, runtime.fail(ctx, execution, err)
 	}

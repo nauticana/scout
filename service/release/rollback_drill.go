@@ -8,6 +8,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // RollbackDrillHarness rehearses a rollback against the persisted state
@@ -28,10 +29,7 @@ type RollbackDrillHarness struct {
 var _ contract.RollbackDrill = (*RollbackDrillHarness)(nil)
 
 func (harness *RollbackDrillHarness) now() time.Time {
-	if harness.Now != nil {
-		return harness.Now()
-	}
-	return time.Now()
+	return clk.Now(harness.Now)
 }
 
 func (harness *RollbackDrillHarness) Run(ctx context.Context, platformVersion string) (domain.RollbackDrillReport, error) {

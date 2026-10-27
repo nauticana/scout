@@ -3,6 +3,7 @@ package observability
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -95,12 +96,7 @@ func VerifyTurnControl(records []domain.DecisionRecord, outcomes []domain.CallOu
 }
 
 func containsState(states []controlState, state controlState) bool {
-	for _, candidate := range states {
-		if candidate == state {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(states, state)
 }
 
 // recordFence reads the fence every turn record's payload carries.

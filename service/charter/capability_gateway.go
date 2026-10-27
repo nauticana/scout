@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // Capability is the Charter capability a Scout tool realizes. An empty ContractVersion accepts the catalog's.
@@ -188,10 +189,7 @@ func attemptToReconcile(actions []model.ActionRecord, capabilityID model.Ref, in
 }
 
 func (g *CapabilityGateway) now() time.Time {
-	if g.Now != nil {
-		return g.Now()
-	}
-	return time.Now()
+	return clk.Now(g.Now)
 }
 
 // attempt carries the originating tool call to the binder and the governed gateway's answer back, so the loop keeps

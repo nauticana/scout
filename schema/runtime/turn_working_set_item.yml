@@ -1,0 +1,25 @@
+table: turn_working_set_item
+comment: >-
+  One candidate a turn's latest working set compilation considered, selected
+  into the model's context or excluded from it, so left-out context stays in
+  the evidence plane; the compilation replaces the turn's rows under the
+  owner's fence
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: conversation_id
+    type: VARCHAR(120)
+  - name: turn_no
+    type: BIGINT
+  - name: candidate_id
+    type: VARCHAR(200)
+    comment: The candidate's id as its product source named it
+  - name: selected
+    type: BOOLEAN
+primary_key: [partner_id, conversation_id, turn_no, candidate_id]
+foreign_keys:
+  - name: conversation_turn_working_set_items
+    columns: [partner_id, conversation_id, turn_no]
+    references:
+      table: conversation_turn
+      columns: [partner_id, conversation_id, turn_no]

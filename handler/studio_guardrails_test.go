@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
+	"github.com/nauticana/keel/common"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
@@ -17,12 +17,12 @@ import (
 )
 
 func guardrailsHandler(backend fake.StudioGuardrailBackend) *StudioGuardrailsHandler {
-	return &StudioGuardrailsHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	return &StudioGuardrailsHandler{UserService: conversationUsers{}, Backend: backend}
 }
 
 // envelopeData decodes the data member of keel's response envelope.
 func envelopeData(recorder *httptest.ResponseRecorder, target any) error {
-	return json.Unmarshal(recorder.Body.Bytes(), &struct {
+	return common.DecodeJSON(recorder.Body.Bytes(), &struct {
 		Data any `json:"data"`
 	}{Data: target})
 }

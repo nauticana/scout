@@ -3,6 +3,8 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -20,9 +22,7 @@ func ledgerRateQuery(turnsPerMinute string, rows map[string][][]any) *queueQuery
 		qLedgerGetConversation: {{"conversation-1"}},
 		qReleaseGet:            {frozenRelease("v1", turnLimits(`{"turns_per_minute":`+turnsPerMinute+`,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}`))},
 	}}
-	for name, answer := range rows {
-		query.rows[name] = answer
-	}
+	maps.Copy(query.rows, rows)
 	return query
 }
 
@@ -85,8 +85,8 @@ func TestTurnLedgerBeginFailsClosedWithoutAFrozenRelease(t *testing.T) {
 }
 
 func lastIndexOf(calls []string, name string) int {
-	for i := len(calls) - 1; i >= 0; i-- {
-		if calls[i] == name {
+	for i, call := range slices.Backward(calls) {
+		if call == name {
 			return i
 		}
 	}

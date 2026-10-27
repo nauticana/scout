@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
@@ -38,7 +36,7 @@ func (b *portabilityBackend) Import(_ context.Context, actor domain.StudioActor,
 }
 
 func servePortability(backend *portabilityBackend, method, target, body string) *httptest.ResponseRecorder {
-	handler := &StudioPortabilityHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioPortabilityHandler{UserService: conversationUsers{}, Backend: backend}
 	recorder := httptest.NewRecorder()
 	path, _, _ := strings.Cut(target, "?")
 	handler.Routes()[path](recorder, authenticatedRequest(method, target, []byte(body)))
@@ -146,7 +144,7 @@ func (b *templatesBackend) TemplateStatus(_ context.Context, _ domain.StudioActo
 }
 
 func serveTemplates(backend *templatesBackend, method, target, body string) *httptest.ResponseRecorder {
-	handler := &StudioTemplatesHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioTemplatesHandler{UserService: conversationUsers{}, Backend: backend}
 	recorder := httptest.NewRecorder()
 	path, _, _ := strings.Cut(target, "?")
 	handler.Routes()[path](recorder, authenticatedRequest(method, target, []byte(body)))

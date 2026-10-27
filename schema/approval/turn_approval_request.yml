@@ -98,6 +98,10 @@ columns:
     type: VARCHAR(256)
     nullable: true
     comment: The product resolver's evidence reference for the assigned approver, never personal data beyond it
+  - name: authenticated_only
+    type: BOOLEAN
+    default: FALSE
+    comment: The route refuses decision links, so the request is decided only in an authenticated view
   - name: turn_settled_at
     type: TIMESTAMP
     nullable: true
@@ -175,7 +179,7 @@ checks:
   - name: turn_approval_request_output_class_ck
     expression: output_class_code IN ('A', 'D', 'R', 'C')
   - name: turn_approval_request_route_ck
-    expression: (approval_route_id IS NULL AND approver_reference_kind IS NULL AND approver_reference IS NULL AND route_resolution IS NULL AND route_step = 0) OR (approval_route_id IS NOT NULL AND approver_reference_kind IS NOT NULL AND approver_reference IS NOT NULL AND release_version IS NOT NULL)
+    expression: (approval_route_id IS NULL AND approver_reference_kind IS NULL AND approver_reference IS NULL AND route_resolution IS NULL AND route_step = 0 AND NOT authenticated_only) OR (approval_route_id IS NOT NULL AND approver_reference_kind IS NOT NULL AND approver_reference IS NOT NULL AND release_version IS NOT NULL)
   - name: turn_approval_request_settled_ck
     expression: turn_settled_at IS NULL OR status_code = 'T'
   - name: turn_approval_request_resolved_ck

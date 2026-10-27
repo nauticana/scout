@@ -141,6 +141,11 @@ func (gateway *GovernedGateway) prepare(ctx context.Context, call domain.ToolCal
 	if err := validateArguments(definition, call.Arguments); err != nil {
 		return preparedCall{}, err
 	}
+	// A turn that compiled a working set mutates only on verified or bounded context.
+	if call.Assurance != "" && !definition.ReadOnly && !call.Assurance.Acts() {
+		return preparedCall{}, fmt.Errorf("%w: %w: tool %q mutates and the turn's working set assurance is %s",
+			domain.ErrForbidden, domain.ErrWorkingSetUnassured, call.ToolID, call.Assurance)
+	}
 	if err := gateway.Authorizer.Authorize(ctx, call, definition); err != nil {
 		return preparedCall{}, err
 	}
@@ -343,6 +348,9 @@ func (gateway *GovernedGateway) validate(call domain.ToolCall) error {
 	}
 	if call.Principal.Kind == "" || strings.TrimSpace(call.Principal.ID) == "" {
 		return fmt.Errorf("%w: tool calls require a resolved principal", domain.ErrPrincipalUnknown)
+	}
+	if call.Assurance != "" && !call.Assurance.Valid() {
+		return fmt.Errorf("%w: working set assurance %q is not a working_set_assurance code", domain.ErrValidation, call.Assurance)
 	}
 	if call.Principal.TenantID != call.TenantContext.TenantID {
 		return fmt.Errorf("%w: principal tenant %d does not own the call", domain.ErrForbidden, call.Principal.TenantID)

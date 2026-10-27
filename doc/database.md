@@ -65,9 +65,9 @@ flowchart BT
     execution_graph_module["Execution Graph<br/>4 tables"]
     knowledge["Knowledge<br/>9 tables"]
     knowledge_vector["Knowledge Vector<br/>1 table"]
-    runtime["Runtime<br/>18 tables"]
+    runtime["Runtime<br/>19 tables"]
     release["Release<br/>16 tables"]
-    evaluation["Evaluation<br/>20 tables"]
+    evaluation["Evaluation<br/>21 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
@@ -78,7 +78,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 61 Scout tables — while the full platform is 152. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 61 Scout tables — while the full platform is 154. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -299,6 +299,7 @@ flowchart RL
         turn_call_outcome["turn_call_outcome"]
         turn_call_attestation["turn_call_attestation"]
         turn_operator_entry["turn_operator_entry"]
+        turn_working_set_item["turn_working_set_item"]
         turn_queue["turn_queue"]
         turn_dead_letter["turn_dead_letter"]
         budget_reservation["budget_reservation"]
@@ -328,6 +329,7 @@ flowchart RL
     turn_call_attestation --> turn_call_outcome
     turn_operator_entry --> conversation_turn
     turn_operator_entry --> step_idempotency
+    turn_working_set_item --> conversation_turn
     budget_reservation --> conversation_turn
 
     subgraph release["Release"]
@@ -385,6 +387,7 @@ flowchart RL
         evaluation_comparison["evaluation_comparison"]
         golden_case_turn["golden_case_turn"]
         golden_case_tool["golden_case_tool"]
+        golden_case_evidence["golden_case_evidence"]
     end
     human_review_item --> golden_set
     golden_set_version --> golden_set
@@ -409,6 +412,7 @@ flowchart RL
     evaluation_comparison --> golden_example
     golden_case_turn --> golden_case
     golden_case_tool --> golden_case
+    golden_case_evidence --> golden_case
 
     subgraph skill["Skill"]
         direction BT
@@ -1261,6 +1265,7 @@ erDiagram
         varchar approver_reference
         smallint route_step
         varchar route_resolution
+        boolean authenticated_only
         timestamp turn_settled_at
     }
     turn_approval_decision {
@@ -1325,8 +1330,9 @@ never approve it. An agent's request names in `release_version` the release whos
 `approval_routing` setting routed it, a real key to `effective_agent_release`. A routed request also
 carries the route (`approval_route_id`), the role or position deciding at the current step
 (`approver_reference_kind`, `approver_reference`), the escalation `route_step` (0 to 3) that verdicts and
-reassignments are fenced on, and `route_resolution`, the product resolver's evidence reference; a check
-keeps the route columns all null at step 0 or all set with a release version. Rule sources, approver
+reassignments are fenced on, `route_resolution`, the product resolver's evidence reference, and
+`authenticated_only`, copied from the route so no decision link decides it; a check keeps the route
+columns all null at step 0 and the flag false, or all set with a release version. Rule sources, approver
 kinds, and output classes are keel constants seeded by the `approval` module and enforced by checks. `turn_settled_at` is set
 on an expired request once its parked turn has been failed or found no longer parked, so a sweep retries
 until it is.
@@ -1714,6 +1720,7 @@ erDiagram
     step_idempotency ||--o{ turn_call_outcome : step_call_outcomes
     tool_version ||--o{ turn_call_outcome : tool_call_outcomes
     conversation_turn ||--o{ turn_operator_entry : turn_operator_entries
+    conversation_turn ||--o{ turn_working_set_item : conversation_turn_working_set_items
     conversation_turn ||--o{ turn_call_outcome : turn_call_outcomes
     turn_call_outcome ||--o{ turn_call_attestation : call_outcome_attestations
     conversation_turn ||--o{ budget_reservation : budget_reservations
@@ -1772,6 +1779,14 @@ erDiagram
         varchar holder_id
         timestamp hold_until
         varchar work_ref
+        char working_set_code
+    }
+    turn_working_set_item {
+        bigint partner_id PK,FK
+        varchar conversation_id PK,FK
+        bigint turn_no PK,FK
+        varchar candidate_id PK
+        boolean selected
     }
     turn_status {
         char code PK
@@ -1986,11 +2001,13 @@ Create `conversation_turn` before calling `BudgetLedger.Reserve`; the ledger enf
 
 `turn_queue` is the durable, shuffle-sharded turn queue: the partition is derived from tenant and conversation so a conversation's turns stay ordered, `request_id` is unique per tenant so redelivery deduplicates, and `lease_token` with `lease_until` fences a worker's claim against a reclaimer. A claim also waits while any earlier turn of the conversation, by `turn_no`, is queued, running, streaming, suspended, held, or operated, so the durable turn number, not queue time, orders a conversation. `acting_context` carries who the turn acts as — principal, authority chain, delegation bounds, work item — as references and bounds, never a credential. A delivery is requeued only when its turn is queued again — resumed after approval, released from a hold, handed back by a person, or woken by a cancellation — whether it was acknowledged or is still leased by a worker that found the turn parked; that is how such a turn returns to a worker. `conversation_turn.cancel_requested_at` is the durable cancellation request a worker polls.
 
-`conversation_turn.fence` is the epoch of the turn's owner: every acquisition and ownership transition increments it, and every runtime write checks it ([persistence](persistence.md#turn-fence)); the check `conversation_turn_fence_ck` keeps it non-negative. `turn_status` `H` (held) is a non-terminal status no worker runs, and `O` (operated) one a person holds under a lease. `hold_requested_at` and `hold_reason` are a pending request that a running turn hold at its next durable checkpoint, both set or both null (`conversation_turn_hold_request_ck`); `hold_code` and `held_at` are set exactly while the turn is `H` or `O` (`conversation_turn_held_code_ck`, `conversation_turn_held_at_ck`). `holder_kind` and `holder_id` name the person who operates the turn: both set or both null (`conversation_turn_holder_ck`), set in `O`, and allowed only in `O` or `C`, where they name the person who finished it (`conversation_turn_operated_ck`). `hold_until`, from the store clock, ends the operator's lease and is set exactly in `O` (`conversation_turn_hold_until_ck`); `conversation_turn_hold_ix (status_code, hold_until)` serves the lapse sweeper. `hold_code` is `C` (held at a checkpoint on request), `A` (held because its agent was suspended), `P` (preempted by an operator), or `U` (held on a call whose outcome is unknown), checked by `conversation_turn_hold_code_ck`; the `runtime` seed registers the code list `turn_hold_code` beside `turn_queue_status` and `agent_run_status` as keel constants.
+`conversation_turn.fence` is the epoch of the turn's owner: every acquisition and ownership transition increments it, and every runtime write checks it ([persistence](persistence.md#turn-fence)); the check `conversation_turn_fence_ck` keeps it non-negative. `turn_status` `H` (held) is a non-terminal status no worker runs, and `O` (operated) one a person holds under a lease. `hold_requested_at` and `hold_reason` are a pending request that a running turn hold at its next durable checkpoint, both set or both null (`conversation_turn_hold_request_ck`); `hold_code` and `held_at` are set exactly while the turn is `H` or `O` (`conversation_turn_held_code_ck`, `conversation_turn_held_at_ck`). `holder_kind` and `holder_id` name the person who operates the turn: both set or both null (`conversation_turn_holder_ck`), set in `O`, and allowed only in `O` or `C`, where they name the person who finished it (`conversation_turn_operated_ck`). `hold_until`, from the store clock, ends the operator's lease and is set exactly in `O` (`conversation_turn_hold_until_ck`); `conversation_turn_hold_ix (status_code, hold_until)` serves the lapse sweeper. `hold_code` is `C` (held at a checkpoint on request), `A` (held because its agent was suspended), `P` (preempted by an operator), `U` (held on a call whose outcome is unknown), or `E` (held on a working set that is conflicted or lacks required evidence), checked by `conversation_turn_hold_code_ck`; the `runtime` seed registers the code list `turn_hold_code` beside `turn_queue_status` and `agent_run_status` as keel constants.
 
 `turn_call_outcome` records every non-read-only call of a tool-loop step before it leaves, keyed by the turn, the execution step, and the model's call id, with real foreign keys to the turn-scoped `step_idempotency` row and the `tool_version` it called ([persistence](persistence.md#call-outcomes)). `status_code` is `I` (in flight), `A` (accepted asynchronously), `C` (completed), `F` (failed), or `U` (unknown), keel constant list `turn_call_outcome_status`; `resolution_code` is `G` (gateway), `W` (late worker report), `E` (effect observation), `L` (outcome lookup), `T` (attestation), or `M` (MCP confirmation), list `turn_call_resolution`; and `origin_code` is `A` (the agent's loop) or `O` (a person operating the turn), list `turn_call_origin`. Checks keep a resolution, `resolved_at`, and `resolved_fence` set exactly on `C` and `F`, a resolver and note on `T`, `deadline_at >= dispatched_at`, positive fences, the uri and digest pairs, and a result object on `A`. `dispatch_fence` is the turn fence the call was last sent under, and only that worker may report it late; `deadline_at`, from the store clock, is when the call can no longer be in flight. The unique `turn_call_outcome_key_uq (partner_id, idempotency_key)` keeps one key from naming two effects, `turn_call_outcome_turn_ix (partner_id, request_id, status_code)` serves the release gate and turn reads, and `turn_call_outcome_due_ix (status_code, deadline_at)` is there for reconciliation by deadline. `turn_call_attestation` holds one row per person attesting an open call, `outcome_code` `C` or `F` (list `turn_call_attested`) with a non-empty note and optional evidence; the call settles `T` once the required number of distinct people agree.
 
 `turn_operator_entry` is the append-only record of what a person did in a turn they operated ([persistence](persistence.md#turn-fence)), keyed by the turn, the fence it was made under, and `entry_no`, which also numbers the turn's entries uniquely (`turn_operator_entry_turn_uq`). `kind_code` is `N` (note), `T` (tool call), `Y` (reply), `W` (withdrawal), or `H` (handback instruction), list `turn_operator_entry_kind`. `step_no` is the step that takes the entry, `execution_step_id` that step once it had started (a nullable foreign key `step_operator_entries` to `step_idempotency`), and `after_entry_no` its journal length at the hold, 0 without a step. The body lives in object storage (`entry_uri`, `entry_digest`). Only a tool call carries usage — tokens, tool calls, searches, and `cost_minor_units` in `currency_code`, whose exponent is read from `currency` — and it always names its currency (`turn_operator_entry_spend_ck`).
+
+`conversation_turn.working_set_code` is the assurance of the turn's latest compiled working set ([engineering reference](engineering-reference.md#working-set)), null when the runtime composes no working set compiler: `V` (verified), `B` (bounded by its token budget), `C` (conflicted), `I` (insufficient evidence), or `U` (unverified), list `working_set_assurance`, checked by `conversation_turn_working_set_code_ck`. `turn_working_set_item` keeps every candidate id that compilation considered, `selected` into the model's context or excluded from it, so context the turn left out stays in the evidence plane; the foreign key `conversation_turn_working_set_items` ties the rows to the turn. Each compilation replaces the turn's rows and code in one transaction opened by the owner's fenced write of the code, so a resumed turn records what it compiled last and a fenced-out worker records nothing.
 
 `turn_dead_letter` retains terminally failed turns with their reason and attempt count for investigation or replay.
 
@@ -2220,6 +2237,7 @@ erDiagram
     approval_risk_tier ||--o{ golden_case : risk_tier_golden_cases
     golden_case ||--o{ golden_case_turn : golden_case_turns
     golden_case ||--o{ golden_case_tool : golden_case_tools
+    golden_case ||--o{ golden_case_evidence : golden_case_evidence_ids
     golden_set_version ||--o{ golden_query : golden_queries
     golden_set_version ||--o{ golden_example : golden_examples
     agent_tenant ||--o{ evaluation_sample : evaluation_samples
@@ -2267,6 +2285,7 @@ erDiagram
         varchar rubric_ref
         varchar risk_tier_code FK
         bigint review_item_id FK
+        boolean execution_expected
     }
     golden_case_turn {
         bigint partner_id PK,FK
@@ -2282,6 +2301,13 @@ erDiagram
         varchar tool_id PK
         text output_json
         boolean is_error
+    }
+    golden_case_evidence {
+        bigint partner_id PK,FK
+        varchar golden_set_id PK,FK
+        varchar case_id PK,FK
+        char role_code PK
+        varchar evidence_id PK
     }
     agent_golden_set {
         bigint partner_id PK,FK
@@ -2312,6 +2338,9 @@ erDiagram
         char payload_digest
         varchar script_uri
         char script_digest
+        text required_evidence_ids
+        text controlling_authority_ids
+        boolean execution_expected
     }
     golden_query {
         bigint partner_id PK,FK
@@ -2574,7 +2603,7 @@ erDiagram
 ```
  `evaluation_manifest` is content-addressed over the candidate and baseline component versions, dataset revision, evaluator versions, and safety policy. `golden_set`, `golden_set_version`, `golden_example`, and `golden_query` carry versioned truth with provenance, consent and retention class, risk tier, and slices, and a scope column that keeps hidden gate examples out of the dev scope. `evaluation_run` and `evaluation_result` store per-example outcomes with minor-unit cost, `gate_decision` stores the signed, expiring platform verdict, and `evaluation_sample` the policy-bounded production samples whose payloads are sealed in object storage.
 
-Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. A scripted case keeps its follow-up turns in `golden_case_turn` (`turn_no` from 2; turn 1 is the case input) and the sandboxed response every call of one tool gets in `golden_case_tool`: JSON `output_json`, or `is_error` with no output. `tool_id` is the id calls name, with no foreign key, since a script may answer a tool the registry does not hold. A freeze stores each scripted case's canonical script in object storage and names it from the example (`golden_example.script_uri`, `script_digest`); an unscripted example has neither. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. Every executed case's trajectory is stored in object storage and named from its result (`evaluation_result.trajectory_uri`, `trajectory_digest`), null when the case produced none. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
+Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. A scripted case keeps its follow-up turns in `golden_case_turn` (`turn_no` from 2; turn 1 is the case input) and the sandboxed response every call of one tool gets in `golden_case_tool`: JSON `output_json`, or `is_error` with no output. `tool_id` is the id calls name, with no foreign key, since a script may answer a tool the registry does not hold. A freeze stores each scripted case's canonical script in object storage and names it from the example (`golden_example.script_uri`, `script_digest`); an unscripted example has neither. `golden_case_evidence` labels the evidence (`role_code` `E`) and controlling-authority (`A`) ids a case's decision needs to reach the model, with no foreign key, since an id may name a document, chunk, or resource another system holds, and `golden_case.execution_expected` whether a mutating tool call is expected (null is unlabeled); a freeze copies them into the immutable `golden_example.required_evidence_ids` and `controlling_authority_ids` (JSON arrays, like `reviews`) and `execution_expected`. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. Every executed case's trajectory is stored in object storage and named from its result (`evaluation_result.trajectory_uri`, `trajectory_digest`), null when the case produced none. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
 
 A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `B` (baseline) is arm a and `C` (candidate) arm b. Either arm may be a draft (`subject_code` `D`), which `provider_id` and `model_id` may pin to another text model, or a release (`R`); arm a may instead be an `evaluation_baseline` (`B`), which then carries no `definition_digest`. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
 
@@ -2597,9 +2626,9 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `execution_graph` | `execution_graph`, `execution_step`, `execution_graph_entry`, `execution_transition` |
 | `knowledge` | `knowledge_base`, `knowledge_base_version`, `knowledge_document`, `knowledge_chunk`, `agent_knowledge_binding`, `agent_knowledge_document`, `knowledge_document_manifest`, `knowledge_base_alias`, `knowledge_source_event` |
 | `knowledge_vector` | `knowledge_chunk_vector` |
-| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_call_outcome`, `turn_call_attestation`, `turn_operator_entry`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
+| `runtime` | `agent_conversation`, `conversation_turn`, `conversation_turn_detail`, `step_checkpoint`, `session_snapshot`, `step_idempotency`, `step_loop_entry`, `turn_call_outcome`, `turn_call_attestation`, `turn_operator_entry`, `turn_working_set_item`, `turn_queue`, `turn_dead_letter`, `budget_reservation`, `usage_event`, `turn_feedback`, `agent_run`, `agent_ops_event`, `agent_work_item` |
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
-| `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison`, `golden_case_turn`, `golden_case_tool` |
+| `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison`, `golden_case_turn`, `golden_case_tool`, `golden_case_evidence` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
 | `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |

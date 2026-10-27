@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // StudioDelegations lets Studio show and grant which agents may hand work to which.
@@ -162,8 +163,5 @@ func (s *StudioDelegations) grantID() (string, error) {
 }
 
 func (s *StudioDelegations) now() time.Time {
-	if s.Now != nil {
-		return s.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(s.Now).UTC()
 }

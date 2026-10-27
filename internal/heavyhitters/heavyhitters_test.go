@@ -14,7 +14,7 @@ func TestSketchNeverUnderestimatesAndHonorsErrorBound(t *testing.T) {
 	// Zipf skew: a few tenants dominate.
 	zipf := rand.NewZipf(random, 1.2, 1, 5000)
 	exact := make(map[uint64]int64)
-	for i := 0; i < 50000; i++ {
+	for range 50000 {
 		key := zipf.Uint64()
 		weight := int64(1 + random.Intn(3))
 		exact[key] += weight

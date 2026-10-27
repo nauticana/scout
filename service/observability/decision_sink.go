@@ -145,13 +145,13 @@ func (sink *TableAuditSink) insert(ctx context.Context, qs keelport.QueryService
 	}
 	_, err := qs.Query(context.WithoutCancel(ctx), qDecisionInsert,
 		tenantID, decision.Category, string(decision.Principal.Kind), decision.Principal.ID,
-		nullable(decision.Authority.GrantID), nullable(string(decision.Authority.Grantor.Kind)), nullable(decision.Authority.Grantor.ID),
-		nullable(decision.ClientRef), nullable(decision.ScopeID), decision.Action, nullable(decision.Resource), nullable(decision.ReleaseVersion),
-		nullable(decision.PolicyID), nullable(decision.PolicyVersion), string(decision.Outcome),
-		nullable(strings.Join(obligations, ",")), nullable(decision.Reason),
-		nullable(decision.RequestID), nullable(decision.ConversationID),
-		nullable(decision.Evidence.URI), nullable(decision.Evidence.Digest), occurred,
-		nullable(decision.WorkRef), nullable(domain.DecisionKeyFor(ctx, decision)))
+		common.NullIfEmpty(decision.Authority.GrantID), common.NullIfEmpty(string(decision.Authority.Grantor.Kind)), common.NullIfEmpty(decision.Authority.Grantor.ID),
+		common.NullIfEmpty(decision.ClientRef), common.NullIfEmpty(decision.ScopeID), decision.Action, common.NullIfEmpty(decision.Resource), common.NullIfEmpty(decision.ReleaseVersion),
+		common.NullIfEmpty(decision.PolicyID), common.NullIfEmpty(decision.PolicyVersion), string(decision.Outcome),
+		common.NullIfEmpty(strings.Join(obligations, ",")), common.NullIfEmpty(decision.Reason),
+		common.NullIfEmpty(decision.RequestID), common.NullIfEmpty(decision.ConversationID),
+		common.NullIfEmpty(decision.Evidence.URI), common.NullIfEmpty(decision.Evidence.Digest), occurred,
+		common.NullIfEmpty(decision.WorkRef), common.NullIfEmpty(domain.DecisionKeyFor(ctx, decision)))
 	if err != nil {
 		return fmt.Errorf("record decision: %w", err)
 	}
@@ -229,7 +229,7 @@ func (sink *TableAuditSink) Decisions(ctx context.Context, query domain.Decision
 			Evidence:   domain.ObjectRef{URI: common.AsString(row[18]), Digest: common.AsString(row[19])},
 			OccurredAt: common.AsTime(row[20]), ClientRef: common.AsString(row[21]), WorkRef: common.AsString(row[22]),
 		}
-		for _, obligation := range strings.Split(common.AsString(row[14]), ",") {
+		for obligation := range strings.SplitSeq(common.AsString(row[14]), ",") {
 			if obligation != "" {
 				record.Obligations = append(record.Obligations, domain.ObligationKind(obligation))
 			}
@@ -247,13 +247,6 @@ func evidenceName(decision domain.DecisionRecord) string {
 		tenant = "platform"
 	}
 	return fmt.Sprintf("decision/%s/%s/%s", tenant, decision.Category, hex.EncodeToString(sum[:]))
-}
-
-func nullable(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
 }
 
 func nullableTime(value time.Time) any {

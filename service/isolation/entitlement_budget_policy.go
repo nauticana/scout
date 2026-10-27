@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -86,10 +87,7 @@ func (policy *EntitlementBudgetPolicy) init(ctx context.Context) error {
 }
 
 func (policy *EntitlementBudgetPolicy) now() time.Time {
-	if policy.Now != nil {
-		return policy.Now().UTC()
-	}
-	return time.Now().UTC()
+	return clk.Now(policy.Now).UTC()
 }
 
 // BudgetFor returns the still-available non-governed allowance as the ceiling
@@ -131,10 +129,7 @@ func (policy *EntitlementBudgetPolicy) BudgetFor(ctx context.Context, tenantID i
 	if len(usage.Rows) > 0 && len(usage.Rows[0]) > 0 {
 		external = keelcommon.AsInt64(usage.Rows[0][0])
 	}
-	remaining := limit - external
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(limit-external, 0)
 	return domain.BudgetLimits{
 		WindowTokens: math.MaxInt64 / 4, WindowCostMinorUnits: remaining,
 		Currency: policy.Currency, Window: window,

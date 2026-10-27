@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
@@ -37,7 +35,7 @@ func serveRuns(handler *StudioRunsHandler, target string) *httptest.ResponseReco
 
 func TestStudioRunTraceRouteServesTheTraceAndBumpsTheFeature(t *testing.T) {
 	at := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	handler := &StudioRunsHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: runsBackend{
+	handler := &StudioRunsHandler{UserService: conversationUsers{}, Backend: runsBackend{
 		trace: func(_ context.Context, actor domain.StudioActor, agentID string, runID int64) (domain.RunTrace, error) {
 			if actor.TenantID != 7 || agentID != "writer-a" || runID != 31 {
 				t.Fatalf("trace of %+v %s %d", actor, agentID, runID)
@@ -51,16 +49,21 @@ func TestStudioRunTraceRouteServesTheTraceAndBumpsTheFeature(t *testing.T) {
 						Models:  []domain.ModelReference{{ProviderID: "anthropic", ModelID: "claude"}}, Usage: domain.Usage{InputTokens: 10, Currency: "USD"},
 						Finish: domain.RunTraceFinishToolCalls, ToolCalls: 1}},
 					{Sequence: 2, Kind: domain.RunTraceEventToolCall, At: at, Tool: &domain.RunTraceToolCall{Tool: domain.ToolReference{ToolID: "lookup", Version: "v1"},
-						Outcome: domain.RunTraceToolError, ErrorClass: "rate_limited"}},
+						CallID: "c1", Outcome: domain.RunTraceToolError, ErrorClass: "rate_limited",
+						Settlement: &domain.RunTraceCallSettlement{Status: domain.CallCompleted, Resolution: domain.ResolvedByAttestation,
+							Resolver: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}, ResolvedAt: at, EvidenceDigest: strings.Repeat("e", 64)}}},
 					{Sequence: 3, Kind: domain.RunTraceEventDecision, At: at, Decision: &domain.RunTraceDecisionEvent{Source: domain.RunTraceDecisionCharter,
 						Action: "CAP-1", Charter: &domain.CharterAction{ActionID: domain.CharterRef{ID: "ACT-1"}, Disposition: "denied",
-							Authority: []domain.CharterEvaluation{{Ref: &domain.CharterRef{ID: "G-1"}, Result: "denied"}}}}},
+							Authority:      []domain.CharterEvaluation{{Ref: &domain.CharterRef{ID: "G-1"}, Result: "denied"}},
+							Preconditions:  []domain.CharterCondition{{ID: "PRE-1", Result: "satisfied", ObservedAt: at}},
+							Postconditions: []domain.CharterCondition{{ID: "POST-1", Result: "unknown"}},
+							Effect:         "unobserved", UnknownCause: "observation-failed"}}},
 				},
 				Truncated: true,
 			}, nil
 		},
 	}}
-	if feature := handler.Feature(); feature.ID != StudioFeatureRuns || feature.Version != 2 {
+	if feature := handler.Feature(); feature.ID != StudioFeatureRuns || feature.Version != 3 {
 		t.Fatalf("feature = %+v", feature)
 	}
 	recorder := serveRuns(handler, api.StudioRunTracePath+"?agent_name=writer-a&run_id=31")
@@ -75,11 +78,25 @@ func TestStudioRunTraceRouteServesTheTraceAndBumpsTheFeature(t *testing.T) {
 	if step == nil || step.Finish != "tool_calls" || step.Usage == nil || step.Usage.InputTokens != 10 || step.Models[0].Model != "claude" || step.Journal.EntryNo != 1 {
 		t.Fatalf("model step = %s", recorder.Body.String())
 	}
-	if call == nil || call.Outcome != "error" || call.ErrorClass != "rate_limited" || call.Usage != nil {
+	if call == nil || call.Outcome != "error" || call.ErrorClass != "rate_limited" || call.Usage != nil || call.CallID != "c1" {
 		t.Fatalf("tool call = %s", recorder.Body.String())
+	}
+	if settled := call.Settlement; settled == nil || settled.Status != "C" || settled.Resolution != "T" || settled.ResolverKind != "human" ||
+		settled.ResolverID != "9" || settled.ResolvedAt == nil || settled.EvidenceDigest != strings.Repeat("e", 64) {
+		t.Fatalf("settlement = %s", recorder.Body.String())
 	}
 	if decision == nil || decision.Source != "charter" || decision.Charter == nil || decision.Charter.Authority[0].Ref.ID != "G-1" {
 		t.Fatalf("decision = %s", recorder.Body.String())
+	}
+	if action := decision.Charter; len(action.Preconditions) != 1 || action.Preconditions[0].ID != "PRE-1" || action.Preconditions[0].ObservedAt == nil ||
+		len(action.Postconditions) != 1 || action.Postconditions[0].Result != "unknown" || action.Postconditions[0].ObservedAt != nil ||
+		action.Effect != "unobserved" || action.UnknownCause != "observation-failed" {
+		t.Fatalf("charter conditions = %s", recorder.Body.String())
+	}
+	for _, field := range []string{`"call_id":"c1"`, `"settlement":{"status":"C"`, `"preconditions":[{"id":"PRE-1"`, `"unknown_cause":"observation-failed"`} {
+		if !strings.Contains(recorder.Body.String(), field) {
+			t.Fatalf("trace lacks %s: %s", field, recorder.Body.String())
+		}
 	}
 }
 
@@ -92,7 +109,7 @@ func TestStudioRunTraceRouteRefusesABadRunAndHidesStoredRecordFailures(t *testin
 		}
 		return domain.RunTrace{}, errors.New("run trace loop journal entry 3 of step 11: object digest mismatch: scout://sessions/scout/loop/7/r-1/11/3")
 	}}
-	handler := &StudioRunsHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioRunsHandler{UserService: conversationUsers{}, Backend: backend}
 	for _, target := range []string{"?agent_name=writer-a", "?agent_name=writer-a&run_id=0", "?agent_name=writer-a&run_id=x"} {
 		if recorder := serveRuns(handler, api.StudioRunTracePath+target); recorder.Code != http.StatusBadRequest || called {
 			t.Fatalf("%s = %d (backend called %v)", target, recorder.Code, called)

@@ -138,7 +138,7 @@ func TestBaseDraftTesterRunsTheConfiguredDefaultTask(t *testing.T) {
 	var seen string
 	tester := testerFor(&quotaFake{allowed: true}, 1)
 	tester.Build = func(context.Context, domain.ModelReference, string, []domain.CompiledPromptSection) (contract.PricedAgent, error) {
-		return &PricedAgent{AgentExecutor: &taskRecorder{executorFake: executorFake{output: "ok"}, task: &seen}, Pricer: &pricerFake{cost: 1}}, nil
+		return &PricedAgent{AgentExecutor: &taskRecorder{output: "ok", task: &seen}, Pricer: &pricerFake{cost: 1}}, nil
 	}
 	if _, err := tester.Execute(context.Background(), domain.StudioActor{TenantID: 3}, domain.AgentTestRequest{}, draftDefinition()); err != nil || seen != DefaultTestTask {
 		t.Fatalf("task = %q, error = %v, want the built-in task", seen, err)

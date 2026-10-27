@@ -176,7 +176,7 @@ func (hub *CacheReplyHub) Publish(ctx context.Context, reply domain.TurnReply) e
 // storeFrame writes the frame by compare-and-set too: a publisher whose head advance was
 // overtaken by a higher fence before its frame landed finds that fence's frame and stores nothing.
 func (hub *CacheReplyHub) storeFrame(ctx context.Context, key, encoded string, fence int64) error {
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		raw, err := hub.Cache.Get(ctx, key)
 		if errors.Is(err, cache.ErrCacheMiss) {
 			raw, err = "", nil

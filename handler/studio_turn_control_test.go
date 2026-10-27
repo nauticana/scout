@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -18,6 +16,7 @@ import (
 
 type turnControlBackend struct {
 	filter   domain.LiveTurnFilter
+	open     domain.OpenOutcomeFilter
 	hold     domain.TurnHoldRequest
 	release  domain.TurnReleaseRequest
 	lookup   domain.TurnOutcomeRequest
@@ -57,6 +56,18 @@ func (backend *turnControlBackend) LiveTurns(_ context.Context, _ domain.StudioA
 	return domain.LiveTurnPage{Turns: []domain.LiveTurn{heldTurn}, NextBefore: "1000:request-1"}, backend.err
 }
 
+func (backend *turnControlBackend) OpenOutcomes(_ context.Context, _ domain.StudioActor, filter domain.OpenOutcomeFilter) (domain.OpenOutcomePage, error) {
+	backend.open = filter
+	if backend.err != nil {
+		return domain.OpenOutcomePage{}, backend.err
+	}
+	return domain.OpenOutcomePage{Outcomes: []domain.OpenOutcome{{
+		AgentID: "writer-a", Key: domain.CallOutcomeKey{TenantID: 7, RequestID: "request-1", ExecutionStepID: 11, CallID: "c1"},
+		ConversationID: "c", TurnNo: 4, Tool: domain.ToolReference{ToolID: "shop.write", Version: "2"}, Status: domain.CallUnknown,
+		DispatchedAt: time.Unix(1500, 0).UTC(), DeadlineAt: time.Unix(1600, 0).UTC(), DeadlinePassed: true,
+	}}, NextBefore: "1600000000000:11:cmVxdWVzdC0x:c1"}, nil
+}
+
 func (backend *turnControlBackend) Turn(context.Context, domain.StudioActor, string, string) (domain.LiveTurn, error) {
 	return heldTurn, backend.err
 }
@@ -80,7 +91,7 @@ func serveTurnControl(handler *StudioTurnControlHandler, method, target, body st
 
 func TestStudioTurnControlRoutesMapRequestsAndResults(t *testing.T) {
 	backend := &turnControlBackend{}
-	handler := &StudioTurnControlHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioTurnControlHandler{UserService: conversationUsers{}, Backend: backend}
 	if feature := handler.Feature(); feature.ID != StudioFeatureTurnControl || feature.Object != domain.OperationAuthorizationObject ||
 		strings.Join(feature.Actions, ",") != "VIEW,OPERATE,PREEMPT,RECONCILE" {
 		t.Fatalf("feature = %+v", feature)
@@ -146,6 +157,40 @@ func TestStudioTurnControlRoutesMapRequestsAndResults(t *testing.T) {
 	}
 }
 
+func TestStudioOpenOutcomesRouteMapsTheFilterAndThePage(t *testing.T) {
+	backend := &turnControlBackend{}
+	handler := &StudioTurnControlHandler{UserService: conversationUsers{}, Backend: backend}
+	recorder := serveTurnControl(handler, http.MethodGet, api.StudioOpenOutcomesPath+"?agent_name=writer-a&before=9:1:cg:c0&limit=5", "")
+	if recorder.Code != http.StatusOK || backend.open != (domain.OpenOutcomeFilter{AgentID: "writer-a", Before: "9:1:cg:c0", Limit: 5}) {
+		t.Fatalf("GET open = %d %s, filter %+v", recorder.Code, recorder.Body.String(), backend.open)
+	}
+	body := recorder.Body.String()
+	for _, field := range []string{`"agent_name":"writer-a"`, `"request_id":"request-1"`, `"conversation_id":"c"`, `"turn_no":"4"`,
+		`"execution_step_id":"11"`, `"call_id":"c1"`, `"tool_id":"shop.write"`, `"tool_version":"2"`, `"status":"U"`,
+		`"deadline_passed":true`, `"next_before":"1600000000000:11:cmVxdWVzdC0x:c1"`} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("open outcomes lack %s: %s", field, body)
+		}
+	}
+	var page api.OpenOutcomePage
+	if envelopeData(recorder, &page) != nil || len(page.Outcomes) != 1 || page.Outcomes[0].TurnNo != 4 ||
+		!page.Outcomes[0].DeadlineAt.Equal(time.Unix(1600, 0)) || page.NextBefore == "" {
+		t.Fatalf("page = %s", body)
+	}
+	if recorder := serveTurnControl(handler, http.MethodGet, api.StudioOpenOutcomesPath+"?limit=x", ""); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("malformed limit = %d, want 400", recorder.Code)
+	}
+	for err, want := range map[error]int{
+		fmt.Errorf("%w: before is not an open outcome cursor", domain.ErrValidation): http.StatusBadRequest,
+		fmt.Errorf("%w: AGENT_OPERATION VIEW on every agent", domain.ErrForbidden):   http.StatusForbidden,
+	} {
+		backend.err = err
+		if recorder := serveTurnControl(handler, http.MethodGet, api.StudioOpenOutcomesPath+"?before=nonsense", ""); recorder.Code != want {
+			t.Fatalf("%v = %d, want %d", err, recorder.Code, want)
+		}
+	}
+}
+
 type pauseBackend struct{ request domain.AgentPauseRequest }
 
 func (backend *pauseBackend) Pause(_ context.Context, _ domain.StudioActor, request domain.AgentPauseRequest) (domain.AgentPauseResult, error) {
@@ -155,7 +200,7 @@ func (backend *pauseBackend) Pause(_ context.Context, _ domain.StudioActor, requ
 
 func TestStudioPauseRouteSuspendsAndReportsHolds(t *testing.T) {
 	backend := &pauseBackend{}
-	handler := &StudioPauseHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioPauseHandler{UserService: conversationUsers{}, Backend: backend}
 	recorder := httptest.NewRecorder()
 	handler.Routes()[api.StudioPausePath](recorder, authenticatedRequest(http.MethodPost, api.StudioPausePath,
 		[]byte(`{"agent_name":"writer-a","policy":"suspend","reason":"incident","expected_agent_revision":4}`)))
@@ -170,7 +215,7 @@ func TestStudioPauseRouteSuspendsAndReportsHolds(t *testing.T) {
 func TestStudioTurnControlMapsAStaleFenceToConflict(t *testing.T) {
 	for _, err := range []error{domain.ErrConflict, domain.ErrFenceLost, domain.ErrTurnHeld} {
 		backend := &turnControlBackend{err: fmt.Errorf("%w: turn request-1", err)}
-		handler := &StudioTurnControlHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+		handler := &StudioTurnControlHandler{UserService: conversationUsers{}, Backend: backend}
 		recorder := serveTurnControl(handler, http.MethodPost, api.StudioTurnReleasePath, `{"agent_name":"writer-a","request_id":"request-1","fence":2}`)
 		if recorder.Code != http.StatusConflict {
 			t.Fatalf("%v = %d, want 409", err, recorder.Code)

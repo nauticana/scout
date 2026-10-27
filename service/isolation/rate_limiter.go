@@ -75,8 +75,7 @@ func (l laneLimiter) allow(ctx context.Context, lane string, tenant domain.Tenan
 	if !errors.Is(err, keellimiter.ErrRateLimited) {
 		return err
 	}
-	var limit *keellimiter.LimitError
-	if errors.As(err, &limit) {
+	if limit, ok := errors.AsType[*keellimiter.LimitError](err); ok {
 		return &keellimiter.LimitError{Err: domain.ErrRateLimited, Scope: limit.Scope, After: limit.After}
 	}
 	return fmt.Errorf("%w: %v", domain.ErrRateLimited, err)

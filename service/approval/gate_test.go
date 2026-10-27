@@ -74,7 +74,7 @@ func gate(store *stubStore) *Gate {
 func TestGateOpensOncePerProposalAndReturnsPending(t *testing.T) {
 	store := &stubStore{}
 	g := gate(store)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		decision, err := g.Decide(context.Background(), toolCall(`{"amount":1}`), autonomyAsk)
 		if err != nil || decision != domain.ApprovalPending {
 			t.Fatalf("decision = %q, error = %v", decision, err)

@@ -42,7 +42,7 @@ func enqueueRows() map[string][][]any {
 func TestAgentEvaluationStorePinsTheDraftAndTheSetVersion(t *testing.T) {
 	ctx := context.Background()
 	query := newQueryFake(enqueueRows())
-	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &AgentEvaluationStore{DB: dbFake{query: query}}
 
 	run, err := store.Enqueue(ctx, draftEnqueue())
 	if err != nil {
@@ -86,7 +86,7 @@ func TestAgentEvaluationStoreRefusesUnpinnableRuns(t *testing.T) {
 	refuse := func(name string, rows map[string][][]any, request domain.AgentEvaluationEnqueue, want error) {
 		t.Helper()
 		query := newQueryFake(rows)
-		store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
+		store := &AgentEvaluationStore{DB: dbFake{query: query}}
 		if _, err := store.Enqueue(ctx, request); !errors.Is(err, want) {
 			t.Fatalf("%s = %v, want %v", name, err, want)
 		}
@@ -146,7 +146,7 @@ func TestAgentEvaluationStoreReadsRunsAndPagesInTheReadersScope(t *testing.T) {
 		qAgentEvalRun:     {runRow(domain.EvaluationCompleted, nil)},
 		qAgentEvalResults: {{"refund", scores, int64(250), int64(50), int64(20), int64(6), "EUR", int64(2), false, nil, int64(30), int64(4), int64(2), nil, nil}},
 	})
-	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &AgentEvaluationStore{DB: dbFake{query: query}}
 	run, err := store.Run(ctx, domain.GoldenScopeDev, 7, 11)
 	if err != nil {
 		t.Fatal(err)
@@ -171,11 +171,11 @@ func TestAgentEvaluationStoreReadsRunsAndPagesInTheReadersScope(t *testing.T) {
 	if args := query.args[qAgentEvalResults]; args[2] != "dev" || args[3] != "dev" || args[4] != "zeta" || args[5] != "zeta" || args[6] != 51 {
 		t.Fatalf("results args = %v", args)
 	}
-	if _, err := (&AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: newQueryFake(nil)}}}).Run(ctx, domain.GoldenScopeDev, 7, 12); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := (&AgentEvaluationStore{DB: dbFake{query: newQueryFake(nil)}}).Run(ctx, domain.GoldenScopeDev, 7, 12); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("another tenant's or a manifest run = %v", err)
 	}
 	legacy := newQueryFake(map[string][][]any{qAgentEvalRun: {runRow("running", nil)}})
-	if _, err := (&AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: legacy}}}).Run(ctx, domain.GoldenScopeDev, 7, 11); err == nil ||
+	if _, err := (&AgentEvaluationStore{DB: dbFake{query: legacy}}).Run(ctx, domain.GoldenScopeDev, 7, 11); err == nil ||
 		!strings.Contains(err.Error(), "unknown status") {
 		t.Fatalf("a stored word status = %v, want refused", err)
 	}
@@ -191,7 +191,7 @@ func TestAgentEvaluationStoreFencesEveryWorkerWrite(t *testing.T) {
 		qAgentEvalDraft:    {{string(definition), string(settings)}},
 		qAgentEvalRecorded: {{"refund", int64(5), int64(2), int64(3), "EUR", nil}, {"probe", int64(40), int64(4), int64(7), "EUR", "judging failed: canceled"}},
 	})
-	store := &AgentEvaluationStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &AgentEvaluationStore{DB: dbFake{query: query}}
 	claim, err := store.Load(ctx, lease)
 	if err != nil {
 		t.Fatal(err)

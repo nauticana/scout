@@ -56,8 +56,7 @@ func errorClass(err error) string {
 	if err == nil || errors.Is(err, io.EOF) {
 		return ErrorClassNone
 	}
-	var deadline *StreamDeadlineError
-	if errors.As(err, &deadline) {
+	if deadline, ok := errors.AsType[*StreamDeadlineError](err); ok {
 		return deadline.Kind.errorClass()
 	}
 	for _, candidate := range errorClasses {

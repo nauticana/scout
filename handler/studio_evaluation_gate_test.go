@@ -7,8 +7,6 @@ import (
 	"slices"
 	"testing"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
@@ -48,7 +46,7 @@ func (f *gateBackendFake) OverrideGate(_ context.Context, actor domain.StudioAct
 
 func TestEvaluationGateRoutesMapTheWire(t *testing.T) {
 	backend := &gateBackendFake{}
-	handler := &StudioEvaluationGateHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Backend: backend}
+	handler := &StudioEvaluationGateHandler{UserService: conversationUsers{}, Backend: backend}
 	routes := handler.Routes()
 	feature := handler.Feature()
 	if len(routes) != 3 || feature.ID != StudioFeatureEvaluationGate || !slices.Contains(feature.Actions, string(domain.StudioOverrideGate)) {

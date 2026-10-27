@@ -44,7 +44,7 @@ func (db loggedDB) BeginTx(context.Context, map[string]string) (keelport.TxQuery
 
 func comparisonStore(rows map[string][][]any) (*AgentEvaluationStore, *loggedQuery) {
 	query := newLoggedQuery(rows)
-	return &AgentEvaluationStore{keelStore: keelStore{DB: loggedDB{query: query}}}, query
+	return &AgentEvaluationStore{DB: loggedDB{query: query}}, query
 }
 
 func releaseArm(version string) *domain.EvaluationArm {

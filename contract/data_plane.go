@@ -303,8 +303,9 @@ type TurnRecordStore interface {
 	// the turn's queue row. A stale or forged claim is domain.ErrFenceLost, a held, operated, or
 	// suspended turn domain.ErrTurnHeld, and an ended one domain.ErrConflict.
 	Acquire(ctx context.Context, claim domain.TurnClaim) (domain.TurnOwner, error)
-	// Hold stops the owner's running turn under code, domain.HoldCheckpoint at a durable checkpoint
-	// or domain.HoldUnknownOutcome on a call it could not settle: held, fence incremented, a
+	// Hold stops the owner's running turn under code, domain.HoldCheckpoint at a durable checkpoint,
+	// domain.HoldUnknownOutcome on a call it could not settle, or domain.HoldEvidence on a working
+	// set that is conflicted or lacks required evidence: held, fence incremented, a
 	// pending hold request cleared, the budget reservation kept. It returns the held fence.
 	Hold(ctx context.Context, owner domain.TurnOwner, code domain.TurnHoldCode) (int64, error)
 	// Fail marks the owner's running turn failed or cancelled with its error code, in the

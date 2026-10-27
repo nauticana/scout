@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // ManifestBuilder validates a manifest draft and stamps its content-addressed id.
@@ -22,10 +23,7 @@ type ManifestBuilder struct {
 }
 
 func (builder *ManifestBuilder) now() time.Time {
-	if builder.Now != nil {
-		return builder.Now()
-	}
-	return time.Now()
+	return clk.Now(builder.Now)
 }
 
 // Build returns the immutable manifest for a draft; ManifestID and CreatedAt of the draft are ignored.
@@ -67,6 +65,9 @@ func DatasetRevision(examples []domain.GoldenExample) string {
 		// A script joins the line only when present, so an unscripted example digests as before.
 		if example.Script.Digest != "" {
 			fields = append(fields, example.Script.Digest)
+		}
+		if example.Assurance.Labeled() {
+			fields = append(fields, "assurance:"+assuranceDigest(example.Assurance))
 		}
 		lines = append(lines, strings.Join(fields, "\x1f"))
 	}

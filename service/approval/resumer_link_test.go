@@ -93,6 +93,15 @@ func TestLinksStayOutOfHighRiskDecisions(t *testing.T) {
 	if _, err := resumer.MintLink(context.Background(), key, 42, domain.ApprovalStatusApproved, time.Hour); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("no link policy = %v, want forbidden", err)
 	}
+	resumer.LinkMaxRisk = domain.RiskCritical
+	store.stored.Route.AuthenticatedOnly = true
+	if _, err := resumer.MintLink(context.Background(), key, 42, domain.ApprovalStatusApproved, time.Hour); !errors.Is(err, domain.ErrAuthenticatedView) {
+		t.Fatalf("authenticated-only route link = %v, want authenticated view", err)
+	}
+	if _, err := resumer.RedeemLink(context.Background(), "token", key, domain.ApprovalStatusApproved, ""); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("authenticated-only route redeem = %v, want not found", err)
+	}
+	store.stored.Route.AuthenticatedOnly = false
 	resumer.LinkMaxRisk = domain.RiskMedium
 	if _, err := resumer.MintLink(context.Background(), key, 42, domain.ApprovalStatusEdited, time.Hour); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("edit link = %v, want validation", err)

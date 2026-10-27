@@ -93,7 +93,7 @@ func TestGatewayJudgeOrderIsStableAndSeedDependent(t *testing.T) {
 		t.Fatal("presentation order follows the role rather than the content")
 	}
 	differing := 0
-	for seed := int64(0); seed < 16; seed++ {
+	for seed := range int64(16) {
 		if (&GatewayJudge{Seed: seed}).candidateFirst(pair) {
 			differing++
 		}

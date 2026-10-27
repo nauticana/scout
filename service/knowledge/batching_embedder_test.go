@@ -40,16 +40,14 @@ func TestBatchingEmbedderCoalescesAndCorrelates(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make([]domain.Embedding, 3)
 	for i := range results {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			content := make([]byte, i+1)
 			embedding, err := embedder.Embed(context.Background(), tenant, content)
 			if err != nil {
 				t.Error(err)
 			}
 			results[i] = embedding
-		}()
+		})
 	}
 	wg.Wait()
 	if len(recorder.batches) != 1 || len(recorder.batches[0]) != 3 {
@@ -90,13 +88,11 @@ func TestBatchingEmbedderNeverExceedsMaxBatch(t *testing.T) {
 	embedder := &BatchingEmbedder{Batcher: recorder, MaxBatch: 4, MaxWait: 5 * time.Millisecond}
 	var wait sync.WaitGroup
 	for range 100 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			if _, err := embedder.Embed(context.Background(), domain.TenantContext{TenantID: 1}, []byte("x")); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	recorder.mu.Lock()

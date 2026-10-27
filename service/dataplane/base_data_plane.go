@@ -79,8 +79,11 @@ type BaseDataPlane struct {
 	Knowledge    contract.PinnedKnowledgeResolver
 	Entitlements contract.EntitlementResolver
 	// Memory puts the tenant's memory into every turn; nil keeps none.
-	Memory  contract.MemoryStore
-	Weights contract.TenantWeightPolicy
+	Memory contract.MemoryStore
+	// WorkingSet compiles each loop turn's authority-aware context, such as a workingset.Compiler
+	// over the product's candidate source, recorded by TableWorkingSetRecorder; nil compiles none.
+	WorkingSet contract.WorkingSetCompiler
+	Weights    contract.TenantWeightPolicy
 	// PrincipalLimits reads each agent's frozen budget, operating mode, and execution limits; nil uses
 	// isolation.ReleaseLimits over DB.
 	PrincipalLimits contract.PrincipalLimits
@@ -468,11 +471,15 @@ func (plane *BaseDataPlane) composeLoop() error {
 		plane.Models = gateway
 	}
 	if plane.Requests == nil {
-		plane.Requests = &ReleaseLoopRequestBuilder{
+		builder := &ReleaseLoopRequestBuilder{
 			Definitions: &controlplane.TableAgentDefinitionReader{DB: plane.DB}, Renderer: &agentruntime.PromptRenderer{}, Skills: plane.Skills,
 			Knowledge: plane.Knowledge, Entitlements: plane.Entitlements, KnowledgeMaxBytes: plane.Settings.GuardrailMaxInputBytes, Memory: plane.Memory,
 			LanguageCode: plane.LanguageCode, MaxOutputTokens: plane.MaxOutputTokens, Task: plane.Task,
 		}
+		if plane.WorkingSet != nil {
+			builder.WorkingSet, builder.WorkingSetRecords = plane.WorkingSet, &TableWorkingSetRecorder{DB: plane.DB}
+		}
+		plane.Requests = builder
 	}
 	if plane.Journal == nil {
 		plane.Journal = &TableLoopJournal{DB: plane.DB, Objects: plane.Objects}

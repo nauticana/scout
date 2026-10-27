@@ -55,7 +55,13 @@ func charterAction(record model.ActionRecord) domain.CharterAction {
 		Disposition: record.Disposition, Outcome: record.Outcome,
 		Assignment: optionalRef(record.AssignmentID), Reconciles: optionalRef(record.ReconcilesActionID),
 		SodException: optionalRef(record.SodExceptionID), MaterialInputsDigest: record.MaterialInputsDigest,
-		At: record.ActionTime,
+		Effect: record.Effect, UnknownCause: record.UnknownCause, At: record.ActionTime,
+	}
+	for _, evaluation := range record.PreconditionEvaluations {
+		action.Preconditions = append(action.Preconditions, domain.CharterCondition{ID: evaluation.PreconditionID, Result: evaluation.Result, ObservedAt: evaluation.ObservedAt})
+	}
+	for _, evaluation := range record.PostconditionEvaluations {
+		action.Postconditions = append(action.Postconditions, domain.CharterCondition{ID: evaluation.PostconditionID, Result: evaluation.Result, ObservedAt: evaluation.ObservedAt})
 	}
 	for _, evaluation := range record.AuthorityEvaluations {
 		action.Authority = append(action.Authority, domain.CharterEvaluation{Ref: optionalRef(evaluation.AuthorityGrantID), Result: evaluation.Result})

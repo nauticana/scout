@@ -69,6 +69,10 @@ columns:
     type: VARCHAR(200)
     nullable: true
     comment: The product work item the turn served; products own its meaning, which prevents a foreign key
+  - name: working_set_code
+    type: CHAR(1)
+    nullable: true
+    comment: Assurance of the turn's latest compiled working set; null when the runtime compiles none
 primary_key: [partner_id, conversation_id, turn_no]
 foreign_keys:
   - name: conversation_turns
@@ -114,7 +118,9 @@ checks:
   - name: conversation_turn_hold_request_ck
     expression: (hold_requested_at IS NULL) = (hold_reason IS NULL)
   - name: conversation_turn_hold_code_ck
-    expression: hold_code IN ('C', 'A', 'P', 'U')
+    expression: hold_code IN ('C', 'A', 'P', 'U', 'E')
+  - name: conversation_turn_working_set_code_ck
+    expression: working_set_code IN ('V', 'B', 'C', 'I', 'U')
   - name: conversation_turn_held_code_ck
     expression: (status_code IN ('H', 'O')) = (hold_code IS NOT NULL)
   - name: conversation_turn_held_at_ck

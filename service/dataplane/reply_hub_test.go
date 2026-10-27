@@ -25,12 +25,12 @@ func TestReplyHubDeliversInOrder(t *testing.T) {
 	if subscription.Route() == "" {
 		t.Fatal("route must be set")
 	}
-	for seq := int64(0); seq < 3; seq++ {
+	for seq := range int64(3) {
 		if err := hub.Publish(ctx, frame(seq, seq == 2)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for seq := int64(0); seq < 3; seq++ {
+	for seq := range int64(3) {
 		reply, err := subscription.Receive(ctx)
 		if err != nil || reply.Sequence != seq {
 			t.Fatalf("frame %d = %+v, %v", seq, reply, err)
@@ -44,7 +44,7 @@ func TestReplyHubDeliversInOrder(t *testing.T) {
 func TestReplyHubReplaysFromCursor(t *testing.T) {
 	hub := &MemoryReplyHub{}
 	ctx := context.Background()
-	for seq := int64(0); seq < 5; seq++ {
+	for seq := range int64(5) {
 		if err := hub.Publish(ctx, frame(seq, false)); err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestReplyHubReplaysFromCursor(t *testing.T) {
 func TestReplyHubExpiredCursorAndOverflow(t *testing.T) {
 	hub := &MemoryReplyHub{RetainedFrames: 2, SubscriberBuffer: 1}
 	ctx := context.Background()
-	for seq := int64(0); seq < 4; seq++ {
+	for seq := range int64(4) {
 		if err := hub.Publish(ctx, frame(seq, false)); err != nil {
 			t.Fatal(err)
 		}

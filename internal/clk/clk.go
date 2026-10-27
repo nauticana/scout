@@ -17,6 +17,14 @@ func Of(now func() time.Time) clock.Clock {
 	return fn(now)
 }
 
+// Now reads now, or the system clock when it is nil.
+func Now(now func() time.Time) time.Time {
+	if now == nil {
+		return time.Now()
+	}
+	return now()
+}
+
 type fn func() time.Time
 
 var _ clock.Clock = fn(nil)

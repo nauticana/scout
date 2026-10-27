@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 	"strconv"
@@ -115,9 +116,7 @@ CREATE INDEX IF NOT EXISTS knowledge_chunk_vector_hnsw_{dims}_ix ON knowledge_ch
 
 func pgVectorQueriesFor(dimensions int) map[string]string {
 	queries := make(map[string]string, len(pgVectorQueries)+len(pgVectorDimensionQueries))
-	for name, sql := range pgVectorQueries {
-		queries[name] = sql
-	}
+	maps.Copy(queries, pgVectorQueries)
 	dims := strconv.Itoa(dimensions)
 	for name, sql := range pgVectorDimensionQueries {
 		queries[name] = strings.ReplaceAll(sql, pgVectorDimensionsToken, dims)

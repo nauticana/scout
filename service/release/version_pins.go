@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -435,10 +436,7 @@ var (
 )
 
 func (manager *PinnedTrafficManager) now() time.Time {
-	if manager.Now != nil {
-		return manager.Now()
-	}
-	return time.Now()
+	return clk.Now(manager.Now)
 }
 
 func (manager *PinnedTrafficManager) validate() error {

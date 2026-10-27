@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 const (
@@ -97,10 +98,7 @@ func (dispatcher *QueueTurnDispatcher) queries(ctx context.Context) port.QuerySe
 }
 
 func (dispatcher *QueueTurnDispatcher) now() time.Time {
-	if dispatcher.Now != nil {
-		return dispatcher.Now()
-	}
-	return time.Now()
+	return clk.Now(dispatcher.Now)
 }
 
 // Enqueue durably accepts the turn once; an identical replay is a no-op and a

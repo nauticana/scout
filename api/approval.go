@@ -37,10 +37,12 @@ type ApprovalRequest struct {
 	RevisesStepID int64 `json:"revises_step_id,omitempty"`
 	// RuleSource is why the call needs a person: autonomy, policy, or guardrail.
 	RuleSource string `json:"rule_source"`
-	// RouteID, RouteStep, and ApproverReference are the routed authority the request is assigned under.
+	// RouteID, RouteStep, and ApproverReference are the routed authority the request is assigned under;
+	// AuthenticatedOnly means no decision link decides it.
 	RouteID           string             `json:"route_id,omitempty"`
 	RouteStep         int                `json:"route_step"`
 	ApproverReference *ApproverReference `json:"approver_reference,omitempty"`
+	AuthenticatedOnly bool               `json:"authenticated_only,omitempty"`
 }
 
 // ApprovalResolveRequest is a signed-in decider's verdict, an approval_status code: A approved,

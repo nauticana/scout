@@ -79,7 +79,7 @@ func (p *Google) contentParams(request domain.ModelRequest) ([]*genai.Content, *
 	}
 	config := &genai.GenerateContentConfig{MaxOutputTokens: int32(maxOutputTokens(request))}
 	if temperature := sampling(p.Temperature, request); temperature != nil {
-		config.Temperature = genai.Ptr(float32(*temperature))
+		config.Temperature = new(float32(*temperature))
 	}
 	if len(request.Instructions) > 0 {
 		config.SystemInstruction = genai.NewContentFromText(string(request.Instructions), genai.RoleUser)
@@ -191,15 +191,15 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 		}
 		calls = append(calls, domain.ModelToolCall{CallID: callID, Name: call.Name, Arguments: arguments})
 	}
-	text := ""
+	var text strings.Builder
 	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
 		for _, part := range resp.Candidates[0].Content.Parts {
 			if part != nil && !part.Thought {
-				text += part.Text
+				text.WriteString(part.Text)
 			}
 		}
 	}
-	if err := emptyResult(GoogleProviderID, text, calls); err != nil {
+	if err := emptyResult(GoogleProviderID, text.String(), calls); err != nil {
 		return domain.ModelResult{}, err
 	}
 	native := ""
@@ -219,10 +219,10 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 		// Vertex omits usage on some model families; a 4-chars-per-token
 		// estimate keeps accounting non-zero rather than silently free.
 		usage.InputTokens = int64(len(request.Instructions)+len(request.Prompt)) / 4
-		usage.OutputTokens = int64(len(text)) / 4
+		usage.OutputTokens = int64(len(text.String())) / 4
 	}
 	return domain.ModelResult{
-		Output: []byte(text), ToolCalls: calls, Citations: googleCitations(grounding),
+		Output: []byte(text.String()), ToolCalls: calls, Citations: googleCitations(grounding),
 		FinishReason: finishReason(native, calls), Usage: usage,
 	}, nil
 }
@@ -366,17 +366,17 @@ func googleFold(aggregate, response *genai.GenerateContentResponse) string {
 	if streamed.Content == nil {
 		return ""
 	}
-	text := ""
+	var text strings.Builder
 	for _, part := range streamed.Content.Parts {
 		if part == nil {
 			continue
 		}
 		candidate.Content.Parts = append(candidate.Content.Parts, part)
 		if !part.Thought {
-			text += part.Text
+			text.WriteString(part.Text)
 		}
 	}
-	return text
+	return text.String()
 }
 
 func (p *Google) GenerateImage(ctx context.Context, model string, request domain.ImageRequest) (domain.MediaResult, error) {
@@ -423,7 +423,7 @@ func (p *Google) GenerateVideo(ctx context.Context, model string, request domain
 		duration = 5
 	}
 	operation, err := client.Models.GenerateVideos(ctx, model, mediaPrompt(request.Prompt, request.StyleHint), nil, &genai.GenerateVideosConfig{
-		DurationSeconds: genai.Ptr(duration),
+		DurationSeconds: new(duration),
 		NumberOfVideos:  atLeastOne(request.Count),
 	})
 	if err != nil {

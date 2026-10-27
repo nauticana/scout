@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 )
 
 var (
@@ -13,6 +14,8 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	// ErrForbidden indicates that the tenant is not allowed to perform the operation.
 	ErrForbidden = errors.New("forbidden")
+	// ErrAuthenticatedView refuses a decision link: the request is decided only in an authenticated view.
+	ErrAuthenticatedView = fmt.Errorf("%w: decided only in an authenticated view", ErrForbidden)
 	// ErrRateLimited indicates that a tenant admission limit was exceeded.
 	ErrRateLimited = errors.New("rate limited")
 	// ErrBudgetExceeded indicates that a token or cost budget was exceeded.
@@ -94,6 +97,9 @@ var (
 	// ErrBudgetUnsettled indicates a turn ended but its reservation was no longer held, so it was
 	// not settled; the turn's end stands.
 	ErrBudgetUnsettled = errors.New("budget unsettled")
+	// ErrWorkingSetUnassured indicates the turn's working set does not support the step: a
+	// conflicted or insufficient set holds the turn, and one that is not verified or bounded refuses a mutating call.
+	ErrWorkingSetUnassured = errors.New("working set unassured")
 )
 
 // TurnStage identifies the turn-lifecycle boundary that produced an error.

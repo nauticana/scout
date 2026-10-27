@@ -8,6 +8,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/clk"
 )
 
 // BoundedShadowSampler mirrors a stable-hash share of requests to a shadow
@@ -33,10 +34,7 @@ type shadowWindow struct {
 var _ contract.ShadowTrafficSampler = (*BoundedShadowSampler)(nil)
 
 func (sampler *BoundedShadowSampler) now() time.Time {
-	if sampler.Now != nil {
-		return sampler.Now()
-	}
-	return time.Now()
+	return clk.Now(sampler.Now)
 }
 
 func (sampler *BoundedShadowSampler) validate() error {

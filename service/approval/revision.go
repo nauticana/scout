@@ -59,7 +59,7 @@ func (g *Gate) edited(ctx context.Context, call domain.ToolCall) (domain.Approva
 	if err != nil {
 		return domain.ApprovalRequest{}, domain.ApprovalKey{}, false, err
 	}
-	for index := 0; index < maxAsks; index++ {
+	for index := range maxAsks {
 		key := domain.ApprovalKey{TenantID: call.TenantContext.TenantID, RequestID: call.RequestID, ExecutionStepID: stepIDAt(call, index)}
 		request, err := g.Store.Get(ctx, key)
 		if errors.Is(err, domain.ErrNotFound) {

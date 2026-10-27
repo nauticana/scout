@@ -13,7 +13,7 @@ import (
 )
 
 func goldenRow(exampleID, scope string) []any {
-	return []any{int64(7), "core", int64(3), exampleID, scope, "curated", "internal", "short", "low", "billing", "en-US", "rubric://r", "expected", "object://b/" + exampleID, sha256Hex([]byte(exampleID)), `[{"Reviewer":"eve","Verdict":"accept"}]`, nil, nil}
+	return []any{int64(7), "core", int64(3), exampleID, scope, "curated", "internal", "short", "low", "billing", "en-US", "rubric://r", "expected", "object://b/" + exampleID, sha256Hex([]byte(exampleID)), `[{"Reviewer":"eve","Verdict":"accept"}]`, nil, nil, nil, nil, nil}
 }
 
 func TestGoldenSetStoreHidesGateExamplesFromDevScope(t *testing.T) {
@@ -22,7 +22,7 @@ func TestGoldenSetStoreHidesGateExamplesFromDevScope(t *testing.T) {
 		qGoldenExampleList: {goldenRow("open", "dev"), goldenRow("secret", "gate")},
 		qGoldenExampleGet:  {goldenRow("secret", "gate")},
 	})
-	store := &GoldenSetStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &GoldenSetStore{DB: dbFake{query: query}}
 
 	if _, err := store.ListExamples(ctx, domain.GoldenScopeDev, 7, "core", 3); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("dev list of a gate row = %v", err)
@@ -42,7 +42,7 @@ func TestGoldenSetStoreHidesGateExamplesFromDevScope(t *testing.T) {
 func TestGoldenSetStoreWriteArgumentOrder(t *testing.T) {
 	ctx := context.Background()
 	query := newQueryFake(nil)
-	store := &GoldenSetStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &GoldenSetStore{DB: dbFake{query: query}}
 	hidden := testExample("secret")
 	hidden.Hidden = true
 
@@ -53,7 +53,7 @@ func TestGoldenSetStoreWriteArgumentOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := query.args[qGoldenExampleInsert]
-	if len(args) != 18 || args[0] != int64(7) || args[3] != "secret" || args[4] != "gate" || args[14] != hidden.Payload.Digest {
+	if len(args) != 21 || args[0] != int64(7) || args[3] != "secret" || args[4] != "gate" || args[14] != hidden.Payload.Digest || args[18] != nil || args[20] != nil {
 		t.Fatalf("example insert args = %v", args)
 	}
 
@@ -89,7 +89,7 @@ func TestManifestStoreDetectsContentConflictAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	replay := newQueryFake(map[string][][]any{qManifestGet: {{string(encoded)}}})
-	store := &ManifestStore{keelStore: keelStore{DB: dbFake{query: replay}}}
+	store := &ManifestStore{DB: dbFake{query: replay}}
 	if err := store.Put(ctx, manifest); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -98,12 +98,12 @@ func TestManifestStoreDetectsContentConflictAndReplay(t *testing.T) {
 	}
 
 	conflicting := newQueryFake(map[string][][]any{qManifestGet: {{`{"ManifestID":"x"}`}}})
-	if err := (&ManifestStore{keelStore: keelStore{DB: dbFake{query: conflicting}}}).Put(ctx, manifest); !errors.Is(err, domain.ErrConflict) {
+	if err := (&ManifestStore{DB: dbFake{query: conflicting}}).Put(ctx, manifest); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("conflict = %v", err)
 	}
 
 	fresh := newQueryFake(nil)
-	if err := (&ManifestStore{keelStore: keelStore{DB: dbFake{query: fresh}}}).Put(ctx, manifest); err != nil {
+	if err := (&ManifestStore{DB: dbFake{query: fresh}}).Put(ctx, manifest); err != nil {
 		t.Fatal(err)
 	}
 	args := fresh.args[qManifestInsert]
@@ -112,12 +112,12 @@ func TestManifestStoreDetectsContentConflictAndReplay(t *testing.T) {
 	}
 
 	loaded := newQueryFake(map[string][][]any{qManifestGet: {{string(encoded)}}})
-	got, err := (&ManifestStore{keelStore: keelStore{DB: dbFake{query: loaded}}}).Get(ctx, 7, manifest.ManifestID)
+	got, err := (&ManifestStore{DB: dbFake{query: loaded}}).Get(ctx, 7, manifest.ManifestID)
 	if err != nil || got.ManifestID != manifest.ManifestID {
 		t.Fatalf("get = %+v, %v", got, err)
 	}
 	tampered := newQueryFake(map[string][][]any{qManifestGet: {{`{"ManifestID":"` + manifest.ManifestID + `","TenantID":7}`}}})
-	if _, err := (&ManifestStore{keelStore: keelStore{DB: dbFake{query: tampered}}}).Get(ctx, 7, manifest.ManifestID); err == nil {
+	if _, err := (&ManifestStore{DB: dbFake{query: tampered}}).Get(ctx, 7, manifest.ManifestID); err == nil {
 		t.Fatal("returned a manifest whose id does not match its content")
 	}
 }
@@ -129,7 +129,7 @@ func TestResultStoreRunLifecycleArgumentOrder(t *testing.T) {
 		qRunFinish: {{int64(1)}},
 		qRunGetSet: {{manifest.ManifestID, "core", int64(3)}},
 	})
-	store := &ResultStore{keelStore: keelStore{DB: dbFake{query: query}}, Now: fixedClock(testClock)}
+	store := &ResultStore{DB: dbFake{query: query}, Now: fixedClock(testClock)}
 
 	runID, err := store.StartRun(ctx, domain.EvaluationRun{TenantID: 7, ManifestID: manifest.ManifestID, Scope: domain.GoldenScopeGate})
 	if err != nil || runID != 1 {
@@ -183,7 +183,7 @@ func TestGateDecisionStoreRoundTripsSignedPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := newQueryFake(map[string][][]any{qGateLatest: {{decision.DecisionID, string(payload), hex.EncodeToString(decision.Signature), decision.SignerKeyID}}})
-	store := &GateDecisionStore{keelStore: keelStore{DB: dbFake{query: query}}}
+	store := &GateDecisionStore{DB: dbFake{query: query}}
 
 	if err := store.Put(ctx, decision); err != nil {
 		t.Fatal(err)
@@ -208,5 +208,22 @@ func TestGateDecisionStoreRoundTripsSignedPayload(t *testing.T) {
 	worded.Verdict = "healthy"
 	if err := store.Put(ctx, worded); !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "verdict") {
 		t.Fatalf("stored a verdict that is not a rollout health verdict code: %v", err)
+	}
+}
+
+func TestGoldenSetStorePersistsTheNormalizedLabels(t *testing.T) {
+	query := newQueryFake(nil)
+	store := &GoldenSetStore{DB: dbFake{query: query}}
+	example := testExample("labeled")
+	example.Assurance = domain.AssuranceLabels{RequiredEvidence: []string{" doc-2", "doc-1 "}, ControllingAuthority: []string{"policy-7"}, ExecutionExpected: new(false)}
+	if err := store.PutExample(context.Background(), domain.GoldenScopeDev, example); err != nil {
+		t.Fatal(err)
+	}
+	if args := query.args[qGoldenExampleInsert]; args[18] != `["doc-1","doc-2"]` || args[19] != `["policy-7"]` || args[20] != false {
+		t.Fatalf("label args = %v", args[18:])
+	}
+	example.Assurance.RequiredEvidence = []string{"doc-1", " doc-1"}
+	if err := store.PutExample(context.Background(), domain.GoldenScopeDev, example); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("repeated label = %v", err)
 	}
 }

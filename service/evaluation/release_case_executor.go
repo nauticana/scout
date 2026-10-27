@@ -113,6 +113,10 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("resolve %s@%s: %w", subject.AgentID, subject.AgentVersion, err)
 	}
+	readOnly, err := readOnlyTools(ctx, executor.Registry, example.TenantID, subject.AgentID, subject.AgentVersion)
+	if err != nil {
+		return domain.EvaluationCase{}, err
+	}
 	sandbox, err := executor.Sandboxes(ctx, example, script)
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("sandbox for example %q: %w", example.ExampleID, err)
@@ -137,7 +141,7 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 		}
 	}
 	replay := &caseReplay{
-		loop: loop, journal: journal, fences: fences, graph: graph, enforcer: executor.Guardrails, guardrails: guardrails, principal: principal,
+		loop: loop, journal: journal, fences: fences, graph: graph, readOnly: readOnly, enforcer: executor.Guardrails, guardrails: guardrails, principal: principal,
 		limits: limits, budget: budget, maxSteps: executor.MaxSteps, now: executor.Now,
 		conversationID: "evaluation/" + subject.AgentVersion + "/" + example.ExampleID,
 	}

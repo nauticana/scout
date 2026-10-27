@@ -23,7 +23,7 @@ func (p *pageLabels) principal(tenantID int64, ref *api.PrincipalRef) {
 	if ref == nil {
 		return
 	}
-	key := domain.ScopedPrincipalRef{TenantID: tenantID, PrincipalRef: domain.PrincipalRef{Kind: domain.PrincipalKind(ref.Kind), ID: ref.ID}}
+	key := domain.ScopedPrincipalRef{TenantID: tenantID, Kind: domain.PrincipalKind(ref.Kind), ID: ref.ID}
 	p.labels.Principals[key] = ""
 	p.fill = append(p.fill, func() { ref.Label = p.labels.Principals[key] })
 }

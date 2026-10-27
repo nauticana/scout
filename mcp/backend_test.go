@@ -155,7 +155,7 @@ func TestRegisterToolBackendEnforcesPolicy(t *testing.T) {
 // The handler re-checks scopes even though discovery filtering hides the tool.
 func TestBackendToolAuthorizesBeforeExecuting(t *testing.T) {
 	backend := &toolBackendFake{}
-	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], backend: backend}
+	tool := backendTool{callers: BaseCallerResolver{}, definition: backendTools[1], backend: backend}
 	result, err := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{})
 	if err != nil || !result.IsError || backend.call.Name != "" {
 		t.Fatalf("unscoped handle = %+v, err = %v, call = %+v", result, err, backend.call)
@@ -310,7 +310,7 @@ func TestOnDeniedReportsMissingScopes(t *testing.T) {
 func TestBackendToolReportsItsOwnRefusal(t *testing.T) {
 	var tools []string
 	backend := &toolBackendFake{}
-	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[1], backend: backend,
+	tool := backendTool{callers: BaseCallerResolver{}, definition: backendTools[1], backend: backend,
 		onDenied: func(_ context.Context, _ domain.MCPCaller, name string, _ error) { tools = append(tools, name) }}
 	if result, _ := tool.Handle(remoteContext("read"), mcpgo.CallToolRequest{}); !result.IsError || len(tools) != 1 || tools[0] != "submit" {
 		t.Fatalf("result = %+v, reported = %v", result, tools)
@@ -319,7 +319,7 @@ func TestBackendToolReportsItsOwnRefusal(t *testing.T) {
 
 func TestBackendToolReportsUnresolvedCaller(t *testing.T) {
 	var denied []error
-	tool := backendTool{governed: governed{callers: BaseCallerResolver{}}, definition: backendTools[0], backend: &toolBackendFake{},
+	tool := backendTool{callers: BaseCallerResolver{}, definition: backendTools[0], backend: &toolBackendFake{},
 		onDenied: func(_ context.Context, _ domain.MCPCaller, _ string, err error) { denied = append(denied, err) }}
 	if result, _ := tool.Handle(withTransport(context.Background(), domain.MCPTransportStreamableHTTP), mcpgo.CallToolRequest{}); !result.IsError || len(denied) != 1 || !errors.Is(denied[0], domain.ErrUnauthorized) {
 		t.Fatalf("result = %+v, denied = %v", result, denied)

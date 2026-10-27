@@ -30,7 +30,8 @@ type GoldenCase struct {
 	ReviewAgentID string
 	InputWithheld bool
 	// Script holds the case's follow-up turns and sandboxed tool responses; zero is unscripted.
-	Script CaseScript
+	Script    CaseScript
+	Assurance AssuranceLabels
 }
 
 // CaseScript is the scripted part of a golden case: the inputs of turns 2..n, each

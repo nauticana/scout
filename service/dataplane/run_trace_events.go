@@ -115,7 +115,7 @@ func journalEvent(entry domain.LoopEntry, ref domain.RunTraceJournalRef) (domain
 		if entry.Observation == nil || entry.Tool.ToolID == "" {
 			return domain.RunTraceEvent{}, fmt.Errorf("observation entry is incomplete")
 		}
-		call := &domain.RunTraceToolCall{Journal: ref, Tool: entry.Tool, Outcome: domain.RunTraceToolOK, Usage: entry.Usage}
+		call := &domain.RunTraceToolCall{Journal: ref, CallID: entry.Observation.CallID, Tool: entry.Tool, Outcome: domain.RunTraceToolOK, Usage: entry.Usage}
 		if entry.Observation.IsError {
 			call.Outcome, call.ErrorClass = domain.RunTraceToolError, observedErrorClass(entry.Observation.Output)
 		}

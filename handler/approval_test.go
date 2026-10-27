@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	keelhandler "github.com/nauticana/keel/handler"
-
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/domain"
 )
@@ -36,7 +34,7 @@ func (desk *approvalDeskFake) RedeemLink(context.Context, string, domain.Approva
 
 func TestApprovalResolveDecidesAsTheSessionUser(t *testing.T) {
 	desk := &approvalDeskFake{}
-	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
+	handler := &ApprovalHandler{UserService: conversationUsers{}, Desk: desk}
 	recorder := httptest.NewRecorder()
 	spoofed := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusApproved) + `","proposed_digest":"d","tenant_id":99}`)
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, spoofed))
@@ -56,7 +54,7 @@ func TestApprovalResolveDecidesAsTheSessionUser(t *testing.T) {
 
 func TestApprovalResolvePassesAnEditsRevisedArguments(t *testing.T) {
 	desk := &approvalDeskFake{}
-	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
+	handler := &ApprovalHandler{UserService: conversationUsers{}, Desk: desk}
 	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusEdited) + `","proposed_digest":"d","revised_arguments":{"qty":5}}`)
 	recorder := httptest.NewRecorder()
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
@@ -76,7 +74,7 @@ func TestApprovalResolvePassesAnEditsRevisedArguments(t *testing.T) {
 
 func TestApprovalResolveTreatsNullRevisedArgumentsAsAbsent(t *testing.T) {
 	desk := &approvalDeskFake{}
-	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Desk: desk}
+	handler := &ApprovalHandler{UserService: conversationUsers{}, Desk: desk}
 	body := []byte(`{"request_id":"r-1","execution_step_id":3,"verdict":"` + string(domain.ApprovalStatusApproved) + `","proposed_digest":"d","revised_arguments":null}`)
 	recorder := httptest.NewRecorder()
 	handler.Routes()[api.ApprovalResolvePath](recorder, authenticatedRequest(http.MethodPost, api.ApprovalResolvePath, body))
@@ -134,7 +132,7 @@ func TestApprovalConfirmationRoutesActAsTheSessionPerson(t *testing.T) {
 	}
 	configureConversationRequestLimit(t)
 	inbox := &confirmationInboxFake{}
-	handler := &ApprovalHandler{AbstractHandler: keelhandler.AbstractHandler{UserService: conversationUsers{}}, Inbox: inbox}
+	handler := &ApprovalHandler{UserService: conversationUsers{}, Inbox: inbox}
 	serve := func(method, path, target string, body []byte) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		handler.Routes()[path](recorder, authenticatedRequest(method, target, body))

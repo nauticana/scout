@@ -91,8 +91,7 @@ func (s *StudioLimits) Limits(ctx context.Context, actor domain.StudioActor, age
 			report.Spend = &spend
 		}
 	}
-	var unenforceable *domain.BudgetUnenforceableError
-	if errors.As(err, &unenforceable) {
+	if unenforceable, ok := errors.AsType[*domain.BudgetUnenforceableError](err); ok {
 		report.BudgetProblem = unenforceable.Problem
 		return report, nil
 	}

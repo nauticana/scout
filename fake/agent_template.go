@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -65,7 +66,7 @@ func (t *memoryTemplate) audience() *domain.TemplateAudience {
 	for tenant := range t.tenants {
 		audience.Tenants = append(audience.Tenants, tenant)
 	}
-	sort.Slice(audience.Tenants, func(i, j int) bool { return audience.Tenants[i] < audience.Tenants[j] })
+	slices.Sort(audience.Tenants)
 	return audience
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -158,13 +159,13 @@ func anthropicMessage(message domain.ModelMessage) anthropic.MessageParam {
 }
 
 func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
-	text := ""
+	var text strings.Builder
 	var calls []domain.ModelToolCall
 	var sources citations
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
-			text += block.Text
+			text.WriteString(block.Text)
 			for _, citation := range block.Citations {
 				if citation.Type == "web_search_result_location" {
 					sources.add(citation.URL, urlHost(citation.URL), citation.Title, citation.CitedText)
@@ -174,11 +175,11 @@ func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
 			calls = append(calls, domain.ModelToolCall{CallID: block.ID, Name: block.Name, Arguments: []byte(block.Input)})
 		}
 	}
-	if err := emptyResult(AnthropicProviderID, text, calls); err != nil {
+	if err := emptyResult(AnthropicProviderID, text.String(), calls); err != nil {
 		return domain.ModelResult{}, err
 	}
 	return domain.ModelResult{
-		Output:       []byte(text),
+		Output:       []byte(text.String()),
 		ToolCalls:    calls,
 		Citations:    sources.list,
 		FinishReason: finishReason(string(resp.StopReason), calls),
