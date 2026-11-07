@@ -106,7 +106,7 @@ SELECT verdict_code, reason, policy_digest, policy_json, inputs_digest, base_ver
   FROM agent_gate_decision
  WHERE partner_id = ? AND agent_id = ? AND definition_digest = ?`,
 	qGateDecisionRuns: `
-SELECT d.run_id, d.role_code, r.scope_code, d.score_bp, d.sample_count, d.critical_count
+SELECT d.run_id, d.role_code, r.scope_code, d.score_bp, d.sample_count, d.skipped_count, d.critical_count
   FROM agent_gate_decision_run d
   JOIN evaluation_run r ON r.partner_id = d.partner_id AND r.id = d.run_id
  WHERE d.partner_id = ? AND d.agent_id = ? AND d.definition_digest = ?
@@ -129,8 +129,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (partner_id, agent_id, definition_digest) DO NOTHING
 RETURNING decided_at`,
 	qGateInsertRun: `
-INSERT INTO agent_gate_decision_run (partner_id, agent_id, definition_digest, run_id, role_code, score_bp, sample_count, critical_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO agent_gate_decision_run (partner_id, agent_id, definition_digest, run_id, role_code, score_bp, sample_count, skipped_count, critical_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGateAudit: `
 INSERT INTO agent_studio_event (id, partner_id, agent_id, event, detail, principal_kind, principal_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?, ?)`,
@@ -541,7 +541,7 @@ func (g *StudioEvaluationGate) decide(ctx context.Context, tenantID int64, agent
 			reasons = append(reasons, fmt.Sprintf("%s run %d has %d %s values outside 0..1", golden, candidate.RunID, candidate.invalid, policy.Metric))
 		}
 		if minimum := max(policy.MinSamples, 1); candidate.Samples < minimum {
-			reasons = append(reasons, fmt.Sprintf("%s run %d has %d samples, fewer than %d", golden, candidate.RunID, candidate.Samples, minimum))
+			reasons = append(reasons, fmt.Sprintf("%s run %d has %d samples (%d cases lack %s), fewer than %d", golden, candidate.RunID, candidate.Samples, candidate.Skipped, policy.Metric, minimum))
 		}
 		if candidate.ScoreBP < policy.MinScoreBP {
 			reasons = append(reasons, fmt.Sprintf("%s %s score %d bp is below %d bp", golden, policy.Metric, candidate.ScoreBP, policy.MinScoreBP))
@@ -578,8 +578,8 @@ type scoredRun struct {
 }
 
 // score finds the newest completed run of digest in scope on the current set version and averages
-// metric over all of its results; a result the metric did not score counts 0, and several scores of
-// the metric count their lowest.
+// metric over the results that scored it, skipping and counting the rest; several scores of the
+// metric count their lowest, and a critical score counts whether or not the result has the metric.
 func (g *StudioEvaluationGate) score(ctx context.Context, tenantID int64, agentID, digest string, current gateContext, golden domain.GoldenScope, metric string) (scoredRun, bool, error) {
 	runs, err := g.qs.Query(ctx, qGateRun, tenantID, agentID, current.goldenSetID, current.setVersion, string(golden), digest)
 	if err != nil {
@@ -623,6 +623,10 @@ func (g *StudioEvaluationGate) score(ctx context.Context, tenantID int64, agentI
 		if critical {
 			run.Criticals++
 		}
+		if !scored {
+			run.Skipped++
+			continue
+		}
 		run.Samples++
 		total += value
 	}
@@ -641,7 +645,7 @@ func inputsDigest(decision domain.EvaluationGateDecision) string {
 		fmt.Fprintf(&payload, "\x1f%s\x1f%s", decision.DecidedBy.Kind, decision.DecidedBy.ID)
 	}
 	for _, run := range decision.Runs {
-		fmt.Fprintf(&payload, "\x1e%d\x1f%s\x1f%d\x1f%d\x1f%d", run.RunID, run.Role, run.ScoreBP, run.Samples, run.Criticals)
+		fmt.Fprintf(&payload, "\x1e%d\x1f%s\x1f%d\x1f%d\x1f%d\x1f%d", run.RunID, run.Role, run.ScoreBP, run.Samples, run.Skipped, run.Criticals)
 	}
 	return sha256Hex(payload.String())
 }
@@ -701,7 +705,7 @@ func (g *StudioEvaluationGate) record(ctx context.Context, actor domain.StudioAc
 	decision.DecidedAt = common.AsTime(inserted.Rows[0][0])
 	for _, run := range decision.Runs {
 		if _, err = tx.Query(ctx, qGateInsertRun, actor.TenantID, decision.AgentID, decision.DefinitionDigest, run.RunID,
-			string(run.Role), run.ScoreBP, run.Samples, run.Criticals); err != nil {
+			string(run.Role), run.ScoreBP, run.Samples, run.Skipped, run.Criticals); err != nil {
 			return domain.EvaluationGateDecision{}, fmt.Errorf("insert gate decision run %d: %w", run.RunID, err)
 		}
 	}
@@ -763,12 +767,12 @@ func (g *StudioEvaluationGate) scanDecision(ctx context.Context, qs keelport.Que
 		return domain.EvaluationGateDecision{}, fmt.Errorf("load gate decision runs: %w", err)
 	}
 	for _, run := range runs.Rows {
-		if len(run) < 6 {
-			return domain.EvaluationGateDecision{}, fmt.Errorf("gate decision run row: expected 6 columns, got %d", len(run))
+		if len(run) < 7 {
+			return domain.EvaluationGateDecision{}, fmt.Errorf("gate decision run row: expected 7 columns, got %d", len(run))
 		}
 		gateRun := domain.EvaluationGateRun{
 			RunID: common.AsInt64(run[0]), Role: domain.GateRunRole(common.AsString(run[1])), Scope: domain.GoldenScope(common.AsString(run[2])),
-			ScoreBP: common.AsInt64(run[3]), Samples: common.AsInt64(run[4]), Criticals: common.AsInt64(run[5]),
+			ScoreBP: common.AsInt64(run[3]), Samples: common.AsInt64(run[4]), Skipped: common.AsInt64(run[5]), Criticals: common.AsInt64(run[6]),
 		}
 		if !gateRun.Role.Valid() {
 			return domain.EvaluationGateDecision{}, fmt.Errorf("gate decision run %d: unknown role %q", gateRun.RunID, gateRun.Role)

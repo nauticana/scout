@@ -8,7 +8,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/nauticana/charter v1.6.1
-	github.com/nauticana/keel v1.3.0
+	github.com/nauticana/keel v1.3.2
 	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.72.0
 )
@@ -81,7 +81,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.21.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/infisical/go-sdk v0.7.2 // indirect
+	github.com/infisical/go-sdk v0.9.1 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

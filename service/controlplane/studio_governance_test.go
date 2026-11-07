@@ -88,7 +88,7 @@ func newGovernanceFixture(rows map[string][][]any) *governanceFixture {
 }
 
 func (f *governanceFixture) owning(snapshot domain.GovernanceSnapshot) *governanceFixture {
-	f.service.Source = fake.GovernanceSource{SnapshotFunc: func(_ context.Context, tenantID int64, agentID string) (domain.GovernanceSnapshot, bool, error) {
+	f.service.Source = fake.GovernanceSource{SnapshotFunc: func(_ context.Context, tenantID int64, agentID, _ string) (domain.GovernanceSnapshot, bool, error) {
 		return snapshot, tenantID == 8 && agentID == "writer-a", nil
 	}}
 	return f
@@ -332,7 +332,7 @@ func TestGovernanceFailsClosedOnAnUnusableSnapshot(t *testing.T) {
 	}
 	down := errors.New("directory down")
 	fixture := newGovernanceFixture(map[string][][]any{})
-	fixture.service.Source = fake.GovernanceSource{SnapshotFunc: func(context.Context, int64, string) (domain.GovernanceSnapshot, bool, error) {
+	fixture.service.Source = fake.GovernanceSource{SnapshotFunc: func(context.Context, int64, string, string) (domain.GovernanceSnapshot, bool, error) {
 		return domain.GovernanceSnapshot{}, false, down
 	}}
 	if _, err := fixture.service.SaveGovernance(context.Background(), humanActor(8, 9), governanceChange(billingGovernance())); !errors.Is(err, down) {

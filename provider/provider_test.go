@@ -2,9 +2,15 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/openai/openai-go"
+	"google.golang.org/genai"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -86,5 +92,67 @@ func TestUnsupportedModalitiesFail(t *testing.T) {
 	}
 	if _, err := (&Anthropic{}).Generate(context.Background(), domain.ModelSelection{Model: "m"}, domain.ModelRequest{}); !errors.Is(err, domain.ErrNotReady) {
 		t.Error("anthropic without a key must be ErrNotReady")
+	}
+}
+
+func TestGoogleVideoLocationSeparatesOnlyVideo(t *testing.T) {
+	global := &Google{ProjectID: "p", Location: "global", VideoLocation: "us-central1"}
+	if config := global.clientConfig(global.Location); config.Location != "global" || global.separateVideoLocation() != "us-central1" {
+		t.Fatalf("location = %q, video = %q", config.Location, global.separateVideoLocation())
+	}
+	for name, unseparated := range map[string]*Google{
+		"unset":      {Location: "global"},
+		"same":       {Location: "us-central1", VideoLocation: "us-central1"},
+		"gemini api": {UseGeminiAPI: true, VideoLocation: "us-central1"},
+	} {
+		if location := unseparated.separateVideoLocation(); location != "" {
+			t.Errorf("%s: video location = %q", name, location)
+		}
+	}
+	got := withVideoModels([]string{"gemini-2", "veo-3"}, []string{"gemini-regional", "veo-3", "veo-3.1-fast-generate-001"})
+	if !slices.Equal(got, []string{"gemini-2", "veo-3", "veo-3.1-fast-generate-001"}) {
+		t.Fatalf("models = %v", got)
+	}
+}
+
+func TestPromptCacheMarksThePrefixAndKeepsCacheTokensOutOfInput(t *testing.T) {
+	cached := domain.ModelRequest{Instructions: []byte("rules"), Prompt: []byte("task"), PromptCache: true, MaxOutputTokens: 1}
+	params, err := (&Anthropic{}).messageParams(domain.ModelSelection{Model: "m"}, cached)
+	if err != nil || params.System[0].CacheControl.Type != "ephemeral" {
+		t.Fatalf("cache control = %+v, %v", params.System, err)
+	}
+	cached.PromptCache = false
+	if params, err = (&Anthropic{}).messageParams(domain.ModelSelection{Model: "m"}, cached); err != nil || params.System[0].CacheControl.Type != "" {
+		t.Fatalf("uncached = %+v, %v", params.System, err)
+	}
+	cached.PromptCache = true
+
+	var message anthropic.Message
+	if err = json.Unmarshal([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":90,"cache_creation_input_tokens":40}}`), &message); err != nil {
+		t.Fatal(err)
+	}
+	result, err := anthropicResult(&message, cached)
+	if err != nil || result.Usage.InputTokens != 5 || result.Usage.CacheReadTokens != 90 || result.Usage.CacheWriteTokens != 40 {
+		t.Fatalf("anthropic usage = %+v, %v", result.Usage, err)
+	}
+	if result, err = anthropicResult(&message, domain.ModelRequest{}); err != nil || result.Usage.InputTokens != 135 || result.Usage.CacheReadTokens != 0 || result.Usage.CacheWriteTokens != 0 {
+		t.Fatalf("an uncached request bills cache tokens as input: %+v, %v", result.Usage, err)
+	}
+
+	var completion openai.ChatCompletion
+	if err = json.Unmarshal([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":60}}}`), &completion); err != nil {
+		t.Fatal(err)
+	}
+	if result, err = openAIResult(OpenAIProviderID, &completion, cached); err != nil || result.Usage.InputTokens != 40 || result.Usage.CacheReadTokens != 60 {
+		t.Fatalf("openai usage = %+v, %v", result.Usage, err)
+	}
+	if result, err = openAIResult(OpenAIProviderID, &completion, domain.ModelRequest{}); err != nil || result.Usage.InputTokens != 100 || result.Usage.CacheReadTokens != 0 {
+		t.Fatalf("an uncached request keeps its input whole: %+v, %v", result.Usage, err)
+	}
+
+	gemini := &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: genai.NewContentFromText("ok", genai.RoleModel)}},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 100, CandidatesTokenCount: 2, CachedContentTokenCount: 70}}
+	if result, err = googleResult(gemini, cached); err != nil || result.Usage.InputTokens != 30 || result.Usage.CacheReadTokens != 70 {
+		t.Fatalf("google usage = %+v, %v", result.Usage, err)
 	}
 }

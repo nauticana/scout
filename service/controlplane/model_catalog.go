@@ -24,6 +24,8 @@ const (
 	RateImage            = "image"
 	RateVideoSecond      = "video_second"
 	RateWebSearch        = "web_search"
+	RateCacheRead        = "cache_read_per_million"
+	RateCacheWrite       = "cache_write_per_million"
 )
 
 const (
@@ -44,7 +46,8 @@ SELECT provider_id, model_id, display_name, context_token_limit, output_token_li
 SELECT DISTINCT ON (provider_id, model_id, currency_code)
        provider_id, model_id, currency_code,
        input_minor_units_per_million, output_minor_units_per_million,
-       image_minor_units, video_minor_units_per_second, search_minor_units
+       image_minor_units, video_minor_units_per_second, search_minor_units,
+       cache_read_minor_units_per_million, cache_write_minor_units_per_million
   FROM model_price
  WHERE effective_at <= CURRENT_TIMESTAMP
  ORDER BY provider_id, model_id, currency_code, effective_at DESC`,
@@ -209,6 +212,8 @@ func (c *ModelCatalog) rates(ctx context.Context) (map[domain.ModelReference][]d
 			{RateImage, common.AsInt64(row[5])},
 			{RateVideoSecond, common.AsInt64(row[6])},
 			{RateWebSearch, common.AsInt64(row[7])},
+			{RateCacheRead, common.AsInt64(row[8])},
+			{RateCacheWrite, common.AsInt64(row[9])},
 		} {
 			if rate.amount > 0 {
 				rates[reference] = append(rates[reference], domain.ModelRate{
@@ -224,10 +229,11 @@ func (c *ModelCatalog) rates(ctx context.Context) (map[domain.ModelReference][]d
 // Cost prices one model's usage in the catalog currency, in integer minor
 // units. Token rates are per million, so the division happens last to keep the
 // rounding error below one minor unit. Media counts are billed per asset and
-// per whole second, grounding searches per search. An unpriced model is an
-// error, never a free one.
+// per whole second, grounding searches per search. An unpriced model, or
+// prefix-cache tokens without their rate, is an error, never free.
 func (c *ModelCatalog) Cost(ctx context.Context, reference domain.ModelReference, usage domain.ModelUsage) (int64, string, error) {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.Images < 0 || usage.VideoSeconds < 0 || usage.SearchQueries < 0 {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 ||
+		usage.Images < 0 || usage.VideoSeconds < 0 || usage.SearchQueries < 0 {
 		return 0, "", fmt.Errorf("%w: usage counts cannot be negative", domain.ErrValidation)
 	}
 	if err := c.init(ctx); err != nil {
@@ -243,6 +249,11 @@ func (c *ModelCatalog) Cost(ctx context.Context, reference domain.ModelReference
 	}
 	var total int64
 	var currency string
+	for category, tokens := range map[string]int64{RateCacheRead: usage.CacheReadTokens, RateCacheWrite: usage.CacheWriteTokens} {
+		if tokens > 0 && !slices.ContainsFunc(priced, func(rate domain.ModelRate) bool { return rate.UsageCategory == category }) {
+			return 0, "", fmt.Errorf("%w: no %s price for model %s/%s", domain.ErrNotFound, category, reference.ProviderID, reference.ModelID)
+		}
+	}
 	for _, rate := range priced {
 		currency = rate.Currency
 		switch rate.UsageCategory {
@@ -256,6 +267,10 @@ func (c *ModelCatalog) Cost(ctx context.Context, reference domain.ModelReference
 			total += rate.AmountMinor * usage.VideoSeconds
 		case RateWebSearch:
 			total += rate.AmountMinor * usage.SearchQueries
+		case RateCacheRead:
+			total += rate.AmountMinor * usage.CacheReadTokens / perMillion
+		case RateCacheWrite:
+			total += rate.AmountMinor * usage.CacheWriteTokens / perMillion
 		}
 	}
 	return total, currency, nil

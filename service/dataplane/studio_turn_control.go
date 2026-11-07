@@ -37,11 +37,12 @@ const liveTurnColumns = `
 SELECT turn.request_id, turn.conversation_id, turn.turn_no, turn.status_code, turn.fence,
        COALESCE(turn.hold_code, ''), turn.hold_requested_at IS NOT NULL, COALESCE(turn.hold_reason, ''),
        turn.cancel_requested_at IS NOT NULL, turn.queued_at, turn.started_at, turn.held_at,
-       COALESCE(turn.holder_kind, ''), COALESCE(turn.holder_id, ''), turn.hold_until
+       COALESCE(turn.holder_kind, ''), COALESCE(turn.holder_id, ''), turn.hold_until, COALESCE(turn.working_set_code, '')
   FROM conversation_turn turn
   JOIN agent_conversation conv ON conv.partner_id = turn.partner_id AND conv.conversation_id = turn.conversation_id`
 
 var operateQueries = map[string]string{
+	qWorkingSetItems: workingSetItemsSQL,
 	qOperateLiveTurns: liveTurnColumns + `
  WHERE turn.partner_id = ? AND conv.agent_id = ? AND turn.status_code IN (` + sqlTurnLive + `)
    AND (? = '' OR turn.queued_at < ? OR turn.queued_at = ? AND turn.request_id < ?)
@@ -338,8 +339,8 @@ func decodeTurnCursor(before string) (time.Time, string, error) {
 }
 
 func decodeLiveTurn(row []any) (domain.LiveTurn, error) {
-	if len(row) < 15 {
-		return domain.LiveTurn{}, fmt.Errorf("decode live turn: expected 15 columns, got %d", len(row))
+	if len(row) < 16 {
+		return domain.LiveTurn{}, fmt.Errorf("decode live turn: expected 16 columns, got %d", len(row))
 	}
 	turn := domain.LiveTurn{
 		RequestID: common.AsString(row[0]), ConversationID: common.AsString(row[1]), TurnNo: common.AsInt64(row[2]),
@@ -351,6 +352,7 @@ func decodeLiveTurn(row []any) (domain.LiveTurn, error) {
 	turn.HeldAt, _ = common.AsTimeOK(row[11])
 	turn.Holder = domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[12])), ID: common.AsString(row[13])}
 	turn.HoldUntil, _ = common.AsTimeOK(row[14])
+	turn.WorkingSet.Assurance = domain.WorkingSetAssurance(common.AsString(row[15]))
 	return turn, nil
 }
 
@@ -369,6 +371,9 @@ func (s *StudioTurnControl) Turn(ctx context.Context, actor domain.StudioActor, 
 func (s *StudioTurnControl) turnWithOutcomes(ctx context.Context, tenantID int64, agentID, requestID string) (domain.LiveTurn, error) {
 	turn, err := s.turn(ctx, tenantID, agentID, requestID)
 	if err != nil {
+		return domain.LiveTurn{}, err
+	}
+	if turn.WorkingSet, err = readTurnWorkingSet(ctx, s.qs, tenantID, turn.ConversationID, turn.TurnNo, string(turn.WorkingSet.Assurance)); err != nil {
 		return domain.LiveTurn{}, err
 	}
 	if turn.Outcomes, err = s.Outcomes.List(ctx, tenantID, requestID); err != nil {

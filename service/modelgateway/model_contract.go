@@ -2,6 +2,7 @@ package modelgateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -146,6 +147,15 @@ func checkCapabilities(ctx context.Context, catalog contract.ModelCandidateCatal
 	}
 	_, err := capableCandidate(ctx, catalog, selection, request.TenantContext, required)
 	return err
+}
+
+// routeCaches reports whether the route declares the prompt cache; one that does not serves uncached.
+func routeCaches(ctx context.Context, catalog contract.ModelCandidateCatalog, selection domain.ModelSelection, tenant domain.TenantContext) (bool, error) {
+	_, err := capableCandidate(ctx, catalog, selection, tenant, []domain.ModelCapability{domain.CapabilityPromptCache})
+	if errors.Is(err, domain.ErrCapabilityUnsupported) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // capableCandidate returns the tenant's catalog entry for the selected route,

@@ -78,6 +78,8 @@ type BaseDataPlane struct {
 	// turns; nil means no release binds knowledge whole.
 	Knowledge    contract.PinnedKnowledgeResolver
 	Entitlements contract.EntitlementResolver
+	// PromptCache renders release content first and asks routes declaring the capability to cache it.
+	PromptCache bool
 	// Memory puts the tenant's memory into every turn; nil keeps none.
 	Memory contract.MemoryStore
 	// WorkingSet compiles each loop turn's authority-aware context, such as a workingset.Compiler
@@ -474,7 +476,7 @@ func (plane *BaseDataPlane) composeLoop() error {
 		builder := &ReleaseLoopRequestBuilder{
 			Definitions: &controlplane.TableAgentDefinitionReader{DB: plane.DB}, Renderer: &agentruntime.PromptRenderer{}, Skills: plane.Skills,
 			Knowledge: plane.Knowledge, Entitlements: plane.Entitlements, KnowledgeMaxBytes: plane.Settings.GuardrailMaxInputBytes, Memory: plane.Memory,
-			LanguageCode: plane.LanguageCode, MaxOutputTokens: plane.MaxOutputTokens, Task: plane.Task,
+			LanguageCode: plane.LanguageCode, MaxOutputTokens: plane.MaxOutputTokens, Task: plane.Task, PromptCache: plane.PromptCache,
 		}
 		if plane.WorkingSet != nil {
 			builder.WorkingSet, builder.WorkingSetRecords = plane.WorkingSet, &TableWorkingSetRecorder{DB: plane.DB}

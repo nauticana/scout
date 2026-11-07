@@ -72,7 +72,10 @@ type RuntimePolicyVersion struct {
 type Usage struct {
 	InputTokens  int64
 	OutputTokens int64
-	ToolCalls    int
+	// CacheReadTokens and CacheWriteTokens are prefix-cache input billed at their own rates, never in InputTokens.
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	ToolCalls        int
 	// SearchQueries counts the provider-native web searches a grounded call ran.
 	SearchQueries  int64
 	CostMinorUnits int64

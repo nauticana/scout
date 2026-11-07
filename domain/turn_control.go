@@ -130,10 +130,11 @@ type LiveTurn struct {
 	// Holder is the person who operates the turn, or who finished it; HoldUntil ends their lease.
 	Holder    PrincipalRef
 	HoldUntil time.Time
-	// Outcomes are the turn's dispatched calls and Entries its operator entries; only the
-	// single-turn read fills them.
-	Outcomes []CallOutcome
-	Entries  []OperatorEntry
+	// WorkingSet carries the assurance on every read; only the single-turn read fills its ids,
+	// as it does Outcomes, the turn's dispatched calls, and Entries, its operator entries.
+	WorkingSet TurnWorkingSet
+	Outcomes   []CallOutcome
+	Entries    []OperatorEntry
 }
 
 // LiveTurnFilter pages an agent's live turns, newest first; Before is the previous page's

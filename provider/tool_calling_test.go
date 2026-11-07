@@ -87,7 +87,7 @@ func TestAnthropicRoundTripsParallelToolCallsAndConstrainsOutput(t *testing.T) {
 		"stop_reason":"tool_use","usage":{"input_tokens":5,"output_tokens":7}}`), &message); err != nil {
 		t.Fatalf("decode message: %v", err)
 	}
-	result, err := anthropicResult(&message)
+	result, err := anthropicResult(&message, domain.ModelRequest{})
 	requireParallelCalls(t, result, err, "toolu_1", "toolu_2")
 	if result.Usage.InputTokens != 5 || result.Usage.OutputTokens != 7 {
 		t.Fatalf("usage = %+v", result.Usage)

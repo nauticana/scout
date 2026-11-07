@@ -14,10 +14,12 @@ import (
 // FactoryConfig contains host-selected provider settings. Credentials remain
 // in the injected keystore and are fetched when an adapter is built.
 type FactoryConfig struct {
-	CredentialRefs     map[string]string
-	GoogleProjectID    string
-	GoogleLocation     string
-	UseGoogleGeminiAPI bool
+	CredentialRefs  map[string]string
+	GoogleProjectID string
+	GoogleLocation  string
+	// GoogleVideoLocation is the Vertex location of Veo; empty uses GoogleLocation.
+	GoogleVideoLocation string
+	UseGoogleGeminiAPI  bool
 	// Temperature is sent only to models Sampling reports as accepting it; nil sends none.
 	Temperature *float64
 	// Sampling says which models accept sampling parameters. Without it none do,
@@ -171,11 +173,12 @@ func (factory *Factory) googleAdapter(ctx context.Context, temperature *float64)
 		return nil, fmt.Errorf("%w: google Vertex project and location are required", domain.ErrValidation)
 	}
 	return &Google{
-		ProjectID:    strings.TrimSpace(factory.config.GoogleProjectID),
-		Location:     strings.TrimSpace(factory.config.GoogleLocation),
-		UseGeminiAPI: factory.config.UseGoogleGeminiAPI,
-		APIKey:       apiKey,
-		Temperature:  temperature,
+		ProjectID:     strings.TrimSpace(factory.config.GoogleProjectID),
+		Location:      strings.TrimSpace(factory.config.GoogleLocation),
+		VideoLocation: strings.TrimSpace(factory.config.GoogleVideoLocation),
+		UseGeminiAPI:  factory.config.UseGoogleGeminiAPI,
+		APIKey:        apiKey,
+		Temperature:   temperature,
 	}, nil
 }
 

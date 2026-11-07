@@ -27,6 +27,9 @@ type ModelRequest struct {
 	RequiredCapabilities []ModelCapability
 	// AffinityKey groups requests that benefit from landing on the same route (session or prefix cache).
 	AffinityKey string
+	// PromptCache asks a route declaring CapabilityPromptCache to cache the Instructions prefix; a
+	// route without it serves the request uncached.
+	PromptCache bool
 	// Idempotent marks a request safe to hedge or retry on another route.
 	Idempotent bool
 	// ExcludedRouteIDs are routes a hedge or retry must avoid; the router treats them as ineligible.
@@ -72,13 +75,15 @@ const (
 	CapabilityWebSearch ModelCapability = "WS"
 	// CapabilityEmbeddings marks a route that turns content into vectors.
 	CapabilityEmbeddings ModelCapability = "EM"
+	// CapabilityPromptCache marks a route that serves a request's Instructions prefix from a vendor cache.
+	CapabilityPromptCache ModelCapability = "PC"
 )
 
 // Valid reports whether the capability is a seeded model_capability code.
 func (capability ModelCapability) Valid() bool {
 	switch capability {
 	case CapabilityText, CapabilityImage, CapabilityVideo, CapabilityTools, CapabilitySampling,
-		CapabilityStructuredOutput, CapabilityWebSearch, CapabilityEmbeddings:
+		CapabilityStructuredOutput, CapabilityWebSearch, CapabilityEmbeddings, CapabilityPromptCache:
 		return true
 	default:
 		return false

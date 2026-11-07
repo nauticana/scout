@@ -45,10 +45,19 @@ type LiveTurn struct {
 	HolderKind string     `json:"holder_kind,omitempty"`
 	HolderID   string     `json:"holder_id,omitempty"`
 	HoldUntil  *time.Time `json:"hold_until,omitempty"`
-	// Outcomes are the turn's dispatched calls and Entries its operator entries; only the
-	// single-turn read returns them.
-	Outcomes []CallOutcome   `json:"outcomes,omitempty"`
-	Entries  []OperatorEntry `json:"entries,omitempty"`
+	// WorkingSet is absent until the turn compiles one; only the single-turn read returns its ids,
+	// as it does Outcomes, the turn's dispatched calls, and Entries, its operator entries.
+	WorkingSet *TurnWorkingSet `json:"working_set,omitempty"`
+	Outcomes   []CallOutcome   `json:"outcomes,omitempty"`
+	Entries    []OperatorEntry `json:"entries,omitempty"`
+}
+
+// TurnWorkingSet is a turn's working set: assurance is a working_set_assurance code, and selected
+// and excluded are the ids of the candidates it kept and left out, never their content.
+type TurnWorkingSet struct {
+	Assurance string   `json:"assurance"`
+	Selected  []string `json:"selected,omitempty"`
+	Excluded  []string `json:"excluded,omitempty"`
 }
 
 // CallOutcome is one non-read-only call of a turn. status is a turn_call_outcome_status code

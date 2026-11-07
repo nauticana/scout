@@ -175,6 +175,7 @@ const (
 	agent_alert_page_size                 = "agent_alert_page_size"
 	agent_alert_max_page_size             = "agent_alert_max_page_size"
 	agent_evaluation_case_max_turns       = "agent_evaluation_case_max_turns"
+	agent_evaluation_case_max_labels      = "agent_evaluation_case_max_labels"
 	agent_evaluation_case_max_tools       = "agent_evaluation_case_max_tools"
 	agent_evaluation_case_tool_max_bytes  = "agent_evaluation_case_tool_max_bytes"
 	agent_evaluation_trajectory_max_bytes = "agent_evaluation_trajectory_max_bytes"
@@ -193,6 +194,7 @@ const (
 	agent_hold_lapse_period               = "agent_hold_lapse_period"
 	agent_working_set_max_candidates      = "agent_working_set_max_candidates"
 	agent_working_set_max_tokens          = "agent_working_set_max_tokens"
+	agent_working_set_retrieval_top_k     = "agent_working_set_retrieval_top_k"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -378,6 +380,7 @@ type ScoutConfig struct {
 	AgentAlertPageSize                int // agent_alert_page_size 50 Alerts one Studio page returns when the caller names no limit (0..agent_alert_max_page_size); 0 takes 50
 	AgentAlertMaxPageSize             int // agent_alert_max_page_size 200 Largest alert page a Studio caller may ask for (1..1000); 0 takes 200
 	AgentEvaluationCaseMaxTurns       int // agent_evaluation_case_max_turns 10 Turns one golden case scripts, its input included (1..100); 0 uses Scout's default
+	AgentEvaluationCaseMaxLabels      int // agent_evaluation_case_max_labels 50 Ids one golden case labels in each evidence role (1..1000); 0 uses Scout's default
 	AgentEvaluationCaseMaxTools       int // agent_evaluation_case_max_tools 20 Sandboxed tool responses one golden case scripts (1..200); 0 uses Scout's default
 	AgentEvaluationCaseToolMaxBytes   int // agent_evaluation_case_tool_max_bytes 16384 Bytes of one scripted tool output (2..1048576); 0 uses Scout's default
 	AgentEvaluationTrajectoryMaxBytes int // agent_evaluation_trajectory_max_bytes 1048576 Bytes of one stored case trajectory (1024..16777216); 0 uses Scout's default
@@ -396,6 +399,7 @@ type ScoutConfig struct {
 	AgentHoldLapsePeriod              int // agent_hold_lapse_period 30 Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30
 	AgentWorkingSetMaxCandidates      int // agent_working_set_max_candidates 64 Candidates one turn's working set source may offer (1..1024); 0 takes 64
 	AgentWorkingSetMaxTokens          int // agent_working_set_max_tokens 8000 Token budget of one turn's working set (1..1048576); 0 takes 8000
+	AgentWorkingSetRetrievalTopK      int // agent_working_set_retrieval_top_k 8 Matches one retrieval binding offers a turn's working set (1..256); 0 takes 8
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -635,6 +639,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentAlertPageSize = c.Int(rows, agent_alert_page_size)
 	c.AgentAlertMaxPageSize = c.Int(rows, agent_alert_max_page_size)
 	c.AgentEvaluationCaseMaxTurns = c.Int(rows, agent_evaluation_case_max_turns)
+	c.AgentEvaluationCaseMaxLabels = c.Int(rows, agent_evaluation_case_max_labels)
 	c.AgentEvaluationCaseMaxTools = c.Int(rows, agent_evaluation_case_max_tools)
 	c.AgentEvaluationCaseToolMaxBytes = c.Int(rows, agent_evaluation_case_tool_max_bytes)
 	c.AgentEvaluationTrajectoryMaxBytes = c.Int(rows, agent_evaluation_trajectory_max_bytes)
@@ -653,6 +658,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentHoldLapsePeriod = c.Int(rows, agent_hold_lapse_period)
 	c.AgentWorkingSetMaxCandidates = c.Int(rows, agent_working_set_max_candidates)
 	c.AgentWorkingSetMaxTokens = c.Int(rows, agent_working_set_max_tokens)
+	c.AgentWorkingSetRetrievalTopK = c.Int(rows, agent_working_set_retrieval_top_k)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -679,6 +685,7 @@ func (c *ScoutConfig) workingSetFlagErrors() error {
 	}{
 		{agent_working_set_max_candidates, c.AgentWorkingSetMaxCandidates, workingset.MaxCandidates},
 		{agent_working_set_max_tokens, c.AgentWorkingSetMaxTokens, workingset.MaxTokens},
+		{agent_working_set_retrieval_top_k, c.AgentWorkingSetRetrievalTopK, 256},
 	} {
 		if flag.value < 0 || flag.value > flag.max {
 			errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", flag.name, flag.value, flag.max))
@@ -952,6 +959,7 @@ func (c *ScoutConfig) caseScriptFlagErrors() error {
 		value, lo, hi int
 	}{
 		{agent_evaluation_case_max_turns, c.AgentEvaluationCaseMaxTurns, 1, 100},
+		{agent_evaluation_case_max_labels, c.AgentEvaluationCaseMaxLabels, 1, 1000},
 		{agent_evaluation_case_max_tools, c.AgentEvaluationCaseMaxTools, 1, 200},
 		{agent_evaluation_case_tool_max_bytes, c.AgentEvaluationCaseToolMaxBytes, 2, 1 << 20},
 		{agent_evaluation_trajectory_max_bytes, c.AgentEvaluationTrajectoryMaxBytes, 1 << 10, 16 << 20},

@@ -209,6 +209,7 @@ validates them at load.
 | `agent_evaluation_max_baselines` | int | 20 | 0 | — | Human baselines one golden set version may hold (`EvaluationBaselineStore.MaxBaselines`); 0 uses the default 20. |
 | `agent_evaluation_compare_page_bytes` | int | 1048576 | 0 | — | Bytes of stored answers one Studio comparison page returns (`StudioEvaluation.MaxPageAnswerBytes`); an answer past it is omitted and marked; 0 uses the default 1048576. |
 | `agent_evaluation_case_max_turns` | int | 10 | 0, else 1 | 100 | Turns one golden case may script, its input included (`GoldenCaseStore.MaxTurns`); 0 uses the default 10. |
+| `agent_evaluation_case_max_labels` | int | 50 | 0, else 1 | 1000 | Ids one golden case may label in each evidence role (`GoldenCaseStore.MaxLabels`, `GoldenSetStore.MaxLabels`); 0 uses the default 50. |
 | `agent_evaluation_case_max_tools` | int | 20 | 0, else 1 | 200 | Sandboxed tool responses one golden case may script (`GoldenCaseStore.MaxTools`); 0 uses the default 20. |
 | `agent_evaluation_case_tool_max_bytes` | int | 16384 | 0, else 2 | 1048576 | Bytes of one scripted tool output (`GoldenCaseStore.MaxToolOutputBytes`); 0 uses the default 16384. |
 | `agent_evaluation_trajectory_max_bytes` | int | 1048576 | 0, else 1024 | 16777216 | Bytes of one stored case trajectory (`AgentEvaluationWorker.MaxTrajectoryBytes`, `StudioEvaluation.MaxTrajectoryBytes`); a larger one is refused; 0 uses the default 1048576. |
@@ -244,6 +245,7 @@ validates them at load.
 | `agent_knowledge_rrf_offset` | int | 60 | 0 | — | Reciprocal rank fusion constant k of hybrid retrieval (`knowledge.HybridRetriever.RRFOffset`), scoring rank r as 1/(k+r); a larger k flattens the advantage of top ranks; 0 uses the default 60. |
 | `agent_working_set_max_candidates` | int | 64 | 0, else 1 | 1024 | Candidates one turn's working set source may offer (`workingset.Compiler.Limits.MaxCandidates`, through `ScoutConfig.WorkingSetLimits()`); more fails the step with an execution limit; 0 uses the default 64. |
 | `agent_working_set_max_tokens` | int | 8000 | 0, else 1 | 1048576 | Token budget of one turn's working set (`Limits.MaxTokens`); required, controlling, and conflicted context beyond it fails the step rather than being cut, and optional context past it is left out and recorded as excluded; 0 uses the default 8000. |
+| `agent_working_set_retrieval_top_k` | int | 8 | 0, else 1 | 256 | Matches one retrieval binding offers a turn's working set (`knowledge.ReleaseCandidates.TopK`); keep bindings × this within `agent_working_set_max_candidates`; 0 takes 8. |
 
 ### Agent health and alerts
 
@@ -354,7 +356,7 @@ truncation.
 | `policy.StudioRestrictions.MaxEntries` | `agent_studio_max_restriction_entries` | non-negative; zero takes 256. Bounds a tenant layer's denials and, separately, its guardrail rules |
 | `evaluation.StudioEvaluation.MaxOpenRuns` | `agent_evaluation_max_open_runs` | non-negative; zero refuses every evaluation |
 | `evaluation.GoldenCaseStore.{MaxInputBytes,MaxCases,VersionsShown}` | `agent_evaluation_case_max_bytes`, `agent_evaluation_max_cases`, `--evaluation_versions_shown` | non-negative; zero takes 32 KiB / 500 / 20 |
-| `evaluation.GoldenCaseStore.{MaxTurns,MaxTools,MaxToolOutputBytes}` | `agent_evaluation_case_max_turns`, `agent_evaluation_case_max_tools`, `agent_evaluation_case_tool_max_bytes` | non-negative; zero takes 10 / 20 / 16 KiB |
+| `evaluation.GoldenCaseStore.{MaxTurns,MaxTools,MaxToolOutputBytes,MaxLabels}` | `agent_evaluation_case_max_turns`, `agent_evaluation_case_max_tools`, `agent_evaluation_case_tool_max_bytes`, `agent_evaluation_case_max_labels` | non-negative; zero takes 10 / 20 / 16 KiB / 50 |
 | `evaluation.NewAgentEvaluationWorker(lease, batch, maxAttempts)` | `agent_evaluation_lease`, `agent_evaluation_batch`, `agent_evaluation_max_attempts` | lease at least 1s and longer than the slowest example; batch and attempts positive |
 | `evaluation.AgentEvaluationWorker.{Concurrency,MaxRunCostMinorUnits,Currency,MaxTrajectoryBytes}` | `agent_evaluation_concurrency`, `agent_evaluation_max_run_cost`, `agent_evaluation_currency`, `agent_evaluation_trajectory_max_bytes` | concurrency non-negative, below 2 sequential; cost positive minor units, counting judge spend; a three-letter currency; trajectory bytes non-negative, zero takes 1 MiB |
 | `evaluation.NewGatewayRubricJudge(gateway, inputs, pricer, settings)` as `AgentEvaluationWorker.Judge` | `agent_evaluation_judge_*` through `ScoutConfig.RubricJudgeSettings()` | compose only when `Configured()`; settings must `Validate()`; the judge route must declare `SO` (structured output) or every graded run fails |

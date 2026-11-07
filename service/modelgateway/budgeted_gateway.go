@@ -69,7 +69,8 @@ func (budget modelBudget) priced(ctx context.Context, reference domain.ModelRefe
 		return usage, nil
 	}
 	cost, currency, err := budget.pricer.Cost(context.WithoutCancel(ctx), reference, domain.ModelUsage{
-		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries,
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CacheReadTokens: usage.CacheReadTokens,
+		CacheWriteTokens: usage.CacheWriteTokens, SearchQueries: usage.SearchQueries,
 	})
 	if err != nil {
 		return usage, fmt.Errorf("price confirmed model usage: %w", err)

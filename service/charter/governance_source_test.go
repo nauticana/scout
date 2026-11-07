@@ -92,7 +92,7 @@ func harborGovernance(c corpus.Source) *GovernanceSource {
 func TestGovernanceSourceSuppliesTheCharterDefinitionInForce(t *testing.T) {
 	c := harbor(t)
 	source := harborGovernance(c)
-	snapshot, ok, err := source.Snapshot(context.Background(), 7, oecAgent)
+	snapshot, ok, err := source.Snapshot(context.Background(), 7, oecAgent, "")
 	if err != nil || !ok {
 		t.Fatalf("snapshot = %v, %v", ok, err)
 	}
@@ -116,12 +116,12 @@ func TestGovernanceSourceSuppliesTheCharterDefinitionInForce(t *testing.T) {
 	if snapshot.Governance.TriggerChannels != nil || snapshot.Governance.Enterprise != nil {
 		t.Fatalf("a snapshot carries Charter fields only: %+v", snapshot.Governance)
 	}
-	again, _, err := source.Snapshot(context.Background(), 7, oecAgent)
+	again, _, err := source.Snapshot(context.Background(), 7, oecAgent, "")
 	if err != nil || again.Digest != snapshot.Digest {
 		t.Fatalf("the digest of unchanged governance moved: %q then %q (%v)", snapshot.Digest, again.Digest, err)
 	}
 	source.Link = nil
-	if unlinked, _, err := source.Snapshot(context.Background(), 7, oecAgent); err != nil || unlinked.Link != "" {
+	if unlinked, _, err := source.Snapshot(context.Background(), 7, oecAgent, ""); err != nil || unlinked.Link != "" {
 		t.Fatalf("no link function names no link: %q, %v", unlinked.Link, err)
 	}
 }
@@ -135,7 +135,7 @@ func TestGovernanceSourceChoosesTheOneDefinitionInForce(t *testing.T) {
 		maps.Copy(out, set)
 		return out
 	}
-	original, _, err := harborGovernance(harbor(t)).Snapshot(context.Background(), 7, oecAgent)
+	original, _, err := harborGovernance(harbor(t)).Snapshot(context.Background(), 7, oecAgent, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestGovernanceSourceChoosesTheOneDefinitionInForce(t *testing.T) {
 			source := harborGovernance(governedCorpus(t, tc.defs...))
 			at := tc.at
 			source.Now = func() time.Time { return at }
-			snapshot, ok, err := source.Snapshot(context.Background(), 7, oecAgent)
+			snapshot, ok, err := source.Snapshot(context.Background(), 7, oecAgent, "")
 			if tc.err != nil {
 				if !errors.Is(err, tc.err) || ok {
 					t.Fatalf("want %v and no snapshot, got %v, %v", tc.err, ok, err)
@@ -201,13 +201,13 @@ func TestGovernanceSourceFailsClosed(t *testing.T) {
 		{"an id naming another kind", harborGovernance(c), 7, "POS-SALES-OPERATIONS-MANAGER", domain.ErrValidation},
 	}
 	for _, tc := range cases {
-		snapshot, ok, err := tc.source.Snapshot(ctx, tc.tenant, tc.agentID)
+		snapshot, ok, err := tc.source.Snapshot(ctx, tc.tenant, tc.agentID, "")
 		if !errors.Is(err, tc.want) || ok || !reflect.DeepEqual(snapshot, domain.GovernanceSnapshot{}) {
 			t.Errorf("%s: want %v and nothing, got %+v, %v, %v", tc.name, tc.want, snapshot, ok, err)
 		}
 	}
 	failing := &GovernanceSource{Documents: failingSource{}, Namespace: harborGovernance(c).Namespace}
-	if _, ok, err := failing.Snapshot(ctx, 7, oecAgent); err == nil || ok || errors.Is(err, domain.ErrValidation) {
+	if _, ok, err := failing.Snapshot(ctx, 7, oecAgent, ""); err == nil || ok || errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a store failure is an error, not a refusal: %v, %v", ok, err)
 	}
 }
@@ -224,7 +224,7 @@ func TestGovernanceSourceKeepsToTheTenantsNamespace(t *testing.T) {
 	})
 	ctx := context.Background()
 	source := harborGovernance(c)
-	snapshot, _, err := source.Snapshot(ctx, 7, oecAgent)
+	snapshot, _, err := source.Snapshot(ctx, 7, oecAgent, "")
 	if err != nil || snapshot.Version != "1" || snapshot.Document.ID != oecDefinition {
 		t.Fatalf("another namespace's definition reached tenant 7: %+v, %v", snapshot, err)
 	}
@@ -232,17 +232,17 @@ func TestGovernanceSourceKeepsToTheTenantsNamespace(t *testing.T) {
 	if err = binding.WriteRelease(ctx, nil, 7, domain.AgentDefinition{AgentID: oecAgent, Version: "9"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("another namespace declared a version for tenant 7: %v", err)
 	}
-	if _, _, err = source.Snapshot(ctx, 8, oecAgent); !errors.Is(err, domain.ErrValidation) {
+	if _, _, err = source.Snapshot(ctx, 8, oecAgent, ""); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("tenant 8 has no identity of its own yet: %v", err)
 	}
 
 	addVariant(t, c, identityDoc, map[string]any{"namespace": otherNS})
 	addVariant(t, c, definitionDoc, map[string]any{"namespace": otherNS, "id": "AGENTDEF-OTHER", "definitionVersion": "3", "purpose": "Serve the other tenant"})
-	other, _, err := source.Snapshot(ctx, 8, oecAgent)
+	other, _, err := source.Snapshot(ctx, 8, oecAgent, "")
 	if err != nil || other.Document.ID != "AGENTDEF-OTHER" || other.Governance.Purpose != "Serve the other tenant" {
 		t.Fatalf("tenant 8 must read its own namespace: %+v, %v", other, err)
 	}
-	if mine, _, err := source.Snapshot(ctx, 7, oecAgent); err != nil || mine.Document.ID != oecDefinition {
+	if mine, _, err := source.Snapshot(ctx, 7, oecAgent, ""); err != nil || mine.Document.ID != oecDefinition {
 		t.Fatalf("tenant 7 must keep its own definition: %+v, %v", mine, err)
 	}
 }
@@ -256,7 +256,7 @@ func TestStudioGovernanceAcceptsTheCharterSnapshot(t *testing.T) {
 	)
 	source := harborGovernance(c)
 	ctx := context.Background()
-	snapshot, _, err := source.Snapshot(ctx, 7, oecAgent)
+	snapshot, _, err := source.Snapshot(ctx, 7, oecAgent, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestGovernanceSourceDecodesOnlyTheTenantsDefinitions(t *testing.T) {
 	addVariant(t, c, definitionDoc, map[string]any{"namespace": otherNS, "id": "AGENTDEF-MALFORMED", "definitionVersion": 2, "triggers": "x"})
 	ctx := context.Background()
 	source := harborGovernance(c)
-	if snapshot, ok, err := source.Snapshot(ctx, 7, oecAgent); err != nil || !ok || snapshot.Version != "1" {
+	if snapshot, ok, err := source.Snapshot(ctx, 7, oecAgent, ""); err != nil || !ok || snapshot.Version != "1" {
 		t.Fatalf("another namespace's malformed definition failed tenant 7: %+v, %v, %v", snapshot, ok, err)
 	}
 	binding := &IdentityBinding{Agents: agent.NewBaseProvider(c), Namespace: source.Namespace}
@@ -297,7 +297,7 @@ func TestGovernanceSourceDecodesOnlyTheTenantsDefinitions(t *testing.T) {
 		t.Fatalf("another namespace's malformed definition failed tenant 7's binding: %v", err)
 	}
 	addVariant(t, c, definitionDoc, map[string]any{"id": "AGENTDEF-MALFORMED-HERE", "definitionVersion": 2})
-	if _, ok, err := source.Snapshot(ctx, 7, oecAgent); err == nil || ok || errors.Is(err, domain.ErrValidation) {
+	if _, ok, err := source.Snapshot(ctx, 7, oecAgent, ""); err == nil || ok || errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a malformed definition in the tenant's namespace is a store error: %v, %v", ok, err)
 	}
 }
@@ -311,12 +311,12 @@ func TestGovernanceSourceReadsValidityInUTC(t *testing.T) {
 	source := harborGovernance(c)
 	eastern := time.FixedZone("UTC-5", -5*60*60)
 	source.Now = func() time.Time { return time.Date(2026, 6, 30, 22, 0, 0, 0, eastern) }
-	snapshot, _, err := source.Snapshot(context.Background(), 7, oecAgent)
+	snapshot, _, err := source.Snapshot(context.Background(), 7, oecAgent, "")
 	if err != nil || snapshot.Version != "2" {
 		t.Fatalf("2026-07-01 03:00 UTC is in version 2's validity: %q, %v", snapshot.Version, err)
 	}
 	source.Now = func() time.Time { return time.Date(2026, 7, 1, 1, 0, 0, 0, time.FixedZone("UTC+3", 3*60*60)) }
-	if snapshot, _, err = source.Snapshot(context.Background(), 7, oecAgent); err != nil || snapshot.Version != "1" {
+	if snapshot, _, err = source.Snapshot(context.Background(), 7, oecAgent, ""); err != nil || snapshot.Version != "1" {
 		t.Fatalf("2026-06-30 22:00 UTC is in version 1's validity: %q, %v", snapshot.Version, err)
 	}
 }
@@ -409,6 +409,27 @@ func TestIdentityBindingChecksTheFrozenCharterDocument(t *testing.T) {
 		err := binding.WriteRelease(context.Background(), nil, 7, domain.AgentDefinition{AgentID: oecAgent, Version: "1", Sections: tc.sections})
 		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
 			t.Errorf("%s: want %v, got %v", tc.name, tc.want, err)
+		}
+	}
+}
+
+func TestSnapshotOfAVersionReadsTheDefinitionDeclaringIt(t *testing.T) {
+	ctx := context.Background()
+	documents := governedCorpus(t,
+		map[string]any{"id": oecDefinition, "definitionVersion": "1"},
+		map[string]any{"id": oecDefinition + "-2", "definitionVersion": "2", "lifecycleState": "active"},
+		map[string]any{"id": oecDefinition + "-3", "definitionVersion": "3", "lifecycleState": "draft"})
+	source := harborGovernance(documents)
+	if _, _, err := source.Snapshot(ctx, 7, oecAgent, ""); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("two in force now = %v", err)
+	}
+	snapshot, ok, err := source.Snapshot(ctx, 7, oecAgent, "2")
+	if err != nil || !ok || snapshot.Version != "2" || snapshot.Document.ID != oecDefinition+"-2" {
+		t.Fatalf("version 2 = %+v, %v, %v", snapshot, ok, err)
+	}
+	for _, version := range []string{"3", "4"} {
+		if _, _, err := source.Snapshot(ctx, 7, oecAgent, version); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("version %s, not in force = %v", version, err)
 		}
 	}
 }

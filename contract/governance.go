@@ -10,7 +10,9 @@ import (
 // snapshot the enterprise keeps, such as a Charter AgentDefinition, and a link to it. ok is false
 // when the enterprise owns nothing of the agent. Studio never stores what a snapshot supplies.
 type GovernanceSource interface {
-	Snapshot(ctx context.Context, tenantID int64, agentID string) (snapshot domain.GovernanceSnapshot, ok bool, err error)
+	// Snapshot resolves the governance declaring version, the release a restore creates; an empty
+	// version is what is in force now, which a draft and a publish freeze.
+	Snapshot(ctx context.Context, tenantID int64, agentID, version string) (snapshot domain.GovernanceSnapshot, ok bool, err error)
 }
 
 // TriggerBindingVerifier proves that the product-owned schedule or topic a schedule or event

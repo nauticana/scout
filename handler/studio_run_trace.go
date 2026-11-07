@@ -11,6 +11,7 @@ func runTraceItem(trace domain.RunTrace) api.RunTrace {
 		item.Turn = &api.RunTraceTurn{
 			ConversationID: turn.ConversationID, TurnNo: turn.TurnNo, Status: string(turn.Status), QueuedAt: turn.QueuedAt,
 			StartedAt: optionalTime(turn.StartedAt), FirstResponseAt: optionalTime(turn.FirstResponseAt), CompletedAt: optionalTime(turn.CompletedAt),
+			WorkingSet: apiTurnWorkingSet(turn.WorkingSet),
 		}
 	}
 	for _, event := range trace.Events {

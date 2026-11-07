@@ -105,15 +105,16 @@ transports that deliver work are product wiring.
 
 An enterprise may own the fields instead. Every field a `contract.GovernanceSource` snapshot sets is
 read-only in Studio and never stored by Scout, and the release freezes the snapshot's document,
-version, and digest. An unusable snapshot or a source error fails the call.
+version, and digest. A draft and a publish read what is in force now; a restore reads what declares
+the version it creates. An unusable snapshot or a source error fails the call.
 
 `charter.GovernanceSource` reads it from a Charter corpus: `Documents` and `Namespace`, mapping a
 tenant to the namespace that owns its agents, are required; `Link` optionally names where a person
 reads or changes the governing definition, and `Now` is the clock. The agent id must name an
 `AgentIdentity` in the tenant's namespace, and only that namespace's `AgentDefinition`s whose
 `agentIdentityId` resolves to it count, so a document in another namespace, malformed or not, never
-affects the tenant. Exactly one must be in force — lifecycle empty or `active`, validity holding on
-the clock's UTC date — or the snapshot fails closed: an unmapped tenant is `ErrNotReady`, an
+affects the tenant. Exactly one, among those declaring the version when one is named, must be in
+force — lifecycle empty or `active`, validity holding on the clock's UTC date — or the snapshot fails closed: an unmapped tenant is `ErrNotReady`, an
 unknown agent or none in force `ErrValidation`, and two in force `ErrConflict`. The snapshot carries
 the definition's governance members in Charter's shapes, its id and `definitionVersion`, and a
 `sha256:` digest of them.
@@ -123,13 +124,16 @@ resolution: the published version must be a `definitionVersion` one of the ident
 in the tenant's namespace declares (`ErrValidation` otherwise), and a release whose governance froze
 a Charter `AgentDefinition` snapshot must have frozen exactly that definition at that version
 (`ErrConflict` otherwise). With both composed, release N publishes only while the definition
-declaring N is the one in force; a restore takes a new version but keeps the restored release's
-snapshot, so restoring a release that froze one is refused.
+declaring N is the one in force. A restore creates a new version N, so the definition declaring N
+must be in force first: the new release freezes that snapshot over the source's Studio-owned fields
+and gets its own digest, and the source release is unchanged. The restore's review and gate judge the
+source digest, which the release keeps as `restored_from_digest`; evidence for the regression bound
+needs a run of the new digest.
 
 As a publish guard the same service refuses a release whose governance is malformed, binds a schedule
 or topic the verifier does not prove, lacks a field the active Charter profile requires
 (`agent_governance_required_fields`: empty requires all ten, `none` none), or does not carry the
-source's current snapshot, so a restore cannot reactivate superseded enterprise governance. Restoring
+snapshot of the release being created, so a restore cannot reactivate superseded enterprise governance. Restoring
 a release frozen before the agent had governance skips the required fields.
 
 ## Entitlements

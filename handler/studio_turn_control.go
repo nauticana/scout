@@ -242,6 +242,7 @@ func apiLiveTurn(turn domain.LiveTurn) api.LiveTurn {
 		Fence: turn.Fence, HoldCode: string(turn.HoldCode), HoldRequested: turn.HoldRequested, HoldReason: turn.HoldReason,
 		CancelRequested: turn.CancelRequested, QueuedAt: turn.QueuedAt, StartedAt: optionalTime(turn.StartedAt), HeldAt: optionalTime(turn.HeldAt),
 		HolderKind: string(turn.Holder.Kind), HolderID: turn.Holder.ID, HoldUntil: optionalTime(turn.HoldUntil),
+		WorkingSet: apiTurnWorkingSet(turn.WorkingSet),
 	}
 	for _, outcome := range turn.Outcomes {
 		result.Outcomes = append(result.Outcomes, apiCallOutcome(outcome))
@@ -250,6 +251,14 @@ func apiLiveTurn(turn domain.LiveTurn) api.LiveTurn {
 		result.Entries = append(result.Entries, apiOperatorEntry(entry))
 	}
 	return result
+}
+
+// apiTurnWorkingSet is nil for a turn that compiled no working set.
+func apiTurnWorkingSet(set domain.TurnWorkingSet) *api.TurnWorkingSet {
+	if set.Assurance == "" {
+		return nil
+	}
+	return &api.TurnWorkingSet{Assurance: string(set.Assurance), Selected: set.Selected, Excluded: set.Excluded}
 }
 
 func apiCallOutcome(outcome domain.CallOutcome) api.CallOutcome {

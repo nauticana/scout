@@ -130,6 +130,12 @@ func (gateway *Gateway) admit(ctx context.Context, selection domain.ModelSelecti
 	if err := checkCapabilities(ctx, gateway.Catalog, selection, request); err != nil {
 		return nil, err
 	}
+	if request.PromptCache {
+		var err error
+		if request.PromptCache, err = routeCaches(ctx, gateway.Catalog, selection, request.TenantContext); err != nil {
+			return nil, err
+		}
+	}
 	call := &modelCall{gateway: gateway, selection: selection, request: request, started: gateway.now(), contract: compiled,
 		prefillTokens: inputTokens(gateway.PromptTokens, request)}
 	if err := gateway.RateLimiter.AllowModelCall(ctx, request); err != nil {

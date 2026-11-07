@@ -52,7 +52,7 @@ Add released module versions; never use local filesystem replacements:
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.3.0
+go get github.com/nauticana/keel@v1.3.2
 go get github.com/nauticana/charter@v1.6.1
 ```
 

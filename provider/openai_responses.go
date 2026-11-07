@@ -26,7 +26,7 @@ func (p *OpenAI) respond(ctx context.Context, selection domain.ModelSelection, r
 	if err != nil {
 		return domain.ModelResult{}, fmt.Errorf("%s Responses: %w", p.id(), err)
 	}
-	return responseResult(p.id(), resp)
+	return responseResult(p.id(), resp, request)
 }
 
 func (p *OpenAI) responseParams(selection domain.ModelSelection, request domain.ModelRequest) (responses.ResponseNewParams, error) {
@@ -100,7 +100,7 @@ func responseInputItems(message domain.ModelMessage) []responses.ResponseInputIt
 	return items
 }
 
-func responseResult(provider string, resp *responses.Response) (domain.ModelResult, error) {
+func responseResult(provider string, resp *responses.Response, request domain.ModelRequest) (domain.ModelResult, error) {
 	text := resp.OutputText()
 	answer := []rune(text)
 	var calls []domain.ModelToolCall
@@ -142,6 +142,7 @@ func responseResult(provider string, resp *responses.Response) (domain.ModelResu
 		ToolCalls:    calls,
 		Citations:    sources.list,
 		FinishReason: finishReason(native, calls),
-		Usage:        domain.Usage{InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, SearchQueries: searches},
+		Usage: withCachedInput(domain.Usage{InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, SearchQueries: searches},
+			request, resp.Usage.InputTokensDetails.CachedTokens),
 	}, nil
 }

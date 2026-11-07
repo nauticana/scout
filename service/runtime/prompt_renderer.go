@@ -20,7 +20,9 @@ var _ contract.PromptRenderer = (*PromptRenderer)(nil)
 
 func (PromptRenderer) Render(agentID string, sections []domain.CompiledPromptSection, task domain.AgentTask) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Task: %s\n", task.Task)
+	if task.Task != "" {
+		fmt.Fprintf(&sb, "Task: %s\n", task.Task)
+	}
 	if task.Context != "" {
 		fmt.Fprintf(&sb, "Context: %s\n", task.Context)
 	}
@@ -28,7 +30,9 @@ func (PromptRenderer) Render(agentID string, sections []domain.CompiledPromptSec
 		fmt.Fprintf(&sb, "Input Data: %s\n", task.InputData)
 	}
 
-	sb.WriteString("\n--- Agent Configuration ---\n")
+	if agentID != "" || len(sections) > 0 {
+		sb.WriteString("\n--- Agent Configuration ---\n")
+	}
 	if agentID != "" {
 		fmt.Fprintf(&sb, "Agent Name: %s\n", agentID)
 	}

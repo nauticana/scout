@@ -176,8 +176,8 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
-github.com/infisical/go-sdk v0.7.2 h1:iw7uVzH8TTv7kN/xbc2HqmeflmPfRDhVVOk82fI1LeI=
-github.com/infisical/go-sdk v0.7.2/go.mod h1:yEfXF+3YDDXiJ9zzJUSzW6me6XXPPEDK52fSU6JfpCA=
+github.com/infisical/go-sdk v0.9.1 h1:3QMToKEPasPXYamtuqWYl07ItwfL0vzjYB4YCY1ANvY=
+github.com/infisical/go-sdk v0.9.1/go.mod h1:4Xh9Mj2/8wPmYuyNDbg8oJFajNFBTcrgITBQ6K8hXaU=
 github.com/invopop/jsonschema v0.14.0 h1:MHQqLhvpNUZfw+hM3AZDYK7jxO8FZoQeQM77g8iyZjg=
 github.com/invopop/jsonschema v0.14.0/go.mod h1:ygm6C2EaVNMBDPpaPlnOA2pFAxBnxGjFlMZABxm9n2I=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
@@ -202,8 +202,8 @@ github.com/mark3labs/mcp-go v1.1.1 h1:PMZjyayCF01Y4R2kQXgDtsmxVLOdq1Mol4CnzzTYSE
 github.com/mark3labs/mcp-go v1.1.1/go.mod h1:r2fW4o3wsoJ7IMsx1Wuq5xeP8PRGXPDfNveoGAYbb/s=
 github.com/nauticana/charter v1.6.1 h1:2jCz5SGti+86QnoQcE7u9OeSC9WnnbhqlhKcrhz1exQ=
 github.com/nauticana/charter v1.6.1/go.mod h1:igMbk06CgSixkXbQxiW03DLTbRHQTXw1QLBaua2VyQE=
-github.com/nauticana/keel v1.3.0 h1:BwlAmqz4xNO3R1fg7X2hY8Nx5tYphrHoBdcQnSFZdjg=
-github.com/nauticana/keel v1.3.0/go.mod h1:yEIgmiPk6HCBuQVbnPfZwbKOHCpUG8yU2anoxrPtW/M=
+github.com/nauticana/keel v1.3.2 h1:cgEL6IVV/6EbnySO3pvuoarG+d9oTf60IqgoYbzVb9s=
+github.com/nauticana/keel v1.3.2/go.mod h1:v8HYMyjeByjwDRDCjwEwMkc6O4UVfmnHzF6BrXVfNFY=
 github.com/nyaruka/phonenumbers v1.7.2 h1:biMUpF5TWuHtYXVzuNE7pSCjlA9tkvd8Vaq8b1CYaaQ=
 github.com/nyaruka/phonenumbers v1.7.2/go.mod h1:fsKPJ70O9JetEA4ggnJadYTFWwtGPvu/lETTXNXq6Cs=
 github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1U0=

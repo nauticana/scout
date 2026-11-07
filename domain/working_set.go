@@ -108,6 +108,13 @@ type WorkingSet struct {
 	TokenCost int64
 }
 
+// TurnWorkingSet is what a turn's working set recorded: its assurance and candidate ids, never content.
+type TurnWorkingSet struct {
+	Assurance WorkingSetAssurance
+	Selected  []string
+	Excluded  []string
+}
+
 // WorkingSetLimits bound a compilation; zero takes the compiler's default.
 type WorkingSetLimits struct {
 	MaxCandidates int

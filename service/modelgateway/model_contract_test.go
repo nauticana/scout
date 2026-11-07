@@ -293,3 +293,18 @@ func TestARequestTemperatureRequiresTheSamplingCapability(t *testing.T) {
 		t.Fatalf("temperature NaN = %v", err)
 	}
 }
+
+func TestPromptCacheIsServedOnlyByARouteDeclaringIt(t *testing.T) {
+	for name, capabilities := range map[string][]domain.ModelCapability{
+		"declared": {domain.CapabilityPromptCache}, "undeclared": {domain.CapabilityText},
+	} {
+		gateway, _ := contractGateway(t, capabilities, domain.ModelResult{})
+		caches, err := routeCaches(context.Background(), gateway.Catalog, contractSelection, validModelRequest().TenantContext)
+		if err != nil || caches != (name == "declared") {
+			t.Fatalf("%s: caches = %v, %v", name, caches, err)
+		}
+	}
+	if caches, err := routeCaches(context.Background(), nil, contractSelection, domain.TenantContext{}); err != nil || caches {
+		t.Fatalf("no catalog = %v, %v", caches, err)
+	}
+}

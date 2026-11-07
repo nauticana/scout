@@ -39,6 +39,8 @@ func (table *traceTable) Query(_ context.Context, name string, args ...any) (*ke
 			return &keelmodel.QueryResult{Rows: [][]any{row}}, nil
 		}
 		return &keelmodel.QueryResult{}, nil
+	case qWorkingSetItems:
+		return &keelmodel.QueryResult{Rows: [][]any{{"a", true}, {"b", false}}}, nil
 	case qRunTraceTurn:
 		if row, ok := table.turns[strings.TrimSpace(fmt.Sprintln(args...))]; ok {
 			return &keelmodel.QueryResult{Rows: [][]any{row}}, nil
@@ -89,7 +91,7 @@ func newTraceFixture(t *testing.T) *traceFixture {
 			"7 31 writer-a": {int64(31), "writer-a", "4", "chat", traceRequest, "C", traceAt(9)},
 			"7 32 writer-a": {int64(32), "writer-a", "4", "batch", nil, "C", traceAt(9)},
 		}, turns: map[string][]any{
-			"7 " + traceRequest: {"conv-1", int64(3), "C", traceAt(0), traceAt(1), traceAt(5), traceAt(9)},
+			"7 " + traceRequest: {"conv-1", int64(3), "C", traceAt(0), traceAt(1), traceAt(5), traceAt(9), string(domain.AssuranceBounded)},
 		}, sources: map[string]map[string][][]any{}},
 		storage: storage, objects: newObjectStateStore(storage),
 	}
@@ -429,5 +431,17 @@ func TestRunTraceAttachesEachCallsSettlementByStepAndCallID(t *testing.T) {
 	fixture.table.sources[qRunTraceOutcomes]["7 "+traceRequest] = many
 	if _, err := fixture.store.Trace(context.Background(), 7, "writer-a", 31); !errors.Is(err, domain.ErrExecutionLimit) {
 		t.Fatalf("an unbounded outcome read = %v, want ErrExecutionLimit", err)
+	}
+}
+
+func TestRunTraceShowsTheTurnsWorkingSet(t *testing.T) {
+	fixture := newTraceFixture(t)
+	trace, err := fixture.store.Trace(context.Background(), 7, "writer-a", 31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := trace.Turn.WorkingSet
+	if set.Assurance != domain.AssuranceBounded || len(set.Selected) != 1 || set.Selected[0] != "a" || len(set.Excluded) != 1 || set.Excluded[0] != "b" {
+		t.Fatalf("working set = %+v", set)
 	}
 }

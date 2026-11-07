@@ -71,7 +71,7 @@ func apiGateState(state domain.EvaluationGateState, err error) (any, error) {
 		}
 		for _, run := range decision.Runs {
 			mapped.Runs = append(mapped.Runs, api.EvaluationGateRun{RunID: run.RunID, Role: string(run.Role), Scope: string(run.Scope),
-				ScoreBP: run.ScoreBP, Samples: run.Samples, CriticalFailures: run.Criticals})
+				ScoreBP: run.ScoreBP, Samples: run.Samples, SkippedCases: run.Skipped, CriticalFailures: run.Criticals})
 		}
 		result.Decision = &mapped
 	}

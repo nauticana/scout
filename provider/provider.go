@@ -133,3 +133,14 @@ func terminalFrame(result domain.ModelResult) domain.ModelChunk {
 		FinishReason: result.FinishReason, Usage: result.Usage,
 	}
 }
+
+// withCachedInput moves the prefix-cache reads a vendor bills inside its input count out of it when
+// the request asked for caching. A vendor caching by itself on other requests stays at the input
+// rate, so a model with no cache rate keeps its price.
+func withCachedInput(usage domain.Usage, request domain.ModelRequest, cached int64) domain.Usage {
+	if request.PromptCache && cached > 0 && cached <= usage.InputTokens {
+		usage.InputTokens -= cached
+		usage.CacheReadTokens = cached
+	}
+	return usage
+}

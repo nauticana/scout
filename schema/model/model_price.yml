@@ -22,6 +22,13 @@ columns:
   - name: search_minor_units
     type: BIGINT
     default: "0"
+  - name: cache_read_minor_units_per_million
+    type: BIGINT
+    nullable: true
+    comment: Rate of prefix-cache reads; prefix-cache tokens without a rate are unpriced
+  - name: cache_write_minor_units_per_million
+    type: BIGINT
+    nullable: true
 primary_key: [provider_id, model_id, currency_code, effective_at]
 foreign_keys:
   - name: model_prices
@@ -45,3 +52,5 @@ checks:
     expression: video_minor_units_per_second >= 0
   - name: model_price_search_ck
     expression: search_minor_units >= 0
+  - name: model_price_cache_ck
+    expression: (cache_read_minor_units_per_million IS NULL OR cache_read_minor_units_per_million >= 0) AND (cache_write_minor_units_per_million IS NULL OR cache_write_minor_units_per_million >= 0)

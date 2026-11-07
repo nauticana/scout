@@ -86,7 +86,8 @@ func validModelSpend(spend domain.ModelSpend) error {
 	if strings.TrimSpace(spend.Model.ProviderID) == "" || strings.TrimSpace(spend.Model.ModelID) == "" {
 		return fmt.Errorf("%w: model usage names a provider and a model", domain.ErrValidation)
 	}
-	if spend.InputTokens < 0 || spend.OutputTokens < 0 || spend.SearchQueries < 0 || spend.CostMinorUnits < 0 {
+	if spend.InputTokens < 0 || spend.OutputTokens < 0 || spend.CacheReadTokens < 0 || spend.CacheWriteTokens < 0 ||
+		spend.SearchQueries < 0 || spend.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: model usage cannot be negative", domain.ErrValidation)
 	}
 	return nil
@@ -94,11 +95,14 @@ func validModelSpend(spend domain.ModelSpend) error {
 
 func addModelSpend(total, add domain.ModelSpend) (domain.ModelSpend, error) {
 	if total.InputTokens > math.MaxInt64-add.InputTokens || total.OutputTokens > math.MaxInt64-add.OutputTokens ||
+		total.CacheReadTokens > math.MaxInt64-add.CacheReadTokens || total.CacheWriteTokens > math.MaxInt64-add.CacheWriteTokens ||
 		total.SearchQueries > math.MaxInt64-add.SearchQueries || total.CostMinorUnits > math.MaxInt64-add.CostMinorUnits {
 		return domain.ModelSpend{}, fmt.Errorf("%w: model usage overflow", domain.ErrValidation)
 	}
 	total.InputTokens += add.InputTokens
 	total.OutputTokens += add.OutputTokens
+	total.CacheReadTokens += add.CacheReadTokens
+	total.CacheWriteTokens += add.CacheWriteTokens
 	total.SearchQueries += add.SearchQueries
 	total.CostMinorUnits += add.CostMinorUnits
 	return total, nil

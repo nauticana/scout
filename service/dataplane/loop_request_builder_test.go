@@ -9,6 +9,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	agentruntime "github.com/nauticana/scout/service/runtime"
 )
 
 type definitionReaderStub struct {
@@ -250,5 +251,42 @@ func TestReleaseLoopRequestBuilderAddsTheTenantsMemory(t *testing.T) {
 	builder.Memory = memoryStub{err: errors.New("database down")}
 	if _, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{}); err == nil {
 		t.Fatal("a memory read failure must fail the turn")
+	}
+}
+
+func TestPromptCachePutsOnlyReleaseContentInTheStablePrefix(t *testing.T) {
+	definition := domain.AgentDefinition{AgentID: "writer-a", Version: "3", Languages: []domain.CompiledPrompt{{LanguageCode: "en",
+		Sections: []domain.CompiledPromptSection{{Caption: "Role", Description: "d", Instruction: "write"}}}}}
+	builder := &ReleaseLoopRequestBuilder{Definitions: &definitionReaderStub{definition: definition}, Renderer: agentruntime.PromptRenderer{},
+		Memory: memoryStub{sections: []domain.MemorySection{{SectionID: "s", Caption: "Memo", Body: "per-tenant-memory"}}}, MaxOutputTokens: 10, PromptCache: true,
+		Knowledge:    &pinnedKnowledgeStub{pinned: domain.PinnedKnowledge{Documents: []domain.PinnedDocument{{KnowledgeBaseID: "kb", DocumentID: "d", Content: []byte("standing-rule")}}}},
+		Entitlements: entitlementsStub{}}
+	build := func(turn string) domain.ModelRequest {
+		t.Helper()
+		request, err := builder.Build(context.Background(), domain.StepInput{Principal: domain.Principal{TenantID: 7, ID: "writer-a", Release: "3"},
+			RequestID: turn, Input: []byte("task " + turn)}, domain.ToolLoopConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+	first, second := build("one"), build("two")
+	if !first.PromptCache || len(first.Instructions) == 0 || string(first.Instructions) != string(second.Instructions) {
+		t.Fatalf("prefix differs across turns: %q / %q", first.Instructions, second.Instructions)
+	}
+	prefix, prompt := string(first.Instructions), string(first.Prompt)
+	for _, want := range []string{"write", "standing-rule"} {
+		if !strings.Contains(prefix, want) || strings.Contains(prompt, want) {
+			t.Errorf("%q belongs in the prefix alone: %q / %q", want, prefix, prompt)
+		}
+	}
+	for _, want := range []string{"task one", "per-tenant-memory"} {
+		if strings.Contains(prefix, want) || !strings.Contains(prompt, want) {
+			t.Errorf("%q belongs in the prompt alone: %q / %q", want, prefix, prompt)
+		}
+	}
+	builder.PromptCache = false
+	if off := build("one"); off.PromptCache || len(off.Instructions) != 0 || !strings.Contains(string(off.Prompt), "standing-rule") {
+		t.Fatalf("uncached request = %+v", off)
 	}
 }

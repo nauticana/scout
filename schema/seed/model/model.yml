@@ -16,6 +16,7 @@ seeds:
       - [model_capability, SM, Sampling Parameters]
       - [model_capability, WS, Web Search]
       - [model_capability, EM, Embeddings]
+      - [model_capability, PC, Prompt Cache]
   - table: constant_lookup
     columns: [constant_id, table_name, column_name]
     rows:

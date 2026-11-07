@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,10 +20,13 @@ import (
 // Vertex AI (ADC, needs Project+Location) or the Gemini Developer API (APIKey)
 // on hosts without keyless Vertex access.
 type Google struct {
-	ProjectID    string
-	Location     string
-	UseGeminiAPI bool
-	APIKey       string
+	ProjectID string
+	Location  string
+	// VideoLocation is the Vertex location of GenerateVideo, because Vertex serves Veo only on
+	// regional endpoints; empty uses Location.
+	VideoLocation string
+	UseGeminiAPI  bool
+	APIKey        string
 	// Temperature is sent only when set; nil leaves sampling to the model.
 	Temperature *float64
 	// VideoPollInterval paces the long-running video operation; zero uses one second.
@@ -34,10 +39,22 @@ var (
 )
 
 func (p *Google) newClient(ctx context.Context) (*genai.Client, error) {
+	return genai.NewClient(ctx, p.clientConfig(p.Location))
+}
+
+func (p *Google) clientConfig(location string) *genai.ClientConfig {
 	if p.UseGeminiAPI {
-		return genai.NewClient(ctx, &genai.ClientConfig{Backend: genai.BackendGeminiAPI, APIKey: p.APIKey})
+		return &genai.ClientConfig{Backend: genai.BackendGeminiAPI, APIKey: p.APIKey}
 	}
-	return genai.NewClient(ctx, &genai.ClientConfig{Project: p.ProjectID, Location: p.Location, Backend: genai.BackendVertexAI})
+	return &genai.ClientConfig{Project: p.ProjectID, Location: location, Backend: genai.BackendVertexAI}
+}
+
+// separateVideoLocation is the location video runs in when it differs from Location.
+func (p *Google) separateVideoLocation() string {
+	if p.UseGeminiAPI || p.VideoLocation == p.Location {
+		return ""
+	}
+	return p.VideoLocation
 }
 
 func (p *Google) Generate(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (domain.ModelResult, error) {
@@ -57,9 +74,35 @@ func (p *Google) Generate(ctx context.Context, selection domain.ModelSelection, 
 }
 
 // listModels reads the base models: models/<id> on the Gemini API,
-// publishers/google/models/<id> on Vertex.
+// publishers/google/models/<id> on Vertex. With a separate video location it adds the Veo models
+// served there and nothing else, so a regional-only text model is not reported as routable.
 func (p *Google) listModels(ctx context.Context) ([]string, error) {
-	client, err := p.newClient(ctx)
+	ids, err := p.listModelsAt(ctx, p.Location)
+	if err != nil {
+		return nil, err
+	}
+	location := p.separateVideoLocation()
+	if location == "" {
+		return ids, nil
+	}
+	regional, err := p.listModelsAt(ctx, location)
+	if err != nil {
+		return nil, err
+	}
+	return withVideoModels(ids, regional), nil
+}
+
+func withVideoModels(ids, regional []string) []string {
+	for _, id := range regional {
+		if strings.HasPrefix(id, "veo-") && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (p *Google) listModelsAt(ctx context.Context, location string) ([]string, error) {
+	client, err := genai.NewClient(ctx, p.clientConfig(location))
 	if err != nil {
 		return nil, fmt.Errorf("genai.NewClient: %w", err)
 	}
@@ -215,6 +258,7 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 	if resp.UsageMetadata != nil {
 		usage.InputTokens = int64(resp.UsageMetadata.PromptTokenCount)
 		usage.OutputTokens = int64(resp.UsageMetadata.CandidatesTokenCount)
+		usage = withCachedInput(usage, request, int64(resp.UsageMetadata.CachedContentTokenCount))
 	} else {
 		// Vertex omits usage on some model families; a 4-chars-per-token
 		// estimate keeps accounting non-zero rather than silently free.
@@ -414,7 +458,7 @@ func (p *Google) GenerateVideo(ctx context.Context, model string, request domain
 	if model == "" {
 		return domain.MediaResult{}, fmt.Errorf("%w: no video model configured", domain.ErrValidation)
 	}
-	client, err := p.newClient(ctx)
+	client, err := genai.NewClient(ctx, p.clientConfig(cmp.Or(p.separateVideoLocation(), p.Location)))
 	if err != nil {
 		return domain.MediaResult{}, fmt.Errorf("genai.NewClient: %w", err)
 	}

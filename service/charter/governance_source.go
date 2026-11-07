@@ -21,8 +21,9 @@ import (
 
 // GovernanceSource reads an agent's enterprise-owned governance from a tenant's Charter documents. It resolves
 // the agent's AgentIdentity and the definitions its namespace declares as IdentityBinding does, and the one
-// definition in force now governs: its lifecycle is active or unset and its validity holds. IdentityBinding
-// then requires that definition to declare the published version. It stores nothing.
+// definition in force now, among those declaring the version when one is named, governs: its lifecycle is
+// active or unset and its validity holds. IdentityBinding then requires that definition to declare the
+// published version. It stores nothing.
 type GovernanceSource struct {
 	Documents corpus.Source
 	// Namespace maps a tenant to the Charter namespace that owns its agents.
@@ -37,7 +38,7 @@ var _ contract.GovernanceSource = (*GovernanceSource)(nil)
 
 // Snapshot fails closed, never reporting that the enterprise owns nothing, when the tenant has no namespace,
 // the agent no identity, or not exactly one of its definitions is in force.
-func (s *GovernanceSource) Snapshot(ctx context.Context, tenantID int64, agentID string) (domain.GovernanceSnapshot, bool, error) {
+func (s *GovernanceSource) Snapshot(ctx context.Context, tenantID int64, agentID, version string) (domain.GovernanceSnapshot, bool, error) {
 	if s.Documents == nil {
 		return domain.GovernanceSnapshot{}, false, fmt.Errorf("%w: charter governance source needs documents", domain.ErrNotReady)
 	}
@@ -45,7 +46,7 @@ func (s *GovernanceSource) Snapshot(ctx context.Context, tenantID int64, agentID
 	if err != nil {
 		return domain.GovernanceSnapshot{}, false, err
 	}
-	governing, err := s.governing(agentID, declared)
+	governing, err := s.governing(agentID, version, declared)
 	if err != nil {
 		return domain.GovernanceSnapshot{}, false, err
 	}
@@ -67,7 +68,7 @@ func (s *GovernanceSource) Snapshot(ctx context.Context, tenantID int64, agentID
 	return snapshot, true, nil
 }
 
-func (s *GovernanceSource) governing(agentID string, declared []model.AgentDefinition) (model.AgentDefinition, error) {
+func (s *GovernanceSource) governing(agentID, version string, declared []model.AgentDefinition) (model.AgentDefinition, error) {
 	now := time.Now()
 	if s.Now != nil {
 		now = s.Now()
@@ -77,12 +78,16 @@ func (s *GovernanceSource) governing(agentID string, declared []model.AgentDefin
 	var inForce []model.AgentDefinition
 	for _, definition := range declared {
 		active := definition.LifecycleState == "" || definition.LifecycleState == model.LifecycleActive
-		if active && temporal.EffectiveAt(definition.Validity, now) {
+		declares := version == "" || definition.DefinitionVersion == version
+		if active && declares && temporal.EffectiveAt(definition.Validity, now) {
 			inForce = append(inForce, definition)
 		}
 	}
 	switch len(inForce) {
 	case 0:
+		if version != "" {
+			return model.AgentDefinition{}, fmt.Errorf("%w: no charter definition of %s declaring version %s is in force", domain.ErrValidation, agentID, version)
+		}
 		return model.AgentDefinition{}, fmt.Errorf("%w: no charter definition of %s is in force", domain.ErrValidation, agentID)
 	case 1:
 		return inForce[0], nil

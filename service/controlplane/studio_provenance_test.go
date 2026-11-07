@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/fake"
 )
 
 var templateOriginRow = []any{"AgentTemplate", "tpl-00000000000000000001", nil, true, "2", "sha256:" + strings.Repeat("a", 64), int64(8), "tpl-00000000000000000001", int64(2), nil, nil}
@@ -122,6 +125,47 @@ func TestStudioRestoreKeepsTheVersionsProvenance(t *testing.T) {
 	}
 	if stored.DerivedFrom == nil || *stored.DerivedFrom != *derived {
 		t.Fatalf("restored provenance = %+v", stored.DerivedFrom)
+	}
+}
+
+// A restore freezes the snapshot declaring its new version; the source's digest stays what was judged.
+func TestStudioRestoreFreezesEnterpriseGovernanceOfTheNewVersion(t *testing.T) {
+	sourceDigest := strings.Repeat("a", 64)
+	frozen, _ := json.Marshal(domain.AgentGovernance{Purpose: "old", Enterprise: &domain.GovernanceSnapshotRef{Version: "1", Digest: "sha256:old"}})
+	definition := domain.AgentDefinition{AgentID: "writer-a", AgentTypeID: "writer", Version: "1", DefinitionDigest: sourceDigest,
+		Sections: map[string]json.RawMessage{domain.GovernanceSection: frozen}}
+	encoded, _ := json.Marshal(definition)
+	rows := provenanceRows()
+	rows[qStudioGetVersion] = [][]any{{string(encoded), false}}
+	rows[qStudioGetSettings] = [][]any{{"a:writer-a", `[]`, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), nil}}
+	rows[qStudioNextVersion] = [][]any{{int64(2)}}
+	studio, query := provenanceStudio(rows)
+	var asked []string
+	governance := &StudioGovernance{Required: []domain.GovernanceField{}, Source: fake.GovernanceSource{
+		SnapshotFunc: func(_ context.Context, _ int64, _, version string) (domain.GovernanceSnapshot, bool, error) {
+			asked = append(asked, version)
+			if version != "2" {
+				return domain.GovernanceSnapshot{}, false, domain.ErrValidation
+			}
+			return domain.GovernanceSnapshot{Document: domain.CharterObjectRef{Kind: "AgentDefinition", ID: "writer-a-2"}, Version: version, Digest: "sha256:" + strings.Repeat("b", 64), Governance: domain.AgentGovernance{Purpose: "new"}}, true, nil
+		}}}
+	studio.Sections, studio.Guards = []contract.DefinitionSection{governance}, []contract.PublishGuard{governance}
+	if _, err := studio.Restore(context.Background(), humanActor(8, 9), domain.AgentRestoreRequest{AgentID: "writer-a", Version: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	var stored domain.AgentDefinition
+	if err := json.Unmarshal([]byte(query.args[qStudioInsertVersion][3].(string)), &stored); err != nil {
+		t.Fatal(err)
+	}
+	var restored domain.AgentGovernance
+	if err := json.Unmarshal(stored.Sections[domain.GovernanceSection], &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Purpose != "new" || restored.Enterprise == nil || restored.Enterprise.Version != "2" || !slices.Equal(asked, []string{"2", "2"}) {
+		t.Fatalf("restored governance = %+v, asked %v", restored, asked)
+	}
+	if stored.DefinitionDigest == sourceDigest || stored.RestoredFromDigest != sourceDigest || query.args[qStudioInsertVersion][4] != stored.DefinitionDigest {
+		t.Fatalf("digest = %s, restored from %s", stored.DefinitionDigest, stored.RestoredFromDigest)
 	}
 }
 

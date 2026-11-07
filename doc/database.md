@@ -598,6 +598,8 @@ erDiagram
         bigint image_minor_units
         bigint video_minor_units_per_second
         bigint search_minor_units
+        bigint cache_read_minor_units_per_million
+        bigint cache_write_minor_units_per_million
     }
     tenant_model_access {
         bigint partner_id PK,FK
@@ -2598,6 +2600,7 @@ erDiagram
         char role_code PK
         int score_bp
         int sample_count
+        int skipped_count
         int critical_count
     }
 ```

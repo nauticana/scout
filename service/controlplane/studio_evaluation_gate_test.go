@@ -165,7 +165,7 @@ func TestEvaluateGateFailsWithEveryReason(t *testing.T) {
 	query.rows[qGateActive] = [][]any{{"2", baseDigest}}
 	query.rows[qGateInsert] = [][]any{{reviewedAt}}
 	query.runs[digest], query.runs[baseDigest] = 41, 42
-	// A critical failure, and a result the metric did not score, which counts 0.
+	// A critical failure on the one sample, and a result the metric did not score, which is skipped.
 	query.results[41] = [][]any{scoresRow(`[{"Metric":"rubric_score","Value":0.7,"Critical":true}]`), scoresRow(`[{"Metric":"pattern_match","Value":1}]`)}
 	query.results[42] = [][]any{scoresRow(`[{"Metric":"rubric_score","Value":1}]`), scoresRow(`[{"Metric":"rubric_score","Value":1}]`)}
 
@@ -177,10 +177,13 @@ func TestEvaluateGateFailsWithEveryReason(t *testing.T) {
 	if decision.Verdict != domain.GateVerdictFail || state.Admitted || decision.BaseVersion != "2" || len(decision.Runs) != 4 {
 		t.Fatalf("decision = %+v", decision)
 	}
-	for _, want := range []string{"1 critical failures", "3500 bp is below 8000 bp", "regresses 6500 bp from release 2"} {
+	for _, want := range []string{"1 critical failures", "1 samples (1 cases lack rubric_score), fewer than 2", "7000 bp is below 8000 bp", "regresses 3000 bp from release 2"} {
 		if !strings.Contains(decision.Reason, want) {
 			t.Errorf("reason %q lacks %q", decision.Reason, want)
 		}
+	}
+	if run := decision.Runs[0]; run.Samples != 1 || run.Skipped != 1 || run.ScoreBP != 7000 {
+		t.Fatalf("a result without the metric is skipped, not scored: %+v", run)
 	}
 	if args := query.args[qGateInsert]; args[3] != string(domain.GateVerdictFail) || args[8] != "2" {
 		t.Fatalf("insert args = %v", args)
@@ -340,7 +343,7 @@ func TestOverrideGateNeedsItsGrantAReasonAndTheCurrentDigest(t *testing.T) {
 func TestGateReportsTheCurrentDraftAndItsDecision(t *testing.T) {
 	gate, query, digest := gateService(t, devGate)
 	query.rows[qGateDecision] = [][]any{decisionRow(domain.GateVerdictPass, nil, policyDigest(t, devGate), baseDigest, nil, int64(2))}
-	query.rows[qGateDecisionRuns] = [][]any{{int64(41), string(domain.GateRunCandidate), "dev", int64(8500), int64(2), int64(0)}}
+	query.rows[qGateDecisionRuns] = [][]any{{int64(41), string(domain.GateRunCandidate), "dev", int64(8500), int64(2), int64(1), int64(0)}}
 	state, err := gate.Gate(context.Background(), humanActor(8, 9), "writer-a")
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +366,7 @@ func TestGateRefusesUnknownStoredCodes(t *testing.T) {
 		t.Fatalf("legacy verdict = %v", err)
 	}
 	query.rows[qGateDecision] = [][]any{decisionRow(domain.GateVerdictPass, nil, policyDigest(t, devGate), baseDigest, nil, int64(3))}
-	query.rows[qGateDecisionRuns] = [][]any{{int64(41), "candidate", "dev", int64(8500), int64(2), int64(0)}}
+	query.rows[qGateDecisionRuns] = [][]any{{int64(41), "candidate", "dev", int64(8500), int64(2), int64(1), int64(0)}}
 	if _, err := gate.Gate(context.Background(), humanActor(8, 9), "writer-a"); err == nil || !strings.Contains(err.Error(), "unknown role") {
 		t.Fatalf("legacy role = %v", err)
 	}
@@ -524,8 +527,19 @@ func TestGateScoringEdges(t *testing.T) {
 	query.rows[qGateInsert] = [][]any{{reviewedAt}}
 	query.runs[digest] = 41
 	state, err = zero.EvaluateGate(context.Background(), humanActor(8, 9), "writer-a")
-	if err != nil || state.Decision.Verdict != domain.GateVerdictFail || !strings.Contains(state.Decision.Reason, "0 samples, fewer than 1") {
+	if err != nil || state.Decision.Verdict != domain.GateVerdictFail || !strings.Contains(state.Decision.Reason, "0 samples (0 cases lack rubric_score), fewer than 1") {
 		t.Fatalf("a run without results = %+v, %v", state.Decision, err)
+	}
+}
+
+func TestGateFailsARunThatNeverScoredItsMetric(t *testing.T) {
+	gate, query, digest := gateService(t, `{"metric":"rubric_score","required_scopes":["dev"]}`)
+	query.rows[qGateInsert] = [][]any{{reviewedAt}}
+	query.runs[digest] = 41
+	query.results[41] = [][]any{scoresRow(`[{"Metric":"pattern_match","Value":1}]`), scoresRow(`[]`)}
+	state, err := gate.EvaluateGate(context.Background(), humanActor(8, 9), "writer-a")
+	if err != nil || state.Decision.Verdict != domain.GateVerdictFail || state.Decision.Runs[0].Skipped != 2 {
+		t.Fatalf("decision = %+v, %v", state.Decision, err)
 	}
 }
 

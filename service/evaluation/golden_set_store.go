@@ -60,6 +60,8 @@ SELECT partner_id, golden_set_id, set_version, query_id, knowledge_base_id, quer
 // GoldenSetStore persists golden sets, examples, and queries under a read scope.
 type GoldenSetStore struct {
 	keelStore
+	// MaxLabels bounds the ids one example labels in each evidence role; zero means DefaultCaseMaxLabels.
+	MaxLabels int
 }
 
 var _ contract.GoldenSetStore = (*GoldenSetStore)(nil)
@@ -124,7 +126,7 @@ func (store *GoldenSetStore) PutExample(ctx context.Context, scope domain.Golden
 	if err != nil {
 		return fmt.Errorf("encode reviews: %w", err)
 	}
-	if example.Assurance, err = validAssurance(example.Assurance, DefaultCaseMaxLabels); err != nil {
+	if example.Assurance, err = validAssurance(example.Assurance, orDefault(store.MaxLabels, DefaultCaseMaxLabels)); err != nil {
 		return err
 	}
 	qs, err := store.queries(ctx, "golden set store", goldenQueries)

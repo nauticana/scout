@@ -39,7 +39,7 @@ func (p *Anthropic) Generate(ctx context.Context, selection domain.ModelSelectio
 	if err != nil {
 		return domain.ModelResult{}, fmt.Errorf("anthropic Messages.New: %w", err)
 	}
-	return anthropicResult(resp)
+	return anthropicResult(resp, request)
 }
 
 func (p *Anthropic) listModels(ctx context.Context) ([]string, error) {
@@ -74,6 +74,9 @@ func (p *Anthropic) messageParams(selection domain.ModelSelection, request domai
 	}
 	if len(request.Instructions) > 0 {
 		params.System = []anthropic.TextBlockParam{{Text: string(request.Instructions)}}
+		if request.PromptCache {
+			params.System[0].CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
 	}
 	for _, message := range conversation(request) {
 		params.Messages = append(params.Messages, anthropicMessage(message))
@@ -158,7 +161,7 @@ func anthropicMessage(message domain.ModelMessage) anthropic.MessageParam {
 	return anthropic.NewUserMessage(blocks...)
 }
 
-func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
+func anthropicResult(resp *anthropic.Message, request domain.ModelRequest) (domain.ModelResult, error) {
 	var text strings.Builder
 	var calls []domain.ModelToolCall
 	var sources citations
@@ -183,12 +186,20 @@ func anthropicResult(resp *anthropic.Message) (domain.ModelResult, error) {
 		ToolCalls:    calls,
 		Citations:    sources.list,
 		FinishReason: finishReason(string(resp.StopReason), calls),
-		Usage: domain.Usage{
-			InputTokens:   int64(resp.Usage.InputTokens),
-			OutputTokens:  int64(resp.Usage.OutputTokens),
-			SearchQueries: resp.Usage.ServerToolUse.WebSearchRequests,
-		},
+		Usage:        anthropicUsage(resp.Usage, request),
 	}, nil
+}
+
+// anthropicUsage keeps cache tokens apart only when the request asked for caching; Anthropic
+// bills them outside input_tokens, so otherwise they rejoin the input at its rate.
+func anthropicUsage(usage anthropic.Usage, request domain.ModelRequest) domain.Usage {
+	out := domain.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.ServerToolUse.WebSearchRequests}
+	if request.PromptCache {
+		out.CacheReadTokens, out.CacheWriteTokens = usage.CacheReadInputTokens, usage.CacheCreationInputTokens
+	} else {
+		out.InputTokens += usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+	}
+	return out
 }
 
 func (p *Anthropic) Stream(ctx context.Context, selection domain.ModelSelection, request domain.ModelRequest) (contract.ModelStream, error) {
@@ -200,12 +211,12 @@ func (p *Anthropic) Stream(ctx context.Context, selection domain.ModelSelection,
 		return nil, err
 	}
 	client := anthropic.NewClient(option.WithAPIKey(p.APIKey))
-	return anthropicStream(client.Messages.NewStreaming(ctx, params)), nil
+	return anthropicStream(client.Messages.NewStreaming(ctx, params), request), nil
 }
 
 // anthropicStream emits each text delta as it arrives and accumulates the same
 // message a unary call returns, so both paths report the same terminal frame.
-func anthropicStream(stream *ssestream.Stream[anthropic.MessageStreamEventUnion]) contract.ModelStream {
+func anthropicStream(stream *ssestream.Stream[anthropic.MessageStreamEventUnion], request domain.ModelRequest) contract.ModelStream {
 	accumulated := anthropic.Message{}
 	terminal := false
 	return &eventStream{
@@ -227,7 +238,7 @@ func anthropicStream(stream *ssestream.Stream[anthropic.MessageStreamEventUnion]
 				return domain.ModelChunk{}, false, nil
 			}
 			terminal = true
-			result, err := anthropicResult(&accumulated)
+			result, err := anthropicResult(&accumulated, request)
 			if err != nil {
 				return domain.ModelChunk{}, false, err
 			}

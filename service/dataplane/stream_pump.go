@@ -166,10 +166,12 @@ func (pump *StreamPump) publish(ctx context.Context, turn domain.TurnRequest, ro
 func addChunkUsage(total *domain.Usage, usage domain.Usage) error {
 	const maxInt64 = int64(^uint64(0) >> 1)
 	const maxInt = int(^uint(0) >> 1)
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 ||
+		usage.ToolCalls < 0 || usage.SearchQueries < 0 || usage.CostMinorUnits < 0 {
 		return fmt.Errorf("%w: stream usage cannot be negative", domain.ErrValidation)
 	}
 	if total.InputTokens > maxInt64-usage.InputTokens || total.OutputTokens > maxInt64-usage.OutputTokens ||
+		total.CacheReadTokens > maxInt64-usage.CacheReadTokens || total.CacheWriteTokens > maxInt64-usage.CacheWriteTokens ||
 		total.ToolCalls > maxInt-usage.ToolCalls || total.SearchQueries > maxInt64-usage.SearchQueries ||
 		total.CostMinorUnits > maxInt64-usage.CostMinorUnits {
 		return fmt.Errorf("%w: stream usage overflow", domain.ErrValidation)
@@ -186,6 +188,8 @@ func addChunkUsage(total *domain.Usage, usage domain.Usage) error {
 	}
 	total.InputTokens += usage.InputTokens
 	total.OutputTokens += usage.OutputTokens
+	total.CacheReadTokens += usage.CacheReadTokens
+	total.CacheWriteTokens += usage.CacheWriteTokens
 	total.ToolCalls += usage.ToolCalls
 	total.SearchQueries += usage.SearchQueries
 	total.CostMinorUnits += usage.CostMinorUnits

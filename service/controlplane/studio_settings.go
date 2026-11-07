@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -270,13 +271,9 @@ func (s *StudioService) sections(ctx context.Context, tenantID int64, draft doma
 		if len(bytes.TrimSpace(raw)) == 0 {
 			continue
 		}
-		var value any
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return nil, fmt.Errorf("%w: definition section %q is not JSON: %v", domain.ErrValidation, name, err)
-		}
-		canonical, err := json.Marshal(value)
+		canonical, err := canonicalSection(raw)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: definition section %q is not JSON: %v", domain.ErrValidation, name, err)
 		}
 		if sections == nil {
 			sections = map[string]json.RawMessage{}
@@ -284,6 +281,36 @@ func (s *StudioService) sections(ctx context.Context, tenantID int64, draft doma
 		sections[name] = canonical
 	}
 	return sections, nil
+}
+
+// refreezeSections resolves the enterprise governance of a restore for the version it creates,
+// the one frozen value that belongs to a version, and reports whether it changed.
+func (s *StudioService) refreezeSections(ctx context.Context, tenantID int64, definition *domain.AgentDefinition, version string) (bool, error) {
+	changed := false
+	sections := maps.Clone(definition.Sections)
+	for _, section := range s.Sections {
+		governance, ok := section.(*StudioGovernance)
+		if !ok {
+			continue
+		}
+		name := section.Name()
+		raw, err := governance.restoredSection(ctx, tenantID, definition.AgentID, version, sections[name])
+		if err != nil {
+			return false, fmt.Errorf("definition section %q: %w", name, err)
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		canonical, err := canonicalSection(raw)
+		if err != nil {
+			return false, fmt.Errorf("%w: definition section %q is not JSON: %v", domain.ErrValidation, name, err)
+		}
+		if !bytes.Equal(canonical, sections[name]) {
+			sections[name], changed = canonical, true
+		}
+	}
+	definition.Sections = sections
+	return changed, nil
 }
 
 func sectionNames(maps ...map[string]json.RawMessage) []string {

@@ -22,12 +22,14 @@ type EvaluationGatePolicy struct {
 // EvaluationGateRun is one completed run a decision read; role is a gate_decision_run_role code
 // (candidate for the decided draft, baseline for the active release).
 type EvaluationGateRun struct {
-	RunID            int64  `json:"run_id"`
-	Role             string `json:"role"`
-	Scope            string `json:"scope"`
-	ScoreBP          int64  `json:"score_bp"`
-	Samples          int64  `json:"samples"`
-	CriticalFailures int64  `json:"critical_failures"`
+	RunID   int64  `json:"run_id"`
+	Role    string `json:"role"`
+	Scope   string `json:"scope"`
+	ScoreBP int64  `json:"score_bp"`
+	Samples int64  `json:"samples"`
+	// SkippedCases counts the results that lack the metric; they are not samples.
+	SkippedCases     int64 `json:"skipped_cases"`
+	CriticalFailures int64 `json:"critical_failures"`
 }
 
 // EvaluationGateDecision is the gate's verdict, a gate_decision_verdict code, on one definition digest.

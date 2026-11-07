@@ -8,11 +8,11 @@ import (
 )
 
 type GovernanceSource struct {
-	SnapshotFunc func(context.Context, int64, string) (domain.GovernanceSnapshot, bool, error)
+	SnapshotFunc func(ctx context.Context, tenantID int64, agentID, version string) (domain.GovernanceSnapshot, bool, error)
 }
 
-func (f GovernanceSource) Snapshot(ctx context.Context, tenantID int64, agentID string) (domain.GovernanceSnapshot, bool, error) {
-	return f.SnapshotFunc(ctx, tenantID, agentID)
+func (f GovernanceSource) Snapshot(ctx context.Context, tenantID int64, agentID, version string) (domain.GovernanceSnapshot, bool, error) {
+	return f.SnapshotFunc(ctx, tenantID, agentID, version)
 }
 
 type TriggerBindingVerifier struct {

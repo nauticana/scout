@@ -252,7 +252,8 @@ func pricedSpend(ctx context.Context, pricer contract.ModelPricer, reference dom
 		return usage, true
 	}
 	cost, currency, err := pricer.Cost(context.WithoutCancel(ctx), reference, domain.ModelUsage{
-		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, SearchQueries: usage.SearchQueries,
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CacheReadTokens: usage.CacheReadTokens,
+		CacheWriteTokens: usage.CacheWriteTokens, SearchQueries: usage.SearchQueries,
 	})
 	if err != nil || cost < 0 || len(currency) != 3 {
 		return usage, true

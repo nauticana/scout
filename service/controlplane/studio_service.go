@@ -681,7 +681,16 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if err != nil {
 		return domain.AgentRelease{}, err
 	}
-	restored := domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version}
+	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
+	if err != nil {
+		return domain.AgentRelease{}, err
+	}
+	sourceDigest := definition.DefinitionDigest
+	refrozen, err := s.refreezeSections(ctx, actor.TenantID, &definition, version)
+	if err != nil {
+		return domain.AgentRelease{}, err
+	}
+	restored := domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version, Version: version}
 	if err = s.guard(ctx, restored); err != nil {
 		return domain.AgentRelease{}, err
 	}
@@ -695,12 +704,14 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if err = s.checkBudget(ctx, settings.Resources, definition); err != nil {
 		return domain.AgentRelease{}, err
 	}
-	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentRelease{}, err
+	if refrozen {
+		if definition.DefinitionDigest, err = s.Compiler.DefinitionDigest(definition); err != nil {
+			return domain.AgentRelease{}, err
+		}
 	}
 	definition.Version = version
 	definition.RestoredFromVersion = request.Version
+	definition.RestoredFromDigest = sourceDigest
 	definition.ChangeSummary = "Restored from version " + request.Version
 	definition.PublishedBy = actorUserID(actor)
 	definition.PublishedAt = s.now()

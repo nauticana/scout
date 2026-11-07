@@ -41,8 +41,9 @@ var runTraceQueries = map[string]string{
 SELECT id, agent_id, agent_version, task_kind, request_id, status_code, completed_at
   FROM agent_run
  WHERE partner_id = ? AND id = ? AND agent_id = ?`,
+	qWorkingSetItems: workingSetItemsSQL,
 	qRunTraceTurn: `
-SELECT conversation_id, turn_no, status_code, queued_at, started_at, first_response_at, completed_at
+SELECT conversation_id, turn_no, status_code, queued_at, started_at, first_response_at, completed_at, COALESCE(working_set_code, '')
   FROM conversation_turn
  WHERE partner_id = ? AND request_id = ?`,
 	qRunTraceJournal: `
@@ -194,17 +195,21 @@ func (store *TableRunTrace) turn(ctx context.Context, tenantID int64, requestID 
 		return nil, nil
 	}
 	row := result.Rows[0]
-	if len(row) < 7 {
+	if len(row) < 8 {
 		return nil, malformedTraceRow("conversation turn")
 	}
 	queuedAt, ok := common.AsTimeOK(row[3])
 	if !ok {
 		return nil, malformedTraceRow("conversation turn")
 	}
-	return &domain.RunTraceTurn{
+	turn := domain.RunTraceTurn{
 		ConversationID: common.AsString(row[0]), TurnNo: common.AsInt64(row[1]), Status: domain.TurnStatus(common.AsString(row[2])),
 		QueuedAt: queuedAt, StartedAt: common.AsTime(row[4]), FirstResponseAt: common.AsTime(row[5]), CompletedAt: common.AsTime(row[6]),
-	}, nil
+	}
+	if turn.WorkingSet, err = readTurnWorkingSet(ctx, store.qs, tenantID, turn.ConversationID, turn.TurnNo, common.AsString(row[7])); err != nil {
+		return nil, err
+	}
+	return &turn, nil
 }
 
 // journal cuts the trace before the first entry past its entry or cumulative byte bound.

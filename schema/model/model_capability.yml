@@ -16,4 +16,4 @@ foreign_keys:
       columns: [provider_id, model_id]
 checks:
   - name: model_capability_code_ck
-    expression: capability_code IN ('TX', 'IM', 'VD', 'TL', 'SO', 'SM', 'WS', 'EM')
+    expression: capability_code IN ('TX', 'IM', 'VD', 'TL', 'SO', 'SM', 'WS', 'EM', 'PC')

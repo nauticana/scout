@@ -55,6 +55,7 @@ type RunTraceTurn struct {
 	StartedAt       time.Time
 	FirstResponseAt time.Time
 	CompletedAt     time.Time
+	WorkingSet      TurnWorkingSet
 }
 
 // RunTraceEvent has exactly the detail matching Kind and a one-based Sequence.

@@ -64,6 +64,7 @@ func (h *StudioEvaluationHandler) trajectory(ctx context.Context, actor domain.S
 		item := api.TrajectoryEvent{
 			Sequence: event.Sequence, Kind: string(event.Kind), Name: event.Name, Payload: event.Payload,
 			OffsetMs: event.Offset.Milliseconds(), Failed: event.Failed, Recovered: event.Recovered,
+			Mutating: event.Mutating, Evidence: event.Evidence,
 		}
 		item.Usage = trajectoryUsage(event.Usage)
 		result.Events = append(result.Events, item)

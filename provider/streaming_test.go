@@ -66,7 +66,7 @@ func TestAnthropicStreamsTextDeltasThenOneTerminalFrame(t *testing.T) {
 		event("content_block_stop", `{"type":"content_block_stop","index":0}`),
 		event("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`),
 		event("message_stop", `{"type":"message_stop"}`),
-	)), nil))
+	)), nil), domain.ModelRequest{})
 
 	text, terminal := drain(t, stream)
 	if text != "partial" {

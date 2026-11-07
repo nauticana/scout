@@ -173,14 +173,18 @@ type TrajectoryUsage struct {
 // TrajectoryEvent is one sequenced event: kind is token, tool_call, observation, state, or
 // policy; a state event named turn marks where each turn after the first starts.
 type TrajectoryEvent struct {
-	Sequence  int64            `json:"sequence"`
-	Kind      string           `json:"kind"`
-	Name      string           `json:"name,omitempty"`
-	Payload   json.RawMessage  `json:"payload,omitempty"`
-	OffsetMs  int64            `json:"offset_ms"`
-	Failed    bool             `json:"failed,omitempty"`
-	Recovered bool             `json:"recovered,omitempty"`
-	Usage     *TrajectoryUsage `json:"usage,omitempty"`
+	Sequence  int64           `json:"sequence"`
+	Kind      string          `json:"kind"`
+	Name      string          `json:"name,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	OffsetMs  int64           `json:"offset_ms"`
+	Failed    bool            `json:"failed,omitempty"`
+	Recovered bool            `json:"recovered,omitempty"`
+	// Mutating marks an observation of a tool not declared read-only; Evidence are the resource
+	// links that tool returned to the model.
+	Mutating bool             `json:"mutating,omitempty"`
+	Evidence []string         `json:"evidence,omitempty"`
+	Usage    *TrajectoryUsage `json:"usage,omitempty"`
 }
 
 // CaseTrajectory is GET evaluation/trajectory?run_id=&case_id=&arm=: one case's trajectory as

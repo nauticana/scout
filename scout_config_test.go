@@ -338,6 +338,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_alert_page_size:                 "50",
 		agent_alert_max_page_size:             "200",
 		agent_evaluation_case_max_turns:       "10",
+		agent_evaluation_case_max_labels:      "50",
 		agent_evaluation_case_max_tools:       "20",
 		agent_evaluation_case_tool_max_bytes:  "16384",
 		agent_evaluation_trajectory_max_bytes: "1048576",
@@ -356,6 +357,7 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_hold_lapse_period:               "30",
 		agent_working_set_max_candidates:      "64",
 		agent_working_set_max_tokens:          "8000",
+		agent_working_set_retrieval_top_k:     "8",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {
@@ -830,6 +832,9 @@ func TestCaseScriptFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
 	if err := cfg.Apply(scoutConfigRows()); err != nil {
 		t.Fatal(err)
 	}
+	if cfg.AgentEvaluationCaseMaxLabels != 50 {
+		t.Fatalf("case max labels = %d", cfg.AgentEvaluationCaseMaxLabels)
+	}
 	if cfg.AgentEvaluationCaseMaxTurns != 10 || cfg.AgentEvaluationCaseMaxTools != 20 || cfg.AgentEvaluationCaseToolMaxBytes != 16384 ||
 		cfg.AgentEvaluationTrajectoryMaxBytes != 1048576 {
 		t.Fatalf("case script flags = %d, %d, %d, %d", cfg.AgentEvaluationCaseMaxTurns, cfg.AgentEvaluationCaseMaxTools,
@@ -843,7 +848,7 @@ func TestCaseScriptFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
 		t.Fatalf("zero takes the default: %v", err)
 	}
 	for flag, value := range map[string]string{
-		agent_evaluation_case_max_turns: "101", agent_evaluation_case_max_tools: "-1",
+		agent_evaluation_case_max_turns: "101", agent_evaluation_case_max_tools: "-1", agent_evaluation_case_max_labels: "1001",
 		agent_evaluation_case_tool_max_bytes: "1", agent_evaluation_trajectory_max_bytes: "1023",
 	} {
 		rows := scoutConfigRows()
@@ -896,14 +901,14 @@ func TestWorkingSetFlagsTakeTheirDefaultsAndRefuseOutOfRange(t *testing.T) {
 		t.Fatalf("WorkingSetLimits() = %+v, want the seeded defaults %+v", got, want)
 	}
 	zero := scoutConfigRows()
-	for _, flag := range []string{agent_working_set_max_candidates, agent_working_set_max_tokens} {
+	for _, flag := range []string{agent_working_set_max_candidates, agent_working_set_max_tokens, agent_working_set_retrieval_top_k} {
 		zero[flag] = keelconfig.ConfigRow{Value: "0"}
 	}
 	if err := (&ScoutConfig{}).Apply(zero); err != nil {
 		t.Fatalf("zero takes the default: %v", err)
 	}
 	for flag, value := range map[string]string{
-		agent_working_set_max_candidates: "1025", agent_working_set_max_tokens: "-1",
+		agent_working_set_max_candidates: "1025", agent_working_set_max_tokens: "-1", agent_working_set_retrieval_top_k: "257",
 	} {
 		rows := scoutConfigRows()
 		rows[flag] = keelconfig.ConfigRow{Value: value}

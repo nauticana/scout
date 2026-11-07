@@ -212,6 +212,7 @@ seeds:
       - [agent_alert_page_size, int, true, "50", "Alerts one Studio page returns when the caller names no limit (0..agent_alert_max_page_size); 0 takes 50"]
       - [agent_alert_max_page_size, int, true, "200", "Largest alert page a Studio caller may ask for (1..1000); 0 takes 200"]
       - [agent_evaluation_case_max_turns, int, true, "10", "Turns one golden case may script, its input included (1..100); 0 uses Scout's default of 10"]
+      - [agent_evaluation_case_max_labels, int, true, "50", "Ids one golden case may label in each evidence role (1..1000); 0 uses Scout's default of 50"]
       - [agent_evaluation_case_max_tools, int, true, "20", "Sandboxed tool responses one golden case may script (1..200); 0 uses Scout's default of 20"]
       - [agent_evaluation_case_tool_max_bytes, int, true, "16384", "Bytes of one scripted tool output (2..1048576); 0 uses Scout's default of 16384"]
       - [agent_evaluation_trajectory_max_bytes, int, true, "1048576", "Bytes of one stored case trajectory Studio reads; a larger one is refused (1024..16777216); 0 uses Scout's default of 1048576"]
@@ -229,6 +230,7 @@ seeds:
       - [agent_hold_lapse_batch, int, true, "100", "Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100"]
       - [agent_hold_lapse_period, int, true, "30", "Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30"]
       - [agent_working_set_max_candidates, int, true, "64", "Candidates one turn's working set source may offer; more fails the turn (1..1024); 0 takes 64"]
+      - [agent_working_set_retrieval_top_k, int, true, "8", "Matches one retrieval binding offers a turn's working set (1..256); 0 takes 8"]
       - [agent_working_set_max_tokens, int, true, "8000", "Token budget of one turn's working set; required context beyond it fails the turn (1..1048576); 0 takes 8000"]
   - table: authorization_object
     columns: [id, caption]

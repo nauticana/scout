@@ -15,13 +15,14 @@ type RunTrace struct {
 
 // RunTraceTurn is the run's turn; status is a turn_status code.
 type RunTraceTurn struct {
-	ConversationID  string     `json:"conversation_id"`
-	TurnNo          int64      `json:"turn_no"`
-	Status          string     `json:"status"`
-	QueuedAt        time.Time  `json:"queued_at"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	FirstResponseAt *time.Time `json:"first_response_at,omitempty"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	ConversationID  string          `json:"conversation_id"`
+	TurnNo          int64           `json:"turn_no"`
+	Status          string          `json:"status"`
+	QueuedAt        time.Time       `json:"queued_at"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	FirstResponseAt *time.Time      `json:"first_response_at,omitempty"`
+	CompletedAt     *time.Time      `json:"completed_at,omitempty"`
+	WorkingSet      *TurnWorkingSet `json:"working_set,omitempty"`
 }
 
 // RunTraceEvent holds the detail member named by Kind.

@@ -31,6 +31,7 @@ type ReleaseLoopRequestBuilder struct {
 	Skills contract.SkillRegistry
 	// Knowledge and Entitlements read the release's whole-mode bindings, pinned to
 	// its version; nil reads none. KnowledgeMaxBytes bounds them and the memory, fail closed.
+	// A product that offers them through a working set instead leaves these and Memory nil.
 	Knowledge         contract.PinnedKnowledgeResolver
 	Entitlements      contract.EntitlementResolver
 	KnowledgeMaxBytes int
@@ -41,6 +42,9 @@ type ReleaseLoopRequestBuilder struct {
 	// before the model with domain.ErrWorkingSetUnassured.
 	WorkingSet        contract.WorkingSetCompiler
 	WorkingSetRecords contract.WorkingSetRecorder
+	// PromptCache renders what the release fixes (compiled prompt, whole-mode knowledge, skill index)
+	// as Instructions ahead of the turn's task, working set, and memory, and asks the route to cache them.
+	PromptCache bool
 	// LanguageCode selects the compiled prompt; empty takes the release's only language.
 	LanguageCode    string
 	MaxOutputTokens int64
@@ -78,10 +82,11 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	if task.Context, err = builder.withMemory(ctx, principal.TenantID, task.Context); err != nil {
 		return domain.ModelRequest{}, err
 	}
-	if task.Context, err = builder.withPinnedKnowledge(ctx, principal, task.Context); err != nil {
+	releaseContext, err := builder.withPinnedKnowledge(ctx, principal, "")
+	if err != nil {
 		return domain.ModelRequest{}, err
 	}
-	if task.Context, err = builder.withSkillIndex(ctx, principal.TenantID, definition, task.Context); err != nil {
+	if releaseContext, err = builder.withSkillIndex(ctx, principal.TenantID, definition, releaseContext); err != nil {
 		return domain.ModelRequest{}, err
 	}
 	if config.RequireEvidence {
@@ -95,11 +100,21 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 	if err != nil {
 		return domain.ModelRequest{}, err
 	}
+	var instructions []byte
+	agentName, sections := definition.AgentID, prompt.Sections
+	if builder.PromptCache {
+		instructions = []byte(builder.Renderer.Render(agentName, sections, domain.AgentTask{Context: releaseContext}))
+		agentName, sections = "", nil
+	} else if releaseContext != "" {
+		task.Context = strings.TrimSpace(task.Context + "\n\n" + releaseContext)
+	}
 	return domain.ModelRequest{
 		TenantContext:   domain.TenantContext{TenantID: principal.TenantID, ScopeID: principal.ScopeID},
 		RequestID:       input.RequestID,
 		ConversationID:  input.Snapshot.ConversationID,
-		Prompt:          []byte(builder.Renderer.Render(definition.AgentID, prompt.Sections, task)),
+		Instructions:    instructions,
+		PromptCache:     builder.PromptCache,
+		Prompt:          []byte(builder.Renderer.Render(agentName, sections, task)),
 		MaxOutputTokens: builder.MaxOutputTokens,
 		Model:           pinnedTextModel(definition),
 		AffinityKey:     input.Snapshot.ConversationID,

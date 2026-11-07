@@ -48,7 +48,7 @@ func TestAnthropicGroundsAndReportsCitedSources(t *testing.T) {
 		"usage":{"input_tokens":5,"output_tokens":7,"server_tool_use":{"web_search_requests":2}}}`), &message); err != nil {
 		t.Fatalf("decode message: %v", err)
 	}
-	result, err := anthropicResult(&message)
+	result, err := anthropicResult(&message, domain.ModelRequest{})
 	if err != nil {
 		t.Fatalf("anthropicResult: %v", err)
 	}

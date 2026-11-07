@@ -47,7 +47,7 @@ func TestCodeListsAgreeWithSeedAndSchema(t *testing.T) {
 		{
 			constantID: "model_capability",
 			codes: codes(CapabilityText, CapabilityImage, CapabilityVideo, CapabilityTools, CapabilityStructuredOutput,
-				CapabilitySampling, CapabilityWebSearch, CapabilityEmbeddings),
+				CapabilitySampling, CapabilityWebSearch, CapabilityEmbeddings, CapabilityPromptCache),
 			valid: func(code string) bool { return ModelCapability(code).Valid() },
 			seed:  "model/model.yml", schema: "model/model_capability.yml",
 			column: "capability_code", columnType: "CHAR(2)", check: "model_capability_code_ck",

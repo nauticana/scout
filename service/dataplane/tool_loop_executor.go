@@ -349,7 +349,8 @@ func (executor *ToolLoopExecutor) priced(ctx context.Context, selection domain.M
 	currency := ""
 	for i, spend := range spends {
 		cost, spendCurrency, err := executor.Pricer.Cost(ctx, spend.Model,
-			domain.ModelUsage{InputTokens: spend.InputTokens, OutputTokens: spend.OutputTokens, SearchQueries: spend.SearchQueries})
+			domain.ModelUsage{InputTokens: spend.InputTokens, OutputTokens: spend.OutputTokens, CacheReadTokens: spend.CacheReadTokens,
+				CacheWriteTokens: spend.CacheWriteTokens, SearchQueries: spend.SearchQueries})
 		if err != nil {
 			return usage, fmt.Errorf("price model %s/%s: %w", spend.Model.ProviderID, spend.Model.ModelID, err)
 		}

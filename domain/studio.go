@@ -286,8 +286,10 @@ type PublishCandidate struct {
 	Actor      StudioActor
 	Definition AgentDefinition
 	Settings   EffectiveRelease
-	// RestoredFrom is the version a restore copies; empty for a publish.
+	// RestoredFrom is the version a restore copies and Version the one it creates; both are empty
+	// for a publish. Definition.DefinitionDigest stays the source's, which reviews and the gate judged.
 	RestoredFrom string
+	Version      string
 	// Activation marks a scheduled release going live, already admitted when it was published.
 	Activation bool
 }
@@ -519,9 +521,11 @@ type StudioModel struct {
 // ModelUsage is the billable work one model performed: tokens for text, assets
 // for images, whole seconds for video, and grounding searches.
 type ModelUsage struct {
-	InputTokens   int64
-	OutputTokens  int64
-	Images        int64
-	VideoSeconds  int64
-	SearchQueries int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	Images           int64
+	VideoSeconds     int64
+	SearchQueries    int64
 }

@@ -519,7 +519,7 @@ func (r *StudioPublishReviews) WriteRelease(ctx context.Context, tx keelport.TxQ
 	}
 	target, claim, event := reviewTarget{kind: domain.PublishReviewOfPublish, digest: definition.DefinitionDigest}, qReviewClaim, "PUBLISH_REVIEWED"
 	if definition.RestoredFromVersion != "" {
-		target.kind, target.restoreVersion = domain.PublishReviewOfRestore, definition.RestoredFromVersion
+		target.kind, target.restoreVersion, target.digest = domain.PublishReviewOfRestore, definition.RestoredFromVersion, definition.RestoredFromDigest
 		claim, event = qReviewClaimRestore, "RESTORE_REVIEWED"
 	}
 	admitted, err := r.admit(ctx, qs, claim, tenantID, definition.AgentID, target, publisher)

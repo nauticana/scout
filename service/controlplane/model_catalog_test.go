@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nauticana/scout/domain"
@@ -23,8 +24,8 @@ func TestListJoinsCapabilitiesAndRates(t *testing.T) {
 			{"google", "gemini-3.1-flash-image", string(domain.CapabilityText)},
 		},
 		qCatalogPrices: {
-			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000)},
-			{"google", "gemini-3.1-flash-image", "CRD", int64(0), int64(0), int64(120000), int64(0), int64(0)},
+			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000), nil, nil},
+			{"google", "gemini-3.1-flash-image", "CRD", int64(0), int64(0), int64(120000), int64(0), int64(0), nil, nil},
 		},
 	})
 	models, err := catalog.List(context.Background(), 8)
@@ -95,8 +96,8 @@ func TestValidateSkipsUnsetSlots(t *testing.T) {
 func TestCostPricesUsageInIntegerMinorUnits(t *testing.T) {
 	catalog := catalogFake(map[string][][]any{
 		qCatalogPrices: {
-			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000)},
-			{"google", "videogeneration@001", "CRD", int64(0), int64(0), int64(0), int64(1400000), int64(0)},
+			{"anthropic", "claude-opus-5", "CRD", int64(20000000), int64(100000000), int64(0), int64(0), int64(1500000), nil, nil},
+			{"google", "videogeneration@001", "CRD", int64(0), int64(0), int64(0), int64(1400000), int64(0), nil, nil},
 		},
 	})
 	opus := domain.ModelReference{ProviderID: "anthropic", ModelID: "claude-opus-5"}
@@ -134,5 +135,28 @@ func TestCostPricesUsageInIntegerMinorUnits(t *testing.T) {
 	}
 	if _, _, err = catalog.Cost(context.Background(), opus, domain.ModelUsage{InputTokens: -1}); err == nil {
 		t.Fatal("negative usage must be rejected")
+	}
+}
+
+func TestCostPricesPrefixCacheTokensAndRefusesThemWithoutARate(t *testing.T) {
+	cached, plain := domain.ModelReference{ProviderID: "a", ModelID: "cached"}, domain.ModelReference{ProviderID: "a", ModelID: "plain"}
+	catalog := catalogFake(map[string][][]any{qCatalogPrices: {
+		{"a", "cached", "USD", int64(1000000), int64(0), int64(0), int64(0), int64(0), int64(100000), int64(1250000)},
+		{"a", "plain", "USD", int64(1000000), int64(0), int64(0), int64(0), int64(0), nil, nil},
+	}})
+	cost, _, err := catalog.Cost(context.Background(), cached, domain.ModelUsage{InputTokens: 10, CacheReadTokens: 100, CacheWriteTokens: 8})
+	if err != nil || cost != 10+10+10 {
+		t.Fatalf("cost = %d, %v", cost, err)
+	}
+	if _, _, err = catalog.Cost(context.Background(), plain, domain.ModelUsage{InputTokens: 10}); err != nil {
+		t.Fatalf("no cache tokens need no cache rate: %v", err)
+	}
+	for _, usage := range []domain.ModelUsage{{CacheReadTokens: 1}, {CacheWriteTokens: 1}} {
+		if _, _, err = catalog.Cost(context.Background(), plain, usage); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("unpriced cache tokens %+v = %v", usage, err)
+		}
+	}
+	if _, _, err = catalog.Cost(context.Background(), cached, domain.ModelUsage{CacheReadTokens: -1}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("negative cache tokens = %v", err)
 	}
 }

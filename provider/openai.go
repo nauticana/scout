@@ -211,7 +211,8 @@ func openAIResult(provider string, resp *openai.ChatCompletion, request domain.M
 			return domain.ModelResult{}, fmt.Errorf("%w: %s sources: %w", domain.ErrInvalidModelOutput, provider, err)
 		}
 	}
-	usage := domain.Usage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens}
+	usage := withCachedInput(domain.Usage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens},
+		request, resp.Usage.PromptTokensDetails.CachedTokens)
 	if request.Search != nil {
 		// Chat Completions bills the grounded call, not each search it ran.
 		usage.SearchQueries = 1

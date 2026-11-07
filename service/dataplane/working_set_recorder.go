@@ -34,6 +34,38 @@ INSERT INTO turn_working_set_item (partner_id, conversation_id, turn_no, candida
 VALUES (?, ?, ?, ?, ?)`,
 }
 
+// qWorkingSetItems reads what a turn's working set recorded; the compiler's candidate ceiling bounds it.
+const (
+	qWorkingSetItems   = "scout_working_set_items"
+	workingSetItemsSQL = `
+SELECT candidate_id, selected FROM turn_working_set_item
+ WHERE partner_id = ? AND conversation_id = ? AND turn_no = ?
+ ORDER BY candidate_id`
+)
+
+// readTurnWorkingSet reads the recorded ids of a turn that holds assurance; one without reads none.
+func readTurnWorkingSet(ctx context.Context, qs port.QueryService, tenantID int64, conversationID string, turnNo int64, assurance string) (domain.TurnWorkingSet, error) {
+	set := domain.TurnWorkingSet{Assurance: domain.WorkingSetAssurance(assurance)}
+	if assurance == "" {
+		return set, nil
+	}
+	result, err := qs.Query(ctx, qWorkingSetItems, tenantID, conversationID, turnNo)
+	if err != nil {
+		return set, fmt.Errorf("read the turn's working set: %w", err)
+	}
+	if err = result.RequireColumns(2); err != nil {
+		return set, fmt.Errorf("read the turn's working set: %w", err)
+	}
+	for _, row := range result.Rows {
+		if common.AsBool(row[1]) {
+			set.Selected = append(set.Selected, common.AsString(row[0]))
+		} else {
+			set.Excluded = append(set.Excluded, common.AsString(row[0]))
+		}
+	}
+	return set, nil
+}
+
 // TableWorkingSetRecorder records a turn's working set on conversation_turn and
 // turn_working_set_item. A resumed turn compiles again, and its latest set replaces the earlier one.
 type TableWorkingSetRecorder struct {

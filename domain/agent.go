@@ -24,14 +24,17 @@ type AgentDefinition struct {
 	// governance or triggers, each canonical JSON; the digest covers them.
 	Sections map[string]json.RawMessage `json:"sections,omitempty"`
 	// SettingsDigest is scope.SettingsDigest of the effective release frozen with this definition.
-	SettingsDigest        string    `json:"settings_digest,omitempty"`
-	DefinitionDigest      string    `json:"definition_digest"`
-	DraftRevision         int64     `json:"draft_revision"`
-	PromptProfileRevision int64     `json:"prompt_profile_revision"`
-	ChangeSummary         string    `json:"change_summary,omitempty"`
-	PublishedBy           *int64    `json:"published_by,omitempty"`
-	RestoredFromVersion   string    `json:"restored_from_version,omitempty"`
-	PublishedAt           time.Time `json:"published_at"`
+	SettingsDigest        string `json:"settings_digest,omitempty"`
+	DefinitionDigest      string `json:"definition_digest"`
+	DraftRevision         int64  `json:"draft_revision"`
+	PromptProfileRevision int64  `json:"prompt_profile_revision"`
+	ChangeSummary         string `json:"change_summary,omitempty"`
+	PublishedBy           *int64 `json:"published_by,omitempty"`
+	RestoredFromVersion   string `json:"restored_from_version,omitempty"`
+	// RestoredFromDigest is the source's digest, which differs from this release's when a
+	// section was frozen again for the new version.
+	RestoredFromDigest string    `json:"restored_from_digest,omitempty"`
+	PublishedAt        time.Time `json:"published_at"`
 	// DerivedFrom is the draft's origin frozen with this version; the digest covers it.
 	DerivedFrom *DerivedFrom `json:"derived_from,omitempty"`
 }

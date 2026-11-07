@@ -241,6 +241,7 @@ the route returns with `has_trajectory`, and the `evaluation` feature is at vers
 | Flag | Default | Meaning |
 |---|---:|---|
 | `agent_evaluation_case_max_turns` | 10 | Turns one case may script, its input included (`GoldenCaseStore.MaxTurns`) |
+| `agent_evaluation_case_max_labels` | 50 | Ids one case may label in each evidence role (`GoldenCaseStore.MaxLabels`) |
 | `agent_evaluation_case_max_tools` | 20 | Sandboxed tool responses one case may script (`GoldenCaseStore.MaxTools`) |
 | `agent_evaluation_case_tool_max_bytes` | 16384 | Bytes of one scripted tool output (`GoldenCaseStore.MaxToolOutputBytes`) |
 | `agent_evaluation_trajectory_max_bytes` | 1048576 | Bytes of one stored trajectory (`AgentEvaluationWorker.MaxTrajectoryBytes`, `StudioEvaluation.MaxTrajectoryBytes`) |
@@ -348,11 +349,12 @@ it, and [authority](authority.md#scope-hierarchy) how a child scope may only tig
 (`POST gate/evaluate`, `TEST`). For each required scope it reads the newest completed
 single-subject run of that digest — run as a draft or as a release — on the newest frozen version
 of the agent's golden set; comparison runs are never gate evidence. Studio actors run the dev scope
-only, so a `gate` requirement is met by a run the product queued in the gate scope. Every result
-of the run is a sample: a result the metric did not score counts 0, several scores of the metric
-count the lowest, and a value outside 0..1 counts 0 and fails the gate. The run passes with no
-critical score, at least `min_samples` samples (and at least one), and a mean, in basis points of
-a whole score (0 to 10000), at or above `min_score_bp`. With `max_regression_bp` and an active
+only, so a `gate` requirement is met by a run the product queued in the gate scope. A result the
+metric scored is a sample; a missing measurement is not a failed one, so a result without the
+metric is skipped and reported as `skipped_cases`, and only `min_samples` bounds how much a run may
+skip. Several scores of the metric count the lowest, and a value outside 0..1 counts 0 and fails the
+gate. The run passes with no critical score, on any result, at least `min_samples` samples (and at
+least one), and a mean, in basis points of a whole score (0 to 10000), at or above `min_score_bp`. With `max_regression_bp` and an active
 release, the mean may also fall no further below that of the active release's newest completed run
 on the same version and scope, and a missing release run fails. A run holding more results than
 `agent_evaluation_gate_max_results` (default 2000) is refused rather than read in part.

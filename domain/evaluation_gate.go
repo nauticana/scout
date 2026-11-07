@@ -12,8 +12,8 @@ const StudioOverrideGate StudioAction = "OVERRIDE_GATE"
 const MaxEvaluationGateScoreBP = 10000
 
 // EvaluationGatePolicy is the evaluation_gate setting: what a draft's completed evaluations must
-// show before it may be published. Every result of a run is a sample, and one the metric did
-// not score counts as 0. MinScoreBP is the lowest mean of Metric, a 0..1 score, in basis points;
+// show before it may be published. A result the metric scored is a sample; one it did not is
+// skipped and counted, never scored. MinScoreBP is the lowest mean of Metric, a 0..1 score, in basis points;
 // MaxRegressionBP, when set, the most the mean may fall below the active release's on the same
 // set version; RequiredScopes the golden scopes each needing a completed run.
 type EvaluationGatePolicy struct {
@@ -55,11 +55,13 @@ func (role GateRunRole) Valid() bool {
 
 // EvaluationGateRun is one completed evaluation run a decision rests on, with its score.
 type EvaluationGateRun struct {
-	RunID     int64
-	Role      GateRunRole
-	Scope     GoldenScope
-	ScoreBP   int64
-	Samples   int64
+	RunID   int64
+	Role    GateRunRole
+	Scope   GoldenScope
+	ScoreBP int64
+	Samples int64
+	// Skipped counts the results that lack the metric, so coverage stays visible.
+	Skipped   int64
 	Criticals int64
 }
 

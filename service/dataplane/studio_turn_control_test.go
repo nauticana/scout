@@ -127,7 +127,7 @@ type turnControlFixture struct {
 
 func liveTurnRow(requestID string, status domain.TurnStatus, fence int64, holdCode string) []any {
 	queued := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	return []any{requestID, "conversation-1", int64(4), string(status), fence, holdCode, false, "", false, queued, nil, nil, "", "", nil}
+	return []any{requestID, "conversation-1", int64(4), string(status), fence, holdCode, false, "", false, queued, nil, nil, "", "", nil, ""}
 }
 
 func newTurnControlFixture(actions ...domain.OperationAction) *turnControlFixture {
@@ -297,5 +297,21 @@ func TestStudioTurnControlPagesLiveTurnsNewestFirst(t *testing.T) {
 	fixture.service.Limits = domain.LiveTurnLimits{PageSize: 300, MaxPageSize: 200}
 	if _, err := fixture.service.LiveTurns(context.Background(), usageActor, domain.LiveTurnFilter{AgentID: "writer-a"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a default page above the maximum must be refused, got %v", err)
+	}
+}
+
+func TestStudioTurnControlShowsTheWorkingSetOfATurn(t *testing.T) {
+	fixture := newTurnControlFixture(domain.OperationView)
+	row := liveTurnRow("request-1", domain.TurnRunning, 3, "")
+	row[15] = string(domain.AssuranceBounded)
+	fixture.query.rows[qOperateTurn] = [][]any{row}
+	fixture.query.rows[qWorkingSetItems] = [][]any{{"a", true}, {"b", false}}
+	turn, err := fixture.service.Turn(context.Background(), domain.StudioActor{TenantID: 7, Principal: domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "9"}}, "writer-a", "request-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := turn.WorkingSet
+	if set.Assurance != domain.AssuranceBounded || !slices.Equal(set.Selected, []string{"a"}) || !slices.Equal(set.Excluded, []string{"b"}) {
+		t.Fatalf("working set = %+v", set)
 	}
 }

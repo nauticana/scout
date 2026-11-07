@@ -77,7 +77,7 @@ func (s *StudioGovernance) Governance(ctx context.Context, actor domain.StudioAc
 	if err != nil {
 		return domain.AgentGovernanceView{}, err
 	}
-	snapshot, err := s.snapshot(ctx, actor.TenantID, agentID)
+	snapshot, err := s.snapshot(ctx, actor.TenantID, agentID, "")
 	if err != nil {
 		return domain.AgentGovernanceView{}, err
 	}
@@ -100,7 +100,7 @@ func (s *StudioGovernance) SaveGovernance(ctx context.Context, actor domain.Stud
 	if state == domain.AgentStateArchived {
 		return domain.AgentGovernanceView{}, fmt.Errorf("%w: agent %q is archived", domain.ErrConflict, change.AgentID)
 	}
-	snapshot, err := s.snapshot(ctx, actor.TenantID, change.AgentID)
+	snapshot, err := s.snapshot(ctx, actor.TenantID, change.AgentID, "")
 	if err != nil {
 		return domain.AgentGovernanceView{}, err
 	}
@@ -172,7 +172,7 @@ func (s *StudioGovernance) Section(ctx context.Context, tenantID int64, draft do
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := s.snapshot(ctx, tenantID, draft.AgentID)
+	snapshot, err := s.snapshot(ctx, tenantID, draft.AgentID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -183,10 +183,32 @@ func (s *StudioGovernance) Section(ctx context.Context, tenantID int64, draft do
 	return encoded, nil
 }
 
+// restoredSection freezes a restore's enterprise governance again for the version it creates, over
+// the source release's Studio-owned fields; a field the new snapshot drops keeps its frozen value.
+// A release that froze no enterprise governance stays as it is, for CheckPublish to judge.
+func (s *StudioGovernance) restoredSection(ctx context.Context, tenantID int64, agentID, version string, frozen json.RawMessage) (json.RawMessage, error) {
+	if s.Source == nil || len(frozen) == 0 {
+		return frozen, nil
+	}
+	var governance domain.AgentGovernance
+	if err := json.Unmarshal(frozen, &governance); err != nil {
+		return nil, fmt.Errorf("%w: governance section of agent %q: %v", domain.ErrValidation, agentID, err)
+	}
+	if governance.Enterprise == nil {
+		return frozen, nil
+	}
+	snapshot, err := s.snapshot(ctx, tenantID, agentID, version)
+	if err != nil || snapshot == nil {
+		return frozen, err
+	}
+	return json.Marshal(effectiveGovernance(governance, snapshot))
+}
+
 // CheckPublish refuses a release, or a restore, whose frozen governance is malformed, lacks a
 // field the active Charter profile requires, binds a schedule or topic the product does not
-// prove, or froze enterprise governance other than the source's current snapshot. A restore of a
-// release frozen with no governance section predates governance, so the profile does not apply to it.
+// prove, or froze other enterprise governance than the snapshot of the release being created. A
+// restore of a release frozen with no governance section predates governance, so the profile does
+// not apply to it.
 func (s *StudioGovernance) CheckPublish(ctx context.Context, candidate domain.PublishCandidate) error {
 	required, err := s.required()
 	if err != nil {
@@ -203,7 +225,7 @@ func (s *StudioGovernance) CheckPublish(ctx context.Context, candidate domain.Pu
 			return fmt.Errorf("%w: governance section of agent %q: %v", domain.ErrValidation, agentID, err)
 		}
 	}
-	snapshot, err := s.snapshot(ctx, tenantID, agentID)
+	snapshot, err := s.snapshot(ctx, tenantID, agentID, candidate.Version)
 	if err != nil {
 		return err
 	}
@@ -354,13 +376,13 @@ func (s *StudioGovernance) stored(ctx context.Context, tenantID int64, agentID s
 	return governance, nil
 }
 
-// snapshot is the source's current snapshot of the agent's governance; nil when the enterprise
-// owns none of it. An unusable snapshot fails closed.
-func (s *StudioGovernance) snapshot(ctx context.Context, tenantID int64, agentID string) (*domain.GovernanceSnapshot, error) {
+// snapshot is the source's snapshot of the agent's governance for version, empty meaning now; nil
+// when the enterprise owns none of it. An unusable snapshot fails closed.
+func (s *StudioGovernance) snapshot(ctx context.Context, tenantID int64, agentID, version string) (*domain.GovernanceSnapshot, error) {
 	if s.Source == nil {
 		return nil, nil
 	}
-	snapshot, ok, err := s.Source.Snapshot(ctx, tenantID, agentID)
+	snapshot, ok, err := s.Source.Snapshot(ctx, tenantID, agentID, version)
 	if err != nil {
 		return nil, fmt.Errorf("resolve governance of agent %q: %w", agentID, err)
 	}
@@ -374,7 +396,7 @@ func (s *StudioGovernance) snapshot(ctx context.Context, tenantID int64, agentID
 }
 
 // sameSnapshot refuses a release that froze other enterprise governance than the source's
-// current snapshot, or none while the enterprise owns some.
+// snapshot, or none while the enterprise owns some.
 func sameSnapshot(frozen *domain.GovernanceSnapshotRef, current *domain.GovernanceSnapshot) error {
 	switch {
 	case frozen == nil && current == nil:

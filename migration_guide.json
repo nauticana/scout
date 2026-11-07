@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.3.1",
+      "title": "prompt caching, retrieval as working set candidates, versioned governance snapshots, gate coverage, Veo location",
+      "tags": [
+        "breaking",
+        "additive",
+        "schema"
+      ],
+      "summary": "Adopts keel v1.3.2. A release's content can form a cached prompt prefix, priced by its own rates. Knowledge and memory can reach a turn as bounded working set candidates. A restore resolves enterprise governance for the version it creates. An evaluation gate skips a case lacking its metric and reports the count. Studio shows a turn's working set and a trajectory's mutation and evidence fields. Veo can run in its own Vertex location. Breaking: contract.GovernanceSource.Snapshot takes a version.",
+      "body_markdown": "## Breaking\n\nkeel moves from v1.3.0 to v1.3.2; apply its v1.3.1 and v1.3.2 steps first. A `port.QuotaService` implementation or test double adds `RecordUsageOnce` and drops `ReportAddonUsage`.\n\n| Old | New |\n|---|---|\n| `GovernanceSource.Snapshot(ctx, tenantID, agentID)` | `Snapshot(ctx, tenantID, agentID, version)`; an empty version is what is in force now, a named one the definition declaring it |\n| `fake.GovernanceSource.SnapshotFunc` with three arguments | four arguments |\n| Restoring a release that froze enterprise governance was refused | Allowed once the definition declaring the new version is in force; the new release freezes that snapshot and has its own digest, and `AgentDefinition.RestoredFromDigest` keeps the source's |\n| An evaluation gate scored a result lacking the metric as 0 | It is skipped and counted, so stored decisions re-evaluate to a new inputs digest; `min_samples` counts scored results only |\n\n## Schema\n\nRebuild from the schema sources, or add to a live database:\n\n| Table | Change |\n|---|---|\n| `agent_gate_decision_run` | `skipped_count INTEGER NOT NULL` (add with `DEFAULT 0` on a populated table), in `agent_gate_decision_run_score_ck` |\n| `model_price` | nullable `cache_read_minor_units_per_million`, `cache_write_minor_units_per_million`, `model_price_cache_ck` |\n| `model_capability` | `model_capability_code_ck` admits `PC`; seed `model_capability` `PC` |\n\nSeeds add the flags `agent_evaluation_case_max_labels` and `agent_working_set_retrieval_top_k`.\n\n## Additive\n\n- `BaseDataPlane.PromptCache`, `ReleaseLoopRequestBuilder.PromptCache`, `ModelRequest.PromptCache`, `CapabilityPromptCache`, and cache token fields on `Usage`, `ModelSpend`, and `ModelUsage`. Declare `PC` on a route only once its `model_price` has cache rates. Off by default, with requests unchanged.\n- `knowledge.ReleaseCandidates`, `memory.Candidates`, and `workingset.Sources` offer a release's knowledge and the tenant's memory to `workingset.Compiler`. Composed this way, leave `BaseDataPlane.Knowledge` and `Memory` nil.\n- `GoldenSetStore.MaxLabels`; bind it and `GoldenCaseStore.MaxLabels` from `agent_evaluation_case_max_labels`.\n- `LiveTurn.working_set`, `RunTraceTurn.working_set`, `TrajectoryEvent.mutating` and `evidence`, and a gate run's `skipped_cases` in the API.\n- `FactoryConfig.GoogleVideoLocation` and `Google.VideoLocation` for Vertex Veo.\n"
+    },
+    {
       "version": "v1.3.0",
       "title": "keel 1.3.0 API JSON, Charter 1.6, authenticated-only routes, outcome settlement, working sets, assurance metrics",
       "tags": [
