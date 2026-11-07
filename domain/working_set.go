@@ -84,10 +84,12 @@ type WorkingSetCandidate struct {
 	TokenCost   int64
 }
 
-// WorkingSetCandidates is what a source offers one turn: its candidates and the keys the turn needs.
+// WorkingSetCandidates is what a source offers one turn: its candidates, the keys the turn needs,
+// and what offering them spent, such as query embeddings, attributed to the model that performed it.
 type WorkingSetCandidates struct {
 	RequiredKeys []string
 	Candidates   []WorkingSetCandidate
+	Usage        Usage
 }
 
 // WorkingSetRequest names the turn a working set is compiled for.
@@ -105,7 +107,11 @@ type WorkingSet struct {
 	Assurance WorkingSetAssurance
 	Selected  []WorkingSetCandidate
 	Excluded  []string
+	// Offered is every candidate the sources gave, in offer order; Selected and Excluded partition it.
+	Offered   []WorkingSetCandidate
 	TokenCost int64
+	// Usage is what offering the candidates spent; the turn settles it as its own.
+	Usage Usage
 }
 
 // TurnWorkingSet is what a turn's working set recorded: its assurance and candidate ids, never content.

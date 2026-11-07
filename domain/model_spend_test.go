@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"errors"
+	"math"
 	"reflect"
 	"testing"
 )
@@ -23,6 +25,31 @@ func TestUsageAttributedToReplacesTheBreakdownAndKeepsToolCallsUnattributed(t *t
 	} {
 		if got.Models != nil {
 			t.Fatalf("%s: models = %+v, want none", name, got.Models)
+		}
+	}
+}
+
+func TestUsageAddChecksPartsAndMergesTheBreakdown(t *testing.T) {
+	gpt := ModelReference{ProviderID: "openai", ModelID: "gpt"}
+	total, err := Usage{InputTokens: 1, ToolCalls: 1, Currency: "USD", CostMinorUnits: 2}.Add(Usage{InputTokens: 2, CostMinorUnits: 3, Currency: "USD"}.AttributedTo(gpt))
+	if err != nil || total.InputTokens != 3 || total.CostMinorUnits != 5 || total.ToolCalls != 1 || len(total.Models) != 1 || total.Models[0].InputTokens != 2 {
+		t.Fatalf("total = %+v, %v", total, err)
+	}
+	if _, err := (Usage{InputTokens: -1}).Add(Usage{}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("negative total: error = %v, want validation", err)
+	}
+	if _, err := (Usage{CostMinorUnits: 1}).Add(Usage{}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("priced total without currency: error = %v, want validation", err)
+	}
+	for name, add := range map[string]Usage{
+		"negative":         {OutputTokens: -1},
+		"cost no currency": {CostMinorUnits: 1},
+		"other currency":   {CostMinorUnits: 1, Currency: "EUR"},
+		"overflow":         {CostMinorUnits: math.MaxInt64},
+		"unnamed model":    {InputTokens: 1, Models: []ModelSpend{{InputTokens: 1}}},
+	} {
+		if _, err := total.Add(add); !errors.Is(err, ErrValidation) {
+			t.Fatalf("%s: error = %v, want validation", name, err)
 		}
 	}
 }

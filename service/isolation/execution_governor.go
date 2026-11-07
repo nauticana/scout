@@ -111,7 +111,12 @@ func (permit *executionPermit) AfterStep(ctx context.Context, result domain.Step
 		permit.mu.Unlock()
 		return fmt.Errorf("%w: no execution step is pending", domain.ErrConflict)
 	}
-	addUsage(&permit.usage, result.Usage)
+	usage, err := permit.usage.Add(result.Usage)
+	if err != nil {
+		permit.mu.Unlock()
+		return err
+	}
+	permit.usage = usage
 	permit.pending = false
 	total := permit.usage
 	limitErr := permit.limitError(total)
@@ -176,16 +181,6 @@ func validateUsage(usage domain.Usage, currency string) error {
 		return fmt.Errorf("%w: cost currency is required", domain.ErrValidation)
 	}
 	return nil
-}
-
-func addUsage(total *domain.Usage, usage domain.Usage) {
-	total.InputTokens += usage.InputTokens
-	total.OutputTokens += usage.OutputTokens
-	total.ToolCalls += usage.ToolCalls
-	total.CostMinorUnits += usage.CostMinorUnits
-	if total.Currency == "" {
-		total.Currency = usage.Currency
-	}
 }
 
 func subtractUsage(total, accounted domain.Usage) domain.Usage {

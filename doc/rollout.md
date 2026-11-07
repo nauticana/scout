@@ -38,9 +38,12 @@ The shadow stage mirrors a bounded share of authenticated, redacted traffic thro
 
 1. compliance pin (approved and signed),
 2. approved tenant pin, effective and not expired, matching the region,
-3. pilot: the release a named person, or a position they hold, pilots,
-4. experiment cohort by stable hash of tenant, agent, experiment, salt, and subject,
-5. deployment default: canary by stable hash, else stable.
+3. approved assignment pin whose `assignment_ref` the new conversation names (`VersionRequest.AssignmentRef`, from the turn's `assignment_ref`),
+4. pilot: the release a named person, or a position they hold, pilots,
+5. experiment cohort by stable hash of tenant, agent, experiment, salt, and subject,
+6. deployment default: canary by stable hash, else stable.
+
+An assignment pin holds the release serving one Charter assignment of the agent from its start; its pin names a published release, which `charter.IdentityBinding`, where composed, has already bound to a declared definition version. A conversation naming no assignment, or another, passes it by.
 
 A pilot is explicit, effective-dated membership in `agent_pilot_member`, not a hash cohort: Studio's `pilot` feature adds or ends one subject's membership of one published, unquarantined release (subject kind `P`, a principal by user id, or `O`, a product position reference; one open membership per subject per agent, at most `agent_pilot_max_members` per agent). `TablePilotResolver` sees only the trusted subject, `VersionRequest.Subject`, which the data plane takes from the turn's `OnBehalfOf`; a turn acting for no one, a non-human subject, and alias resolution without a session are in no pilot. The person's own membership wins, otherwise the newest membership of a position the product's `PositionResolver` says they hold, each call bounded by `PositionTimeout` (`agent_pilot_position_timeout`). A release quarantined after it was added is skipped and resolution falls through. A pilot resolver error fails the resolution; it never falls through to cohort or deployment.
 

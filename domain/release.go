@@ -165,23 +165,38 @@ type ReleaseBundle struct {
 	Digest                   string
 }
 
-// PinScope orders pins: compliance pins beat tenant pins.
+// PinScope orders pins: compliance pins beat tenant pins, which beat assignment pins.
 type PinScope string
 
 const (
 	PinScopeCompliance PinScope = "C"
 	PinScopeTenant     PinScope = "T"
+	// PinScopeAssignment serves the conversations naming one Charter assignment of the agent.
+	PinScopeAssignment PinScope = "A"
 )
 
 // Valid reports whether scope is one of the version_pin_scope codes.
 func (scope PinScope) Valid() bool {
-	return scope == PinScopeCompliance || scope == PinScopeTenant
+	return scope == PinScopeCompliance || scope == PinScopeTenant || scope == PinScopeAssignment
 }
 
-// VersionPin holds one tenant agent on an immutable version for a bounded period.
+// Rank orders scopes for resolution, 0 first.
+func (scope PinScope) Rank() int {
+	switch scope {
+	case PinScopeCompliance:
+		return 0
+	case PinScopeTenant:
+		return 1
+	}
+	return 2
+}
+
+// VersionPin holds one tenant agent on an immutable version for a bounded period. AssignmentRef
+// is set on, and only on, an assignment pin.
 type VersionPin struct {
 	ID                       int64
 	Scope                    PinScope
+	AssignmentRef            string
 	TenantID                 int64
 	AgentID                  string
 	Version                  string
@@ -213,6 +228,7 @@ type VersionSource string
 const (
 	VersionFromCompliancePin VersionSource = "compliance_pin"
 	VersionFromTenantPin     VersionSource = "tenant_pin"
+	VersionFromAssignmentPin VersionSource = "assignment_pin"
 	VersionFromPilot         VersionSource = "pilot"
 	VersionFromCohort        VersionSource = "experiment_cohort"
 	VersionFromCanary        VersionSource = "canary"
@@ -223,11 +239,13 @@ const (
 
 // VersionRequest asks which release a new conversation starts on. Subject is the person the
 // conversation acts for, taken from the trusted session; zero when it acts for no one.
+// AssignmentRef is the Charter assignment the conversation serves; empty takes no assignment pin.
 type VersionRequest struct {
 	TenantID       int64
 	AgentID        string
 	ConversationID string
 	Subject        PrincipalRef
+	AssignmentRef  string
 }
 
 // AgentVersionResolution is a selected agent version with the rule that chose it; Pilot is

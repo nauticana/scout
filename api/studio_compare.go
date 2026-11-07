@@ -11,12 +11,14 @@ const (
 )
 
 // CompareSubject is one arm of a comparison: the draft (draft true, frozen on model when set),
-// one release, or, for arm a only, one recorded baseline; exactly one of them.
+// one release, for arm a only one recorded baseline, or for arm b only the control of arm a's
+// release; exactly one of them.
 type CompareSubject struct {
 	Draft      bool   `json:"draft,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Release    string `json:"release,omitempty"`
 	BaselineID int64  `json:"baseline_id,omitempty"`
+	Control    bool   `json:"control,omitempty"`
 }
 
 // AgentCompareRequest is POST compare: set_version is the frozen golden set version whose
@@ -28,8 +30,8 @@ type AgentCompareRequest struct {
 	B          CompareSubject `json:"b"`
 }
 
-// ComparedSubject is one pinned arm: subject is D (draft), R (release), or B (baseline); a draft frozen on
-// another text model names it in provider and model.
+// ComparedSubject is one pinned arm: subject is D (draft), R (release), B (baseline), or W (control of
+// arm a's release); a draft frozen on another text model names it in provider and model.
 type ComparedSubject struct {
 	Subject          string `json:"subject"`
 	Provider         string `json:"provider,omitempty"`

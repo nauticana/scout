@@ -107,6 +107,9 @@ func (source *ReleaseCandidates) Candidates(ctx context.Context, request domain.
 		if err != nil {
 			return domain.WorkingSetCandidates{}, fmt.Errorf("retrieve from knowledge base %q: %w", base, err)
 		}
+		if offered.Usage, err = offered.Usage.Add(result.Usage); err != nil {
+			return domain.WorkingSetCandidates{}, fmt.Errorf("retrieve from knowledge base %q: %w", base, err)
+		}
 		for position, match := range result.Matches {
 			offered.Candidates = append(offered.Candidates, matchCandidate(base, version, position, match))
 		}

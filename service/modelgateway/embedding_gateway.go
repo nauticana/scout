@@ -157,6 +157,10 @@ func (embedder *GovernedEmbedder) EmbedBatch(ctx context.Context, tenant domain.
 	if callErr != nil {
 		return nil, errors.Join(callErr, settleErr)
 	}
+	// Each vector's share names the route, so a consumer can price and settle it as its own.
+	for i := range embeddings {
+		embeddings[i].Usage = embeddings[i].Usage.AttributedTo(embedder.reference())
+	}
 	return embeddings, settleErr
 }
 

@@ -82,14 +82,17 @@ type SkillRegistry interface {
 // uses one by registering a copy whose DerivedFrom names it; releases bind tenant
 // versions only.
 type SkillCatalog interface {
-	// Register publishes an immutable catalog version. It carries no eval set,
-	// origin, or requirement; the tenant copy declares those.
+	// Register publishes an immutable catalog version. It carries no eval set or
+	// origin; its Requires name registered catalog versions, which each tenant copy
+	// must hold copies of.
 	Register(ctx context.Context, skill domain.SkillDefinition) error
 	// Get returns a catalog version.
 	Get(ctx context.Context, skillID, version string) (domain.SkillDefinition, error)
 	// Derived lists the tenant versions copied from a catalog version, across
 	// tenants, so a withdrawal or fix can find them.
 	Derived(ctx context.Context, origin domain.SkillReference) ([]domain.TenantSkillReference, error)
+	// Dependents lists the catalog versions requiring one, so a withdrawal finds them.
+	Dependents(ctx context.Context, required domain.SkillReference) ([]domain.SkillReference, error)
 }
 
 // GuardrailConfigRepository stores versioned tenant guardrail policies.

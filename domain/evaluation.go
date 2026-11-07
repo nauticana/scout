@@ -106,6 +106,8 @@ type EvaluationSubject struct {
 	IndexGeneration int64
 	// Decoding is the canonical JSON of sampling settings (temperature, top-p, seed, max tokens).
 	Decoding []byte
+	// Control is the reference arm's working set a control replay truncates to; nil replays as the release does.
+	Control *WorkingSet
 }
 
 // EvaluatorVersion identifies one heuristic, judge, or human evaluator revision.
@@ -222,6 +224,8 @@ type EvaluationCase struct {
 	Output     []byte
 	Retrieval  []KnowledgeMatch
 	Trajectory []TrajectoryEvent
+	// WorkingSet is the first turn's compiled working set, when the replay compiled one.
+	WorkingSet *WorkingSet
 	Latency    time.Duration
 	Usage      Usage
 }

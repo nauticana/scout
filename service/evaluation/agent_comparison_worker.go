@@ -11,12 +11,13 @@ import (
 )
 
 // compareExample answers one example with arm a (arms[1]) and arm b (arms[0]), stores both
-// answers, has the pair judge decide between them unless an arm ended in a failed state,
-// and records the outcome; it returns the cost it settled. Spend an arm or the judge
-// incurred is recorded even when the example then fails, so a reclaimed attempt never pays
-// for it again; such a record carries a reason and fails the run.
+// answers, scores each executed arm with the heuristic evaluators, has the pair judge decide
+// between them unless an arm ended in a failed state, and records the outcome; it returns the
+// cost it settled. Spend an arm or the judge incurred is recorded even when the example then
+// fails, so a reclaimed attempt never pays for it again; such a record carries a reason and
+// fails the run.
 func (w *AgentEvaluationWorker) compareExample(ctx context.Context, claim domain.AgentEvaluationClaim, arms []domain.EvaluationArm, limits []domain.ExecutionLimits, example domain.GoldenExample) (int64, error) {
-	a, err := w.execute(ctx, claim, arms[1], limits[1], example)
+	a, err := w.execute(ctx, claim, arms[1], limits[1], example, nil)
 	if err != nil {
 		return 0, &caseFailure{example: example, err: err}
 	}
@@ -33,7 +34,7 @@ func (w *AgentEvaluationWorker) compareExample(ctx context.Context, claim domain
 		comparison.Reason = "arm b did not run: " + stage.ErrorClass(err)
 		return w.settle(ctx, claim, example, comparison, err)
 	}
-	b, err := w.execute(ctx, claim, arms[0], limits[0], example)
+	b, err := w.execute(ctx, claim, arms[0], limits[0], example, &a)
 	if err == nil {
 		err = w.settleable(b)
 	}
@@ -54,6 +55,13 @@ func (w *AgentEvaluationWorker) compareExample(ctx context.Context, claim domain
 		comparison.Reason = "storing trajectories failed: " + stage.ErrorClass(err)
 		return w.settle(ctx, claim, example, comparison, &caseFailure{example: example, err: err})
 	}
+	if comparison.A.Scores, err = w.heuristics(ctx, arms[1], a); err == nil {
+		comparison.B.Scores, err = w.heuristics(ctx, arms[0], b)
+	}
+	if err != nil {
+		comparison.Reason = "scoring failed: " + stage.ErrorClass(err)
+		return w.settle(ctx, claim, example, comparison, &caseFailure{example: example, err: err})
+	}
 	judgeErr := w.decide(ctx, claim.Run.RequestedBy, example, a, b, &comparison)
 	if judgeErr != nil && ctx.Err() != nil {
 		// Shutdown cut the judge off: nothing is recorded, so the reclaimed attempt compares the example again.
@@ -64,6 +72,22 @@ func (w *AgentEvaluationWorker) compareExample(ctx context.Context, claim domain
 		failure = &caseFailure{example: example, err: judgeErr, unsettled: errors.Is(judgeErr, errJudgeSpendUnsettled)}
 	}
 	return w.settle(ctx, claim, example, comparison, failure)
+}
+
+// heuristics scores an executed arm with every heuristic evaluator; a baseline's recorded output has no trajectory to score.
+func (w *AgentEvaluationWorker) heuristics(ctx context.Context, arm domain.EvaluationArm, evalCase domain.EvaluationCase) ([]domain.EvaluationScore, error) {
+	if arm.Subject.Kind == domain.SubjectBaseline {
+		return nil, nil
+	}
+	var scores []domain.EvaluationScore
+	for _, evaluator := range w.Evaluators {
+		found, err := evaluator.Evaluate(ctx, evalCase)
+		if err != nil {
+			return nil, fmt.Errorf("evaluator %s: %w", evaluator.Version().Version, err)
+		}
+		scores = append(scores, found...)
+	}
+	return scores, nil
 }
 
 // settle records the comparison under the lease, detached from cancellation, and returns the
@@ -129,7 +153,7 @@ func (w *AgentEvaluationWorker) decide(ctx context.Context, principal domain.Pri
 		return fmt.Errorf("pair judge %s: %w", w.PairJudge.Version().Version, err)
 	}
 	comparison.Evaluator, comparison.InputDigest, comparison.Confidence = w.PairJudge.Version(), verdict.InputDigest, clamp01(verdict.Confidence)
-	comparison.A.Scores, comparison.B.Scores = verdict.Baseline, verdict.Candidate
+	comparison.A.Scores, comparison.B.Scores = append(comparison.A.Scores, verdict.Baseline...), append(comparison.B.Scores, verdict.Candidate...)
 	if !example.Hidden {
 		comparison.Rationale = verdict.Rationale
 	}

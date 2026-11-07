@@ -12,6 +12,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/service/dataplane"
+	"github.com/nauticana/scout/service/workingset"
 )
 
 // ReleaseCaseExecutor replays a golden example against a published agent
@@ -41,9 +42,34 @@ type ReleaseCaseExecutor struct {
 	// Guardrails and GuardrailConfigs apply the release's output guardrails; set both or neither.
 	Guardrails       contract.GuardrailEnforcer
 	GuardrailConfigs contract.GuardrailConfigRepository
+	// WorkingSets compiles a working set for each replayed turn, which the case records and a
+	// control arm truncates; nil replays through Requests alone.
+	WorkingSets *ReplayWorkingSets
 	// MaxSteps bounds each turn's graph walk; zero allows as many steps as the graph has.
 	MaxSteps int
 	Now      func() time.Time
+}
+
+// ReplayWorkingSets composes a replay's working set: Source and Limits are what the release's
+// turns compile from, and Requests builds the loop's opening request over the compiler and
+// recorder each replay is given, as dataplane.ReleaseLoopRequestBuilder does over WorkingSet
+// and WorkingSetRecords.
+type ReplayWorkingSets struct {
+	Source   contract.WorkingSetCandidateSource
+	Limits   domain.WorkingSetLimits
+	Requests func(compiler contract.WorkingSetCompiler, records contract.WorkingSetRecorder) contract.ToolLoopRequestBuilder
+}
+
+// requests returns the builder of one replay and the recorder its working sets reach. A control
+// compiles the reference arm's candidates, unranked, within the tokens the reference selected.
+func (sets *ReplayWorkingSets) requests(control *domain.WorkingSet) (contract.ToolLoopRequestBuilder, *dataplane.MemoryWorkingSetRecorder) {
+	compiler := &workingset.Compiler{Source: sets.Source, Limits: sets.Limits}
+	if control != nil {
+		compiler = &workingset.Compiler{Source: workingset.Fixed{Offered: domain.WorkingSetCandidates{Candidates: control.Offered}},
+			Limits: domain.WorkingSetLimits{MaxCandidates: len(control.Offered), MaxTokens: control.TokenCost}, Unranked: true}
+	}
+	records := &dataplane.MemoryWorkingSetRecorder{}
+	return sets.Requests(compiler, records), records
 }
 
 var _ contract.CaseExecutor = (*ReleaseCaseExecutor)(nil)
@@ -55,6 +81,8 @@ func (executor *ReleaseCaseExecutor) validate() error {
 		return fmt.Errorf("release case executor: graphs, request builder, router, model gateway, tool registry, payload reader, sandboxes, and release limits are required")
 	case (executor.Guardrails == nil) != (executor.GuardrailConfigs == nil):
 		return fmt.Errorf("release case executor: guardrails and guardrail configs are set together or not at all")
+	case executor.WorkingSets != nil && (executor.WorkingSets.Source == nil || executor.WorkingSets.Requests == nil):
+		return fmt.Errorf("release case executor: replay working sets need a source and a request builder")
 	case executor.MaxSteps < 0:
 		return fmt.Errorf("%w: max steps cannot be negative", domain.ErrValidation)
 	}
@@ -98,6 +126,8 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	switch {
 	case len(preserved) > 0 && len(inputs) > 1:
 		return domain.EvaluationCase{}, fmt.Errorf("%w: preserved retrieval answers a single turn", domain.ErrCapabilityUnsupported)
+	case subject.Control != nil && (len(inputs) > 1 || executor.WorkingSets == nil):
+		return domain.EvaluationCase{}, fmt.Errorf("%w: a control answers a single turn through replay working sets", domain.ErrCapabilityUnsupported)
 	case executor.Retrieval != nil:
 		for i := range inputs {
 			var found []domain.KnowledgeMatch
@@ -121,10 +151,14 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if err != nil {
 		return domain.EvaluationCase{}, fmt.Errorf("sandbox for example %q: %w", example.ExampleID, err)
 	}
+	requests, records := executor.Requests, (*dataplane.MemoryWorkingSetRecorder)(nil)
+	if executor.WorkingSets != nil {
+		requests, records = executor.WorkingSets.requests(subject.Control)
+	}
 	fences := &dataplane.MemoryTurnFences{}
 	journal := &dataplane.MemoryLoopJournal{Fences: fences}
 	loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
-		Requests: decodedRequests{ToolLoopRequestBuilder: executor.Requests, decoding: decoding},
+		Requests: decodedRequests{ToolLoopRequestBuilder: requests, decoding: decoding},
 		Router:   subjectRouter{ModelRouter: executor.Router, modelVersion: subject.Versions.Model},
 		Models:   executor.Models, Registry: executor.Registry, Tools: sandbox,
 		Journal: journal, Pricer: executor.Pricer, Evidence: executor.Evidence,
@@ -148,7 +182,13 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if err := replay.run(ctx, inputs); err != nil {
 		return domain.EvaluationCase{}, err
 	}
-	return replay.evaluationCase(example, matches), nil
+	evalCase := replay.evaluationCase(example, matches)
+	if records != nil {
+		if set, recorded := records.Set(replay.conversationID); recorded {
+			evalCase.WorkingSet = &set
+		}
+	}
+	return evalCase, nil
 }
 
 // sandboxDispatch bounds a sandboxed call by the loop deadline: a scripted tool answers at once.
@@ -209,10 +249,10 @@ type decodedRequests struct {
 	decoding replayDecoding
 }
 
-func (builder decodedRequests) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, error) {
-	request, err := builder.ToolLoopRequestBuilder.Build(ctx, input, config)
+func (builder decodedRequests) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error) {
+	request, spent, err := builder.ToolLoopRequestBuilder.Build(ctx, input, config)
 	if err != nil {
-		return domain.ModelRequest{}, err
+		return domain.ModelRequest{}, spent, err
 	}
 	if builder.decoding.Temperature != nil {
 		request.Temperature = builder.decoding.Temperature
@@ -220,7 +260,7 @@ func (builder decodedRequests) Build(ctx context.Context, input domain.StepInput
 	if builder.decoding.MaxTokens > 0 {
 		request.MaxOutputTokens = builder.decoding.MaxTokens
 	}
-	return request, nil
+	return request, spent, nil
 }
 
 // subjectRouter refuses a route serving another model version than the subject pins.

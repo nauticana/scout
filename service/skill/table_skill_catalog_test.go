@@ -19,6 +19,7 @@ type catalogFake struct {
 	versions map[string][]any
 	tools    map[string][]string
 	examples map[string][]string
+	requires map[string][][2]string
 	derived  map[string][][]any
 }
 
@@ -49,6 +50,24 @@ func (fake *catalogFake) Query(_ context.Context, name string, args ...any) (*ke
 		return rows(fake.examples[key]), nil
 	case qCatalogExampleInsert:
 		fake.examples[key] = append(fake.examples[key], args[3].(string))
+	case qCatalogRequireList:
+		result := &keelmodel.QueryResult{}
+		for _, required := range fake.requires[key] {
+			result.Rows = append(result.Rows, []any{required[0], required[1]})
+		}
+		return result, nil
+	case qCatalogRequireInsert:
+		fake.requires[key] = append(fake.requires[key], [2]string{args[2].(string), args[3].(string)})
+	case qCatalogDependents:
+		result := &keelmodel.QueryResult{}
+		for versionKey, requires := range fake.requires {
+			for _, required := range requires {
+				if required[0] == args[0].(string) && required[1] == args[1].(string) {
+					result.Rows = append(result.Rows, []any{fake.versions[versionKey][0], fake.versions[versionKey][1]})
+				}
+			}
+		}
+		return result, nil
 	case qCatalogDerived:
 		return &keelmodel.QueryResult{Rows: fake.derived[key]}, nil
 	}
@@ -75,7 +94,7 @@ func (db catalogDB) BeginTx(context.Context, map[string]string) (keelport.TxQuer
 func newCatalog() (*catalogFake, *TableSkillCatalog) {
 	fake := &catalogFake{
 		profiles: map[string]string{}, versions: map[string][]any{}, tools: map[string][]string{},
-		examples: map[string][]string{}, derived: map[string][][]any{},
+		examples: map[string][]string{}, requires: map[string][][2]string{}, derived: map[string][][]any{},
 	}
 	return fake, &TableSkillCatalog{DB: catalogDB{fake: fake}}
 }
@@ -116,8 +135,7 @@ func TestCatalogRegisterRefusesTenantOnlyFields(t *testing.T) {
 		"eval set": func(skill *domain.SkillDefinition) {
 			skill.EvalSet = &domain.GoldenSetReference{GoldenSetID: "g", SetVersion: 1}
 		},
-		"origin":      func(skill *domain.SkillDefinition) { skill.DerivedFrom = reference },
-		"requirement": func(skill *domain.SkillDefinition) { skill.Requires = []domain.SkillReference{*reference} },
+		"origin": func(skill *domain.SkillDefinition) { skill.DerivedFrom = reference },
 	} {
 		skill := catalogSkill()
 		mutate(&skill)
@@ -140,5 +158,38 @@ func TestCatalogDerivedListsTenantCopies(t *testing.T) {
 	}
 	if _, err = catalog.Derived(context.Background(), domain.SkillReference{SkillID: "audit"}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a versionless origin: want ErrValidation, got %v", err)
+	}
+}
+
+func TestCatalogRequirementsNameRegisteredCatalogVersions(t *testing.T) {
+	_, catalog := newCatalog()
+	ctx := context.Background()
+	base := domain.SkillReference{SkillID: "base", Version: "1"}
+	dependent := catalogSkill()
+	dependent.Requires = []domain.SkillReference{base}
+	if err := catalog.Register(ctx, dependent); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an unregistered requirement: want ErrNotFound, got %v", err)
+	}
+	baseSkill := catalogSkill()
+	baseSkill.SkillID = "base"
+	if err := catalog.Register(ctx, baseSkill); err != nil {
+		t.Fatalf("Register base: %v", err)
+	}
+	if err := catalog.Register(ctx, dependent); err != nil {
+		t.Fatalf("Register dependent: %v", err)
+	}
+	if err := catalog.Register(ctx, catalogSkill()); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("dropping the requirement: want ErrConflict, got %v", err)
+	}
+	stored, err := catalog.Get(ctx, "audit", "1")
+	if err != nil || !slices.Equal(stored.Requires, []domain.SkillReference{base}) {
+		t.Fatalf("stored = %+v, %v", stored, err)
+	}
+	dependents, err := catalog.Dependents(ctx, base)
+	if err != nil || !slices.Equal(dependents, []domain.SkillReference{{SkillID: "audit", Version: "1"}}) {
+		t.Fatalf("Dependents = %+v, %v", dependents, err)
+	}
+	if _, err = catalog.Dependents(ctx, domain.SkillReference{SkillID: "base"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("a versionless reference: want ErrValidation, got %v", err)
 	}
 }

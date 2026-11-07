@@ -113,6 +113,9 @@ func (executor *ToolLoopExecutor) now() time.Time {
 func (executor *ToolLoopExecutor) Execute(ctx context.Context, input domain.StepInput) (domain.StepResult, error) {
 	run, err := executor.begin(ctx, input)
 	if err != nil {
+		if run != nil {
+			return domain.StepResult{}, &LoopError{Err: err, Usage: run.usage}
+		}
 		return domain.StepResult{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, run.limits.Deadline)
@@ -146,18 +149,18 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 		decoder := json.NewDecoder(bytes.NewReader(input.Step.Configuration))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&run.config); err != nil {
-			return nil, fmt.Errorf("%w: tool loop configuration: %w", domain.ErrValidation, err)
+			return run, fmt.Errorf("%w: tool loop configuration: %w", domain.ErrValidation, err)
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			return nil, fmt.Errorf("%w: tool loop configuration has trailing JSON", domain.ErrValidation)
+			return run, fmt.Errorf("%w: tool loop configuration has trailing JSON", domain.ErrValidation)
 		}
 	}
 	if run.config.MaxIterations < 0 || run.config.MaxToolCalls < 0 || run.config.MaxTokens < 0 || run.config.MaxCostMinorUnits < 0 ||
 		run.config.MaxRepeatedCalls < 0 || run.config.DeadlineSeconds < 0 || run.config.MaxOutputTokens < 0 {
-		return nil, fmt.Errorf("%w: tool loop configuration limits cannot be negative", domain.ErrValidation)
+		return run, fmt.Errorf("%w: tool loop configuration limits cannot be negative", domain.ErrValidation)
 	}
 	if err := run.config.Search.Validate(); err != nil {
-		return nil, fmt.Errorf("tool loop configuration: %w", err)
+		return run, fmt.Errorf("tool loop configuration: %w", err)
 	}
 	run.limits.MaxIterations = narrowed(run.limits.MaxIterations, run.config.MaxIterations)
 	run.limits.MaxToolCalls = narrowed(run.limits.MaxToolCalls, run.config.MaxToolCalls)
@@ -171,20 +174,20 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 	run.limits.MaxTokens = narrowed64(run.limits.MaxTokens, input.Spend.Tokens)
 	run.limits.MaxCostMinorUnits = narrowedOptional64(run.limits.MaxCostMinorUnits, input.Spend.CostMinorUnits)
 	if input.Bounds.BudgetMinorUnits > 0 && strings.TrimSpace(input.Bounds.Currency) == "" {
-		return nil, fmt.Errorf("%w: a delegated cost budget requires a currency", domain.ErrValidation)
+		return run, fmt.Errorf("%w: a delegated cost budget requires a currency", domain.ErrValidation)
 	}
-	if (run.limits.MaxCostMinorUnits > 0 || input.Bounds.BudgetMinorUnits > 0 || input.Spend.PricingRequired) && executor.Pricer == nil {
-		return nil, fmt.Errorf("%w: a cost-bounded tool loop requires a model pricer", domain.ErrDegraded)
+	if run.costBounded() && executor.Pricer == nil {
+		return run, fmt.Errorf("%w: a cost-bounded tool loop requires a model pricer", domain.ErrDegraded)
 	}
 	if run.config.RequireEvidence && executor.Evidence == nil {
-		return nil, fmt.Errorf("%w: step %q requires evidence but no validator is composed", domain.ErrDegraded, input.Step.StepID)
+		return run, fmt.Errorf("%w: step %q requires evidence but no validator is composed", domain.ErrDegraded, input.Step.StepID)
 	}
-	request, err := executor.Requests.Build(ctx, input, run.config)
-	if err != nil {
-		return nil, stage.At(domain.StagePrompt, err)
+	request, spent, err := executor.Requests.Build(ctx, input, run.config)
+	if err = errors.Join(err, executor.accountBuild(ctx, run, spent)); err != nil {
+		return run, stage.At(domain.StagePrompt, err)
 	}
 	if request.TenantContext.TenantID != principal.TenantID {
-		return nil, fmt.Errorf("%w: loop request tenant %d is not the principal's", domain.ErrForbidden, request.TenantContext.TenantID)
+		return run, fmt.Errorf("%w: loop request tenant %d is not the principal's", domain.ErrForbidden, request.TenantContext.TenantID)
 	}
 	request.Principal = domain.PrincipalRef{Kind: principal.Kind, ID: principal.ID}
 	request.RequiredCapabilities = append(request.RequiredCapabilities, run.config.Capabilities...)
@@ -196,7 +199,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 	}
 	bound, err := executor.Registry.List(ctx, principal.TenantID, principal.ID, principal.Release)
 	if err != nil {
-		return nil, fmt.Errorf("list tools bound to %s@%s: %w", principal.ID, principal.Release, err)
+		return run, fmt.Errorf("list tools bound to %s@%s: %w", principal.ID, principal.Release, err)
 	}
 	run.tools, run.readOnly = make(map[string]domain.ModelTool, len(bound)), make(map[string]bool, len(bound))
 	run.windows = make(map[string]time.Duration, len(bound))
@@ -207,7 +210,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 			ToolID: definition.ToolID, ToolVersion: definition.Version, InputSchema: definition.InputSchema,
 		}
 		if _, collides := run.tools[tool.Name]; collides {
-			return nil, fmt.Errorf("%w: tools of %s@%s collide on model name %q", domain.ErrConflict, principal.ID, principal.Release, tool.Name)
+			return run, fmt.Errorf("%w: tools of %s@%s collide on model name %q", domain.ErrConflict, principal.ID, principal.Release, tool.Name)
 		}
 		run.tools[tool.Name], run.readOnly[tool.Name] = tool, definition.ReadOnly
 		run.windows[tool.Name] = executor.Dispatch.For(definition)
@@ -215,7 +218,7 @@ func (executor *ToolLoopExecutor) begin(ctx context.Context, input domain.StepIn
 	}
 	run.request = request
 	if run.journal, err = executor.Journal.Load(ctx, run.key); err != nil {
-		return nil, stage.At(domain.StageCheckpoint, fmt.Errorf("load loop journal: %w", err))
+		return run, stage.At(domain.StageCheckpoint, fmt.Errorf("load loop journal: %w", err))
 	}
 	return run, nil
 }
@@ -332,19 +335,34 @@ func (executor *ToolLoopExecutor) decide(ctx context.Context, run *loopRun, iter
 	return *entry.Model, run.account(entry.Usage)
 }
 
+// accountBuild settles what building the opening request spent. A cost-bounded loop refuses
+// spend attributed to no model, which it could not price.
+func (executor *ToolLoopExecutor) accountBuild(ctx context.Context, run *loopRun, spent domain.Usage) error {
+	if !hasUsage(spent) {
+		return nil
+	}
+	if len(spent.Models) == 0 && spent.CostMinorUnits == 0 && run.costBounded() {
+		return fmt.Errorf("%w: the request's retrieval usage names no model to price", domain.ErrDegraded)
+	}
+	priced, err := executor.price(ctx, spent)
+	return errors.Join(err, run.account(priced))
+}
+
 // priced attributes the call's usage to the selected model unless the gateway named
 // the models that performed it, then prices each model's share when no cost was reported.
 func (executor *ToolLoopExecutor) priced(ctx context.Context, selection domain.ModelSelection, usage domain.Usage) (domain.Usage, error) {
 	if len(usage.Models) == 0 {
 		usage = usage.AttributedTo(domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model})
 	}
-	if executor.Pricer == nil || usage.CostMinorUnits > 0 {
+	return executor.price(ctx, usage)
+}
+
+// price prices each model's share when no cost was reported; usage attributed to no model stays unpriced.
+func (executor *ToolLoopExecutor) price(ctx context.Context, usage domain.Usage) (domain.Usage, error) {
+	if executor.Pricer == nil || usage.CostMinorUnits > 0 || len(usage.Models) == 0 {
 		return usage, nil
 	}
 	spends := slices.Clone(usage.Models)
-	if len(spends) == 0 {
-		spends = []domain.ModelSpend{{Model: domain.ModelReference{ProviderID: selection.Provider, ModelID: selection.Model}}}
-	}
 	var total int64
 	currency := ""
 	for i, spend := range spends {
@@ -368,9 +386,7 @@ func (executor *ToolLoopExecutor) priced(ctx context.Context, selection domain.M
 	if currency != "" {
 		usage.Currency = currency
 	}
-	if len(usage.Models) > 0 {
-		usage.Models = spends
-	}
+	usage.Models = spends
 	return usage, nil
 }
 
@@ -639,6 +655,10 @@ func (run *loopRun) admitCall(call domain.ModelToolCall) error {
 		return fmt.Errorf("%w: tool %q was called %d times with identical arguments", domain.ErrLoopDetected, call.Name, run.limits.MaxRepeatedCalls)
 	}
 	return nil
+}
+
+func (run *loopRun) costBounded() bool {
+	return run.limits.MaxCostMinorUnits > 0 || run.input.Bounds.BudgetMinorUnits > 0 || run.input.Spend.PricingRequired
 }
 
 // account adds settled usage and fails closed on the token, cost, and delegated budget limits.

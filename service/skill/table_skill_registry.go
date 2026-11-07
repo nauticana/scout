@@ -30,6 +30,8 @@ const (
 	qSkillRequireList    = "scout_skill_require_list"
 	qSkillRequireInsert  = "scout_skill_require_insert"
 	qSkillOriginGet      = "scout_skill_origin_get"
+	qSkillOriginRequires = "scout_skill_origin_requires"
+	qSkillCopiesOf       = "scout_skill_copies_of"
 	qSkillBoundList      = "scout_skill_bound_list"
 	qSkillBoundTools     = "scout_skill_bound_tools"
 	qSkillBoundExamples  = "scout_skill_bound_examples"
@@ -103,6 +105,16 @@ ON CONFLICT (partner_id, skill_id, skill_version, required_skill_id) DO NOTHING`
 SELECT skill_version
   FROM skill_catalog_version
  WHERE skill_id = ? AND skill_version = ?`,
+	qSkillOriginRequires: `
+SELECT required_skill_id, required_skill_version
+  FROM skill_catalog_requirement
+ WHERE skill_id = ? AND skill_version = ?
+ ORDER BY required_skill_id`,
+	qSkillCopiesOf: `
+SELECT skill_id, skill_version
+  FROM skill_version
+ WHERE partner_id = ? AND origin_skill_id = ? AND origin_skill_version = ?
+ ORDER BY skill_id, skill_version`,
 	qSkillBoundList: `
 SELECT ` + skillVersionColumns + `
   FROM agent_skill_binding b
@@ -207,7 +219,7 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 		}
 		return nil
 	}
-	if err = insertVersion(ctx, tx, tenantID, skill); err != nil {
+	if skill, err = insertVersion(ctx, tx, tenantID, skill); err != nil {
 		return err
 	}
 	stored, found, err := readVersion(ctx, tx, tenantID, skill.SkillID, skill.Version)
@@ -224,7 +236,8 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 	return nil
 }
 
-func insertVersion(ctx context.Context, tx port.QueryService, tenantID int64, skill domain.SkillDefinition) error {
+// insertVersion writes the version and returns it with the requirements its catalog origin adds.
+func insertVersion(ctx context.Context, tx port.QueryService, tenantID int64, skill domain.SkillDefinition) (domain.SkillDefinition, error) {
 	var goldenSetID, goldenSetVersion any
 	if skill.EvalSet != nil {
 		goldenSetID, goldenSetVersion = skill.EvalSet.GoldenSetID, skill.EvalSet.SetVersion
@@ -233,49 +246,98 @@ func insertVersion(ctx context.Context, tx port.QueryService, tenantID int64, sk
 	if origin := skill.DerivedFrom; origin != nil {
 		found, err := tx.Query(ctx, qSkillOriginGet, origin.SkillID, origin.Version)
 		if err != nil {
-			return fmt.Errorf("read catalog skill %s@%s: %w", origin.SkillID, origin.Version, err)
+			return skill, fmt.Errorf("read catalog skill %s@%s: %w", origin.SkillID, origin.Version, err)
 		}
 		if len(found.Rows) == 0 {
-			return fmt.Errorf("%w: skill %s@%s derives from unregistered catalog skill %s@%s", domain.ErrNotFound,
+			return skill, fmt.Errorf("%w: skill %s@%s derives from unregistered catalog skill %s@%s", domain.ErrNotFound,
 				skill.SkillID, skill.Version, origin.SkillID, origin.Version)
 		}
 		originID, originVersion = origin.SkillID, origin.Version
 	}
 	if _, err := tx.Query(ctx, qSkillVersionInsert, tenantID, skill.SkillID, skill.Version, skill.Summary, skill.Procedure,
 		inputSchemaValue(skill.InputSchema), goldenSetID, goldenSetVersion, originID, originVersion); err != nil {
-		return fmt.Errorf("insert skill version %s@%s: %w", skill.SkillID, skill.Version, err)
+		return skill, fmt.Errorf("insert skill version %s@%s: %w", skill.SkillID, skill.Version, err)
 	}
+	origins := make(map[domain.SkillReference]domain.SkillReference, len(skill.Requires))
 	for _, required := range skill.Requires {
 		found, err := tx.Query(ctx, qSkillVersionGet, tenantID, required.SkillID, required.Version)
 		if err != nil {
-			return fmt.Errorf("read required skill %s@%s: %w", required.SkillID, required.Version, err)
+			return skill, fmt.Errorf("read required skill %s@%s: %w", required.SkillID, required.Version, err)
 		}
 		if len(found.Rows) == 0 {
-			return fmt.Errorf("%w: skill %s@%s requires unregistered skill %s@%s", domain.ErrNotFound,
+			return skill, fmt.Errorf("%w: skill %s@%s requires unregistered skill %s@%s", domain.ErrNotFound,
 				skill.SkillID, skill.Version, required.SkillID, required.Version)
 		}
-		if _, err = tx.Query(ctx, qSkillRequireInsert, tenantID, skill.SkillID, skill.Version, required.SkillID, required.Version); err != nil {
-			return fmt.Errorf("insert requirement %s of skill %s@%s: %w", required.SkillID, skill.SkillID, skill.Version, err)
+		if origin := scanSkillVersion(found.Rows[0]).DerivedFrom; origin != nil {
+			origins[*origin] = required
+		}
+	}
+	if skill.DerivedFrom != nil {
+		var err error
+		if skill.Requires, err = catalogRequirements(ctx, tx, tenantID, skill, origins); err != nil {
+			return skill, err
+		}
+	}
+	for _, required := range skill.Requires {
+		if _, err := tx.Query(ctx, qSkillRequireInsert, tenantID, skill.SkillID, skill.Version, required.SkillID, required.Version); err != nil {
+			return skill, fmt.Errorf("insert requirement %s of skill %s@%s: %w", required.SkillID, skill.SkillID, skill.Version, err)
 		}
 	}
 	for _, toolID := range skill.Tools {
 		profile, err := tx.Query(ctx, qSkillToolProfileGet, tenantID, toolID)
 		if err != nil {
-			return fmt.Errorf("read tool profile %q: %w", toolID, err)
+			return skill, fmt.Errorf("read tool profile %q: %w", toolID, err)
 		}
 		if len(profile.Rows) == 0 {
-			return fmt.Errorf("%w: skill %s@%s uses unregistered tool %q", domain.ErrNotFound, skill.SkillID, skill.Version, toolID)
+			return skill, fmt.Errorf("%w: skill %s@%s uses unregistered tool %q", domain.ErrNotFound, skill.SkillID, skill.Version, toolID)
 		}
 		if _, err = tx.Query(ctx, qSkillToolInsert, tenantID, skill.SkillID, skill.Version, toolID); err != nil {
-			return fmt.Errorf("insert tool %q of skill %s@%s: %w", toolID, skill.SkillID, skill.Version, err)
+			return skill, fmt.Errorf("insert tool %q of skill %s@%s: %w", toolID, skill.SkillID, skill.Version, err)
 		}
 	}
 	for i, request := range skill.Examples {
 		if _, err := tx.Query(ctx, qSkillExampleInsert, tenantID, skill.SkillID, skill.Version, i+1, request); err != nil {
-			return fmt.Errorf("insert example %d of skill %s@%s: %w", i+1, skill.SkillID, skill.Version, err)
+			return skill, fmt.Errorf("insert example %d of skill %s@%s: %w", i+1, skill.SkillID, skill.Version, err)
 		}
 	}
-	return nil
+	return skill, nil
+}
+
+// catalogRequirements adds the tenant copy of each catalog version the origin requires to a
+// derived skill's requirements: the copy the skill already names, else the tenant's only copy.
+func catalogRequirements(ctx context.Context, tx port.QueryService, tenantID int64, skill domain.SkillDefinition, named map[domain.SkillReference]domain.SkillReference) ([]domain.SkillReference, error) {
+	origin := *skill.DerivedFrom
+	result, err := tx.Query(ctx, qSkillOriginRequires, origin.SkillID, origin.Version)
+	if err != nil {
+		return nil, fmt.Errorf("list requirements of catalog skill %s@%s: %w", origin.SkillID, origin.Version, err)
+	}
+	requires := slices.Clone(skill.Requires)
+	for _, required := range scanReferences(result.Rows) {
+		if _, found := named[required]; found {
+			continue
+		}
+		copies, err := tx.Query(ctx, qSkillCopiesOf, tenantID, required.SkillID, required.Version)
+		if err != nil {
+			return nil, fmt.Errorf("list copies of catalog skill %s@%s: %w", required.SkillID, required.Version, err)
+		}
+		switch len(copies.Rows) {
+		case 0:
+			return nil, fmt.Errorf("%w: skill %s@%s derives from %s@%s, which requires catalog skill %s@%s, of which the tenant has no copy",
+				domain.ErrNotFound, skill.SkillID, skill.Version, origin.SkillID, origin.Version, required.SkillID, required.Version)
+		case 1:
+			requires = append(requires, scanReferences(copies.Rows)[0])
+		default:
+			return nil, fmt.Errorf("%w: skill %s@%s must name which copy of catalog skill %s@%s it requires",
+				domain.ErrConflict, skill.SkillID, skill.Version, required.SkillID, required.Version)
+		}
+	}
+	slices.SortFunc(requires, func(a, b domain.SkillReference) int { return strings.Compare(a.SkillID, b.SkillID) })
+	for i := 1; i < len(requires); i++ {
+		if requires[i].SkillID == requires[i-1].SkillID {
+			return nil, fmt.Errorf("%w: skill %s@%s requires skill %s at two versions", domain.ErrConflict, skill.SkillID, skill.Version, requires[i].SkillID)
+		}
+	}
+	return requires, nil
 }
 
 // Get returns one version owned by the tenant; another tenant's skill is ErrNotFound.

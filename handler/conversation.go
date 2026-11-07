@@ -104,7 +104,7 @@ func (h *ConversationHandler) submit(w http.ResponseWriter, r *http.Request) {
 		TenantContext: tenant, OnBehalfOf: person,
 		RequestID: request.RequestID, ConversationID: request.ConversationID,
 		AliasID: request.AgentType, AgentID: request.AgentName,
-		Release: request.Release, ReleaseReason: request.ReleaseReason, WorkRef: request.WorkRef,
+		Release: request.Release, ReleaseReason: request.ReleaseReason, WorkRef: request.WorkRef, AssignmentRef: request.AssignmentRef,
 		Input: append([]byte(nil), request.Input...),
 	}
 	ingress := h.Plane.Ingress()

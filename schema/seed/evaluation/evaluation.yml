@@ -45,6 +45,7 @@ seeds:
       - [evaluation_subject, D, Draft]
       - [evaluation_subject, R, Release]
       - [evaluation_subject, B, Baseline]
+      - [evaluation_subject, W, Control]
       - [golden_scope, dev, Development]
       - [golden_scope, gate, Release Gate]
       - [golden_evidence_role, E, Required Evidence]

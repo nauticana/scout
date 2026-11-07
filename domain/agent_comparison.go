@@ -12,13 +12,15 @@ type EvaluationArm struct {
 }
 
 // CompareSubject names one arm of a comparison: the current draft, optionally frozen on
-// another text model of the catalog, one release, or one recorded human baseline.
+// another text model of the catalog, one release, one recorded human baseline, or, for arm b
+// of a release, its budget-matched control.
 type CompareSubject struct {
 	Draft bool
 	// TextModel is the catalog model id a draft is frozen on in place of its own; empty keeps its own.
 	TextModel  string
 	Release    string
 	BaselineID int64
+	Control    bool
 }
 
 // AgentCompareRequest asks for a golden set version to be run against two subjects and

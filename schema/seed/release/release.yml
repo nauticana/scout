@@ -24,6 +24,7 @@ seeds:
     rows:
       - [version_pin_scope, C, Compliance]
       - [version_pin_scope, T, Tenant]
+      - [version_pin_scope, A, Assignment]
       - [pilot_subject_kind, P, Principal]
       - [pilot_subject_kind, O, Position]
   - table: constant_lookup

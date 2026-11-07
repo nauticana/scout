@@ -3,6 +3,7 @@ tables:
   - skill_catalog_version
   - skill_catalog_tool
   - skill_catalog_example
+  - skill_catalog_requirement
   - skill_profile
   - skill_version
   - skill_tool

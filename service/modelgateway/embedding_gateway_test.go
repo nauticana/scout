@@ -71,6 +71,11 @@ func TestGovernedEmbedderEmbedsAtTheRouteWidthAndSettlesItsUsage(t *testing.T) {
 	if len(*released) != 1 || (*released)[0].InputTokens != 12 {
 		t.Fatalf("the capacity lease must be released with the same usage, got %+v", *released)
 	}
+	for _, embedding := range embeddings {
+		if len(embedding.Usage.Models) != 1 || embedding.Usage.Models[0].Model != embedder.reference() || embedding.Usage.Models[0].InputTokens != 6 {
+			t.Fatalf("each vector's share names the route, got %+v", embedding.Usage)
+		}
+	}
 }
 
 func TestGovernedEmbedderRefusesAVectorOfTheWrongWidth(t *testing.T) {

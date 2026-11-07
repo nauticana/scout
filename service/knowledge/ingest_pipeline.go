@@ -206,20 +206,13 @@ func (pipeline *IngestPipeline) IngestBatch(ctx context.Context, batch domain.In
 			item.Failure, item.Terminal = job.err.Error(), job.terminal
 		}
 		result.Items[i] = item
-		result.Usage = addUsage(result.Usage, job.usage)
+		usage, addErr := result.Usage.Add(job.usage)
+		if addErr != nil {
+			return domain.IngestBatchResult{}, addErr
+		}
+		result.Usage = usage
 	}
 	return result, err
-}
-
-func addUsage(total, usage domain.Usage) domain.Usage {
-	total.InputTokens += usage.InputTokens
-	total.OutputTokens += usage.OutputTokens
-	total.ToolCalls += usage.ToolCalls
-	total.CostMinorUnits += usage.CostMinorUnits
-	if total.Currency == "" {
-		total.Currency = usage.Currency
-	}
-	return total
 }
 
 func (pipeline *IngestPipeline) run(ctx context.Context, batch domain.IngestBatch) ([]*ingestJob, error) {
@@ -496,7 +489,12 @@ func (pipeline *IngestPipeline) embed(ctx context.Context, job *ingestJob) {
 		return
 	}
 	for _, embedding := range embeddings {
-		job.usage = addUsage(job.usage, embedding.Embedding.Usage)
+		usage, err := job.usage.Add(embedding.Embedding.Usage)
+		if err != nil {
+			job.fail(err, true)
+			return
+		}
+		job.usage = usage
 	}
 	job.embeddings = embeddings
 }

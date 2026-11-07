@@ -57,7 +57,7 @@ func (h *StudioCompareHandler) compare(ctx context.Context, actor domain.StudioA
 }
 
 func compareSubject(subject api.CompareSubject) domain.CompareSubject {
-	return domain.CompareSubject{Draft: subject.Draft, TextModel: subject.Model, Release: subject.Release, BaselineID: subject.BaselineID}
+	return domain.CompareSubject{Draft: subject.Draft, TextModel: subject.Model, Release: subject.Release, BaselineID: subject.BaselineID, Control: subject.Control}
 }
 
 func (h *StudioCompareHandler) comparison(ctx context.Context, actor domain.StudioActor, query url.Values) (any, error) {

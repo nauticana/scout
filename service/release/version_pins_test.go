@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,7 @@ func TestPinnedTrafficManagerPrecedence(t *testing.T) {
 			pin.ExpiresAt = testStart.Add(-time.Minute)
 			return pin
 		}()}, nil, "4", domain.VersionFromCanary},
+		{"assignment pin for another assignment ignored", []domain.VersionPin{assignmentPin("ASGN-2")}, &cohort, "5", domain.VersionFromCohort},
 		{"cohort before default", nil, &cohort, "5", domain.VersionFromCohort},
 		{"deployment default", nil, nil, "4", domain.VersionFromCanary},
 	}
@@ -69,6 +71,47 @@ func TestPinnedTrafficManagerPrecedence(t *testing.T) {
 			}
 			if got := audit.Categories(); len(got) != 1 || got[0] != "agent_version.resolved" {
 				t.Fatalf("audit = %v", got)
+			}
+		})
+	}
+}
+
+func assignmentPin(assignment string) domain.VersionPin {
+	pin := testPin(domain.PinScopeAssignment, "3", "lead")
+	pin.AssignmentRef = assignment
+	return pin
+}
+
+// An assignment pin serves only the conversations naming its assignment, after the tenant pin and before a pilot.
+func TestPinnedTrafficManagerAssignmentPinPrecedence(t *testing.T) {
+	cohort := domain.ExperimentCohort{TenantID: 8, AgentID: "writer-a", ExperimentID: "tone", Version: "5", Percentage: 100}
+	assigned := writerRequest
+	assigned.AssignmentRef, assigned.Subject = "ASGN-1", pilotPerson
+	cases := []struct {
+		name    string
+		pins    []domain.VersionPin
+		request domain.VersionRequest
+		version string
+		source  domain.VersionSource
+	}{
+		{"assignment pin beats the pilot", []domain.VersionPin{assignmentPin("ASGN-1")}, assigned, "3", domain.VersionFromAssignmentPin},
+		{"tenant pin beats the assignment pin", []domain.VersionPin{assignmentPin("ASGN-1"), testPin(domain.PinScopeTenant, "2", "lead")}, assigned, "2", domain.VersionFromTenantPin},
+		{"a conversation naming no assignment takes none", []domain.VersionPin{assignmentPin("ASGN-1")}, writerRequest, "5", domain.VersionFromCohort},
+		{"an expired assignment pin falls through", []domain.VersionPin{func() domain.VersionPin {
+			pin := assignmentPin("ASGN-1")
+			pin.ExpiresAt = testStart.Add(-time.Minute)
+			return pin
+		}()}, assigned, "6", domain.VersionFromPilot},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			manager, _ := pinnedManager(testCase.pins, &cohort)
+			manager.Pilots = fake.PilotResolverFunc(func(context.Context, int64, string, domain.PrincipalRef, time.Time) (domain.PilotMember, bool, error) {
+				return domain.PilotMember{Version: "6", Subject: domain.PilotSubject{Kind: domain.PilotPrincipal, ID: pilotPerson.ID}}, true, nil
+			})
+			resolution, err := manager.ExplainVersion(context.Background(), testCase.request)
+			if err != nil || resolution.Version != testCase.version || resolution.Source != testCase.source {
+				t.Fatalf("resolution = %+v, err = %v", resolution, err)
 			}
 		})
 	}
@@ -124,9 +167,33 @@ func TestTableVersionPinStoreArguments(t *testing.T) {
 		t.Fatalf("id = %d, err = %v", id, err)
 	}
 	args := query.args[qPinInsert]
-	if len(args) != 14 || args[0] != int64(8) || args[1] != "writer-a" || args[2] != "1" || args[3] != string(domain.PinScopeCompliance) ||
-		args[4] != nil || args[7] != "dpo" || args[9] != `["safety-2026.08"]` || args[10] != nil {
+	if len(args) != 15 || args[0] != int64(8) || args[1] != "writer-a" || args[2] != "1" || args[3] != string(domain.PinScopeCompliance) ||
+		args[4] != nil || args[7] != "dpo" || args[9] != `["safety-2026.08"]` || args[10] != nil || args[14] != nil {
 		t.Fatalf("args = %v", args)
+	}
+}
+
+func TestTableVersionPinStoreAssignmentPins(t *testing.T) {
+	store := &TableVersionPinStore{DB: dbFake{query: newQueryFake(map[string][][]any{qPinInsert: {{int64(13)}}})}}
+	pin := testPin(domain.PinScopeAssignment, "3", "lead")
+	pin.AssignmentRef = "ASGN-1"
+	if id, err := store.Put(context.Background(), pin); err != nil || id != 13 {
+		t.Fatalf("id = %d, err = %v", id, err)
+	}
+	for name, mutate := range map[string]func(*domain.VersionPin){
+		"no assignment":   func(pin *domain.VersionPin) { pin.AssignmentRef = "" },
+		"tenant with one": func(pin *domain.VersionPin) { pin.Scope = domain.PinScopeTenant },
+		"over 200 bytes":  func(pin *domain.VersionPin) { pin.AssignmentRef = strings.Repeat("a", 201) },
+	} {
+		changed := pin
+		mutate(&changed)
+		if _, err := store.Put(context.Background(), changed); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	pin.ApprovedBy = ""
+	if _, err := store.Put(context.Background(), pin); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("unapproved assignment pin: err = %v", err)
 	}
 }
 

@@ -28,15 +28,17 @@ type skillTables struct {
 	toolIDs  map[string]bool
 	// useSkill maps a use_skill version to its input schema.
 	useSkill map[string]string
-	// catalog holds the platform catalog versions a tenant version may derive from.
-	catalog map[string]bool
+	// catalog holds the platform catalog versions a tenant version may derive from, and
+	// catalogRequires the catalog versions each requires.
+	catalog         map[string]bool
+	catalogRequires map[string][][2]string
 }
 
 func (tables *skillTables) clone() *skillTables {
 	copied := &skillTables{
 		profiles: map[string]string{}, versions: map[string][]any{}, tools: map[string][]string{},
 		examples: map[string][]string{}, requires: map[string][][2]string{}, bindings: map[string]string{},
-		toolIDs: tables.toolIDs, useSkill: tables.useSkill, catalog: tables.catalog,
+		toolIDs: tables.toolIDs, useSkill: tables.useSkill, catalog: tables.catalog, catalogRequires: tables.catalogRequires,
 	}
 	maps.Copy(copied.profiles, tables.profiles)
 	maps.Copy(copied.versions, tables.versions)
@@ -122,6 +124,20 @@ func (fake *skillTableFake) Query(_ context.Context, name string, args ...any) (
 		if tables.catalog[key(2)] {
 			return rows([]string{args[1].(string)}), nil
 		}
+	case qSkillOriginRequires:
+		result := &keelmodel.QueryResult{}
+		for _, required := range tables.catalogRequires[key(2)] {
+			result.Rows = append(result.Rows, []any{required[0], required[1]})
+		}
+		return result, nil
+	case qSkillCopiesOf:
+		result := &keelmodel.QueryResult{}
+		for _, versionKey := range slices.Sorted(maps.Keys(tables.versions)) {
+			if row := tables.versions[versionKey]; row[0] == args[0] && row[8] == args[1] && row[9] == args[2] {
+				result.Rows = append(result.Rows, []any{row[1], row[2]})
+			}
+		}
+		return result, nil
 	case qSkillRequireList:
 		result := &keelmodel.QueryResult{}
 		for _, required := range tables.requires[key(3)] {
@@ -209,9 +225,10 @@ func (db skillTableDB) BeginTx(context.Context, map[string]string) (keelport.TxQ
 func newRegistry() (*skillTableFake, *TableSkillRegistry) {
 	open, closed := UseSkillTool(), UseSkillTool("audit")
 	tables := (&skillTables{
-		toolIDs:  map[string]bool{"crawl": true, "propose_edit": true},
-		useSkill: map[string]string{open.Version: string(open.InputSchema), closed.Version: string(closed.InputSchema)},
-		catalog:  map[string]bool{fmt.Sprint("audit", "1"): true},
+		toolIDs:         map[string]bool{"crawl": true, "propose_edit": true},
+		useSkill:        map[string]string{open.Version: string(open.InputSchema), closed.Version: string(closed.InputSchema)},
+		catalog:         map[string]bool{fmt.Sprint("audit", "1"): true, fmt.Sprint("base", "1"): true, fmt.Sprint("rewrite", "1"): true},
+		catalogRequires: map[string][][2]string{fmt.Sprint("rewrite", "1"): {{"base", "1"}}},
 	}).clone()
 	fake := &skillTableFake{committed: tables}
 	return fake, &TableSkillRegistry{DB: skillTableDB{fake: fake}}
@@ -494,6 +511,44 @@ func TestRegisterNamesItsCatalogOrigin(t *testing.T) {
 	}
 	stored, err := registry.Get(ctx, 1, "audit", "1")
 	if err != nil || stored.DerivedFrom == nil || *stored.DerivedFrom != *derived.DerivedFrom {
+		t.Fatalf("stored = %+v, %v", stored, err)
+	}
+}
+
+// A copy of a catalog version requires the tenant's copy of each catalog version it requires.
+func TestRegisterCopiesCarryTheCatalogRequirements(t *testing.T) {
+	_, registry := newRegistry()
+	ctx := context.Background()
+	copyOf := func(skillID, version, origin string) domain.SkillDefinition {
+		skill := auditSkill(version)
+		skill.SkillID, skill.DerivedFrom = skillID, &domain.SkillReference{SkillID: origin, Version: "1"}
+		return skill
+	}
+	if err := registry.Register(ctx, 1, copyOf("rewrite", "1", "rewrite")); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("no copy of the required catalog skill: want ErrNotFound, got %v", err)
+	}
+	if err := registry.Register(ctx, 1, copyOf("base", "1", "base")); err != nil {
+		t.Fatalf("Register base: %v", err)
+	}
+	if err := registry.Register(ctx, 1, copyOf("rewrite", "1", "rewrite")); err != nil {
+		t.Fatalf("Register rewrite: %v", err)
+	}
+	stored, err := registry.Get(ctx, 1, "rewrite", "1")
+	if err != nil || !slices.Equal(stored.Requires, []domain.SkillReference{{SkillID: "base", Version: "1"}}) {
+		t.Fatalf("stored = %+v, %v", stored, err)
+	}
+	if err := registry.Register(ctx, 1, copyOf("base-alt", "1", "base")); err != nil {
+		t.Fatalf("Register base-alt: %v", err)
+	}
+	if err := registry.Register(ctx, 1, copyOf("rewrite", "2", "rewrite")); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("two copies of the required catalog skill: want ErrConflict, got %v", err)
+	}
+	named := copyOf("rewrite", "2", "rewrite")
+	named.Requires = []domain.SkillReference{{SkillID: "base-alt", Version: "1"}}
+	if err := registry.Register(ctx, 1, named); err != nil {
+		t.Fatalf("Register with the copy named: %v", err)
+	}
+	if stored, err = registry.Get(ctx, 1, "rewrite", "2"); err != nil || !slices.Equal(stored.Requires, named.Requires) {
 		t.Fatalf("stored = %+v, %v", stored, err)
 	}
 }

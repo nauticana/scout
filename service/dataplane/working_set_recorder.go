@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/nauticana/keel/common"
 	"github.com/nauticana/keel/port"
@@ -159,4 +160,37 @@ func validRecord(set domain.WorkingSet) error {
 		}
 	}
 	return nil
+}
+
+// MemoryWorkingSetRecorder keeps each turn's latest working set in memory, keyed by request id,
+// for replays and tests that have no conversation_turn row.
+type MemoryWorkingSetRecorder struct {
+	mu   sync.Mutex
+	sets map[string]domain.WorkingSet
+}
+
+var _ contract.WorkingSetRecorder = (*MemoryWorkingSetRecorder)(nil)
+
+func (recorder *MemoryWorkingSetRecorder) RecordWorkingSet(_ context.Context, owner domain.TurnOwner, set domain.WorkingSet) error {
+	if err := owner.Check(); err != nil {
+		return err
+	}
+	if err := validRecord(set); err != nil {
+		return err
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.sets == nil {
+		recorder.sets = make(map[string]domain.WorkingSet)
+	}
+	recorder.sets[owner.RequestID] = set
+	return nil
+}
+
+// Set returns the latest working set recorded for the request.
+func (recorder *MemoryWorkingSetRecorder) Set(requestID string) (domain.WorkingSet, bool) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	set, ok := recorder.sets[requestID]
+	return set, ok
 }

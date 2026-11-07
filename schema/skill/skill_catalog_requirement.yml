@@ -1,0 +1,29 @@
+table: skill_catalog_requirement
+comment: Another catalog version a platform procedure relies on; a tenant copy requires a tenant copy of it
+columns:
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: required_skill_id
+    type: VARCHAR(80)
+  - name: required_skill_version
+    type: VARCHAR(80)
+primary_key: [skill_id, skill_version, required_skill_id]
+foreign_keys:
+  - name: skill_catalog_version_requirements
+    columns: [skill_id, skill_version]
+    references:
+      table: skill_catalog_version
+      columns: [skill_id, skill_version]
+  - name: required_catalog_skill_dependents
+    columns: [required_skill_id, required_skill_version]
+    references:
+      table: skill_catalog_version
+      columns: [skill_id, skill_version]
+indexes:
+  - name: skill_catalog_requirement_required_ix
+    columns: [required_skill_id, required_skill_version]
+checks:
+  - name: skill_catalog_requirement_self_ck
+    expression: required_skill_id <> skill_id

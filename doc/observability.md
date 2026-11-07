@@ -55,7 +55,9 @@ is only ever done on compatible sketches. The sketch never underestimates; its a
 Fleet series carry no tenant, agent, or person, so per-agent views read exact records instead:
 
 - **Usage per model.** `Usage.Models` (`domain.ModelSpend`) is the share each model performed, costed in the
-  usage currency; the model gateway attributes usage to the route that served the call. Settlement writes one
+  usage currency; the model gateway attributes usage to the route that served the call, and the governed
+  embedder each query embedding a turn's working set retrieved, which the tool loop prices and settles
+  as the turn's own. Settlement writes one
   `usage_event` row per provider and model, plus one row with no model for the remainder (tool calls, and spend
   nothing attributed). A turn and category settle once, under an advisory lock in the caller's transaction, and
   a breakdown that exceeds the totals, repeats or blanks a model, or is negative is refused before any write. The

@@ -21,6 +21,9 @@ func (sources Sources) Candidates(ctx context.Context, request domain.WorkingSet
 		if err != nil {
 			return domain.WorkingSetCandidates{}, err
 		}
+		if merged.Usage, err = merged.Usage.Add(offered.Usage); err != nil {
+			return domain.WorkingSetCandidates{}, err
+		}
 		merged.Candidates = append(merged.Candidates, offered.Candidates...)
 		for _, key := range offered.RequiredKeys {
 			if !slices.Contains(merged.RequiredKeys, key) {
@@ -29,6 +32,15 @@ func (sources Sources) Candidates(ctx context.Context, request domain.WorkingSet
 		}
 	}
 	return merged, nil
+}
+
+// Fixed offers the same candidates to every turn, such as a reference arm's to its control.
+type Fixed struct{ Offered domain.WorkingSetCandidates }
+
+var _ contract.WorkingSetCandidateSource = Fixed{}
+
+func (fixed Fixed) Candidates(context.Context, domain.WorkingSetRequest) (domain.WorkingSetCandidates, error) {
+	return fixed.Offered, nil
 }
 
 // EstimateTokens is the 4-characters-per-token cost a source without a tokenizer offers.

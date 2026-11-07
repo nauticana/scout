@@ -273,3 +273,52 @@ func TestCachedRetrieverBoundsDetachedLoad(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A hit spent nothing, so it reports no retrieval usage to settle.
+func TestCachedRetrieverHitReportsNoUsage(t *testing.T) {
+	inner := &countingRetriever{inner: func(context.Context, domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
+		return domain.KnowledgeResult{Matches: []domain.KnowledgeMatch{{DocumentID: "a", ChunkNo: 1, Content: []byte("a")}}, Usage: domain.Usage{InputTokens: 4}}, nil
+	}}
+	cached := newCached(t, inner, testScope, nil)
+	first, err := cached.Retrieve(context.Background(), entitledQuery("user:a"))
+	if err != nil || first.Usage.InputTokens != 4 {
+		t.Fatalf("miss = %+v, %v", first.Usage, err)
+	}
+	if second, err := cached.Retrieve(context.Background(), entitledQuery("user:a")); err != nil || second.Usage.InputTokens != 0 || inner.calls.Load() != 1 {
+		t.Fatalf("hit = %+v, calls = %d, %v", second.Usage, inner.calls.Load(), err)
+	}
+}
+
+// Callers coalesced onto one load report no usage: the embedding was spent once, by the loader.
+func TestCachedRetrieverCoalescedWaitersReportNoUsage(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	inner := &countingRetriever{inner: func(ctx context.Context, _ domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
+		close(entered)
+		<-release
+		return domain.KnowledgeResult{Matches: []domain.KnowledgeMatch{{DocumentID: "a", ChunkNo: 1, Content: []byte("a")}}, Usage: domain.Usage{InputTokens: 4}}, nil
+	}}
+	cached := newCached(t, inner, testScope, nil)
+	results := make(chan domain.Usage, 2)
+	for range 2 {
+		go func() {
+			result, err := cached.Retrieve(context.Background(), entitledQuery("user:a"))
+			if err != nil {
+				t.Error(err)
+			}
+			results <- result.Usage
+		}()
+	}
+	<-entered
+	close(release)
+	spent := 0
+	for range 2 {
+		if usage := <-results; usage.InputTokens == 4 {
+			spent++
+		} else if usage.InputTokens != 0 {
+			t.Fatalf("usage = %+v", usage)
+		}
+	}
+	if spent != 1 || inner.calls.Load() != 1 {
+		t.Fatalf("loads reporting usage = %d, calls = %d", spent, inner.calls.Load())
+	}
+}

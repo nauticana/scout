@@ -38,15 +38,15 @@ var versionPinQueries = map[string]string{
 	qPinInsert: `
 INSERT INTO agent_version_pin
        (partner_id, agent_id, agent_version, scope_code, region, reason, owner, approved_by, signature,
-        compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at, assignment_ref)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 	qPinActive: `
 SELECT id, agent_version, scope_code, region, reason, owner, approved_by, signature,
-       compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at
+       compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at, assignment_ref
   FROM agent_version_pin
  WHERE partner_id = ? AND agent_id = ? AND effective_at <= ? AND (expires_at IS NULL OR expires_at > ?)
- ORDER BY CASE scope_code WHEN '` + string(domain.PinScopeCompliance) + `' THEN 0 ELSE 1 END, created_at DESC, id DESC`,
+ ORDER BY CASE scope_code WHEN '` + string(domain.PinScopeCompliance) + `' THEN 0 WHEN '` + string(domain.PinScopeTenant) + `' THEN 1 ELSE 2 END, created_at DESC, id DESC`,
 	qPinExpire: `
 UPDATE agent_version_pin SET expires_at = ?
  WHERE partner_id = ? AND id = ? AND (expires_at IS NULL OR expires_at > ?)`,
@@ -133,13 +133,17 @@ func (store *TableVersionPinStore) Put(ctx context.Context, pin domain.VersionPi
 	case pin.TenantID <= 0 || strings.TrimSpace(pin.AgentID) == "" || strings.TrimSpace(pin.Version) == "":
 		return 0, fmt.Errorf("%w: pin tenant, agent, and version are required", domain.ErrValidation)
 	case !pin.Scope.Valid():
-		return 0, fmt.Errorf("%w: pin scope must be C (compliance) or T (tenant)", domain.ErrValidation)
+		return 0, fmt.Errorf("%w: pin scope must be C (compliance), T (tenant), or A (assignment)", domain.ErrValidation)
+	case (pin.Scope == domain.PinScopeAssignment) != (strings.TrimSpace(pin.AssignmentRef) != "") || len(pin.AssignmentRef) > 200:
+		return 0, fmt.Errorf("%w: an assignment pin, and only one, names its assignment, at most 200 bytes", domain.ErrValidation)
 	case strings.TrimSpace(pin.Reason) == "" || strings.TrimSpace(pin.Owner) == "" || pin.EffectiveAt.IsZero():
 		return 0, fmt.Errorf("%w: pin reason, owner, and effective time are required", domain.ErrValidation)
 	case !pin.ExpiresAt.IsZero() && !pin.ExpiresAt.After(pin.EffectiveAt):
 		return 0, fmt.Errorf("%w: pin expiry must follow its effective time", domain.ErrValidation)
 	case pin.Scope == domain.PinScopeCompliance && (strings.TrimSpace(pin.ApprovedBy) == "" || strings.TrimSpace(pin.Signature) == ""):
 		return 0, fmt.Errorf("%w: compliance pins require approval and signature", domain.ErrForbidden)
+	case pin.Scope == domain.PinScopeAssignment && strings.TrimSpace(pin.ApprovedBy) == "":
+		return 0, fmt.Errorf("%w: assignment pins require approval", domain.ErrForbidden)
 	}
 	if err := store.init(ctx); err != nil {
 		return 0, err
@@ -151,7 +155,7 @@ func (store *TableVersionPinStore) Put(ctx context.Context, pin domain.VersionPi
 	result, err := store.qs.Query(ctx, qPinInsert,
 		pin.TenantID, pin.AgentID, pin.Version, string(pin.Scope), nullableString(pin.Region), pin.Reason, pin.Owner,
 		nullableString(pin.ApprovedBy), nullableString(pin.Signature), encodeList(pin.CompatiblePolicyVersions),
-		encodeList(pin.CompatibleIndexVersions), pin.EffectiveAt, nullableTime(pin.ExpiresAt), createdAt)
+		encodeList(pin.CompatibleIndexVersions), pin.EffectiveAt, nullableTime(pin.ExpiresAt), createdAt, nullableString(pin.AssignmentRef))
 	if err != nil {
 		return 0, fmt.Errorf("insert version pin: %w", err)
 	}
@@ -185,6 +189,7 @@ func (store *TableVersionPinStore) Active(ctx context.Context, tenantID int64, a
 			Owner: common.AsString(row[5]), ApprovedBy: common.AsString(row[6]), Signature: common.AsString(row[7]),
 			CompatiblePolicyVersions: policies, CompatibleIndexVersions: indexes,
 			EffectiveAt: common.AsTime(row[10]), ExpiresAt: common.AsTime(row[11]), CreatedAt: common.AsTime(row[12]),
+			AssignmentRef: common.AsString(row[13]),
 		})
 	}
 	return pins, nil
@@ -410,8 +415,9 @@ func (store *TableAgentDeploymentStore) RestorePrevious(ctx context.Context, ten
 }
 
 // PinnedTrafficManager resolves agent versions by precedence: compliance pin,
-// approved tenant pin, the subject's pilot, experiment cohort, then the deployment's
-// canary/stable split. Every resolution is audited with the winning rule.
+// approved tenant pin, the pin of the assignment the conversation names, the subject's
+// pilot, experiment cohort, then the deployment's canary/stable split. Every resolution
+// is audited with the winning rule.
 type PinnedTrafficManager struct {
 	Pins contract.VersionPinStore
 	// Pilots serves a listed person their pilot release; it is asked only when the request
@@ -482,16 +488,19 @@ func (manager *PinnedTrafficManager) resolve(ctx context.Context, request domain
 			if pin.Region != "" && pin.Region != manager.Region {
 				continue
 			}
-			if pin.Scope == domain.PinScopeTenant && strings.TrimSpace(pin.ApprovedBy) == "" {
+			if pin.Scope != domain.PinScopeCompliance && strings.TrimSpace(pin.ApprovedBy) == "" {
+				continue
+			}
+			if pin.Scope == domain.PinScopeAssignment && (request.AssignmentRef == "" || pin.AssignmentRef != request.AssignmentRef) {
 				continue
 			}
 			if err := manager.compatible(pin); err != nil {
 				return domain.AgentVersionResolution{}, err
 			}
-			source := domain.VersionFromTenantPin
-			if pin.Scope == domain.PinScopeCompliance {
-				source = domain.VersionFromCompliancePin
-			}
+			source := map[domain.PinScope]domain.VersionSource{
+				domain.PinScopeCompliance: domain.VersionFromCompliancePin, domain.PinScopeTenant: domain.VersionFromTenantPin,
+				domain.PinScopeAssignment: domain.VersionFromAssignmentPin,
+			}[pin.Scope]
 			return domain.AgentVersionResolution{Version: pin.Version, Source: source, PinID: pin.ID}, nil
 		}
 	}
@@ -542,11 +551,12 @@ func (manager *PinnedTrafficManager) auditResolution(ctx context.Context, reques
 	payload, err := json.Marshal(struct {
 		AgentID        string               `json:"agent_id"`
 		ConversationID string               `json:"conversation_id,omitempty"`
+		AssignmentRef  string               `json:"assignment_ref,omitempty"`
 		Version        string               `json:"version"`
 		Source         domain.VersionSource `json:"source"`
 		PinID          int64                `json:"pin_id,omitempty"`
 		Pilot          *domain.PilotSubject `json:"pilot,omitempty"`
-	}{agentID, conversationID, resolution.Version, resolution.Source, resolution.PinID, pilot})
+	}{agentID, conversationID, request.AssignmentRef, resolution.Version, resolution.Source, resolution.PinID, pilot})
 	if err != nil {
 		return fmt.Errorf("encode version audit: %w", err)
 	}

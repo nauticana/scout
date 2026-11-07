@@ -80,7 +80,7 @@ func (retriever *ShardedRetriever) Retrieve(ctx context.Context, query domain.Kn
 		}
 		succeeded++
 		var err error
-		if usage, err = mergeUsage(usage, result.Usage); err != nil {
+		if usage, err = usage.Add(result.Usage); err != nil {
 			return domain.KnowledgeResult{}, stage.At(domain.StageRetrieval, err)
 		}
 		streams = append(streams, result.Matches)
@@ -168,31 +168,4 @@ func (h *matchHeap) Pop() any {
 	last := old[len(old)-1]
 	*h = old[:len(old)-1]
 	return last
-}
-
-func mergeUsage(total, add domain.Usage) (domain.Usage, error) {
-	if add.InputTokens < 0 || add.OutputTokens < 0 || add.ToolCalls < 0 || add.CostMinorUnits < 0 {
-		return domain.Usage{}, fmt.Errorf("%w: retrieval usage cannot be negative", domain.ErrValidation)
-	}
-	const maxInt64 = int64(^uint64(0) >> 1)
-	const maxInt = int(^uint(0) >> 1)
-	if total.InputTokens > maxInt64-add.InputTokens || total.OutputTokens > maxInt64-add.OutputTokens ||
-		total.ToolCalls > maxInt-add.ToolCalls || total.CostMinorUnits > maxInt64-add.CostMinorUnits {
-		return domain.Usage{}, fmt.Errorf("%w: retrieval usage overflow", domain.ErrValidation)
-	}
-	total.InputTokens += add.InputTokens
-	total.OutputTokens += add.OutputTokens
-	total.ToolCalls += add.ToolCalls
-	total.CostMinorUnits += add.CostMinorUnits
-	if add.CostMinorUnits > 0 {
-		if len(add.Currency) != 3 {
-			return domain.Usage{}, fmt.Errorf("%w: retrieval cost requires a currency", domain.ErrValidation)
-		}
-		if total.Currency == "" {
-			total.Currency = add.Currency
-		} else if total.Currency != add.Currency {
-			return domain.Usage{}, fmt.Errorf("%w: shards returned different currencies", domain.ErrValidation)
-		}
-	}
-	return total, nil
 }

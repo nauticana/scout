@@ -52,8 +52,8 @@ Add released module versions; never use local filesystem replacements:
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.3.2
-go get github.com/nauticana/charter@v1.6.1
+go get github.com/nauticana/keel@v1.3.3
+go get github.com/nauticana/charter@v1.7.0
 ```
 
 Scout requires Go 1.27.3.

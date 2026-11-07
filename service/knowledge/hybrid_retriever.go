@@ -159,28 +159,9 @@ func fuse(results []domain.KnowledgeResult, failures []error, offset int) ([]dom
 			continue
 		}
 		succeeded++
-		if result.Usage.InputTokens < 0 || result.Usage.OutputTokens < 0 || result.Usage.ToolCalls < 0 || result.Usage.CostMinorUnits < 0 {
-			return nil, domain.Usage{}, 0, fmt.Errorf("%w: retrieval usage cannot be negative", domain.ErrValidation)
-		}
-		const maxInt64 = int64(^uint64(0) >> 1)
-		const maxInt = int(^uint(0) >> 1)
-		if usage.InputTokens > maxInt64-result.Usage.InputTokens || usage.OutputTokens > maxInt64-result.Usage.OutputTokens ||
-			usage.ToolCalls > maxInt-result.Usage.ToolCalls || usage.CostMinorUnits > maxInt64-result.Usage.CostMinorUnits {
-			return nil, domain.Usage{}, 0, fmt.Errorf("%w: retrieval usage overflow", domain.ErrValidation)
-		}
-		usage.InputTokens += result.Usage.InputTokens
-		usage.OutputTokens += result.Usage.OutputTokens
-		usage.ToolCalls += result.Usage.ToolCalls
-		usage.CostMinorUnits += result.Usage.CostMinorUnits
-		if result.Usage.CostMinorUnits > 0 {
-			if len(result.Usage.Currency) != 3 {
-				return nil, domain.Usage{}, 0, fmt.Errorf("%w: retrieval cost requires a currency", domain.ErrValidation)
-			}
-			if usage.Currency == "" {
-				usage.Currency = result.Usage.Currency
-			} else if usage.Currency != result.Usage.Currency {
-				return nil, domain.Usage{}, 0, fmt.Errorf("%w: retrieval legs returned different currencies", domain.ErrValidation)
-			}
+		var err error
+		if usage, err = usage.Add(result.Usage); err != nil {
+			return nil, domain.Usage{}, 0, fmt.Errorf("retrieval usage: %w", err)
 		}
 		for rank, match := range result.Matches {
 			key := chunkKey{match.DocumentID, match.ChunkNo}

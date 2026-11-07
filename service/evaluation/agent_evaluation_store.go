@@ -239,6 +239,10 @@ func validEnqueue(request domain.AgentEvaluationEnqueue) error {
 	if request.Subject.Kind == domain.SubjectBaseline {
 		return fmt.Errorf("%w: only arm a of a comparison may be a baseline", domain.ErrValidation)
 	}
+	if request.Subject.Kind == domain.SubjectControl && (request.Baseline == nil || request.Baseline.Subject.Kind != domain.SubjectRelease ||
+		request.Baseline.Subject.Version != request.Subject.Version) {
+		return fmt.Errorf("%w: a control is arm b of a comparison whose arm a is the same release", domain.ErrValidation)
+	}
 	if err := validArm(request.AgentID, domain.EvaluationArm{Subject: request.Subject, Draft: request.Draft, DraftSettings: request.DraftSettings}); err != nil {
 		return err
 	}
@@ -272,9 +276,9 @@ func validArm(agentID string, arm domain.EvaluationArm) error {
 		if model := subject.Model; model != nil && (draft.Models.Text == nil || *draft.Models.Text != *model || model.ProviderID == "" || model.ModelID == "") {
 			return fmt.Errorf("%w: a draft frozen on another model carries that model as its text model", domain.ErrValidation)
 		}
-	case domain.SubjectRelease:
+	case domain.SubjectRelease, domain.SubjectControl:
 		if arm.Draft != nil || arm.DraftSettings != nil || strings.TrimSpace(subject.Version) == "" || subject.BaselineID != 0 {
-			return fmt.Errorf("%w: a release subject names a version and carries no draft", domain.ErrValidation)
+			return fmt.Errorf("%w: a release or control subject names a version and carries no draft", domain.ErrValidation)
 		}
 	case domain.SubjectBaseline:
 		if arm.Draft != nil || arm.DraftSettings != nil || subject.Version != "" || subject.DefinitionDigest != "" || subject.BaselineID <= 0 {
@@ -374,7 +378,7 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 // the run's set version in a scope covering the run's.
 func pinSubject(ctx context.Context, tx keelport.TxQueryService, request domain.AgentEvaluationEnqueue, subject domain.AgentEvaluationSubject, goldenSetID string) (domain.AgentEvaluationSubject, error) {
 	switch subject.Kind {
-	case domain.SubjectRelease:
+	case domain.SubjectRelease, domain.SubjectControl:
 		release, err := tx.Query(ctx, qAgentEvalRelease, request.TenantID, request.AgentID, subject.Version)
 		if err != nil {
 			return subject, fmt.Errorf("load release: %w", err)

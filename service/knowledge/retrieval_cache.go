@@ -111,9 +111,12 @@ func (retriever *CachedRetriever) Retrieve(ctx context.Context, query domain.Kno
 		return result, nil
 	}
 	if cached, ok := retriever.cache.Get(key); ok {
+		cached.Usage = domain.Usage{}
 		return cloneResult(cached), nil
 	}
+	loaded := false
 	result, err := retriever.flights.Do(ctx, key, func(loadCtx context.Context) (domain.KnowledgeResult, error) {
+		loaded = true
 		loadCtx, cancel := context.WithTimeout(loadCtx, retriever.config.LoadTimeout)
 		defer cancel()
 		result, err := retriever.inner.Retrieve(loadCtx, query)
@@ -127,6 +130,9 @@ func (retriever *CachedRetriever) Retrieve(ctx context.Context, query domain.Kno
 	})
 	if err != nil {
 		return domain.KnowledgeResult{}, err
+	}
+	if !loaded {
+		result.Usage = domain.Usage{}
 	}
 	return cloneResult(result), nil
 }

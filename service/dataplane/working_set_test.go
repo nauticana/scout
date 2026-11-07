@@ -51,7 +51,7 @@ func workingSetInput() domain.StepInput {
 
 // Without a compiler the request is exactly what it was: no working set, no assurance.
 func TestReleaseLoopRequestBuilderWithoutAWorkingSetIsUnchanged(t *testing.T) {
-	request, err := workingSetBuilder().Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{})
+	request, _, err := workingSetBuilder().Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{})
 	if err != nil || string(request.Prompt) != "writer|be brief|renew the policy|" || request.Assurance != "" {
 		t.Fatalf("prompt %q, assurance %q, err %v", request.Prompt, request.Assurance, err)
 	}
@@ -67,7 +67,7 @@ func TestReleaseLoopRequestBuilderAppendsAndRecordsTheWorkingSet(t *testing.T) {
 	builder := workingSetBuilder()
 	builder.WorkingSet, builder.WorkingSetRecords = compiler, records
 	input := workingSetInput()
-	request, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{})
+	request, _, err := builder.Build(context.Background(), input, domain.ToolLoopConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestReleaseLoopRequestBuilderStopsOnAnUnsettledWorkingSet(t *testing.T) {
 		records := &workingSetRecords{}
 		builder := workingSetBuilder()
 		builder.WorkingSet, builder.WorkingSetRecords = &workingSetStub{set: domain.WorkingSet{Assurance: assurance, Excluded: []string{"a"}}}, records
-		if _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrWorkingSetUnassured) {
+		if _, _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrWorkingSetUnassured) {
 			t.Fatalf("%s: error = %v, want unassured", assurance, err)
 		}
 		if len(records.sets) != 1 || records.sets[0].Assurance != assurance {
@@ -102,19 +102,19 @@ func TestReleaseLoopRequestBuilderStopsOnAnUnsettledWorkingSet(t *testing.T) {
 func TestReleaseLoopRequestBuilderWorkingSetFailsClosed(t *testing.T) {
 	builder := workingSetBuilder()
 	builder.WorkingSet = &workingSetStub{set: domain.WorkingSet{Assurance: domain.AssuranceVerified}}
-	if _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrNotReady) {
+	if _, _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("no recorder: %v", err)
 	}
 	builder.WorkingSetRecords = &workingSetRecords{err: domain.ErrFenceLost}
-	if _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrFenceLost) {
+	if _, _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrFenceLost) {
 		t.Fatalf("record failure: %v", err)
 	}
 	builder.WorkingSet, builder.WorkingSetRecords = &workingSetStub{set: domain.WorkingSet{Assurance: "X"}}, &workingSetRecords{}
-	if _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrValidation) {
+	if _, _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("invalid assurance: %v", err)
 	}
 	builder.WorkingSet = &workingSetStub{err: domain.ErrExecutionLimit}
-	if _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrExecutionLimit) {
+	if _, _, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrExecutionLimit) {
 		t.Fatalf("compile failure: %v", err)
 	}
 }
@@ -211,10 +211,10 @@ func TestTableTurnRecordStoreHoldsOnEvidence(t *testing.T) {
 
 type assuredRequestBuilder struct{ assurance domain.WorkingSetAssurance }
 
-func (builder assuredRequestBuilder) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, error) {
-	request, err := loopRequestBuilder{}.Build(ctx, input, config)
+func (builder assuredRequestBuilder) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error) {
+	request, _, err := loopRequestBuilder{}.Build(ctx, input, config)
 	request.Assurance = builder.assurance
-	return request, err
+	return request, domain.Usage{}, err
 }
 
 // The loop gives the request's assurance to every call, so the gateway sees the turn's working set.
@@ -233,3 +233,85 @@ func TestToolLoopCarriesTheWorkingSetAssuranceToEveryCall(t *testing.T) {
 }
 
 var _ contract.WorkingSetCompiler = (*workingSetStub)(nil)
+
+// What the working set spent reaches the request's usage, settled or not.
+func TestReleaseLoopRequestBuilderReturnsTheWorkingSetUsage(t *testing.T) {
+	spent := domain.Usage{InputTokens: 9}.AttributedTo(domain.ModelReference{ProviderID: "openai", ModelID: "embed"})
+	builder := workingSetBuilder()
+	builder.WorkingSet, builder.WorkingSetRecords = &workingSetStub{set: domain.WorkingSet{Assurance: domain.AssuranceVerified, Usage: spent}}, &workingSetRecords{}
+	if _, usage, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); err != nil || usage.InputTokens != 9 || len(usage.Models) != 1 {
+		t.Fatalf("usage = %+v, %v", usage, err)
+	}
+	builder.WorkingSet = &workingSetStub{set: domain.WorkingSet{Assurance: domain.AssuranceConflicted, Usage: spent}}
+	if _, usage, err := builder.Build(context.Background(), workingSetInput(), domain.ToolLoopConfig{}); !errors.Is(err, domain.ErrWorkingSetUnassured) || usage.InputTokens != 9 {
+		t.Fatalf("an unsettled set still spent: usage = %+v, %v", usage, err)
+	}
+}
+
+type spendingRequestBuilder struct {
+	spent domain.Usage
+	err   error
+}
+
+func (builder spendingRequestBuilder) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error) {
+	request, _, err := loopRequestBuilder{}.Build(ctx, input, config)
+	return request, builder.spent, errors.Join(err, builder.err)
+}
+
+// The loop prices what building the request spent and settles it with the model usage, under the cost bound.
+func TestToolLoopSettlesTheRequestBuildersUsage(t *testing.T) {
+	embed := domain.ModelReference{ProviderID: "openai", ModelID: "embed"}
+	harness := newLoopHarness(t, answers("done"))
+	executor := harness.executor()
+	executor.Pricer = fake.ModelPricerFunc(func(_ context.Context, model domain.ModelReference, usage domain.ModelUsage) (int64, string, error) {
+		if model == embed {
+			return usage.InputTokens * 2, "USD", nil
+		}
+		return 0, "USD", nil
+	})
+	executor.Requests = spendingRequestBuilder{spent: domain.Usage{InputTokens: 4}.AttributedTo(embed)}
+	result, err := executor.Execute(context.Background(), loopInput())
+	if err != nil || result.Usage.InputTokens != 9 || result.Usage.CostMinorUnits != 8 || result.Usage.Currency != "USD" {
+		t.Fatalf("usage = %+v, %v", result.Usage, err)
+	}
+	if index := slices.IndexFunc(result.Usage.Models, func(spend domain.ModelSpend) bool { return spend.Model == embed }); index < 0 || result.Usage.Models[index].CostMinorUnits != 8 {
+		t.Fatalf("models = %+v", result.Usage.Models)
+	}
+
+	bounded := loopInput()
+	bounded.Bounds = domain.DelegationBounds{BudgetMinorUnits: 5, Currency: "USD"}
+	if _, err := executor.Execute(context.Background(), bounded); !errors.Is(err, domain.ErrBudgetExceeded) || spentUsage(err).CostMinorUnits != 8 {
+		t.Fatalf("retrieval over the delegated budget = %v, spent %+v", err, spentUsage(err))
+	}
+	executor.Requests = spendingRequestBuilder{spent: domain.Usage{InputTokens: 4}}
+	if _, err := executor.Execute(context.Background(), bounded); !errors.Is(err, domain.ErrDegraded) {
+		t.Fatalf("unattributed spend under a cost bound = %v", err)
+	}
+	executor.Requests = spendingRequestBuilder{spent: domain.Usage{InputTokens: 4}.AttributedTo(embed), err: domain.ErrNotReady}
+	if _, err := executor.Execute(context.Background(), loopInput()); !errors.Is(err, domain.ErrNotReady) || spentUsage(err).InputTokens != 4 {
+		t.Fatalf("a failed build still reports its spend: %v, %+v", err, spentUsage(err))
+	}
+}
+
+func TestMemoryWorkingSetRecorderKeepsTheLatestSetPerRequest(t *testing.T) {
+	recorder := &MemoryWorkingSetRecorder{}
+	first := domain.WorkingSet{Assurance: domain.AssuranceVerified, Selected: []domain.WorkingSetCandidate{{ID: "a"}}}
+	if err := recorder.RecordWorkingSet(context.Background(), recordOwner, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.RecordWorkingSet(context.Background(), recordOwner, domain.WorkingSet{Assurance: domain.AssuranceBounded, Excluded: []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if set, ok := recorder.Set(recordOwner.RequestID); !ok || set.Assurance != domain.AssuranceBounded || len(set.Selected) != 0 {
+		t.Fatalf("set = %+v, %t", set, ok)
+	}
+	if _, ok := recorder.Set("other"); ok {
+		t.Fatal("an unrecorded request has no set")
+	}
+	if err := recorder.RecordWorkingSet(context.Background(), domain.TurnOwner{}, first); !errors.Is(err, domain.ErrFenceLost) {
+		t.Fatalf("no owner = %v", err)
+	}
+	if err := recorder.RecordWorkingSet(context.Background(), recordOwner, domain.WorkingSet{Assurance: "X"}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("malformed set = %v", err)
+	}
+}

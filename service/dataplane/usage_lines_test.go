@@ -76,7 +76,7 @@ func TestUsageLinesRefuseABreakdownThatDoesNotFitTheTotals(t *testing.T) {
 
 func TestMergeModelSpendAddsPerModelWithoutAliasing(t *testing.T) {
 	total := []domain.ModelSpend{{Model: gpt, InputTokens: 1, CostMinorUnits: 1}}
-	merged, err := mergeModelSpend(total, []domain.ModelSpend{{Model: gpt, InputTokens: 2, SearchQueries: 1}, {Model: claude, OutputTokens: 3}})
+	merged, err := domain.MergeModelSpend(total, []domain.ModelSpend{{Model: gpt, InputTokens: 2, SearchQueries: 1}, {Model: claude, OutputTokens: 3}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,10 +84,10 @@ func TestMergeModelSpendAddsPerModelWithoutAliasing(t *testing.T) {
 	if !reflect.DeepEqual(merged, want) || total[0].InputTokens != 1 {
 		t.Fatalf("merged = %+v, total = %+v", merged, total)
 	}
-	if _, err := mergeModelSpend(merged, []domain.ModelSpend{{Model: gpt, CostMinorUnits: math.MaxInt64}}); !errors.Is(err, domain.ErrValidation) {
+	if _, err := domain.MergeModelSpend(merged, []domain.ModelSpend{{Model: gpt, CostMinorUnits: math.MaxInt64}}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("overflow = %v, want validation", err)
 	}
-	if _, err := mergeModelSpend(nil, []domain.ModelSpend{{InputTokens: 1}}); !errors.Is(err, domain.ErrValidation) {
+	if _, err := domain.MergeModelSpend(nil, []domain.ModelSpend{{InputTokens: 1}}); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("unnamed model = %v, want validation", err)
 	}
 }

@@ -22,7 +22,10 @@ const (
 	qCatalogToolInsert    = "scout_skill_catalog_tool_insert"
 	qCatalogExampleList   = "scout_skill_catalog_example_list"
 	qCatalogExampleInsert = "scout_skill_catalog_example_insert"
+	qCatalogRequireList   = "scout_skill_catalog_require_list"
+	qCatalogRequireInsert = "scout_skill_catalog_require_insert"
 	qCatalogDerived       = "scout_skill_catalog_derived"
+	qCatalogDependents    = "scout_skill_catalog_dependents"
 )
 
 var skillCatalogQueries = map[string]string{
@@ -62,11 +65,25 @@ SELECT request
 INSERT INTO skill_catalog_example (skill_id, skill_version, example_no, request)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (skill_id, skill_version, example_no) DO NOTHING`,
+	qCatalogRequireList: `
+SELECT required_skill_id, required_skill_version
+  FROM skill_catalog_requirement
+ WHERE skill_id = ? AND skill_version = ?
+ ORDER BY required_skill_id`,
+	qCatalogRequireInsert: `
+INSERT INTO skill_catalog_requirement (skill_id, skill_version, required_skill_id, required_skill_version)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (skill_id, skill_version, required_skill_id) DO NOTHING`,
 	qCatalogDerived: `
 SELECT partner_id, skill_id, skill_version
   FROM skill_version
  WHERE origin_skill_id = ? AND origin_skill_version = ?
  ORDER BY partner_id, skill_id, skill_version`,
+	qCatalogDependents: `
+SELECT skill_id, skill_version
+  FROM skill_catalog_requirement
+ WHERE required_skill_id = ? AND required_skill_version = ?
+ ORDER BY skill_id, skill_version`,
 }
 
 // TableSkillCatalog is the SkillCatalog over the skill_catalog tables. It has no
@@ -94,12 +111,13 @@ func (catalog *TableSkillCatalog) init(ctx context.Context) error {
 
 // Register publishes one immutable catalog version, creating its profile with it.
 // Tool ids are stored as given; each tenant copy must name tools that tenant registered.
+// A required catalog version must already exist, so requirements cannot cycle.
 func (catalog *TableSkillCatalog) Register(ctx context.Context, skill domain.SkillDefinition) error {
 	if err := catalog.init(ctx); err != nil {
 		return err
 	}
-	if skill.EvalSet != nil || skill.DerivedFrom != nil || len(skill.Requires) > 0 {
-		return fmt.Errorf("%w: a catalog skill names no eval set, origin, or requirement; its tenant copies do", domain.ErrValidation)
+	if skill.EvalSet != nil || skill.DerivedFrom != nil {
+		return fmt.Errorf("%w: a catalog skill names no eval set or origin; its tenant copies do", domain.ErrValidation)
 	}
 	skill, err := normalize(skill)
 	if err != nil {
@@ -148,9 +166,22 @@ func (catalog *TableSkillCatalog) Register(ctx context.Context, skill domain.Ski
 }
 
 func insertCatalogVersion(ctx context.Context, tx port.QueryService, skill domain.SkillDefinition) error {
+	for _, required := range skill.Requires {
+		if _, found, err := readCatalogVersion(ctx, tx, required.SkillID, required.Version); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("%w: catalog skill %s@%s requires unregistered catalog skill %s@%s", domain.ErrNotFound,
+				skill.SkillID, skill.Version, required.SkillID, required.Version)
+		}
+	}
 	if _, err := tx.Query(ctx, qCatalogVersionInsert, skill.SkillID, skill.Version, skill.Summary, skill.Procedure,
 		inputSchemaValue(skill.InputSchema)); err != nil {
 		return fmt.Errorf("insert catalog skill version %s@%s: %w", skill.SkillID, skill.Version, err)
+	}
+	for _, required := range skill.Requires {
+		if _, err := tx.Query(ctx, qCatalogRequireInsert, skill.SkillID, skill.Version, required.SkillID, required.Version); err != nil {
+			return fmt.Errorf("insert requirement %s of catalog skill %s@%s: %w", required.SkillID, skill.SkillID, skill.Version, err)
+		}
 	}
 	for _, toolID := range skill.Tools {
 		if _, err := tx.Query(ctx, qCatalogToolInsert, skill.SkillID, skill.Version, toolID); err != nil {
@@ -185,11 +216,8 @@ func (catalog *TableSkillCatalog) Get(ctx context.Context, skillID, version stri
 
 // Derived lists every tenant version copied from the catalog version.
 func (catalog *TableSkillCatalog) Derived(ctx context.Context, origin domain.SkillReference) ([]domain.TenantSkillReference, error) {
-	if err := catalog.init(ctx); err != nil {
+	if err := catalog.ready(ctx, origin); err != nil {
 		return nil, err
-	}
-	if strings.TrimSpace(origin.SkillID) == "" || strings.TrimSpace(origin.Version) == "" {
-		return nil, fmt.Errorf("%w: skill and version are required", domain.ErrValidation)
 	}
 	result, err := catalog.qs.Query(ctx, qCatalogDerived, origin.SkillID, origin.Version)
 	if err != nil {
@@ -200,6 +228,36 @@ func (catalog *TableSkillCatalog) Derived(ctx context.Context, origin domain.Ski
 		derived[i] = domain.TenantSkillReference{TenantID: common.AsInt64(row[0]), SkillID: common.AsString(row[1]), Version: common.AsString(row[2])}
 	}
 	return derived, nil
+}
+
+// Dependents lists every catalog version requiring the catalog version.
+func (catalog *TableSkillCatalog) Dependents(ctx context.Context, required domain.SkillReference) ([]domain.SkillReference, error) {
+	if err := catalog.ready(ctx, required); err != nil {
+		return nil, err
+	}
+	result, err := catalog.qs.Query(ctx, qCatalogDependents, required.SkillID, required.Version)
+	if err != nil {
+		return nil, fmt.Errorf("list dependents of catalog skill %s@%s: %w", required.SkillID, required.Version, err)
+	}
+	return scanReferences(result.Rows), nil
+}
+
+func (catalog *TableSkillCatalog) ready(ctx context.Context, reference domain.SkillReference) error {
+	if err := catalog.init(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(reference.SkillID) == "" || strings.TrimSpace(reference.Version) == "" {
+		return fmt.Errorf("%w: skill and version are required", domain.ErrValidation)
+	}
+	return nil
+}
+
+func scanReferences(rows [][]any) []domain.SkillReference {
+	references := make([]domain.SkillReference, len(rows))
+	for i, row := range rows {
+		references[i] = domain.SkillReference{SkillID: common.AsString(row[0]), Version: common.AsString(row[1])}
+	}
+	return references
 }
 
 func readCatalogVersion(ctx context.Context, qs port.QueryService, skillID, version string) (domain.SkillDefinition, bool, error) {
@@ -231,6 +289,13 @@ func readCatalogVersion(ctx context.Context, qs port.QueryService, skillID, vers
 	}
 	for _, row := range examples.Rows {
 		skill.Examples = append(skill.Examples, common.AsString(row[0]))
+	}
+	requires, err := qs.Query(ctx, qCatalogRequireList, skillID, version)
+	if err != nil {
+		return skill, false, fmt.Errorf("list requirements of catalog skill %s@%s: %w", skillID, version, err)
+	}
+	if len(requires.Rows) > 0 {
+		skill.Requires = scanReferences(requires.Rows)
 	}
 	return skill, true, nil
 }

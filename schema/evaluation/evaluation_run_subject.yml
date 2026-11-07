@@ -1,5 +1,5 @@
 table: evaluation_run_subject
-comment: What one arm of an agent evaluation run executes, a frozen draft or a release pinned by definition digest, or a recorded human baseline
+comment: What one arm of an agent evaluation run executes, a frozen draft, a release, or its budget-matched control pinned by definition digest, or a recorded human baseline
 columns:
   - name: run_id
     type: BIGINT
@@ -72,9 +72,9 @@ checks:
   - name: evaluation_run_subject_role_ck
     expression: role_code IN ('B', 'C')
   - name: evaluation_run_subject_code_ck
-    expression: subject_code IN ('B', 'D', 'R')
+    expression: subject_code IN ('B', 'D', 'R', 'W')
   - name: evaluation_run_subject_kind_ck
-    expression: (subject_code = 'D' AND agent_version IS NULL AND baseline_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code = 'R' AND agent_version IS NOT NULL AND baseline_id IS NULL AND provider_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL) OR (subject_code = 'B' AND role_code = 'B' AND baseline_id IS NOT NULL AND agent_version IS NULL AND provider_id IS NULL AND definition_digest IS NULL AND definition_json IS NULL AND settings_json IS NULL)
+    expression: (subject_code = 'D' AND agent_version IS NULL AND baseline_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NOT NULL AND settings_json IS NOT NULL) OR (subject_code IN ('R', 'W') AND agent_version IS NOT NULL AND baseline_id IS NULL AND provider_id IS NULL AND definition_digest IS NOT NULL AND definition_json IS NULL AND settings_json IS NULL) OR (subject_code = 'B' AND role_code = 'B' AND baseline_id IS NOT NULL AND agent_version IS NULL AND provider_id IS NULL AND definition_digest IS NULL AND definition_json IS NULL AND settings_json IS NULL)
   - name: evaluation_run_subject_digest_ck
     expression: definition_digest IS NULL OR CHAR_LENGTH(definition_digest) = 64
   - name: evaluation_run_subject_model_ck

@@ -172,7 +172,7 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 		switch {
 		case arm.Subject.Kind == domain.SubjectDraft && (arm.Draft == nil || w.Drafts == nil || w.Payloads == nil):
 			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "draft evaluation is not composed")
-		case arm.Subject.Kind == domain.SubjectRelease && w.Releases == nil:
+		case (arm.Subject.Kind == domain.SubjectRelease || arm.Subject.Kind == domain.SubjectControl) && w.Releases == nil:
 			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "release evaluation is not composed")
 		case arm.Subject.Kind == domain.SubjectBaseline && w.Payloads == nil:
 			return w.Queue.Finish(ctx, lease, domain.EvaluationFailed, "baseline comparison is not composed")
@@ -250,7 +250,7 @@ func (w *AgentEvaluationWorker) Execute(ctx context.Context, lease domain.AgentE
 // evaluateExample executes, scores, and records one example of a single-subject run and
 // returns the cost it settled.
 func (w *AgentEvaluationWorker) evaluateExample(ctx context.Context, claim domain.AgentEvaluationClaim, arm domain.EvaluationArm, limits domain.ExecutionLimits, example domain.GoldenExample) (int64, error) {
-	evalCase, err := w.execute(ctx, claim, arm, limits, example)
+	evalCase, err := w.execute(ctx, claim, arm, limits, example, nil)
 	if err != nil {
 		return 0, &caseFailure{example: example, err: err}
 	}
@@ -312,8 +312,9 @@ func pinnedDraftLimits(arm domain.EvaluationArm) (domain.ExecutionLimits, error)
 }
 
 // execute answers the example as the arm: a draft through the draft tester, a release through
-// the case executor, and a baseline with its recorded output, verified against its digest.
-func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentEvaluationClaim, arm domain.EvaluationArm, draftLimits domain.ExecutionLimits, example domain.GoldenExample) (domain.EvaluationCase, error) {
+// the case executor, a control through it over the reference arm's working set, and a baseline
+// with its recorded output, verified against its digest.
+func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentEvaluationClaim, arm domain.EvaluationArm, draftLimits domain.ExecutionLimits, example domain.GoldenExample, reference *domain.EvaluationCase) (domain.EvaluationCase, error) {
 	if example.TenantID != claim.Run.TenantID {
 		return domain.EvaluationCase{}, fmt.Errorf("%w: example belongs to another tenant", domain.ErrForbidden)
 	}
@@ -326,6 +327,10 @@ func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentE
 		evalCase, err = w.executeDraft(ctx, claim, *arm.Draft, draftLimits, example)
 	case arm.Subject.Kind == domain.SubjectBaseline:
 		evalCase, err = w.recordedOutput(ctx, arm, example)
+	case arm.Subject.Kind == domain.SubjectControl && (reference == nil || reference.WorkingSet == nil):
+		err = fmt.Errorf("%w: a control arm needs the reference arm's working set, which its replay did not compile", domain.ErrCapabilityUnsupported)
+	case arm.Subject.Kind == domain.SubjectControl:
+		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version, Control: reference.WorkingSet}, example, nil)
 	default:
 		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version}, example, nil)
 	}

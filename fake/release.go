@@ -249,9 +249,7 @@ func (store *VersionPinStore) Active(_ context.Context, tenantID int64, agentID 
 		}
 		active = append(active, pin)
 	}
-	sort.SliceStable(active, func(i, j int) bool {
-		return active[i].Scope == domain.PinScopeCompliance && active[j].Scope != domain.PinScopeCompliance
-	})
+	sort.SliceStable(active, func(i, j int) bool { return active[i].Scope.Rank() < active[j].Scope.Rank() })
 	return active, nil
 }
 

@@ -239,7 +239,9 @@ type LoopJournal interface {
 // the step input. Prompt assembly is product behavior; the executor owns the
 // tools, the conversation that follows, and the output constraint.
 type ToolLoopRequestBuilder interface {
-	Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, error)
+	// Build also returns what building spent, such as the embeddings a working set retrieved,
+	// even when it fails; the loop settles it with the model usage.
+	Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error)
 }
 
 // StepExecutorRegistry resolves executors by graph step kind.

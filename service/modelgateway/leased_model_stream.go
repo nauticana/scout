@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 
 	"github.com/nauticana/scout/contract"
@@ -63,23 +62,13 @@ func streamCause(err error) error {
 }
 
 func (stream *leasedModelStream) addUsage(usage domain.Usage) error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ToolCalls < 0 || usage.SearchQueries < 0 ||
-		usage.CostMinorUnits < 0 || usage.CostMinorUnits > 0 && strings.TrimSpace(usage.Currency) == "" {
-		return fmt.Errorf("%w: model stream usage is invalid", domain.ErrValidation)
-	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	if usage.Currency != "" && stream.usage.Currency != "" && usage.Currency != stream.usage.Currency {
-		return fmt.Errorf("%w: model stream usage currencies differ", domain.ErrValidation)
+	sum, err := stream.usage.Add(usage)
+	if err != nil {
+		return fmt.Errorf("model stream usage: %w", err)
 	}
-	stream.usage.InputTokens += usage.InputTokens
-	stream.usage.OutputTokens += usage.OutputTokens
-	stream.usage.ToolCalls += usage.ToolCalls
-	stream.usage.SearchQueries += usage.SearchQueries
-	stream.usage.CostMinorUnits += usage.CostMinorUnits
-	if stream.usage.Currency == "" {
-		stream.usage.Currency = usage.Currency
-	}
+	stream.usage = sum
 	return nil
 }
 

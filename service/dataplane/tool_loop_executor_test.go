@@ -22,11 +22,11 @@ var loopPrincipal = domain.Principal{
 
 type loopRequestBuilder struct{}
 
-func (loopRequestBuilder) Build(_ context.Context, input domain.StepInput, _ domain.ToolLoopConfig) (domain.ModelRequest, error) {
+func (loopRequestBuilder) Build(_ context.Context, input domain.StepInput, _ domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error) {
 	return domain.ModelRequest{
 		TenantContext: domain.TenantContext{TenantID: input.Principal.TenantID}, RequestID: input.RequestID,
 		ConversationID: "conversation", Prompt: []byte("do the work"), MaxOutputTokens: 100,
-	}, nil
+	}, domain.Usage{}, nil
 }
 
 // loopHarness scripts the model and counts real tool side effects.

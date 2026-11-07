@@ -420,7 +420,9 @@ stateDiagram-v2
   the person as checker or maker. `Inbox.OnDecided` is keel's `OnDecided` and ignores other object types.
 - **Maker-checker is keel's.** Set `ApprovalRequired` at preparation so direct decisions fail closed
   while the keel request is opened. `AttachApproval` links it, and `DecideApprovalTx`, called from
-  `approval.Service.OnDecided`, decides both records in keel's transaction.
+  `approval.Service.OnDecided`, decides both records in keel's transaction. Whether the maker may
+  decide their own confirmation is keel's separation-of-duties policy for the object type
+  `mcp_confirmation`; without a policy row, separation is required.
 - **Exactly once, or unknown.** A run holds a store-clock lease under a fence that only it may
   complete. A runner error wrapping `domain.ErrEffectUnknown`, a success whose result cannot be
   stored, a cancellation, or a lost claim is `U` (unknown), never success and never retried; a person records the verified outcome with `Reconcile`.

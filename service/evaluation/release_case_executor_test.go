@@ -21,8 +21,9 @@ func (function objectReaderFunc) Read(ctx context.Context, ref domain.ObjectRef)
 
 type requestBuilderFunc func(context.Context, domain.StepInput) (domain.ModelRequest, error)
 
-func (function requestBuilderFunc) Build(ctx context.Context, input domain.StepInput, _ domain.ToolLoopConfig) (domain.ModelRequest, error) {
-	return function(ctx, input)
+func (function requestBuilderFunc) Build(ctx context.Context, input domain.StepInput, _ domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error) {
+	request, err := function(ctx, input)
+	return request, domain.Usage{}, err
 }
 
 type guardrailFunc struct {

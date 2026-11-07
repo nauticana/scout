@@ -43,12 +43,13 @@ func (f labelsFake) Entitlements(context.Context, domain.Principal) ([]byte, str
 type retrieverFake struct {
 	queries []domain.KnowledgeQuery
 	matches []domain.KnowledgeMatch
+	usage   domain.Usage
 	err     error
 }
 
 func (f *retrieverFake) Retrieve(_ context.Context, query domain.KnowledgeQuery) (domain.KnowledgeResult, error) {
 	f.queries = append(f.queries, query)
-	return domain.KnowledgeResult{Matches: f.matches}, f.err
+	return domain.KnowledgeResult{Matches: f.matches, Usage: f.usage}, f.err
 }
 
 type pinnedFake struct {
@@ -147,5 +148,16 @@ func TestPinnedDocumentsAreRequiredCandidates(t *testing.T) {
 func TestCandidateIDFitsItsColumn(t *testing.T) {
 	if id := candidateID(strings.Repeat("b", 80), strings.Repeat("v", 80), strings.Repeat("d", 200)); len(id) > domain.MaxWorkingSetCandidateIDBytes {
 		t.Fatalf("id is %d bytes", len(id))
+	}
+}
+
+// Every binding's retrieval usage is offered with the candidates, so the turn settles the query embeddings.
+func TestReleaseCandidatesOfferTheirRetrievalUsage(t *testing.T) {
+	embed := domain.ModelReference{ProviderID: "openai", ModelID: "embed"}
+	retriever := &retrieverFake{usage: domain.Usage{InputTokens: 6}.AttributedTo(embed)}
+	source := releaseSource(retriever, []byte(`["hr"]`), []any{"kb", "4"}, []any{"faq", "1"})
+	offered, err := source.Candidates(context.Background(), candidateRequest())
+	if err != nil || offered.Usage.InputTokens != 12 || len(offered.Usage.Models) != 1 || offered.Usage.Models[0].Model != embed || offered.Usage.Models[0].InputTokens != 12 {
+		t.Fatalf("offered usage = %+v, %v", offered.Usage, err)
 	}
 }

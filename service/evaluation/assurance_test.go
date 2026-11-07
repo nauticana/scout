@@ -322,3 +322,15 @@ func TestGoldenCaseStoreRefusesMalformedAssuranceLabels(t *testing.T) {
 		}
 	}
 }
+
+// A selected working set candidate reached the model by its id and its key.
+func TestAssurancePreservationCountsTheWorkingSet(t *testing.T) {
+	evalCase := domain.EvaluationCase{
+		Example: domain.GoldenExample{Assurance: domain.AssuranceLabels{RequiredEvidence: []string{"crm:limit", "credit_limit", "crm:old", "crm:missing"}}},
+		WorkingSet: &domain.WorkingSet{Assurance: domain.AssuranceBounded, Excluded: []string{"crm:old"},
+			Selected: []domain.WorkingSetCandidate{{ID: "crm:limit", Key: "credit_limit"}}},
+	}
+	if got := assuranceScores(t, evalCase)[domain.MetricRequiredEvidencePreservation]; got.Value != 0.5 {
+		t.Fatalf("required evidence preservation = %+v", got)
+	}
+}

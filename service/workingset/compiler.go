@@ -28,6 +28,10 @@ const (
 type Compiler struct {
 	Source contract.WorkingSetCandidateSource
 	Limits domain.WorkingSetLimits
+	// Unranked fills the budget in offer order and keeps nothing for requirement or authority: the
+	// plain truncation an evaluation's control arm measures against. The set is unverified, and a
+	// zero token limit is a zero budget, not the default.
+	Unranked bool
 }
 
 var _ contract.WorkingSetCompiler = (*Compiler)(nil)
@@ -38,7 +42,9 @@ func (compiler *Compiler) limits() (domain.WorkingSetLimits, error) {
 		return limits, fmt.Errorf("%w: working set limits must lie within 0..%d candidates and 0..%d tokens", domain.ErrValidation, MaxCandidates, MaxTokens)
 	}
 	limits.MaxCandidates = cmp.Or(limits.MaxCandidates, DefaultCandidates)
-	limits.MaxTokens = cmp.Or(limits.MaxTokens, DefaultTokens)
+	if !compiler.Unranked {
+		limits.MaxTokens = cmp.Or(limits.MaxTokens, DefaultTokens)
+	}
 	return limits, nil
 }
 
@@ -65,7 +71,28 @@ func (compiler *Compiler) Compile(ctx context.Context, request domain.WorkingSet
 	if err != nil {
 		return domain.WorkingSet{}, err
 	}
-	return selectSet(offered.Candidates, required, limits.MaxTokens)
+	var set domain.WorkingSet
+	if compiler.Unranked {
+		set = truncate(offered.Candidates, limits.MaxTokens)
+	} else if set, err = selectSet(offered.Candidates, required, limits.MaxTokens); err != nil {
+		return domain.WorkingSet{}, err
+	}
+	set.Offered, set.Usage = offered.Candidates, offered.Usage
+	return set, nil
+}
+
+// truncate keeps eligible candidates in offer order while they fit the budget.
+func truncate(candidates []domain.WorkingSetCandidate, budget int64) domain.WorkingSet {
+	set := domain.WorkingSet{Assurance: domain.AssuranceUnverified}
+	for _, candidate := range candidates {
+		eligible := candidate.Standing == domain.StandingCurrent || candidate.Standing == domain.StandingConflicted
+		if eligible && candidate.TokenCost <= budget-set.TokenCost {
+			set.Selected, set.TokenCost = append(set.Selected, candidate), set.TokenCost+candidate.TokenCost
+			continue
+		}
+		set.Excluded = append(set.Excluded, candidate.ID)
+	}
+	return set
 }
 
 // requiredKeys validates the offer whole and returns the keys the turn needs: those declared

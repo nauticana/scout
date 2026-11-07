@@ -67,8 +67,9 @@ func (ingress *TurnIngress) OpenTurn(ctx context.Context, request domain.TurnReq
 	if request.Release != "" && strings.TrimSpace(request.ReleaseReason) == "" {
 		return nil, fmt.Errorf("%w: a release pin needs a reason", domain.ErrValidation)
 	}
-	if len(request.AliasID) > 80 || len(request.AgentID) > 80 || len(request.Release) > 80 || len(request.ReleaseReason) > 200 || len(request.WorkRef) > 200 {
-		return nil, fmt.Errorf("%w: agent type, agent, and release are at most 80 bytes, a release reason and work reference at most 200", domain.ErrValidation)
+	if len(request.AliasID) > 80 || len(request.AgentID) > 80 || len(request.Release) > 80 || len(request.ReleaseReason) > 200 ||
+		len(request.WorkRef) > 200 || len(request.AssignmentRef) > 200 {
+		return nil, fmt.Errorf("%w: agent type, agent, and release are at most 80 bytes, a release reason, work reference, and assignment reference at most 200", domain.ErrValidation)
 	}
 	if err := ingress.validate(); err != nil {
 		return nil, err

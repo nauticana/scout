@@ -1,12 +1,9 @@
 package dataplane
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
-	"math"
 	"slices"
-	"strings"
 
 	"github.com/nauticana/keel/common"
 
@@ -20,31 +17,6 @@ type usageLine struct {
 	usage domain.Usage
 }
 
-// mergeModelSpend adds one breakdown to another without aliasing either, ordered by model.
-func mergeModelSpend(total, add []domain.ModelSpend) ([]domain.ModelSpend, error) {
-	if len(add) == 0 {
-		return total, nil
-	}
-	merged := slices.Clone(total)
-	for _, spend := range add {
-		if err := validModelSpend(spend); err != nil {
-			return nil, err
-		}
-		index := slices.IndexFunc(merged, func(existing domain.ModelSpend) bool { return existing.Model == spend.Model })
-		if index < 0 {
-			merged = append(merged, spend)
-			continue
-		}
-		sum, err := addModelSpend(merged[index], spend)
-		if err != nil {
-			return nil, err
-		}
-		merged[index] = sum
-	}
-	slices.SortFunc(merged, compareModelSpend)
-	return merged, nil
-}
-
 // usageLines splits settled usage into one line per model plus the part no model
 // performed; usage without a breakdown is one unattributed line. The split is
 // deterministic, so a replayed settlement writes the same rows.
@@ -54,10 +26,10 @@ func usageLines(usage domain.Usage) ([]usageLine, error) {
 		SearchQueries: usage.SearchQueries, CostMinorUnits: usage.CostMinorUnits, Currency: usage.Currency,
 	}
 	spends := slices.Clone(usage.Models)
-	slices.SortFunc(spends, compareModelSpend)
+	slices.SortFunc(spends, domain.CompareModelSpend)
 	lines := make([]usageLine, 0, len(spends)+1)
 	for i, spend := range spends {
-		if err := validModelSpend(spend); err != nil {
+		if err := spend.Validate(); err != nil {
 			return nil, err
 		}
 		if i > 0 && spends[i-1].Model == spend.Model {
@@ -80,36 +52,6 @@ func usageLines(usage domain.Usage) ([]usageLine, error) {
 		lines = append(lines, usageLine{usage: remainder})
 	}
 	return lines, nil
-}
-
-func validModelSpend(spend domain.ModelSpend) error {
-	if strings.TrimSpace(spend.Model.ProviderID) == "" || strings.TrimSpace(spend.Model.ModelID) == "" {
-		return fmt.Errorf("%w: model usage names a provider and a model", domain.ErrValidation)
-	}
-	if spend.InputTokens < 0 || spend.OutputTokens < 0 || spend.CacheReadTokens < 0 || spend.CacheWriteTokens < 0 ||
-		spend.SearchQueries < 0 || spend.CostMinorUnits < 0 {
-		return fmt.Errorf("%w: model usage cannot be negative", domain.ErrValidation)
-	}
-	return nil
-}
-
-func addModelSpend(total, add domain.ModelSpend) (domain.ModelSpend, error) {
-	if total.InputTokens > math.MaxInt64-add.InputTokens || total.OutputTokens > math.MaxInt64-add.OutputTokens ||
-		total.CacheReadTokens > math.MaxInt64-add.CacheReadTokens || total.CacheWriteTokens > math.MaxInt64-add.CacheWriteTokens ||
-		total.SearchQueries > math.MaxInt64-add.SearchQueries || total.CostMinorUnits > math.MaxInt64-add.CostMinorUnits {
-		return domain.ModelSpend{}, fmt.Errorf("%w: model usage overflow", domain.ErrValidation)
-	}
-	total.InputTokens += add.InputTokens
-	total.OutputTokens += add.OutputTokens
-	total.CacheReadTokens += add.CacheReadTokens
-	total.CacheWriteTokens += add.CacheWriteTokens
-	total.SearchQueries += add.SearchQueries
-	total.CostMinorUnits += add.CostMinorUnits
-	return total, nil
-}
-
-func compareModelSpend(a, b domain.ModelSpend) int {
-	return cmp.Or(cmp.Compare(a.Model.ProviderID, b.Model.ProviderID), cmp.Compare(a.Model.ModelID, b.Model.ModelID))
 }
 
 // stagedModelUsage validates usage's breakdown and encodes it for the staged_model_usage

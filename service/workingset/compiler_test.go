@@ -239,3 +239,41 @@ func TestContextFencesItems(t *testing.T) {
 		t.Fatal("an empty set renders nothing")
 	}
 }
+
+// What the sources spent offering their candidates reaches the set, summed across sources.
+func TestOfferedUsageReachesTheSet(t *testing.T) {
+	spent := func(tokens int64) sourceFunc {
+		return offering(domain.WorkingSetCandidates{Usage: domain.Usage{InputTokens: tokens}.AttributedTo(domain.ModelReference{ProviderID: "p", ModelID: "embed"})})
+	}
+	set, err := (&Compiler{Source: Sources{spent(3), spent(4), offering(domain.WorkingSetCandidates{Candidates: []domain.WorkingSetCandidate{candidate("a", domain.StandingCurrent, 1)}})}}).Compile(context.Background(), testRequest())
+	if err != nil || set.Usage.InputTokens != 7 || len(set.Usage.Models) != 1 || set.Usage.Models[0].InputTokens != 7 || len(set.Selected) != 1 {
+		t.Fatalf("set = %+v, %v", set, err)
+	}
+	negative := Sources{offering(domain.WorkingSetCandidates{Usage: domain.Usage{InputTokens: -1}})}
+	if _, err := negative.Candidates(context.Background(), testRequest()); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("negative usage = %v", err)
+	}
+}
+
+// Unranked selection is plain truncation: offer order, no requirement kept, and the set unverified.
+func TestUnrankedSelectionTruncatesInOfferOrder(t *testing.T) {
+	filler, required := candidate("filler", domain.StandingCurrent, 15), candidate("limit", domain.StandingCurrent, 10)
+	required.Required, required.AuthorityRank = true, 0
+	filler.AuthorityRank = 5
+	stale := candidate("old", domain.StandingStale, 1)
+	offered := domain.WorkingSetCandidates{Candidates: []domain.WorkingSetCandidate{filler, stale, required}}
+	ranked, err := compile(t, domain.WorkingSetLimits{MaxTokens: 20}, offered)
+	if err != nil || !slices.Equal(selectedIDs(ranked), []string{"limit"}) || len(ranked.Offered) != 3 || ranked.Assurance != domain.AssuranceBounded {
+		t.Fatalf("ranked = %+v, %v", ranked, err)
+	}
+	control := &Compiler{Source: offering(offered), Limits: domain.WorkingSetLimits{MaxTokens: ranked.TokenCost + 5}, Unranked: true}
+	set, err := control.Compile(context.Background(), testRequest())
+	if err != nil || !slices.Equal(selectedIDs(set), []string{"filler"}) || !slices.Equal(set.Excluded, []string{"old", "limit"}) ||
+		set.Assurance != domain.AssuranceUnverified || set.TokenCost != 15 || len(set.Offered) != 3 {
+		t.Fatalf("control = %+v, %v", set, err)
+	}
+	control.Limits.MaxTokens = 0
+	if set, err := control.Compile(context.Background(), testRequest()); err != nil || len(set.Selected) != 0 || len(set.Excluded) != 3 {
+		t.Fatalf("a zero budget selects nothing: %+v, %v", set, err)
+	}
+}

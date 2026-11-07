@@ -1,0 +1,25 @@
+table: config_scope_unit
+comment: The configuration scope a Charter organization unit is attached to; a child unit's scope descends from its parent's
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: unit_namespace
+    type: VARCHAR(200)
+    comment: The Charter namespace owning the unit
+  - name: unit_id
+    type: VARCHAR(200)
+  - name: scope_id
+    type: VARCHAR(80)
+  - name: created_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, unit_namespace, unit_id]
+foreign_keys:
+  - name: unit_config_scopes
+    columns: [partner_id, scope_id]
+    references:
+      table: config_scope
+      columns: [partner_id, scope_id]
+indexes:
+  - name: config_scope_unit_scope_ix
+    columns: [partner_id, scope_id]

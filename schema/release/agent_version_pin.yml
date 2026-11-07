@@ -35,6 +35,10 @@ columns:
   - name: expires_at
     type: TIMESTAMP
     nullable: true
+  - name: assignment_ref
+    type: VARCHAR(200)
+    nullable: true
+    comment: The opaque Charter assignment an A pin serves; a conversation names it to take the pin
   - name: created_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
@@ -53,6 +57,8 @@ indexes:
     columns: [partner_id, agent_id, scope_code, effective_at]
 checks:
   - name: agent_version_pin_scope_ck
-    expression: scope_code IN ('C', 'T')
+    expression: scope_code IN ('C', 'T', 'A')
+  - name: agent_version_pin_assignment_ck
+    expression: (scope_code = 'A') = (assignment_ref IS NOT NULL)
   - name: agent_version_pin_dates_ck
     expression: expires_at IS NULL OR expires_at > effective_at

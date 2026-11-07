@@ -246,4 +246,9 @@ func TestTurnIngressRefusesOversizedReferences(t *testing.T) {
 	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("error = %v, want validation", err)
 	}
+	request = ingressRequest()
+	request.AssignmentRef = strings.Repeat("a", 201)
+	if _, err := ingress.OpenTurn(context.Background(), request); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("error = %v, want validation", err)
+	}
 }

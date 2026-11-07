@@ -28,7 +28,8 @@ import (
 type Runtime struct {
 	Documents corpus.Source
 	Transport binding.Executor
-	// Observer reads effects back; without one a contract with required postconditions is denied before the transport.
+	// Observer reads facts and effects back; without one a contract with predicate preconditions, required postconditions,
+	// or required structured evidence is denied before the transport.
 	Observer binding.Observer
 	// Store keeps evidence; nil is in-memory. Publisher additionally publishes each redacted document to Topic.
 	Store     evidence.Store

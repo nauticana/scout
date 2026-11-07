@@ -315,6 +315,7 @@ func (store *TableTurnRecordStore) pin(ctx context.Context, tx port.TxQueryServi
 		if store.Versions != nil {
 			chosen, err := store.Versions.ExplainVersion(ctx, domain.VersionRequest{
 				TenantID: tenantID, AgentID: request.AgentID, ConversationID: request.ConversationID, Subject: request.OnBehalfOf,
+				AssignmentRef: request.AssignmentRef,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("open turn: choose release: %w", err)

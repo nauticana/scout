@@ -85,7 +85,7 @@ func TestReleaseConstantCodesAgreeWithSeedAndSchema(t *testing.T) {
 		},
 		{
 			constantID: "version_pin_scope",
-			codes:      codes(PinScopeCompliance, PinScopeTenant),
+			codes:      codes(PinScopeCompliance, PinScopeTenant, PinScopeAssignment),
 			valid:      func(code string) bool { return PinScope(code).Valid() },
 			seed:       "release/release.yml", schema: "release/agent_version_pin.yml",
 			column: "scope_code", columnType: "CHAR(1)", check: "agent_version_pin_scope_ck",

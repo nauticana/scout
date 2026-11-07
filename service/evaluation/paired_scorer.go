@@ -62,7 +62,7 @@ func (scorer *PairedScorer) Score(manifestID string, examples []domain.GoldenExa
 	type key struct{ slice, metric string }
 	arms := make(map[string]map[domain.EvaluationRole]map[string]float64)
 	summary := domain.EvaluationSummary{ManifestID: manifestID}
-	var totalUsage domain.Usage
+	var err error
 	for _, result := range results {
 		if result.ManifestID != manifestID {
 			return domain.EvaluationSummary{}, fmt.Errorf("%w: result for %q does not belong to manifest %q", domain.ErrValidation, result.ExampleID, manifestID)
@@ -81,13 +81,14 @@ func (scorer *PairedScorer) Score(manifestID string, examples []domain.GoldenExa
 				}
 			}
 		}
-		totalUsage = addUsage(totalUsage, result.Usage)
+		if summary.Usage, err = summary.Usage.Add(result.Usage); err != nil {
+			return domain.EvaluationSummary{}, err
+		}
 		if arms[result.ExampleID] == nil {
 			arms[result.ExampleID] = make(map[domain.EvaluationRole]map[string]float64)
 		}
 		arms[result.ExampleID][result.Role] = metricMeans(result)
 	}
-	summary.Usage = totalUsage
 
 	pairs := make(map[key]*pairedValues)
 	exampleIDs := make([]string, 0, len(arms))
@@ -297,18 +298,6 @@ func metricMeans(result domain.EvaluationResult) map[string]float64 {
 	means[domain.MetricTokens] = float64(result.Usage.InputTokens + result.Usage.OutputTokens)
 	means[domain.MetricCostMinorUnits] = float64(result.Usage.CostMinorUnits)
 	return means
-}
-
-func addUsage(total, usage domain.Usage) domain.Usage {
-	total.InputTokens += usage.InputTokens
-	total.OutputTokens += usage.OutputTokens
-	total.ToolCalls += usage.ToolCalls
-	total.SearchQueries += usage.SearchQueries
-	total.CostMinorUnits += usage.CostMinorUnits
-	if total.Currency == "" {
-		total.Currency = usage.Currency
-	}
-	return total
 }
 
 func mean(values []float64) float64 {

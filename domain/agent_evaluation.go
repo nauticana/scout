@@ -122,6 +122,11 @@ const (
 	SubjectRelease EvaluationSubjectKind = "R"
 	// SubjectBaseline is a recorded human baseline: stored reference outputs, never executed.
 	SubjectBaseline EvaluationSubjectKind = "B"
+	// SubjectControl is the budget-matched, authority-unaware control of a release arm: the same
+	// release replayed over the reference arm's working set candidates truncated in offer order
+	// to the tokens the reference selected, so the preservation metrics measure what authority-aware
+	// selection kept that plain truncation dropped.
+	SubjectControl EvaluationSubjectKind = "W"
 )
 
 // AgentEvaluationSubject pins one arm of an agent evaluation: a frozen draft

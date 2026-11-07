@@ -75,6 +75,12 @@ func reachedContext(evalCase domain.EvaluationCase) map[string]struct{} {
 			reached[id] = struct{}{}
 		}
 	}
+	if evalCase.WorkingSet != nil {
+		for _, candidate := range evalCase.WorkingSet.Selected {
+			add(candidate.ID)
+			add(candidate.Key)
+		}
+	}
 	for _, match := range evalCase.Retrieval {
 		add(match.DocumentID)
 		add(match.ChunkID)

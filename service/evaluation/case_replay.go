@@ -149,12 +149,17 @@ func (replay *caseReplay) turn(ctx context.Context, turnNo int64, input []byte, 
 		}
 		var spent interface{ SpentUsage() domain.Usage }
 		if errors.As(err, &spent) {
-			replay.usage = addUsage(replay.usage, spent.SpentUsage())
+			err = errors.Join(err, replay.spend(spent.SpentUsage()))
 		}
 		if err != nil {
 			return false, replay.end(ctx, durationOutcome(walkCtx, err))
 		}
-		replay.usage, turnUsage = addUsage(replay.usage, result.Usage), addUsage(turnUsage, result.Usage)
+		if err = replay.spend(result.Usage); err != nil {
+			return false, replay.end(ctx, err)
+		}
+		if turnUsage, err = turnUsage.Add(result.Usage); err != nil {
+			return false, replay.end(ctx, err)
+		}
 		state, blocked, err := replay.guard(walkCtx, requestID, result.State)
 		if err != nil && errors.Is(context.Cause(walkCtx), errReplayDuration) {
 			return false, replay.end(ctx, durationOutcome(walkCtx, err))
@@ -215,6 +220,15 @@ func durationOutcome(walkCtx context.Context, err error) error {
 
 // end records a failure of the agent under test as the trajectory's final
 // state and returns every other failure, including the caller's own cancellation.
+func (replay *caseReplay) spend(usage domain.Usage) error {
+	sum, err := replay.usage.Add(usage)
+	if err != nil {
+		return err
+	}
+	replay.usage = sum
+	return nil
+}
+
 func (replay *caseReplay) end(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return err

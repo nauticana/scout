@@ -56,9 +56,10 @@ into its dataset revision.
 
 `AssuranceEvaluator` is a deterministic `contract.HeuristicEvaluator` for the labels above,
 defined after the Enterprise Authority Framework's preservation and authorization measures
-(sections 2.6 and 2.7). An id reached the model when a retrieval match of the case names it as
-its document, chunk, or source URI, or a successful observation's tool returned it as an
-evidence link (the trajectory's `evidence`). An action executed when an observation of a tool
+(sections 2.6 and 2.7). An id reached the model when a selected candidate of the case's working
+set carries it as its id or key, a retrieval match of the case names it as its document, chunk,
+or source URI, or a successful observation's tool returned it as an evidence link (the
+trajectory's `evidence`). An action executed when an observation of a tool
 the subject does not bind read-only succeeded (the trajectory's `mutating`); a replay reads
 read-only from the subject's tool registry, and a tool it does not list counts as mutating.
 
@@ -73,9 +74,18 @@ read-only from the subject's tool registry, and a tool it does not list counts a
 A case outside a metric's denominator does not report it, so averages and paired deltas count
 only labeled cases. The evaluation gate still scores a case missing its gated metric as 0, so a
 gate on one of these metrics belongs on a set whose every case carries the label. Retrieval
-matches are recorded only where a release replay composes a case retriever; whole-mode pinned
-knowledge and an unscripted draft test record none, so evidence that reached the model only
-through them reads as missing.
+matches are recorded only where a release replay composes a case retriever, and a working set
+only where it composes `ReleaseCaseExecutor.WorkingSets`; whole-mode pinned knowledge and an
+unscripted draft test record none, so evidence that reached the model only through them reads
+as missing.
+
+The preservation claim itself — that authority-aware selection kept what plain truncation would
+have dropped — is measured by comparing a release with its control (EAF section 5.6): arm `b`
+`{control: true}` of a comparison whose arm `a` is a release. The control replays the same release
+over the candidates arm `a`'s working set offered, selected in offer order within the tokens arm
+`a` selected (`workingset.Compiler.Unranked`), so both arms see the same candidates and the same
+budget and differ only in what the selection kept. Each arm's preservation scores sit side by side
+on the comparison's cases.
 
 Studio actors always work in the dev scope: gate cases are never returned,
 written, or run for them, only counted (`hidden_cases`, `hidden_results`). The
@@ -103,6 +113,11 @@ under the executor's tool-loop limits, a fresh `ToolSandbox` per example as the 
 release's output guardrails when composed. The example payload is the turn input,
 verified against its digest. An agent that exhausts a limit, loops, or answers
 invalidly ends its trajectory in a failed state instead of failing the run.
+
+`WorkingSets`, a `ReplayWorkingSets` (`Source`, `Limits`, and `Requests`, which builds the loop's
+opening request over the compiler and recorder each replay is given), makes a replay compile a
+working set per turn as a live turn does, recorded in memory (`dataplane.MemoryWorkingSetRecorder`)
+and kept as the case's `WorkingSet` from its first turn; a control answers a single turn.
 
 `Sandboxes` is an `evaluation.SandboxFactory` that builds each replay's sandbox from the
 example's script. `ScriptSandbox`, the production one, is a strict `RecordingSandbox`: it
@@ -294,8 +309,9 @@ shutdown, fails the run before anything else runs.
 
 Studio's `compare` feature (`handler.StudioCompareHandler` over `evaluation.StudioEvaluation`)
 runs two subjects of an agent side by side on one frozen version of its golden set, in the dev
-scope only. A person holding `TEST` names the set version and two arms: arm `b` is the draft or
-one release, and arm `a` the draft, one release, or a recorded human baseline. A draft arm may
+scope only. A person holding `TEST` names the set version and two arms: arm `b` is the draft,
+one release, or the control of arm `a`'s release, and arm `a` the draft, one release, or a
+recorded human baseline. A draft arm may
 name a `model`, which replaces the draft's text model before it is frozen exactly as a publish
 would (`DraftFreezer.FreezeDraft`) and is validated as a draft's own model is. Two arms of the
 same definition are refused. The comparison is an `evaluation_run` with two
@@ -308,8 +324,9 @@ baseline with its recorded output, read and checked against its digest. It write
 answer and trajectory to `Outputs` under its content digest (`evaluation_result.output_uri` and
 `output_digest`, `trajectory_uri` and `trajectory_digest`) and records one `evaluation_comparison` row
 per example. An arm that ended in a failed state loses without a judge call, and two such arms
-tie; otherwise `PairJudge`, the strict `GatewayJudge`, decides as the run's requester. Comparison
-runs apply neither the heuristic evaluators nor the rubric judge. Both arms' spend and the judge's
+tie; otherwise `PairJudge`, the strict `GatewayJudge`, decides as the run's requester. Each
+executed arm is scored by the heuristic evaluators, so its assurance metrics sit beside the
+judge's scores; comparison runs apply no rubric judge. Both arms' spend and the judge's
 count in the run totals and against `MaxRunCostMinorUnits`, and are recorded even when an arm, the
 answer or trajectory storage, or the judge then fails; that record carries a reason and fails the run, so a
 reclaimed attempt never pays for the example again. A judge call cut off by shutdown records

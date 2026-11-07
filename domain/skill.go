@@ -15,8 +15,9 @@ type SkillDefinition struct {
 	Procedure string
 	// Tools are the tool ids the procedure uses; a release binding the skill must bind each.
 	Tools []string
-	// Requires are the tenant skill versions the procedure relies on; a release
-	// binding the skill must bind each at that version.
+	// Requires are the skill versions the procedure relies on, tenant versions on a tenant
+	// skill and catalog versions on a catalog skill; a release binding a tenant skill must
+	// bind each at that version, and a copy of a catalog skill requires a copy of each.
 	Requires []SkillReference
 	// InputSchema, when set, is the JSON Schema of what the procedure needs before it starts.
 	InputSchema []byte

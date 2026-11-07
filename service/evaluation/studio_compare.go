@@ -39,8 +39,11 @@ func (s *StudioEvaluation) Compare(ctx context.Context, actor domain.StudioActor
 	if request.SetVersion <= 0 {
 		return domain.AgentEvaluationRun{}, fmt.Errorf("%w: set_version must be positive", domain.ErrValidation)
 	}
-	if err := errors.Join(validCompareSubject("a", request.A, true), validCompareSubject("b", request.B, false)); err != nil {
+	if err := errors.Join(validCompareSubject("a", request.A, true, ""), validCompareSubject("b", request.B, false, request.A.Release)); err != nil {
 		return domain.AgentEvaluationRun{}, err
+	}
+	if request.B.Control {
+		request.B.Release = request.A.Release
 	}
 	b, err := s.compareArm(ctx, actor, request.AgentID, request.B)
 	if err != nil {
@@ -65,22 +68,25 @@ func (s *StudioEvaluation) Compare(ctx context.Context, actor domain.StudioActor
 	return run, nil
 }
 
-// validCompareSubject refuses an arm that is not exactly one of the draft, one release, or,
-// for the reference arm only, one baseline, and a model named for anything but a draft.
-func validCompareSubject(arm string, subject domain.CompareSubject, reference bool) error {
+// validCompareSubject refuses an arm that is not exactly one of the draft, one release, for the
+// reference arm only one baseline, or for the challenger only the control of a release reference,
+// and a model named for anything but a draft.
+func validCompareSubject(arm string, subject domain.CompareSubject, reference bool, referenceRelease string) error {
 	kinds := 0
-	for _, named := range []bool{subject.Draft, strings.TrimSpace(subject.Release) != "", subject.BaselineID != 0} {
+	for _, named := range []bool{subject.Draft, strings.TrimSpace(subject.Release) != "", subject.BaselineID != 0, subject.Control} {
 		if named {
 			kinds++
 		}
 	}
 	switch {
 	case kinds != 1:
-		return fmt.Errorf("%w: arm %s is the draft, one release, or one baseline", domain.ErrValidation, arm)
+		return fmt.Errorf("%w: arm %s is the draft, one release, one baseline, or the control", domain.ErrValidation, arm)
 	case strings.TrimSpace(subject.TextModel) != "" && !subject.Draft:
 		return fmt.Errorf("%w: arm %s names a model, which only a draft is frozen on", domain.ErrValidation, arm)
 	case subject.BaselineID != 0 && (!reference || subject.BaselineID < 0):
 		return fmt.Errorf("%w: only arm a may be a recorded baseline, named by a positive id", domain.ErrValidation)
+	case subject.Control && (reference || strings.TrimSpace(referenceRelease) == ""):
+		return fmt.Errorf("%w: only arm b may be the control, of a release named by arm a", domain.ErrValidation)
 	}
 	return nil
 }
@@ -106,6 +112,8 @@ func (s *StudioEvaluation) compareArm(ctx context.Context, actor domain.StudioAc
 		return arm, nil
 	case subject.BaselineID != 0:
 		return domain.EvaluationArm{Subject: domain.AgentEvaluationSubject{Kind: domain.SubjectBaseline, AgentID: agentID, BaselineID: subject.BaselineID}}, nil
+	case subject.Control:
+		return domain.EvaluationArm{Subject: domain.AgentEvaluationSubject{Kind: domain.SubjectControl, AgentID: agentID, Version: strings.TrimSpace(subject.Release)}}, nil
 	default:
 		return domain.EvaluationArm{Subject: domain.AgentEvaluationSubject{Kind: domain.SubjectRelease, AgentID: agentID, Version: strings.TrimSpace(subject.Release)}}, nil
 	}
@@ -120,6 +128,8 @@ func describeSubject(subject domain.AgentEvaluationSubject) string {
 		return "draft " + subject.DefinitionDigest
 	case domain.SubjectBaseline:
 		return fmt.Sprintf("baseline %d", subject.BaselineID)
+	case domain.SubjectControl:
+		return "control of release " + subject.Version
 	default:
 		return "release " + subject.Version
 	}

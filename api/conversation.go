@@ -33,6 +33,7 @@ type ConversationTurnRequest struct {
 	Release        string          `json:"release,omitempty"`
 	ReleaseReason  string          `json:"release_reason,omitempty"`
 	WorkRef        string          `json:"work_ref,omitempty"`
+	AssignmentRef  string          `json:"assignment_ref,omitempty"`
 	Input          json.RawMessage `json:"input"`
 }
 

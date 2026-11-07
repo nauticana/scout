@@ -713,7 +713,8 @@ func spentUsage(err error) domain.Usage {
 }
 
 func hasUsage(usage domain.Usage) bool {
-	return usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ToolCalls > 0 || usage.CostMinorUnits > 0
+	return usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.CacheReadTokens > 0 || usage.CacheWriteTokens > 0 ||
+		usage.ToolCalls > 0 || usage.SearchQueries > 0 || usage.CostMinorUnits > 0
 }
 
 func (runtime *TurnRuntime) publish(ctx context.Context, execution *turnExecution, payload []byte, final bool, errorCode string, events ...domain.TurnEvent) error {

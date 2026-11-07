@@ -53,32 +53,40 @@ type ReleaseLoopRequestBuilder struct {
 	Task func(ctx context.Context, input domain.StepInput) (task domain.AgentTask, languageCode string, err error)
 }
 
-func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, error) {
+func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig) (domain.ModelRequest, domain.Usage, error) {
 	if builder.Definitions == nil || builder.Renderer == nil || builder.MaxOutputTokens <= 0 {
-		return domain.ModelRequest{}, fmt.Errorf("%w: loop request builder needs a definition reader, a renderer, and positive max output tokens", domain.ErrValidation)
+		return domain.ModelRequest{}, domain.Usage{}, fmt.Errorf("%w: loop request builder needs a definition reader, a renderer, and positive max output tokens", domain.ErrValidation)
 	}
 	principal := input.Principal
 	definition, err := builder.Definitions.Get(ctx, principal.TenantID, principal.ID, principal.Release)
 	if err != nil {
-		return domain.ModelRequest{}, err
+		return domain.ModelRequest{}, domain.Usage{}, err
 	}
 	task, languageCode := domain.AgentTask{Task: string(input.Input)}, builder.LanguageCode
 	if builder.Task != nil {
 		var chosen string
 		if task, chosen, err = builder.Task(ctx, input); err != nil {
-			return domain.ModelRequest{}, err
+			return domain.ModelRequest{}, domain.Usage{}, err
 		}
 		if chosen != "" {
 			languageCode = chosen
 		}
 	}
 	if strings.TrimSpace(task.Task) == "" {
-		return domain.ModelRequest{}, fmt.Errorf("%w: the turn has no input to act on", domain.ErrValidation)
+		return domain.ModelRequest{}, domain.Usage{}, fmt.Errorf("%w: the turn has no input to act on", domain.ErrValidation)
 	}
-	assurance, err := builder.withWorkingSet(ctx, input, &task)
+	set, err := builder.withWorkingSet(ctx, input, &task)
 	if err != nil {
-		return domain.ModelRequest{}, err
+		return domain.ModelRequest{}, set.Usage, err
 	}
+	request, err := builder.complete(ctx, input, config, definition, task, languageCode)
+	request.Assurance = set.Assurance
+	return request, set.Usage, err
+}
+
+func (builder *ReleaseLoopRequestBuilder) complete(ctx context.Context, input domain.StepInput, config domain.ToolLoopConfig, definition domain.AgentDefinition, task domain.AgentTask, languageCode string) (domain.ModelRequest, error) {
+	principal := input.Principal
+	var err error
 	if task.Context, err = builder.withMemory(ctx, principal.TenantID, task.Context); err != nil {
 		return domain.ModelRequest{}, err
 	}
@@ -120,18 +128,18 @@ func (builder *ReleaseLoopRequestBuilder) Build(ctx context.Context, input domai
 		AffinityKey:     input.Snapshot.ConversationID,
 		Output:          task.Output,
 		Search:          search,
-		Assurance:       assurance,
 	}, nil
 }
 
 // withWorkingSet compiles and records the turn's working set and appends what it selected. The
-// record precedes the verdict, so a held turn keeps what it left out in the evidence plane.
-func (builder *ReleaseLoopRequestBuilder) withWorkingSet(ctx context.Context, input domain.StepInput, task *domain.AgentTask) (domain.WorkingSetAssurance, error) {
+// record precedes the verdict, so a held turn keeps what it left out in the evidence plane. The
+// set's usage is returned even on failure: a resumed step compiles, and spends, again.
+func (builder *ReleaseLoopRequestBuilder) withWorkingSet(ctx context.Context, input domain.StepInput, task *domain.AgentTask) (domain.WorkingSet, error) {
 	if builder.WorkingSet == nil {
-		return "", nil
+		return domain.WorkingSet{}, nil
 	}
 	if builder.WorkingSetRecords == nil {
-		return "", fmt.Errorf("%w: a working set compiler needs a working set recorder", domain.ErrNotReady)
+		return domain.WorkingSet{}, fmt.Errorf("%w: a working set compiler needs a working set recorder", domain.ErrNotReady)
 	}
 	principal := input.Principal
 	set, err := builder.WorkingSet.Compile(ctx, domain.WorkingSetRequest{
@@ -139,21 +147,21 @@ func (builder *ReleaseLoopRequestBuilder) withWorkingSet(ctx context.Context, in
 		RequestID: input.RequestID, ConversationID: input.Snapshot.ConversationID, Task: task.Task,
 	})
 	if err != nil {
-		return "", fmt.Errorf("compile working set: %w", err)
+		return domain.WorkingSet{}, fmt.Errorf("compile working set: %w", err)
 	}
 	if !set.Assurance.Valid() {
-		return "", fmt.Errorf("%w: working set compiler returned assurance %q", domain.ErrValidation, set.Assurance)
+		return set, fmt.Errorf("%w: working set compiler returned assurance %q", domain.ErrValidation, set.Assurance)
 	}
 	if err = builder.WorkingSetRecords.RecordWorkingSet(ctx, input.Owner, set); err != nil {
-		return "", fmt.Errorf("record working set: %w", err)
+		return set, fmt.Errorf("record working set: %w", err)
 	}
 	if set.Assurance.Unsettled() {
-		return "", fmt.Errorf("%w: the working set is %s", domain.ErrWorkingSetUnassured, set.Assurance)
+		return set, fmt.Errorf("%w: the working set is %s", domain.ErrWorkingSetUnassured, set.Assurance)
 	}
 	if rendered := workingset.Context(set); rendered != "" {
 		task.Context = strings.TrimSpace(task.Context + "\n\n" + rendered)
 	}
-	return set.Assurance, nil
+	return set, nil
 }
 
 func (builder *ReleaseLoopRequestBuilder) withMemory(ctx context.Context, tenantID int64, taskContext string) (string, error) {

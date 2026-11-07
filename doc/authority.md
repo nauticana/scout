@@ -78,6 +78,11 @@ own levels, and Scout owns only the `tenant` root kind. `config_scope_binding` a
 effective-dated resource value to a scope. One binding table serves every resource kind, so adding a
 level or a kind never adds a table.
 
+A product governing its organization through Charter attaches scopes to organization units with
+`charter.UnitScopes` (`config_scope_unit`): a unit's scope must descend from the scope of its nearest
+attached ancestor, and a position or assignment resolves to the nearest attached scope up its unit path,
+or the tenant root when none is attached.
+
 Binding values are canonical JSON, fixed per kind:
 
 | Kind | Value | Merger | Narrowing rule |
