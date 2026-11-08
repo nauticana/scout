@@ -1,0 +1,18 @@
+comment: Skill code lists
+order: 33
+seeds:
+  - table: constant_header
+    columns: [id, caption]
+    rows:
+      - [skill_origin_kind, Skill Origin Kind]
+  - table: constant_value
+    columns: [constant_id, value, caption]
+    rows:
+      - [skill_origin_kind, R, Repository]
+      - [skill_origin_kind, D, Directory]
+      - [skill_origin_kind, G, Registry]
+      - [skill_origin_kind, F, File]
+  - table: constant_lookup
+    columns: [constant_id, table_name, column_name]
+    rows:
+      - [skill_origin_kind, skill_catalog_origin, kind_code]

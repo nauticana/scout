@@ -71,14 +71,14 @@ flowchart BT
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>9 tables"]
     approval["Approval<br/>2 tables"]
-    skill["Skill<br/>11 tables"]
+    skill["Skill<br/>12 tables"]
     memory["Memory<br/>2 tables"]
     mcp_confirmation["MCP Confirmation<br/>2 tables"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 156. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 157. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -420,6 +420,7 @@ flowchart RL
         direction BT
         skill_catalog_profile["skill_catalog_profile"]
         skill_catalog_version["skill_catalog_version"]
+        skill_catalog_origin["skill_catalog_origin"]
         skill_catalog_tool["skill_catalog_tool"]
         skill_catalog_example["skill_catalog_example"]
         skill_catalog_requirement["skill_catalog_requirement"]
@@ -431,6 +432,7 @@ flowchart RL
         agent_skill_binding["agent_skill_binding"]
     end
     skill_catalog_version --> skill_catalog_profile
+    skill_catalog_origin --> skill_catalog_version
     skill_catalog_tool --> skill_catalog_version
     skill_catalog_example --> skill_catalog_version
     skill_catalog_requirement --> skill_catalog_version
@@ -520,6 +522,7 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `skill_version` | `skill_version_requirements` | `skill_requirement[]` |
 | `skill_catalog_version` | `skill_catalog_derivations` | `skill_version[]` |
 | `skill_catalog_version` | `skill_catalog_version_requirements` | `skill_catalog_requirement[]` |
+| `skill_catalog_version` | `skill_catalog_version_origins` | `skill_catalog_origin[]` |
 
 The YAML foreign-key definitions are the complete relationship-name registry. The `agent`, `model`, `prompt`, and `runtime` seeds register lookups for their principal relations in `foreign_key_lookup` — `agent_profiles`, `agent_drafts`, `agent_aliases`, `agent_versions`, `agent_deployments`, `agent_release_activations`, `agent_studio_events`, `agent_publish_reviews`, `agent_draft_comments`, `model_definitions`, `model_capabilities`, `model_routes`, `model_prices`, `prompt_baselines`, `agent_run_versions`, and `tenant_agent_ops_events`. The `agent`, `approval`, and `configuration` seeds also caption catalog codes as dropdowns over the catalog's `description`: `state_release_activations`, `status_turn_approval_requests`, `status_turn_approval_decisions`, and `outcome_audit_events`. Every `foreign_key_lookup` or `rest_api_child` seed references those names verbatim, which `schema_lookups_test.go` enforces with the display column. Renaming one is an API compatibility change even when its columns do not change.
 
@@ -790,6 +793,7 @@ erDiagram
     skill_catalog_version ||--o{ skill_catalog_requirement : skill_catalog_version_requirements
     skill_catalog_version ||--o{ skill_catalog_requirement : required_catalog_skill_dependents
     skill_catalog_version ||--o{ skill_version : skill_catalog_derivations
+    skill_catalog_version ||--o| skill_catalog_origin : skill_catalog_version_origins
 
     skill_profile {
         bigint partner_id PK,FK
@@ -825,6 +829,15 @@ erDiagram
         varchar summary
         text instructions
         text input_schema
+    }
+    skill_catalog_origin {
+        varchar skill_id PK,FK
+        varchar skill_version PK,FK
+        char kind_code
+        text locator
+        varchar revision
+        varchar digest
+        text license
     }
     skill_catalog_tool {
         varchar skill_id PK,FK
@@ -867,7 +880,7 @@ erDiagram
 
 A skill version is immutable like a tool version. `skill_tool` names tools by id, not version: the agent release pins the versions, and publication refuses a release that binds a skill without binding every tool it lists and `use_skill`. `summary` is the one line the agent sees in the skill index; `instructions` reach the model only when it calls `use_skill`. `skill_example` rows seed the selection cases of the golden set the version names; Scout stores that reference and builds the cases, and leaves running the selection eval and gating the publish on it to the application.
 
-`skill_requirement` names another tenant skill version the procedure relies on; both ends are real versions, and a release binding the skill must bind the required one at that version. Because a requirement must exist before the version naming it, the graph cannot cycle. The `skill_catalog_*` tables hold platform versions no tenant owns; a tenant copy names its origin through `origin_skill_id`/`origin_skill_version`, indexed so a withdrawal finds every copy. `skill_catalog_requirement` names another catalog version a platform procedure relies on, under the same existence rule, and is indexed on the required side so a withdrawal finds the versions requiring one; a tenant copy of a catalog version requires the tenant's copy of each. Catalog tool ids are plain values: tools are tenant-owned, and each copy names tools its tenant registered.
+`skill_requirement` names another tenant skill version the procedure relies on; both ends are real versions, and a release binding the skill must bind the required one at that version. Because a requirement must exist before the version naming it, the graph cannot cycle. The `skill_catalog_*` tables hold platform versions no tenant owns; a tenant copy names its origin through `origin_skill_id`/`origin_skill_version`, indexed so a withdrawal finds every copy. `skill_catalog_requirement` names another catalog version a platform procedure relies on, under the same existence rule, and is indexed on the required side so a withdrawal finds the versions requiring one; a tenant copy of a catalog version requires the tenant's copy of each. `skill_catalog_origin` pins the external source a catalog version was imported from: a `skill_origin_kind` code (repository, directory, registry, file), the locator URI, an immutable revision or a `sha256:` digest or both, and the license as the source states it; the digest is indexed so a withdrawn or compromised upstream skill finds the catalog versions built from it, and through them every tenant copy. Catalog tool ids are plain values: tools are tenant-owned, and each copy names tools its tenant registered.
 
 ## Agent Studio authoring
 
@@ -2662,7 +2675,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `approval` | `turn_approval_request`, `turn_approval_decision` |
 | `mcp_confirmation` | `mcp_confirmation`, `turn_call_confirmation` |
 | `memory` | `memory_section`, `agent_memory` |
-| `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_tool`, `skill_catalog_example`, `skill_catalog_requirement`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
+| `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_origin`, `skill_catalog_tool`, `skill_catalog_example`, `skill_catalog_requirement`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them
 cannot accept a row until they hold values — Scout seeds them all. `prompt_section`

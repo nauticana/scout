@@ -1,6 +1,7 @@
 tables:
   - skill_catalog_profile
   - skill_catalog_version
+  - skill_catalog_origin
   - skill_catalog_tool
   - skill_catalog_example
   - skill_catalog_requirement

@@ -18,6 +18,8 @@ const (
 	qCatalogProfileLock   = "scout_skill_catalog_profile_lock"
 	qCatalogVersionGet    = "scout_skill_catalog_version_get"
 	qCatalogVersionInsert = "scout_skill_catalog_version_insert"
+	qCatalogOriginInsert  = "scout_skill_catalog_origin_insert"
+	qCatalogImported      = "scout_skill_catalog_imported"
 	qCatalogToolList      = "scout_skill_catalog_tool_list"
 	qCatalogToolInsert    = "scout_skill_catalog_tool_insert"
 	qCatalogExampleList   = "scout_skill_catalog_example_list"
@@ -39,14 +41,25 @@ SELECT display_name
  WHERE skill_id = ?
    FOR UPDATE`,
 	qCatalogVersionGet: `
-SELECT v.skill_id, v.skill_version, p.display_name, v.summary, v.instructions, v.input_schema
+SELECT v.skill_id, v.skill_version, p.display_name, v.summary, v.instructions, v.input_schema,
+       o.kind_code, o.locator, o.revision, o.digest, o.license
   FROM skill_catalog_version v
   JOIN skill_catalog_profile p ON p.skill_id = v.skill_id
+  LEFT JOIN skill_catalog_origin o ON o.skill_id = v.skill_id AND o.skill_version = v.skill_version
  WHERE v.skill_id = ? AND v.skill_version = ?`,
 	qCatalogVersionInsert: `
 INSERT INTO skill_catalog_version (skill_id, skill_version, summary, instructions, input_schema)
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (skill_id, skill_version) DO NOTHING`,
+	qCatalogOriginInsert: `
+INSERT INTO skill_catalog_origin (skill_id, skill_version, kind_code, locator, revision, digest, license)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (skill_id, skill_version) DO NOTHING`,
+	qCatalogImported: `
+SELECT skill_id, skill_version
+  FROM skill_catalog_origin
+ WHERE locator = ? OR digest = ?
+ ORDER BY skill_id, skill_version`,
 	qCatalogToolList: `
 SELECT tool_id
   FROM skill_catalog_tool
@@ -175,8 +188,14 @@ func insertCatalogVersion(ctx context.Context, tx port.QueryService, skill domai
 		}
 	}
 	if _, err := tx.Query(ctx, qCatalogVersionInsert, skill.SkillID, skill.Version, skill.Summary, skill.Procedure,
-		inputSchemaValue(skill.InputSchema)); err != nil {
+		nullIfBlank(string(skill.InputSchema))); err != nil {
 		return fmt.Errorf("insert catalog skill version %s@%s: %w", skill.SkillID, skill.Version, err)
+	}
+	if origin := skill.Origin; origin != nil {
+		if _, err := tx.Query(ctx, qCatalogOriginInsert, skill.SkillID, skill.Version, string(origin.Kind), origin.Locator,
+			nullIfBlank(origin.Revision), nullIfBlank(origin.Digest), nullIfBlank(origin.License)); err != nil {
+			return fmt.Errorf("insert origin of catalog skill %s@%s: %w", skill.SkillID, skill.Version, err)
+		}
 	}
 	for _, required := range skill.Requires {
 		if _, err := tx.Query(ctx, qCatalogRequireInsert, skill.SkillID, skill.Version, required.SkillID, required.Version); err != nil {
@@ -230,6 +249,22 @@ func (catalog *TableSkillCatalog) Derived(ctx context.Context, origin domain.Ski
 	return derived, nil
 }
 
+// Imported lists every catalog version whose origin has the locator or the digest.
+func (catalog *TableSkillCatalog) Imported(ctx context.Context, locator, digest string) ([]domain.SkillReference, error) {
+	if err := catalog.init(ctx); err != nil {
+		return nil, err
+	}
+	locator, digest = strings.TrimSpace(locator), strings.TrimSpace(digest)
+	if locator == "" && digest == "" {
+		return nil, fmt.Errorf("%w: a locator or a digest is required", domain.ErrValidation)
+	}
+	result, err := catalog.qs.Query(ctx, qCatalogImported, locator, digest)
+	if err != nil {
+		return nil, fmt.Errorf("list catalog skills imported from %q %q: %w", locator, digest, err)
+	}
+	return scanReferences(result.Rows), nil
+}
+
 // Dependents lists every catalog version requiring the catalog version.
 func (catalog *TableSkillCatalog) Dependents(ctx context.Context, required domain.SkillReference) ([]domain.SkillReference, error) {
 	if err := catalog.ready(ctx, required); err != nil {
@@ -250,6 +285,13 @@ func (catalog *TableSkillCatalog) ready(ctx context.Context, reference domain.Sk
 		return fmt.Errorf("%w: skill and version are required", domain.ErrValidation)
 	}
 	return nil
+}
+
+func nullIfBlank(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func scanReferences(rows [][]any) []domain.SkillReference {
@@ -275,6 +317,10 @@ func readCatalogVersion(ctx context.Context, qs port.QueryService, skillID, vers
 	}
 	if inputSchema := common.AsString(row[5]); inputSchema != "" {
 		skill.InputSchema = []byte(inputSchema)
+	}
+	if kind := common.AsString(row[6]); kind != "" {
+		skill.Origin = &domain.SkillOrigin{Kind: domain.SkillOriginKind(kind), Locator: common.AsString(row[7]),
+			Revision: common.AsString(row[8]), Digest: common.AsString(row[9]), License: common.AsString(row[10])}
 	}
 	tools, err := qs.Query(ctx, qCatalogToolList, skillID, version)
 	if err != nil {

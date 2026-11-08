@@ -1,0 +1,42 @@
+table: skill_catalog_origin
+comment: The external source a platform procedure was imported from, so a withdrawn or compromised upstream skill traces to the catalog versions built from it
+columns:
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: skill_version
+    type: VARCHAR(80)
+  - name: kind_code
+    type: CHAR(1)
+    comment: R repository, D directory, G registry, F file
+  - name: locator
+    type: TEXT
+    comment: The source URI
+  - name: revision
+    type: VARCHAR(120)
+    nullable: true
+    comment: The immutable commit, release, or tag the content was read at
+  - name: digest
+    type: VARCHAR(80)
+    nullable: true
+    comment: sha256 of the imported content
+  - name: license
+    type: TEXT
+    nullable: true
+    comment: The license identifier or text as the source states it
+primary_key: [skill_id, skill_version]
+foreign_keys:
+  - name: skill_catalog_version_origins
+    columns: [skill_id, skill_version]
+    references:
+      table: skill_catalog_version
+      columns: [skill_id, skill_version]
+indexes:
+  - name: skill_catalog_origin_digest_ix
+    columns: [digest]
+checks:
+  - name: skill_catalog_origin_kind_ck
+    expression: kind_code IN ('R', 'D', 'G', 'F')
+  - name: skill_catalog_origin_pinned_ck
+    expression: revision IS NOT NULL OR digest IS NOT NULL
+  - name: skill_catalog_origin_digest_ck
+    expression: digest IS NULL OR (digest LIKE 'sha256:%' AND CHAR_LENGTH(digest) = 71)

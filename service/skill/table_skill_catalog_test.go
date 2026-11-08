@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	keelmodel "github.com/nauticana/keel/model"
@@ -20,6 +21,7 @@ type catalogFake struct {
 	tools    map[string][]string
 	examples map[string][]string
 	requires map[string][][2]string
+	origins  map[string][]any
 	derived  map[string][][]any
 }
 
@@ -36,12 +38,29 @@ func (fake *catalogFake) Query(_ context.Context, name string, args ...any) (*ke
 		}
 	case qCatalogVersionGet:
 		if row, ok := fake.versions[key]; ok {
-			return &keelmodel.QueryResult{Rows: [][]any{{row[0], row[1], fake.profiles[row[0].(string)], row[2], row[3], row[4]}}}, nil
+			origin := fake.origins[key]
+			if origin == nil {
+				origin = make([]any, 7)
+			}
+			return &keelmodel.QueryResult{Rows: [][]any{{row[0], row[1], fake.profiles[row[0].(string)], row[2], row[3], row[4],
+				origin[2], origin[3], origin[4], origin[5], origin[6]}}}, nil
 		}
 	case qCatalogVersionInsert:
 		if _, ok := fake.versions[key]; !ok {
 			fake.versions[key] = args
 		}
+	case qCatalogOriginInsert:
+		if _, ok := fake.origins[key]; !ok {
+			fake.origins[key] = args
+		}
+	case qCatalogImported:
+		result := &keelmodel.QueryResult{}
+		for _, origin := range fake.origins {
+			if origin[3] == args[0] || origin[5] == args[1] {
+				result.Rows = append(result.Rows, origin[:2])
+			}
+		}
+		return result, nil
 	case qCatalogToolList:
 		return rows(fake.tools[key]), nil
 	case qCatalogToolInsert:
@@ -94,7 +113,7 @@ func (db catalogDB) BeginTx(context.Context, map[string]string) (keelport.TxQuer
 func newCatalog() (*catalogFake, *TableSkillCatalog) {
 	fake := &catalogFake{
 		profiles: map[string]string{}, versions: map[string][]any{}, tools: map[string][]string{},
-		examples: map[string][]string{}, requires: map[string][][2]string{}, derived: map[string][][]any{},
+		examples: map[string][]string{}, requires: map[string][][2]string{}, origins: map[string][]any{}, derived: map[string][][]any{},
 	}
 	return fake, &TableSkillCatalog{DB: catalogDB{fake: fake}}
 }
@@ -139,6 +158,77 @@ func TestCatalogRegisterRefusesTenantOnlyFields(t *testing.T) {
 	} {
 		skill := catalogSkill()
 		mutate(&skill)
+		if err := catalog.Register(context.Background(), skill); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: want ErrValidation, got %v", name, err)
+		}
+	}
+	if len(fake.versions) != 0 {
+		t.Fatalf("a refused skill must write nothing, got %+v", fake.versions)
+	}
+}
+
+func TestCatalogOriginIsStoredAndFoundByLocatorOrDigest(t *testing.T) {
+	_, catalog := newCatalog()
+	ctx := context.Background()
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	imported := catalogSkill()
+	imported.Origin = &domain.SkillOrigin{Kind: domain.SkillOriginFile, Locator: " https://example.org/skills/audit/SKILL.md ",
+		Revision: "v2.1.0", Digest: digest, License: "Apache-2.0"}
+	if err := catalog.Register(ctx, imported); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := catalog.Register(ctx, imported); err != nil {
+		t.Fatalf("the same origin again must be a no-op, got %v", err)
+	}
+	stored, err := catalog.Get(ctx, "audit", "1")
+	want := domain.SkillOrigin{Kind: domain.SkillOriginFile, Locator: "https://example.org/skills/audit/SKILL.md",
+		Revision: "v2.1.0", Digest: digest, License: "Apache-2.0"}
+	if err != nil || stored.Origin == nil || *stored.Origin != want {
+		t.Fatalf("stored origin = %+v, %v", stored.Origin, err)
+	}
+	relicensed := imported
+	relicensed.Origin = &domain.SkillOrigin{Kind: want.Kind, Locator: want.Locator, Revision: want.Revision, Digest: want.Digest, License: "MIT"}
+	if err := catalog.Register(ctx, relicensed); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("a changed origin: want ErrConflict, got %v", err)
+	}
+	local := catalogSkill()
+	local.Version = "2"
+	if err := catalog.Register(ctx, local); err != nil {
+		t.Fatalf("Register without origin: %v", err)
+	}
+	if stored, err = catalog.Get(ctx, "audit", "2"); err != nil || stored.Origin != nil {
+		t.Fatalf("a local version carries no origin, got %+v, %v", stored.Origin, err)
+	}
+	reference := []domain.SkillReference{{SkillID: "audit", Version: "1"}}
+	for name, args := range map[string][2]string{"locator": {want.Locator, ""}, "digest": {"", digest}} {
+		if found, err := catalog.Imported(ctx, args[0], args[1]); err != nil || !slices.Equal(found, reference) {
+			t.Fatalf("Imported by %s = %+v, %v", name, found, err)
+		}
+	}
+	if found, err := catalog.Imported(ctx, "https://example.org/other", "sha256:"+strings.Repeat("00", 32)); err != nil || len(found) != 0 {
+		t.Fatalf("an unknown source = %+v, %v", found, err)
+	}
+	if _, err := catalog.Imported(ctx, " ", ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("no locator and no digest: want ErrValidation, got %v", err)
+	}
+}
+
+func TestCatalogRefusesAnUnpinnedOrMalformedOrigin(t *testing.T) {
+	fake, catalog := newCatalog()
+	pinned := domain.SkillOrigin{Kind: domain.SkillOriginRepository, Locator: "https://example.org/skills.git", Revision: "3f9c1e2"}
+	for name, mutate := range map[string]func(*domain.SkillOrigin){
+		"unknown kind":          func(origin *domain.SkillOrigin) { origin.Kind = "X" },
+		"blank locator":         func(origin *domain.SkillOrigin) { origin.Locator = " " },
+		"no revision or digest": func(origin *domain.SkillOrigin) { origin.Revision = "" },
+		"digest without prefix": func(origin *domain.SkillOrigin) { origin.Digest = strings.Repeat("ab", 32) },
+		"short digest":          func(origin *domain.SkillOrigin) { origin.Digest = "sha256:abc" },
+		"uppercase digest":      func(origin *domain.SkillOrigin) { origin.Digest = "sha256:" + strings.Repeat("AB", 32) },
+		"digest with a non-hex": func(origin *domain.SkillOrigin) { origin.Digest = "sha256:" + strings.Repeat("g", 64) },
+	} {
+		origin := pinned
+		mutate(&origin)
+		skill := catalogSkill()
+		skill.Origin = &origin
 		if err := catalog.Register(context.Background(), skill); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("%s: want ErrValidation, got %v", name, err)
 		}

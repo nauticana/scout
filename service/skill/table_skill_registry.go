@@ -185,6 +185,9 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 	if tenantID <= 0 {
 		return fmt.Errorf("%w: tenant is required", domain.ErrValidation)
 	}
+	if skill.Origin != nil {
+		return fmt.Errorf("%w: a tenant skill names no external origin; the catalog version it derives from does", domain.ErrValidation)
+	}
 	skill, err := normalize(skill)
 	if err != nil {
 		return err
@@ -255,7 +258,7 @@ func insertVersion(ctx context.Context, tx port.QueryService, tenantID int64, sk
 		originID, originVersion = origin.SkillID, origin.Version
 	}
 	if _, err := tx.Query(ctx, qSkillVersionInsert, tenantID, skill.SkillID, skill.Version, skill.Summary, skill.Procedure,
-		inputSchemaValue(skill.InputSchema), goldenSetID, goldenSetVersion, originID, originVersion); err != nil {
+		nullIfBlank(string(skill.InputSchema)), goldenSetID, goldenSetVersion, originID, originVersion); err != nil {
 		return skill, fmt.Errorf("insert skill version %s@%s: %w", skill.SkillID, skill.Version, err)
 	}
 	origins := make(map[domain.SkillReference]domain.SkillReference, len(skill.Requires))
@@ -552,13 +555,6 @@ func scanSkillVersion(row []any) domain.SkillDefinition {
 	return skill
 }
 
-func inputSchemaValue(schema []byte) any {
-	if len(schema) == 0 {
-		return nil
-	}
-	return string(schema)
-}
-
 // normalize validates the definition and canonicalizes it, so equal skills
 // compare equal however they were formatted.
 func normalize(skill domain.SkillDefinition) (domain.SkillDefinition, error) {
@@ -620,6 +616,13 @@ func normalize(skill domain.SkillDefinition) (domain.SkillDefinition, error) {
 		}
 		skill.DerivedFrom = &trimmed
 	}
+	if skill.Origin != nil {
+		origin, err := skill.Origin.Normalized()
+		if err != nil {
+			return skill, fmt.Errorf("skill %s@%s: %w", skill.SkillID, skill.Version, err)
+		}
+		skill.Origin = &origin
+	}
 	if len(skill.InputSchema) > 0 {
 		if _, err := jsonschema.Compile(skill.InputSchema); err != nil {
 			return skill, fmt.Errorf("%w: input schema of skill %s@%s: %w", domain.ErrValidation, skill.SkillID, skill.Version, err)
@@ -637,17 +640,11 @@ func sameSkill(stored, offered domain.SkillDefinition) bool {
 	return stored.DisplayName == offered.DisplayName && stored.Summary == offered.Summary && stored.Procedure == offered.Procedure &&
 		bytes.Equal(stored.InputSchema, offered.InputSchema) && slices.Equal(stored.Tools, offered.Tools) &&
 		slices.Equal(stored.Examples, offered.Examples) && slices.Equal(stored.Requires, offered.Requires) &&
-		sameEvalSet(stored.EvalSet, offered.EvalSet) && sameReference(stored.DerivedFrom, offered.DerivedFrom)
+		samePointer(stored.EvalSet, offered.EvalSet) && samePointer(stored.DerivedFrom, offered.DerivedFrom) &&
+		samePointer(stored.Origin, offered.Origin)
 }
 
-func sameReference(stored, offered *domain.SkillReference) bool {
-	if stored == nil || offered == nil {
-		return stored == offered
-	}
-	return *stored == *offered
-}
-
-func sameEvalSet(stored, offered *domain.GoldenSetReference) bool {
+func samePointer[T comparable](stored, offered *T) bool {
 	if stored == nil || offered == nil {
 		return stored == offered
 	}

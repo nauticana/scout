@@ -515,6 +515,18 @@ func TestRegisterNamesItsCatalogOrigin(t *testing.T) {
 	}
 }
 
+func TestRegisterRefusesAnExternalOrigin(t *testing.T) {
+	fake, registry := newRegistry()
+	skill := auditSkill("1")
+	skill.Origin = &domain.SkillOrigin{Kind: domain.SkillOriginRepository, Locator: "https://example.org/skills.git", Revision: "3f9c1e2"}
+	if err := registry.Register(context.Background(), 1, skill); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("want ErrValidation, got %v", err)
+	}
+	if len(fake.committed.versions) != 0 {
+		t.Fatalf("a refused skill must write nothing, got %+v", fake.committed.versions)
+	}
+}
+
 // A copy of a catalog version requires the tenant's copy of each catalog version it requires.
 func TestRegisterCopiesCarryTheCatalogRequirements(t *testing.T) {
 	_, registry := newRegistry()

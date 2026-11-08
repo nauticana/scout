@@ -103,6 +103,13 @@ func TestCodeListsAgreeWithSeedAndSchema(t *testing.T) {
 			column: "outcome_code", columnType: "CHAR(1)", check: "turn_call_attestation_outcome_ck",
 		},
 		{
+			constantID: "skill_origin_kind",
+			codes:      codes(SkillOriginRepository, SkillOriginDirectory, SkillOriginRegistry, SkillOriginFile),
+			valid:      func(code string) bool { return SkillOriginKind(code).Valid() },
+			seed:       "skill/skill.yml", schema: "skill/skill_catalog_origin.yml",
+			column: "kind_code", columnType: "CHAR(1)", check: "skill_catalog_origin_kind_ck",
+		},
+		{
 			constantID: "capacity_class",
 			codes:      codes(CapacityShared, CapacityDedicated),
 			valid:      func(code string) bool { return CapacityClass(code).Valid() },

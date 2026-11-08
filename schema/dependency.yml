@@ -78,7 +78,9 @@ groups:
 
   - name: skill
     path: skill
+    seed: seed/skill/skill.yml
     depends_on: [tenancy, agent, tool]
+    seed_depends_on: [core]
 
   - name: configuration
     path: configuration

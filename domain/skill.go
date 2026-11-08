@@ -1,5 +1,10 @@
 package domain
 
+import (
+	"fmt"
+	"strings"
+)
+
 // UseSkillToolID is the tool an agent calls to load one bound skill's procedure.
 const UseSkillToolID = "use_skill"
 
@@ -27,6 +32,68 @@ type SkillDefinition struct {
 	EvalSet *GoldenSetReference
 	// DerivedFrom is the platform catalog version a tenant version was copied from.
 	DerivedFrom *SkillReference
+	// Origin is the external source a catalog version was imported from.
+	Origin *SkillOrigin
+}
+
+// SkillOriginKind is the kind of external source a catalog version was imported from.
+type SkillOriginKind string
+
+const (
+	SkillOriginRepository SkillOriginKind = "R"
+	SkillOriginDirectory  SkillOriginKind = "D"
+	SkillOriginRegistry   SkillOriginKind = "G"
+	SkillOriginFile       SkillOriginKind = "F"
+)
+
+// Valid reports whether the kind is one of the seeded codes.
+func (kind SkillOriginKind) Valid() bool {
+	switch kind {
+	case SkillOriginRepository, SkillOriginDirectory, SkillOriginRegistry, SkillOriginFile:
+		return true
+	}
+	return false
+}
+
+// SkillOrigin is where a catalog version's procedure was imported from, pinned by an
+// immutable Revision, a "sha256:<64 hex>" Digest of the content, or both.
+type SkillOrigin struct {
+	Kind     SkillOriginKind
+	Locator  string
+	Revision string
+	Digest   string
+	// License is the identifier or text the source states; rights decisions stay with the importer.
+	License string
+}
+
+// Normalized trims the origin and reports why it is not a valid pin.
+func (origin SkillOrigin) Normalized() (SkillOrigin, error) {
+	origin.Locator, origin.Revision = strings.TrimSpace(origin.Locator), strings.TrimSpace(origin.Revision)
+	origin.Digest, origin.License = strings.TrimSpace(origin.Digest), strings.TrimSpace(origin.License)
+	switch {
+	case !origin.Kind.Valid():
+		return origin, fmt.Errorf("%w: skill origin kind %q is not a seeded code", ErrValidation, origin.Kind)
+	case origin.Locator == "":
+		return origin, fmt.Errorf("%w: skill origin needs a locator", ErrValidation)
+	case origin.Revision == "" && origin.Digest == "":
+		return origin, fmt.Errorf("%w: skill origin needs an immutable revision or a content digest", ErrValidation)
+	case origin.Digest != "" && !validSHA256Digest(origin.Digest):
+		return origin, fmt.Errorf("%w: skill origin digest must be sha256:<64 hex>", ErrValidation)
+	}
+	return origin, nil
+}
+
+func validSHA256Digest(digest string) bool {
+	hexDigest, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok || len(hexDigest) != 64 {
+		return false
+	}
+	for _, r := range hexDigest {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // SkillReference names one registered skill version.
