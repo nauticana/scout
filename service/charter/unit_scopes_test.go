@@ -16,16 +16,14 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// unitScopeRows is config_scope_unit joined to its stored units, keyed by namespace and unit; a
-// transaction works on a copy until it commits. A unit in unstored has no organization_unit row.
+// unitScopeRows is config_scope_unit keyed by unit object id; a transaction works on a copy until it commits.
 type unitScopeRows struct {
 	keelport.DatabaseRepository
-	committed map[[2]string]string
-	working   map[[2]string]string
-	unstored  map[string]bool
+	committed map[int64]string
+	working   map[int64]string
 }
 
-func (rows *unitScopeRows) table() map[[2]string]string {
+func (rows *unitScopeRows) table() map[int64]string {
 	if rows.working != nil {
 		return rows.working
 	}
@@ -36,19 +34,13 @@ func (rows *unitScopeRows) Query(_ context.Context, name string, args ...any) (*
 	table := rows.table()
 	switch name {
 	case qUnitScopePut:
-		if rows.unstored[args[3].(string)] {
-			break
-		}
-		table[[2]string{args[2].(string), args[3].(string)}] = args[0].(string)
-		return &keelmodel.QueryResult{Rows: [][]any{{int64(1)}}}, nil
+		table[args[1].(int64)] = args[2].(string)
 	case qUnitScopeDelete:
-		delete(table, [2]string{args[1].(string), args[2].(string)})
+		delete(table, args[1].(int64))
 	case qUnitScopeList:
 		result := &keelmodel.QueryResult{}
-		for key, scopeID := range table {
-			if key[0] == args[1].(string) {
-				result.Rows = append(result.Rows, []any{key[1], scopeID})
-			}
+		for unitID, scopeID := range table {
+			result.Rows = append(result.Rows, []any{unitID, scopeID})
 		}
 		return result, nil
 	}
@@ -60,7 +52,7 @@ func (rows *unitScopeRows) GetQueryService(context.Context, map[string]string) k
 	return rows
 }
 func (rows *unitScopeRows) BeginTx(context.Context, map[string]string) (keelport.TxQueryService, error) {
-	rows.working = make(map[[2]string]string, len(rows.committed))
+	rows.working = make(map[int64]string, len(rows.committed))
 	for key, scopeID := range rows.committed {
 		rows.working[key] = scopeID
 	}
@@ -93,13 +85,20 @@ func (scopeTree) Bindings(context.Context, int64, []string, time.Time) ([]domain
 	return nil, nil
 }
 
+// The store holds production (101), production planning (102), sales operations (103), and a
+// unit of another namespace (104).
 func unitScopesUnder(t *testing.T) (*UnitScopes, *unitScopeRows) {
 	t.Helper()
-	rows := &unitScopeRows{committed: map[[2]string]string{}}
+	rows := &unitScopeRows{committed: map[int64]string{}}
+	unit := func(namespace, id string) model.ObjectRef {
+		return model.ObjectRef{Kind: model.KindOrganizationUnit, Namespace: namespace, ID: id}
+	}
+	store := &objectStore{refs: []model.ObjectRef{unit(harborNS, "OU-PRODUCTION"), unit(harborNS, "OU-PRODUCTION-PLANNING"),
+		unit(harborNS, "OU-SALES-OPERATIONS"), unit("elsewhere", "OU-PRODUCTION-PLANNING")}}
 	return &UnitScopes{
 		DB: rows, Organization: organization.NewBaseProvider(harbor(t)),
-		Scopes:    scopeTree{"tenant": "", "plant": "tenant", "planning": "plant", "sales": "tenant"},
-		Namespace: func(int64) string { return harborNS },
+		Scopes:  scopeTree{"tenant": "", "plant": "tenant", "planning": "plant", "sales": "tenant"},
+		Objects: &DocumentObjects{Store: store, Namespace: func(int64) string { return harborNS }},
 	}, rows
 }
 
@@ -120,7 +119,7 @@ func TestUnitScopesAttachKeepsTheOrganizationTreeInsideTheScopeTree(t *testing.T
 	if err := scopes.Attach(ctx, 7, model.Ref{ID: "OU-PRODUCTION"}, "sales"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("a parent scope outside its child's chain = %v", err)
 	}
-	if rows.committed[[2]string{harborNS, "OU-PRODUCTION"}] != "plant" || rows.working != nil {
+	if rows.committed[101] != "plant" || rows.working != nil {
 		t.Fatalf("rows = %+v", rows.committed)
 	}
 	for name, attach := range map[string]func() error{
@@ -135,11 +134,11 @@ func TestUnitScopesAttachKeepsTheOrganizationTreeInsideTheScopeTree(t *testing.T
 		t.Fatalf("blank scope = %v", err)
 	}
 	// A unit the provider knows but the store does not hold has no row to reference.
-	rows.unstored = map[string]bool{"OU-SALES-OPERATIONS": true}
+	scopes.Objects.Store.(*objectStore).refs[2].ID = "OU-UNSTORED"
 	if err := scopes.Attach(ctx, 7, model.Ref{ID: "OU-SALES-OPERATIONS"}, "sales"); !errors.Is(err, domain.ErrNotFound) || rows.working != nil {
 		t.Fatalf("unstored unit = %v", err)
 	}
-	if _, attached := rows.committed[[2]string{harborNS, "OU-SALES-OPERATIONS"}]; attached {
+	if _, attached := rows.committed[103]; attached {
 		t.Fatalf("rows = %+v", rows.committed)
 	}
 	if err := (&UnitScopes{}).Attach(ctx, 7, model.Ref{ID: "OU-PRODUCTION"}, "plant"); !errors.Is(err, domain.ErrNotReady) {
@@ -149,11 +148,16 @@ func TestUnitScopesAttachKeepsTheOrganizationTreeInsideTheScopeTree(t *testing.T
 
 func TestUnitScopesResolveThroughPositionsAndAssignments(t *testing.T) {
 	ctx := context.Background()
-	scopes, _ := unitScopesUnder(t)
+	scopes, rows := unitScopesUnder(t)
 	position := model.ObjectRef{Kind: model.KindPosition, ID: "PP-PLN-01"}
 	// Nothing attached: the tenant root.
 	if scopeID, err := scopes.Resolve(ctx, 7, position); err != nil || scopeID != "" {
 		t.Fatalf("unattached = %q, %v", scopeID, err)
+	}
+	// An attachment of a unit in another namespace never answers for this one.
+	rows.committed[104] = "planning"
+	if scopeID, err := scopes.Resolve(ctx, 7, position); err != nil || scopeID != "" {
+		t.Fatalf("another namespace = %q, %v", scopeID, err)
 	}
 	if err := scopes.Attach(ctx, 7, model.Ref{ID: "OU-PRODUCTION"}, "plant"); err != nil {
 		t.Fatal(err)

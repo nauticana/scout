@@ -15,6 +15,16 @@ type GovernanceSource interface {
 	Snapshot(ctx context.Context, tenantID int64, agentID, version string) (snapshot domain.GovernanceSnapshot, ok bool, err error)
 }
 
+// CharterObjects maps a tenant's Charter documents, in the tenant's namespace, to the object ids
+// Scout's foreign keys reference, and back.
+type CharterObjects interface {
+	// ObjectIDs returns, in order, the ids of the stored documents of kind with the identifiers;
+	// one not stored as that kind is ErrNotFound.
+	ObjectIDs(ctx context.Context, tenantID int64, kind string, identifiers ...string) ([]int64, error)
+	// Identifiers returns, in order, the identifiers of the documents the ids store.
+	Identifiers(ctx context.Context, tenantID int64, ids ...int64) ([]string, error)
+}
+
 // TriggerBindingVerifier proves that the product-owned schedule or topic a schedule or event
 // trigger binds exists for the tenant and may start the agent; false refuses the trigger.
 type TriggerBindingVerifier interface {

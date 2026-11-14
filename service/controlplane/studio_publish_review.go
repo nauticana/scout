@@ -54,14 +54,11 @@ const (
 	sqlReviewSuperseded = "'" + string(domain.PublishReviewSuperseded) + "'"
 )
 
-// The exception a review's requester named, as the last-but-two review column: the stored Charter
-// exception's id where the enterprise_agent schema module holds it, and none without the module.
+// The object id of the Charter exception a review's requester named, as the last-but-two review
+// column, where the enterprise_agent schema module holds it, and none without the module.
 const (
-	reviewExceptionNone   = `CAST(NULL AS VARCHAR)`
-	reviewExceptionStored = `(SELECT o.identifier
-          FROM agent_publish_review_exception x
-          JOIN enterprise_object o ON o.partner_id = x.partner_id AND o.id = x.sod_exception_id
-         WHERE x.review_id = agent_publish_review.id)`
+	reviewExceptionNone   = `CAST(NULL AS BIGINT)`
+	reviewExceptionStored = `(SELECT x.sod_exception_id FROM agent_publish_review_exception x WHERE x.review_id = agent_publish_review.id)`
 )
 
 var (
@@ -103,11 +100,7 @@ VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlR
 RETURNING id, requested_at`,
 		qReviewExceptionPut: `
 INSERT INTO agent_publish_review_exception (review_id, partner_id, sod_exception_id)
-SELECT ?, x.partner_id, x.id
-  FROM sod_exception x
-  JOIN enterprise_object o ON o.partner_id = x.partner_id AND o.id = x.id
- WHERE o.partner_id = ? AND o.namespace = ? AND o.identifier = ?
-RETURNING sod_exception_id`,
+VALUES (?, ?, ?)`,
 		qReviewLatest:        reviewLatest,
 		qReviewLatestRestore: reviewLatestRestore,
 		qReviewClaimRestore: reviewLatestRestore + `
@@ -178,10 +171,9 @@ type StudioPublishReviews struct {
 	// Releases reads the active release's settings for the diff; nil uses scope.TableEffectiveReleaseStore.
 	Releases contract.EffectiveReleaseRepository
 	Now      func() time.Time
-	// ExceptionNamespace maps a tenant to the Charter namespace owning its separation exceptions. A
-	// review references the stored exception it names, so naming one needs this and the
-	// enterprise_agent schema module; without it no review carries an exception.
-	ExceptionNamespace func(tenantID int64) string
+	// Objects resolves the stored Charter exception a review names, which needs the enterprise_agent
+	// schema module; without it no review carries an exception.
+	Objects contract.CharterObjects
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -205,7 +197,7 @@ func (r *StudioPublishReviews) init(ctx context.Context) error {
 }
 
 func (r *StudioPublishReviews) queries() map[string]string {
-	if r.ExceptionNamespace != nil {
+	if r.Objects != nil {
 		return enterpriseReviewQueries
 	}
 	return reviewQueries
@@ -247,15 +239,16 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 			return domain.PublishReview{}, err
 		}
 	}
-	var namespace string
+	var exceptionID []int64
 	if exception != "" {
-		if r.ExceptionNamespace != nil {
-			namespace = r.ExceptionNamespace(actor.TenantID)
-		}
-		if namespace == "" {
-			return domain.PublishReview{}, fmt.Errorf("%w: naming a separation exception needs the charter namespace of tenant %d", domain.ErrNotReady, actor.TenantID)
+		if r.Objects == nil {
+			return domain.PublishReview{}, fmt.Errorf("%w: naming a separation exception needs charter objects", domain.ErrNotReady)
 		}
 		if err := r.Separation.Excuse(ctx, actor.TenantID, request.AgentID, kind, exception, actor.Principal, r.now()); err != nil {
+			return domain.PublishReview{}, err
+		}
+		var err error
+		if exceptionID, err = r.Objects.ObjectIDs(ctx, actor.TenantID, domain.CharterSodExceptionKind, exception); err != nil {
 			return domain.PublishReview{}, err
 		}
 	}
@@ -344,12 +337,8 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	review.RequestedAt = common.AsTime(inserted.Rows[0][1])
 	detail = fmt.Sprintf("review %d %s", review.ReviewID, detail)
 	if exception != "" {
-		named, putErr := tx.Query(ctx, qReviewExceptionPut, review.ReviewID, actor.TenantID, namespace, exception)
-		if putErr != nil {
-			return domain.PublishReview{}, fmt.Errorf("record separation exception %s: %w", exception, putErr)
-		}
-		if len(named.Rows) == 0 {
-			return domain.PublishReview{}, fmt.Errorf("%w: separation exception %s is not stored in %s", domain.ErrNotFound, exception, namespace)
+		if _, err = tx.Query(ctx, qReviewExceptionPut, review.ReviewID, actor.TenantID, exceptionID[0]); err != nil {
+			return domain.PublishReview{}, fmt.Errorf("record separation exception %s: %w", exception, err)
 		}
 		detail += " naming separation exception " + exception
 	}
@@ -399,7 +388,7 @@ func (r *StudioPublishReviews) Review(ctx context.Context, actor domain.StudioAc
 		return domain.PublishReviewState{}, fmt.Errorf("load publish review: %w", err)
 	}
 	if len(latest.Rows) > 0 {
-		review, scanErr := scanReview(agentID, latest.Rows[0])
+		review, scanErr := r.readReview(ctx, actor.TenantID, agentID, latest.Rows[0])
 		if scanErr != nil {
 			return domain.PublishReviewState{}, scanErr
 		}
@@ -483,7 +472,7 @@ func (r *StudioPublishReviews) decidable(ctx context.Context, actor domain.Studi
 	if len(res.Rows) == 0 {
 		return domain.PublishReview{}, fmt.Errorf("%w: publish review %d", domain.ErrNotFound, decision.ReviewID)
 	}
-	review, err := scanReview(decision.AgentID, res.Rows[0])
+	review, err := r.readReview(ctx, actor.TenantID, decision.AgentID, res.Rows[0])
 	if err != nil {
 		return domain.PublishReview{}, err
 	}
@@ -629,7 +618,7 @@ func (r *StudioPublishReviews) admit(ctx context.Context, qs keelport.QueryServi
 	case len(res.Rows) == 0:
 		problem = fmt.Errorf("%w: agent %q needs an approved %s review of definition %s", domain.ErrConflict, agentID, target.kind, target.digest)
 	default:
-		if review, err = scanReview(agentID, res.Rows[0]); err != nil {
+		if review, err = r.readReview(ctx, tenantID, agentID, res.Rows[0]); err != nil {
 			return nil, err
 		}
 		problem = admissible(review, target)
@@ -832,13 +821,28 @@ func candidateProblem(err error) bool {
 	return err != nil && (settingsProblem(err) || errors.Is(err, domain.ErrNoPrompts))
 }
 
+// readReview scans a review row and names the stored exception it references.
+func (r *StudioPublishReviews) readReview(ctx context.Context, tenantID int64, agentID string, row []any) (domain.PublishReview, error) {
+	review, err := scanReview(agentID, row)
+	exceptionID, named := common.AsInt64OK(row[14])
+	if err != nil || !named {
+		return review, err
+	}
+	names, err := r.Objects.Identifiers(ctx, tenantID, exceptionID)
+	if err != nil {
+		return domain.PublishReview{}, fmt.Errorf("name the separation exception of review %d: %w", review.ReviewID, err)
+	}
+	review.SodExceptionID = names[0]
+	return review, nil
+}
+
 func scanReview(agentID string, row []any) (domain.PublishReview, error) {
 	review := domain.PublishReview{
 		ReviewID: common.AsInt64(row[0]), AgentID: agentID, DefinitionDigest: common.AsString(row[1]),
 		DraftRevision: common.AsInt64(row[2]), PromptProfileRevision: common.AsInt64(row[3]), BaseVersion: common.AsString(row[4]),
 		Status: domain.PublishReviewStatus(common.AsString(row[7])), RequestedBy: common.AsInt64(row[8]),
 		RequestNote: common.AsString(row[9]), RequestedAt: common.AsTime(row[10]), DecisionNote: common.AsString(row[12]),
-		SodExceptionID: common.AsString(row[14]), PublishedVersion: common.AsString(row[15]), RestoreVersion: common.AsString(row[16]),
+		PublishedVersion: common.AsString(row[15]), RestoreVersion: common.AsString(row[16]),
 	}
 	if err := json.Unmarshal([]byte(common.AsString(row[5])), &review.Diff); err != nil {
 		return domain.PublishReview{}, fmt.Errorf("decode publish review %d diff: %w", review.ReviewID, err)

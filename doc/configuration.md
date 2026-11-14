@@ -324,9 +324,10 @@ A release's `budget` setting is data, not a flag: `period` is `turn`, `rolling` 
 | `dataplane.ToolLoopExecutor.{Outcomes,Reconciler,Dispatch}` | `agent_tool_timeout`, `agent_tool_max_attempts`, `agent_outcome_attest_grace` | `Outcomes` required; `Dispatch` (`domain.ToolDispatchWindow`) needs a positive timeout and attempts and a non-negative grace, or construction fails; `Reconciler` optional, without it an unobserved call stays unknown and no tool deduplicates or accepts asynchronously |
 | `toolgateway.GovernedGatewayConfig.{Outcomes,Lookup}` | — | the trusted `ToolOutcomeTraits` by tool id and the composed `ToolOutcomeLookup`; a tool declaring `Lookup` without a lookup fails validation |
 | `confirmation.TableStore.Calls` | — | optional `confirmation.ReconciledCalls`, the data plane's `TableCallOutcomeStore`: reconciling a confirmation then settles the tool calls linked to it in the same transaction; nil settles none |
-| `release.TableVersionPinStore.Namespace` | — | the Charter namespace owning a tenant's assignments; an assignment pin needs it and the `enterprise_release` module, and without it is refused |
-| `controlplane.StudioPublishReviews.ExceptionNamespace` | — | the Charter namespace owning a tenant's separation exceptions; naming one on a review needs it and the `enterprise_agent` module, and without it is refused |
-| `charter.UnitScopes.{DB,Organization,Scopes,Namespace}` | — | all required; `Organization` reads the Charter store in `DB`, whose `enterprise_configuration` module holds the attachments |
+| `charter.DocumentObjects.{Store,Namespace}` | — | the `contract.CharterObjects` over Charter's keel `DocumentStore` and the Charter namespace owning a tenant's documents; both required |
+| `release.TableVersionPinStore.Objects` | — | a `contract.CharterObjects`; an assignment pin needs it and the `enterprise_release` module, and without it is refused |
+| `controlplane.StudioPublishReviews.Objects` | — | a `contract.CharterObjects`; naming a separation exception on a review needs it and the `enterprise_agent` module, and without it is refused |
+| `charter.UnitScopes.{DB,Organization,Scopes,Objects}` | — | all required; `Organization` and `Objects` read the Charter store in `DB`, whose `enterprise_configuration` module holds the attachments |
 | `charter.CapabilityGateway.{Actions,MaxActions}` | — | the Charter `evidence.Queries` its `Lookup` reads through, and how many of the run's latest actions it reads; zero takes 1000, and values above 10000 take 10000 |
 
 ## Principals and scoped configuration (`service/scope`, `service/principal`)

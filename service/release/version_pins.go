@@ -46,16 +46,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 	qPinAssign: `
 INSERT INTO agent_version_pin_assignment (pin_id, partner_id, assignment_id)
-SELECT ?, a.partner_id, a.id
-  FROM organization_assignment a
-  JOIN enterprise_object o ON o.partner_id = a.partner_id AND o.id = a.id
- WHERE o.partner_id = ? AND o.namespace = ? AND o.identifier = ?
-RETURNING assignment_id`,
+VALUES (?, ?, ?)`,
 	qPinAssignments: `
-SELECT a.pin_id, o.identifier
+SELECT a.pin_id, a.assignment_id
   FROM agent_version_pin p
   JOIN agent_version_pin_assignment a ON a.partner_id = p.partner_id AND a.pin_id = p.id
-  JOIN enterprise_object o ON o.partner_id = a.partner_id AND o.id = a.assignment_id
  WHERE p.partner_id = ? AND p.agent_id = ? AND p.effective_at <= ? AND (p.expires_at IS NULL OR p.expires_at > ?)`,
 	qPinActive: `
 SELECT id, agent_version, scope_code, region, reason, owner, approved_by, signature,
@@ -124,11 +119,11 @@ SELECT EXISTS (SELECT 1 FROM agent_deployment WHERE partner_id = ? AND agent_id 
 }
 
 // TableVersionPinStore is the keel-backed VersionPinStore over agent_version_pin. An assignment pin
-// references the stored Charter assignment it serves, so it needs the enterprise_release schema module
-// and Namespace, which maps a tenant to the Charter namespace owning its assignments.
+// references the stored Charter assignment it serves, so it needs the enterprise_release schema
+// module and Objects.
 type TableVersionPinStore struct {
-	DB        keelport.DatabaseRepository
-	Namespace func(tenantID int64) string
+	DB      keelport.DatabaseRepository
+	Objects contract.CharterObjects
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -193,12 +188,12 @@ func insertPin(ctx context.Context, qs keelport.QueryService, args []any) (int64
 
 // putAssignmentPin stores the pin with its reference to the stored assignment, or neither.
 func (store *TableVersionPinStore) putAssignmentPin(ctx context.Context, pin domain.VersionPin, args []any) (id int64, err error) {
-	var namespace string
-	if store.Namespace != nil {
-		namespace = store.Namespace(pin.TenantID)
+	if store.Objects == nil {
+		return 0, fmt.Errorf("%w: assignment pins need charter objects", domain.ErrNotReady)
 	}
-	if namespace == "" {
-		return 0, fmt.Errorf("%w: assignment pins need the charter namespace of tenant %d", domain.ErrNotReady, pin.TenantID)
+	assignment, err := store.Objects.ObjectIDs(ctx, pin.TenantID, domain.CharterAssignmentKind, pin.AssignmentRef)
+	if err != nil {
+		return 0, err
 	}
 	tx, err := store.DB.BeginTx(ctx, versionPinQueries)
 	if err != nil {
@@ -215,12 +210,8 @@ func (store *TableVersionPinStore) putAssignmentPin(ctx context.Context, pin dom
 	if id, err = insertPin(ctx, tx, args); err != nil {
 		return 0, err
 	}
-	assigned, err := tx.Query(ctx, qPinAssign, id, pin.TenantID, namespace, pin.AssignmentRef)
-	if err != nil {
+	if _, err = tx.Query(ctx, qPinAssign, id, pin.TenantID, assignment[0]); err != nil {
 		return 0, fmt.Errorf("bind pin to assignment %s: %w", pin.AssignmentRef, err)
-	}
-	if len(assigned.Rows) == 0 {
-		return 0, fmt.Errorf("%w: charter assignment %s is not stored in %s", domain.ErrNotFound, pin.AssignmentRef, namespace)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit assignment pin: %w", err)
@@ -264,9 +255,20 @@ func (store *TableVersionPinStore) Active(ctx context.Context, tenantID int64, a
 	if err != nil {
 		return nil, fmt.Errorf("list pin assignments: %w", err)
 	}
-	refs := make(map[int64]string, len(assignments.Rows))
-	for _, row := range assignments.Rows {
-		refs[common.AsInt64(row[0])] = common.AsString(row[1])
+	if store.Objects == nil {
+		return nil, fmt.Errorf("%w: assignment pins need charter objects", domain.ErrNotReady)
+	}
+	ids := make([]int64, len(assignments.Rows))
+	for i, row := range assignments.Rows {
+		ids[i] = common.AsInt64(row[1])
+	}
+	names, err := store.Objects.Identifiers(ctx, tenantID, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("name pin assignments: %w", err)
+	}
+	refs := make(map[int64]string, len(names))
+	for i, row := range assignments.Rows {
+		refs[common.AsInt64(row[0])] = names[i]
 	}
 	for i := range pins {
 		pins[i].AssignmentRef = refs[pins[i].ID]

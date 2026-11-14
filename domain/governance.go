@@ -53,6 +53,12 @@ type AgentTrigger struct {
 	Binding string         `json:"binding,omitempty"`
 }
 
+// Charter document kinds Scout's foreign keys reference outside the charter package.
+const (
+	CharterAssignmentKind   = "Assignment"
+	CharterSodExceptionKind = "SodException"
+)
+
 // CharterObjectRef is a Charter objectRef: a document of Kind, in Namespace when that is another
 // namespace, or outside the Charter document set when External.
 type CharterObjectRef struct {

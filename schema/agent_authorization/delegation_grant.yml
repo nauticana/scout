@@ -13,8 +13,6 @@ columns:
   - name: grantor_agent_id
     type: VARCHAR(80)
     nullable: true
-  - name: grantee_kind
-    type: VARCHAR(20)
   - name: grantee_agent_id
     type: VARCHAR(80)
   - name: action_scope
@@ -77,14 +75,12 @@ foreign_keys:
       columns: [code]
 indexes:
   - name: delegation_grant_grantee_ix
-    columns: [partner_id, grantee_kind, grantee_agent_id]
+    columns: [partner_id, grantee_agent_id]
 checks:
   - name: delegation_grant_grantor_ck
     expression: (grantor_user_id IS NULL) <> (grantor_agent_id IS NULL)
   - name: delegation_grant_grantor_kind_ck
     expression: (grantor_kind = 'human' AND grantor_user_id IS NOT NULL) OR (grantor_kind = 'agent' AND grantor_agent_id IS NOT NULL)
-  - name: delegation_grant_grantee_kind_ck
-    expression: grantee_kind = 'agent'
   - name: delegation_grant_depth_ck
     expression: max_depth >= 0
   - name: delegation_grant_window_ck

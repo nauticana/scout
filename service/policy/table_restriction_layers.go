@@ -47,22 +47,20 @@ ON CONFLICT (layer_digest) DO NOTHING`,
 	qPlatformCurrentRead: `
 SELECT l.layer_digest, l.denials, l.guardrail_rules
   FROM platform_current_restriction c
-  JOIN platform_restriction_layer l ON l.layer_digest = c.layer_digest
- WHERE c.layer_key = 'platform'`,
+  JOIN platform_restriction_layer l ON l.layer_digest = c.layer_digest`,
 	qPlatformCurrentLock: `
 SELECT layer_digest
   FROM platform_current_restriction
- WHERE layer_key = 'platform'
    FOR UPDATE`,
 	qPlatformCurrentInsert: `
-INSERT INTO platform_current_restriction (layer_key, layer_digest)
-VALUES ('platform', ?)
-ON CONFLICT (layer_key) DO NOTHING
+INSERT INTO platform_current_restriction (layer_digest)
+VALUES (?)
+ON CONFLICT (singleton) DO NOTHING
 RETURNING layer_digest`,
 	qPlatformCurrentSwap: `
 UPDATE platform_current_restriction
    SET layer_digest = ?, updated_at = CURRENT_TIMESTAMP
- WHERE layer_key = 'platform' AND layer_digest = ?
+ WHERE layer_digest = ?
 RETURNING layer_digest`,
 	qTenantLayerInsert: `
 INSERT INTO tenant_restriction_layer (partner_id, layer_digest, denials, guardrail_rules)

@@ -174,23 +174,26 @@ func TestTableVersionPinStoreArguments(t *testing.T) {
 }
 
 func TestTableVersionPinStoreAssignmentPins(t *testing.T) {
-	query := newQueryFake(map[string][][]any{qPinInsert: {{int64(13)}}, qPinAssign: {{int64(501)}}})
-	store := &TableVersionPinStore{DB: dbFake{query: query}, Namespace: func(int64) string { return "tenant.example" }}
+	query := newQueryFake(map[string][][]any{qPinInsert: {{int64(13)}}})
+	objects := fake.CharterObjects{501: {domain.CharterAssignmentKind, "ASGN-1"}, 502: {domain.CharterSodExceptionKind, "ASGN-2"}}
+	store := &TableVersionPinStore{DB: dbFake{query: query}, Objects: objects}
 	pin := testPin(domain.PinScopeAssignment, "3", "lead")
 	pin.AssignmentRef = "ASGN-1"
 	if id, err := store.Put(context.Background(), pin); err != nil || id != 13 || query.commits != 1 {
 		t.Fatalf("id = %d, err = %v, commits = %d", id, err, query.commits)
 	}
-	requireArgs(t, query, qPinAssign, int64(13), int64(8), "tenant.example", "ASGN-1")
-	// An assignment the store does not hold leaves no pin behind.
-	query.rows[qPinAssign] = nil
-	if _, err := store.Put(context.Background(), pin); !errors.Is(err, domain.ErrNotFound) || query.commits != 1 || query.rollbacks != 1 {
-		t.Fatalf("unstored assignment: err = %v, commits = %d, rollbacks = %d", err, query.commits, query.rollbacks)
+	requireArgs(t, query, qPinAssign, int64(13), int64(8), int64(501))
+	// An assignment the store does not hold as an assignment writes nothing.
+	for _, ref := range []string{"ASGN-9", "ASGN-2"} {
+		pin.AssignmentRef, query.args = ref, map[string][]any{}
+		if _, err := store.Put(context.Background(), pin); !errors.Is(err, domain.ErrNotFound) || len(query.args) != 0 || query.commits != 1 {
+			t.Fatalf("%s: err = %v, args = %v, commits = %d", ref, err, query.args, query.commits)
+		}
 	}
-	query.rows[qPinAssign] = [][]any{{int64(501)}}
+	pin.AssignmentRef = "ASGN-1"
 	unbound := &TableVersionPinStore{DB: dbFake{query: query}}
 	if _, err := unbound.Put(context.Background(), pin); !errors.Is(err, domain.ErrNotReady) {
-		t.Fatalf("no namespace: err = %v", err)
+		t.Fatalf("no charter objects: err = %v", err)
 	}
 	for name, mutate := range map[string]func(*domain.VersionPin){
 		"no assignment":   func(pin *domain.VersionPin) { pin.AssignmentRef = "" },
@@ -311,13 +314,13 @@ func TestTableVersionPinStoreActiveNamesAssignments(t *testing.T) {
 		return []any{id, "3", string(scope), nil, "hold", "lead", "lead", nil, nil, nil, at, nil, at}
 	}
 	query := newQueryFake(map[string][][]any{qPinActive: {row(4, domain.PinScopeTenant)}})
-	store := &TableVersionPinStore{DB: dbFake{query: query}}
+	store := &TableVersionPinStore{DB: dbFake{query: query}, Objects: fake.CharterObjects{501: {domain.CharterAssignmentKind, "ASGN-1"}}}
 	pins, err := store.Active(context.Background(), 8, "writer-a", at)
 	if err != nil || len(pins) != 1 || pins[0].AssignmentRef != "" || query.args[qPinAssignments] != nil {
 		t.Fatalf("pins = %+v, err = %v, args = %v", pins, err, query.args[qPinAssignments])
 	}
 	query.rows[qPinActive] = [][]any{row(4, domain.PinScopeTenant), row(5, domain.PinScopeAssignment), row(6, domain.PinScopeAssignment)}
-	query.rows[qPinAssignments] = [][]any{{int64(5), "ASGN-1"}}
+	query.rows[qPinAssignments] = [][]any{{int64(5), int64(501)}}
 	pins, err = store.Active(context.Background(), 8, "writer-a", at)
 	if err != nil || len(pins) != 3 || pins[0].AssignmentRef != "" || pins[1].AssignmentRef != "ASGN-1" || pins[2].AssignmentRef != "" {
 		t.Fatalf("pins = %+v, err = %v", pins, err)

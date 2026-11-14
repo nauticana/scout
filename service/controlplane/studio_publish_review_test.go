@@ -22,6 +22,12 @@ type excuseCall struct {
 	person    domain.PrincipalRef
 }
 
+// reviewExceptions are the separation exceptions the Charter store holds, by object id.
+var reviewExceptions = fake.CharterObjects{
+	77: {domain.CharterSodExceptionKind, "EXC-OK"}, 78: {domain.CharterSodExceptionKind, "EXC-REVOKED"},
+	79: {domain.CharterAssignmentKind, "EXC-ASSIGNMENT"},
+}
+
 // reviewService composes publish reviews over the publish fixture; excused records every Excuse.
 func reviewService(t *testing.T, required bool) (*StudioPublishReviews, *studioQueryFake, string, *[]excuseCall) {
 	t.Helper()
@@ -29,15 +35,15 @@ func reviewService(t *testing.T, required bool) (*StudioPublishReviews, *studioQ
 	studio.DB = catalogDBFake{studioDBFake{qs: query}}
 	excused := &[]excuseCall{}
 	reviews := &StudioPublishReviews{Studio: studio, Now: func() time.Time { return reviewedAt },
-		Releases:           &fake.EffectiveReleaseRepository{},
-		ExceptionNamespace: func(int64) string { return "tenant.example" },
+		Releases: &fake.EffectiveReleaseRepository{},
+		Objects:  reviewExceptions,
 		Separation: fake.PublishSeparation{
 			RequiredFunc: func(context.Context, int64, string, domain.PublishReviewKind, time.Time) (bool, error) {
 				return required, nil
 			},
 			ExcuseFunc: func(_ context.Context, _ int64, _ string, kind domain.PublishReviewKind, exception string, person domain.PrincipalRef, _ time.Time) error {
 				*excused = append(*excused, excuseCall{kind, exception, person})
-				if exception == "EXC-OK" {
+				if exception == "EXC-OK" || exception == "EXC-UNSTORED" || exception == "EXC-ASSIGNMENT" {
 					return nil
 				}
 				return domain.ErrForbidden
@@ -50,11 +56,19 @@ func reviewService(t *testing.T, required bool) (*StudioPublishReviews, *studioQ
 	return reviews, query, candidate.Definition.DefinitionDigest, excused
 }
 
-// reviewRow is a stored review; user 7 last edited a resource it changes.
+// reviewRow is a stored review; user 7 last edited a resource it changes. A named exception is
+// stored as its object id.
 func reviewRow(id int64, digest string, status domain.PublishReviewStatus, requestedBy int64, decidedBy, exception any) []any {
 	var decidedAt any
 	if decidedBy != nil {
 		decidedAt = reviewedAt
+	}
+	if name, named := exception.(string); named {
+		ids, err := reviewExceptions.ObjectIDs(context.Background(), 8, domain.CharterSodExceptionKind, name)
+		if err != nil {
+			panic(err)
+		}
+		exception = ids[0]
 	}
 	return []any{id, digest, int64(4), int64(2), nil, `{"causes":["models"],"editors":[7]}`, `[{"name":"golden","passed":true}]`,
 		string(status), requestedBy, "please", reviewedAt, decidedBy, nil, decidedAt, exception, nil, nil}
@@ -118,23 +132,27 @@ func TestRequestNamesAnExceptionSeparationAdmitsForTheRequester(t *testing.T) {
 	if _, err := reviews.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrForbidden) || query.commits != 0 {
 		t.Fatalf("refused exception = %v, commits %d", err, query.commits)
 	}
-	request.SodExceptionID = "EXC-OK"
-	// An exception separation admits but the store does not hold has no row to reference.
-	if _, err := reviews.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrNotFound) || query.commits != 0 {
-		t.Fatalf("unstored exception = %v, commits %d", err, query.commits)
+	// An exception separation admits but the store does not hold as an exception has no row to reference.
+	for _, unstored := range []string{"EXC-UNSTORED", "EXC-ASSIGNMENT"} {
+		request.SodExceptionID = unstored
+		if _, err := reviews.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrNotFound) || query.commits != 0 {
+			t.Fatalf("%s = %v, commits %d", unstored, err, query.commits)
+		}
 	}
-	query.rows[qReviewExceptionPut] = [][]any{{int64(77)}}
+	request.SodExceptionID = "EXC-OK"
 	review, err := reviews.Request(context.Background(), humanActor(8, 9), request)
-	put := query.args[qReviewExceptionPut]
-	if err != nil || review.SodExceptionID != "EXC-OK" || len(put) != 4 || put[0] != int64(11) || put[1] != int64(8) || put[2] != "tenant.example" || put[3] != "EXC-OK" {
-		t.Fatalf("review = %+v, %v, args %v", review, err, put)
+	if err != nil || review.SodExceptionID != "EXC-OK" {
+		t.Fatalf("review = %+v, %v", review, err)
+	}
+	if put := query.args[qReviewExceptionPut]; !slices.Equal(put, []any{int64(11), int64(8), int64(77)}) {
+		t.Fatalf("exception args = %v", put)
 	}
 	if last := (*excused)[len(*excused)-1]; last.person.ID != "9" || last.kind != domain.PublishReviewOfPublish || !strings.Contains(query.args[qReviewAudit][3].(string), "EXC-OK") {
 		t.Fatalf("excused %+v, audit %v", last, query.args[qReviewAudit])
 	}
 	unbound := &StudioPublishReviews{Studio: reviews.Studio, Separation: reviews.Separation, Releases: reviews.Releases, Now: reviews.Now}
 	if _, err = unbound.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrNotReady) {
-		t.Fatalf("exception without a namespace = %v", err)
+		t.Fatalf("exception without charter objects = %v", err)
 	}
 	request.SodExceptionID = strings.Repeat("x", 201)
 	if _, err = reviews.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrValidation) {

@@ -95,7 +95,7 @@ func (r *StudioPublishReviews) restoreState(ctx context.Context, tenantID int64,
 		return domain.PublishReviewState{}, fmt.Errorf("load restore review: %w", err)
 	}
 	if len(latest.Rows) > 0 {
-		review, scanErr := scanReview(state.AgentID, latest.Rows[0])
+		review, scanErr := r.readReview(ctx, tenantID, state.AgentID, latest.Rows[0])
 		if scanErr != nil {
 			return domain.PublishReviewState{}, scanErr
 		}

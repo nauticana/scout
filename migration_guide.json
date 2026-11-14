@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.3.5",
+      "title": "Charter 1.8.2 object ids, constant columns removed",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "Adopts charter v1.8.2. Scout resolves the stored Charter documents its foreign keys reference through Charter's DocumentStore instead of joining its tables, behind the new contract.CharterObjects port. delegation_grant drops its constant grantee_kind column, and platform_current_restriction is keyed by a singleton flag. Breaking: TableVersionPinStore.Namespace and StudioPublishReviews.ExceptionNamespace become Objects, and UnitScopes.Namespace becomes Objects.",
+      "body_markdown": "## Breaking\n\ncharter moves from v1.8.1 to v1.8.2; apply its steps first.\n\n| Old | New |\n|---|---|\n| `release.TableVersionPinStore.Namespace` | `Objects contract.CharterObjects` |\n| `controlplane.StudioPublishReviews.ExceptionNamespace` | `Objects contract.CharterObjects` |\n| `charter.UnitScopes.Namespace` | `Objects *charter.DocumentObjects`, whose `Namespace` it uses |\n| `UnitScopes.Detach` of a unit the store does not hold was a no-op | `ErrNotFound` |\n\nCompose one `charter.DocumentObjects{Store, Namespace}` over Charter's keel `DocumentStore` and the tenant-to-namespace mapping, and pass it to all three.\n\n## Schema\n\nRebuild from the schema sources, or change a live database:\n\n| Table | Change |\n|---|---|\n| `delegation_grant` | `grantee_kind` and `delegation_grant_grantee_kind_ck` dropped; `delegation_grant_grantee_ix` is `(partner_id, grantee_agent_id)` |\n| `platform_current_restriction` | `layer_key` and `platform_current_restriction_key_ck` replaced by `singleton BOOLEAN NOT NULL DEFAULT TRUE`, the primary key, and `platform_current_restriction_singleton_ck` |\n\n## Additive\n\n- `contract.CharterObjects` (`ObjectIDs` by kind and identifiers, `Identifiers` by object ids), `charter.DocumentObjects` and its `ObjectStore`, which Charter's keel `DocumentStore` satisfies, and `fake.CharterObjects`.\n- `domain.CharterAssignmentKind` and `domain.CharterSodExceptionKind`."
+    },
+    {
       "version": "1.3.4",
       "title": "Charter 1.8.1, foreign keys into Charter's stored documents",
       "tags": [

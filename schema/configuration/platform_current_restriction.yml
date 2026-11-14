@@ -1,14 +1,15 @@
 table: platform_current_restriction
 comment: The platform restriction layer in force; one row, swapped by compare-and-swap
 columns:
-  - name: layer_key
-    type: VARCHAR(30)
+  - name: singleton
+    type: BOOLEAN
+    default: TRUE
   - name: layer_digest
     type: CHAR(64)
   - name: updated_at
     type: TIMESTAMP
     default: CURRENT_TIMESTAMP
-primary_key: [layer_key]
+primary_key: [singleton]
 foreign_keys:
   - name: platform_current_restrictions
     columns: [layer_digest]
@@ -16,5 +17,5 @@ foreign_keys:
       table: platform_restriction_layer
       columns: [layer_digest]
 checks:
-  - name: platform_current_restriction_key_ck
-    expression: layer_key = 'platform'
+  - name: platform_current_restriction_singleton_ck
+    expression: singleton

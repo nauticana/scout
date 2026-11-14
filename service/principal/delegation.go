@@ -21,16 +21,16 @@ const (
 	qGrantsGrantee = "scout_delegation_grants_grantee"
 	qGrantsAgent   = "scout_delegation_grants_agent"
 
-	grantColumns = `grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_kind, grantee_agent_id,
+	grantColumns = `grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_agent_id,
        action_scope, max_depth, budget_minor_units, currency_code, approval_required, begda, endda, revoked_at`
 )
 
 var delegationQueries = map[string]string{
 	qGrantPut: `
 INSERT INTO delegation_grant
-       (partner_id, grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_kind, grantee_agent_id,
+       (partner_id, grant_id, grantor_kind, grantor_user_id, grantor_agent_id, grantee_agent_id,
         action_scope, max_depth, budget_minor_units, currency_code, approval_required, begda, endda, granted_by)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qGrantGet: `
 SELECT ` + grantColumns + `
   FROM delegation_grant
@@ -43,7 +43,7 @@ RETURNING grant_id`,
 	qGrantsGrantee: `
 SELECT ` + grantColumns + `
   FROM delegation_grant
- WHERE partner_id = ? AND grantee_kind = ? AND grantee_agent_id = ?
+ WHERE partner_id = ? AND grantee_agent_id = ?
    AND revoked_at IS NULL AND begda <= CURRENT_TIMESTAMP AND (endda IS NULL OR endda > CURRENT_TIMESTAMP)`,
 	qGrantsAgent: `
 SELECT ` + grantColumns + `
@@ -105,7 +105,7 @@ func (g *TableGrants) Put(ctx context.Context, grant domain.DelegationGrant) err
 	}
 	_, err := g.qs.Query(context.WithoutCancel(ctx), qGrantPut, grant.TenantID, grant.GrantID,
 		string(grant.Grantor.Kind), grantorUser, grantorAgent,
-		string(grant.Grantee.Kind), grant.Grantee.ID, grant.ActionScope, grant.MaxDepth,
+		grant.Grantee.ID, grant.ActionScope, grant.MaxDepth,
 		budget, currency, grant.ApprovalRequired, grant.ValidFrom, nullTime(grant.ValidTo), nil)
 	if err != nil {
 		return fmt.Errorf("put delegation grant: %w", err)
@@ -144,12 +144,15 @@ func (g *TableGrants) Revoke(ctx context.Context, tenantID int64, grantID, _ str
 	return nil
 }
 
-// ForGrantee lists the grants a principal currently holds.
+// ForGrantee lists the grants a principal currently holds; only an agent holds any.
 func (g *TableGrants) ForGrantee(ctx context.Context, tenantID int64, grantee domain.PrincipalRef) ([]domain.DelegationGrant, error) {
 	if err := g.init(ctx); err != nil {
 		return nil, err
 	}
-	return g.list(ctx, tenantID, qGrantsGrantee, tenantID, string(grantee.Kind), grantee.ID)
+	if grantee.Kind != domain.PrincipalAgent {
+		return nil, nil
+	}
+	return g.list(ctx, tenantID, qGrantsGrantee, tenantID, grantee.ID)
 }
 
 // ForAgent lists the grants in force or still to begin that name an agent on either side.
@@ -291,15 +294,15 @@ func scanGrant(tenantID int64, row []any) domain.DelegationGrant {
 	if grantorKind == domain.PrincipalHuman {
 		grantorID = common.AsString(row[2])
 	}
-	validTo, _ := common.AsTimeOK(row[12])
-	revoked, _ := common.AsTimeOK(row[13])
+	validTo, _ := common.AsTimeOK(row[11])
+	revoked, _ := common.AsTimeOK(row[12])
 	return domain.DelegationGrant{
 		TenantID: tenantID, GrantID: common.AsString(row[0]),
 		Grantor:     domain.PrincipalRef{Kind: grantorKind, ID: grantorID},
-		Grantee:     domain.PrincipalRef{Kind: domain.PrincipalKind(common.AsString(row[4])), ID: common.AsString(row[5])},
-		ActionScope: common.AsString(row[6]), MaxDepth: int(common.AsInt64(row[7])),
-		BudgetMinorUnits: common.AsInt64(row[8]), Currency: common.AsString(row[9]),
-		ApprovalRequired: common.AsBool(row[10]), ValidFrom: common.AsTime(row[11]),
+		Grantee:     domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: common.AsString(row[4])},
+		ActionScope: common.AsString(row[5]), MaxDepth: int(common.AsInt64(row[6])),
+		BudgetMinorUnits: common.AsInt64(row[7]), Currency: common.AsString(row[8]),
+		ApprovalRequired: common.AsBool(row[9]), ValidFrom: common.AsTime(row[10]),
 		ValidTo: validTo, RevokedAt: revoked,
 	}
 }

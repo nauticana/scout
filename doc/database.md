@@ -1268,7 +1268,7 @@ erDiagram
         text guardrail_rules
     }
     platform_current_restriction {
-        varchar layer_key PK
+        boolean singleton PK
         char layer_digest FK
         timestamp updated_at
     }
@@ -1288,7 +1288,7 @@ erDiagram
 Restriction layers are the deliberate exception to freezing: standing denials and block or redact
 guardrail rules that the platform or a tenant applies to every release at decision time. Versions
 are immutable and keyed by digest; the current pointer moves by compare-and-swap, and
-`platform_current_restriction` has exactly one row. See
+`platform_current_restriction` has exactly one row, keyed by a `singleton` that can only be true. See
 [restriction layers](governance.md#restriction-layers).
 
 `agent_permission` mirrors keel's `user_permission`, including `begda`/`endda`, so agents and humans
