@@ -79,7 +79,7 @@ effective-dated resource value to a scope. One binding table serves every resour
 level or a kind never adds a table.
 
 A product governing its organization through Charter attaches scopes to organization units with
-`charter.UnitScopes` (`config_scope_unit`): a unit's scope must descend from the scope of its nearest
+`charter.UnitScopes` (`config_scope_unit`, a foreign key to the stored unit): a unit's scope must descend from the scope of its nearest
 attached ancestor, and a position or assignment resolves to the nearest attached scope up its unit path,
 or the tenant root when none is attached.
 

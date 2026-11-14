@@ -167,18 +167,30 @@ func TestTableVersionPinStoreArguments(t *testing.T) {
 		t.Fatalf("id = %d, err = %v", id, err)
 	}
 	args := query.args[qPinInsert]
-	if len(args) != 15 || args[0] != int64(8) || args[1] != "writer-a" || args[2] != "1" || args[3] != string(domain.PinScopeCompliance) ||
-		args[4] != nil || args[7] != "dpo" || args[9] != `["safety-2026.08"]` || args[10] != nil || args[14] != nil {
+	if len(args) != 14 || args[0] != int64(8) || args[1] != "writer-a" || args[2] != "1" || args[3] != string(domain.PinScopeCompliance) ||
+		args[4] != nil || args[7] != "dpo" || args[9] != `["safety-2026.08"]` || args[10] != nil || query.args[qPinAssign] != nil {
 		t.Fatalf("args = %v", args)
 	}
 }
 
 func TestTableVersionPinStoreAssignmentPins(t *testing.T) {
-	store := &TableVersionPinStore{DB: dbFake{query: newQueryFake(map[string][][]any{qPinInsert: {{int64(13)}}})}}
+	query := newQueryFake(map[string][][]any{qPinInsert: {{int64(13)}}, qPinAssign: {{int64(501)}}})
+	store := &TableVersionPinStore{DB: dbFake{query: query}, Namespace: func(int64) string { return "tenant.example" }}
 	pin := testPin(domain.PinScopeAssignment, "3", "lead")
 	pin.AssignmentRef = "ASGN-1"
-	if id, err := store.Put(context.Background(), pin); err != nil || id != 13 {
-		t.Fatalf("id = %d, err = %v", id, err)
+	if id, err := store.Put(context.Background(), pin); err != nil || id != 13 || query.commits != 1 {
+		t.Fatalf("id = %d, err = %v, commits = %d", id, err, query.commits)
+	}
+	requireArgs(t, query, qPinAssign, int64(13), int64(8), "tenant.example", "ASGN-1")
+	// An assignment the store does not hold leaves no pin behind.
+	query.rows[qPinAssign] = nil
+	if _, err := store.Put(context.Background(), pin); !errors.Is(err, domain.ErrNotFound) || query.commits != 1 || query.rollbacks != 1 {
+		t.Fatalf("unstored assignment: err = %v, commits = %d, rollbacks = %d", err, query.commits, query.rollbacks)
+	}
+	query.rows[qPinAssign] = [][]any{{int64(501)}}
+	unbound := &TableVersionPinStore{DB: dbFake{query: query}}
+	if _, err := unbound.Put(context.Background(), pin); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("no namespace: err = %v", err)
 	}
 	for name, mutate := range map[string]func(*domain.VersionPin){
 		"no assignment":   func(pin *domain.VersionPin) { pin.AssignmentRef = "" },
@@ -290,4 +302,25 @@ func TestCohortSelectionIsStable(t *testing.T) {
 	if changed == 0 || changed == 200 {
 		t.Fatalf("cohort selected %d of 200 subjects", changed)
 	}
+}
+
+// Active reads the assignment of an assignment pin from its stored row, and only when one is active.
+func TestTableVersionPinStoreActiveNamesAssignments(t *testing.T) {
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	row := func(id int64, scope domain.PinScope) []any {
+		return []any{id, "3", string(scope), nil, "hold", "lead", "lead", nil, nil, nil, at, nil, at}
+	}
+	query := newQueryFake(map[string][][]any{qPinActive: {row(4, domain.PinScopeTenant)}})
+	store := &TableVersionPinStore{DB: dbFake{query: query}}
+	pins, err := store.Active(context.Background(), 8, "writer-a", at)
+	if err != nil || len(pins) != 1 || pins[0].AssignmentRef != "" || query.args[qPinAssignments] != nil {
+		t.Fatalf("pins = %+v, err = %v, args = %v", pins, err, query.args[qPinAssignments])
+	}
+	query.rows[qPinActive] = [][]any{row(4, domain.PinScopeTenant), row(5, domain.PinScopeAssignment), row(6, domain.PinScopeAssignment)}
+	query.rows[qPinAssignments] = [][]any{{int64(5), "ASGN-1"}}
+	pins, err = store.Active(context.Background(), 8, "writer-a", at)
+	if err != nil || len(pins) != 3 || pins[0].AssignmentRef != "" || pins[1].AssignmentRef != "ASGN-1" || pins[2].AssignmentRef != "" {
+		t.Fatalf("pins = %+v, err = %v", pins, err)
+	}
+	requireArgs(t, query, qPinAssignments, int64(8), "writer-a", at, at)
 }

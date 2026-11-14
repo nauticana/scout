@@ -6,6 +6,9 @@
 # keel tenant_management (which depends on keel core and geo), approval keel
 # outbox, and mcp_confirmation keel approval and outbox; mcp_confirmation links a
 # confirmation to the runtime tool call that waits on it, so it requires runtime.
+# The enterprise_* modules hold foreign keys into Charter's schema modules:
+# enterprise_configuration and enterprise_release require charter_organization,
+# enterprise_agent charter_authority, each with the Charter modules it depends on.
 version: 1
 groups:
   - name: catalog
@@ -109,3 +112,15 @@ groups:
     seed: seed/mcp_confirmation/mcp_confirmation.yml
     depends_on: [catalog, tenancy, runtime]
     seed_depends_on: [core]
+
+  - name: enterprise_configuration
+    path: enterprise_configuration
+    depends_on: [configuration]
+
+  - name: enterprise_agent
+    path: enterprise_agent
+    depends_on: [agent]
+
+  - name: enterprise_release
+    path: enterprise_release
+    depends_on: [release]

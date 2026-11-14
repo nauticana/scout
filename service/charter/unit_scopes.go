@@ -26,22 +26,30 @@ const (
 
 var unitScopeQueries = map[string]string{
 	qUnitScopePut: `
-INSERT INTO config_scope_unit (partner_id, unit_namespace, unit_id, scope_id)
-VALUES (?, ?, ?, ?)
-ON CONFLICT (partner_id, unit_namespace, unit_id) DO UPDATE SET scope_id = EXCLUDED.scope_id`,
+INSERT INTO config_scope_unit (partner_id, unit_id, scope_id)
+SELECT u.partner_id, u.id, ?
+  FROM organization_unit u
+  JOIN enterprise_object o ON o.partner_id = u.partner_id AND o.id = u.id
+ WHERE o.partner_id = ? AND o.namespace = ? AND o.identifier = ?
+ON CONFLICT (partner_id, unit_id) DO UPDATE SET scope_id = EXCLUDED.scope_id
+RETURNING unit_id`,
 	qUnitScopeDelete: `
-DELETE FROM config_scope_unit
- WHERE partner_id = ? AND unit_namespace = ? AND unit_id = ?`,
+DELETE FROM config_scope_unit s
+ USING enterprise_object o
+ WHERE o.partner_id = s.partner_id AND o.id = s.unit_id
+   AND s.partner_id = ? AND o.namespace = ? AND o.identifier = ?`,
 	qUnitScopeList: `
-SELECT unit_namespace, unit_id, scope_id
-  FROM config_scope_unit
- WHERE partner_id = ?
- ORDER BY unit_namespace, unit_id`,
+SELECT o.identifier, s.scope_id
+  FROM config_scope_unit s
+  JOIN enterprise_object o ON o.partner_id = s.partner_id AND o.id = s.unit_id
+ WHERE s.partner_id = ? AND o.namespace = ?
+ ORDER BY o.identifier`,
 }
 
 // UnitScopes attaches a tenant's configuration scopes to Charter organization units, so scoped
 // configuration inherits along the organization tree: a unit's scope must descend from the scope
 // of its nearest attached ancestor. Namespace maps a tenant to the Charter namespace owning its units.
+// An attachment references the unit's stored row, so Organization reads the Charter store in DB.
 type UnitScopes struct {
 	DB           keelport.DatabaseRepository
 	Organization organization.Provider
@@ -96,10 +104,14 @@ func (u *UnitScopes) Attach(ctx context.Context, tenantID int64, unit model.Ref,
 			}
 		}
 	}()
-	if _, err = tx.Query(ctx, qUnitScopePut, tenantID, namespace, unit.ID, scopeID); err != nil {
+	stored, err := tx.Query(ctx, qUnitScopePut, scopeID, tenantID, namespace, unit.ID)
+	if err != nil {
 		return fmt.Errorf("attach unit %s to scope %s: %w", unit.ID, scopeID, err)
 	}
-	attached, err := u.attachments(ctx, tx, tenantID)
+	if len(stored.Rows) == 0 {
+		return fmt.Errorf("%w: charter unit %s is not stored in %s", domain.ErrNotFound, unit.ID, namespace)
+	}
+	attached, err := u.attachments(ctx, tx, tenantID, namespace)
 	if err != nil {
 		return err
 	}
@@ -137,7 +149,7 @@ func (u *UnitScopes) Resolve(ctx context.Context, tenantID int64, subject model.
 	if err != nil {
 		return "", err
 	}
-	attached, err := u.attachments(ctx, u.qs, tenantID)
+	attached, err := u.attachments(ctx, u.qs, tenantID, namespace)
 	if err != nil {
 		return "", err
 	}
@@ -178,16 +190,14 @@ func (u *UnitScopes) unitOf(ctx context.Context, namespace string, subject model
 }
 
 // attachments reads the tenant's attachments in its namespace, keyed by unit id.
-func (u *UnitScopes) attachments(ctx context.Context, qs keelport.QueryService, tenantID int64) (map[string]string, error) {
-	result, err := qs.Query(ctx, qUnitScopeList, tenantID)
+func (u *UnitScopes) attachments(ctx context.Context, qs keelport.QueryService, tenantID int64, namespace string) (map[string]string, error) {
+	result, err := qs.Query(ctx, qUnitScopeList, tenantID, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("list unit scopes of tenant %d: %w", tenantID, err)
 	}
 	attached := make(map[string]string, len(result.Rows))
 	for _, row := range result.Rows {
-		if common.AsString(row[0]) == u.Namespace(tenantID) {
-			attached[common.AsString(row[1])] = common.AsString(row[2])
-		}
+		attached[common.AsString(row[0])] = common.AsString(row[1])
 	}
 	return attached, nil
 }

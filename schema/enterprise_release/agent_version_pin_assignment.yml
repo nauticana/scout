@@ -1,0 +1,24 @@
+table: agent_version_pin_assignment
+comment: The Charter assignment an assignment pin serves; a conversation names it to take the pin
+columns:
+  - name: pin_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: assignment_id
+    type: BIGINT
+primary_key: [pin_id]
+foreign_keys:
+  - name: version_pin_assignments
+    columns: [partner_id, pin_id]
+    references:
+      table: agent_version_pin
+      columns: [partner_id, id]
+  - name: assignment_version_pins
+    columns: [partner_id, assignment_id]
+    references:
+      table: organization_assignment
+      columns: [partner_id, id]
+indexes:
+  - name: agent_version_pin_assignment_ix
+    columns: [partner_id, assignment_id]

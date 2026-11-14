@@ -16,11 +16,13 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// unitScopeRows is config_scope_unit, keyed by namespace and unit; a transaction works on a copy until it commits.
+// unitScopeRows is config_scope_unit joined to its stored units, keyed by namespace and unit; a
+// transaction works on a copy until it commits. A unit in unstored has no organization_unit row.
 type unitScopeRows struct {
 	keelport.DatabaseRepository
 	committed map[[2]string]string
 	working   map[[2]string]string
+	unstored  map[string]bool
 }
 
 func (rows *unitScopeRows) table() map[[2]string]string {
@@ -34,13 +36,19 @@ func (rows *unitScopeRows) Query(_ context.Context, name string, args ...any) (*
 	table := rows.table()
 	switch name {
 	case qUnitScopePut:
-		table[[2]string{args[1].(string), args[2].(string)}] = args[3].(string)
+		if rows.unstored[args[3].(string)] {
+			break
+		}
+		table[[2]string{args[2].(string), args[3].(string)}] = args[0].(string)
+		return &keelmodel.QueryResult{Rows: [][]any{{int64(1)}}}, nil
 	case qUnitScopeDelete:
 		delete(table, [2]string{args[1].(string), args[2].(string)})
 	case qUnitScopeList:
 		result := &keelmodel.QueryResult{}
 		for key, scopeID := range table {
-			result.Rows = append(result.Rows, []any{key[0], key[1], scopeID})
+			if key[0] == args[1].(string) {
+				result.Rows = append(result.Rows, []any{key[1], scopeID})
+			}
 		}
 		return result, nil
 	}
@@ -125,6 +133,14 @@ func TestUnitScopesAttachKeepsTheOrganizationTreeInsideTheScopeTree(t *testing.T
 	}
 	if err := scopes.Attach(ctx, 7, model.Ref{ID: "OU-SALES-OPERATIONS"}, ""); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("blank scope = %v", err)
+	}
+	// A unit the provider knows but the store does not hold has no row to reference.
+	rows.unstored = map[string]bool{"OU-SALES-OPERATIONS": true}
+	if err := scopes.Attach(ctx, 7, model.Ref{ID: "OU-SALES-OPERATIONS"}, "sales"); !errors.Is(err, domain.ErrNotFound) || rows.working != nil {
+		t.Fatalf("unstored unit = %v", err)
+	}
+	if _, attached := rows.committed[[2]string{harborNS, "OU-SALES-OPERATIONS"}]; attached {
+		t.Fatalf("rows = %+v", rows.committed)
 	}
 	if err := (&UnitScopes{}).Attach(ctx, 7, model.Ref{ID: "OU-PRODUCTION"}, "plant"); !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("zero value = %v", err)

@@ -8,7 +8,7 @@ The YAML files under `schema/` are authoritative. This document explains ownersh
 
 ## Module dependency graph
 
-Scout's schema is eighteen selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
+Scout's schema is twenty-one selectable modules declared in `schema/dependency.yml`. A downstream generates only the modules its product uses; selecting a module means selecting every module it points to, transitively.
 
 - Every node is a schema module, labeled with the number of tables it owns.
 - An arrow points from a module to a module it depends on because at least one foreign key crosses that boundary.
@@ -52,10 +52,19 @@ flowchart BT
     mcp_confirmation --> keel_approval
     evaluation --> knowledge
     evaluation --> release
+    enterprise_configuration --> configuration_module
+    enterprise_configuration --> charter_organization
+    enterprise_agent --> agent
+    enterprise_agent --> charter_authority
+    enterprise_release --> release
+    enterprise_release --> charter_organization
+    charter_authority --> charter_organization
 
     core["keel core"]
     tenant_management["keel tenant_management"]
     keel_approval["keel approval"]
+    charter_organization["charter organization"]
+    charter_authority["charter authority"]
     catalog["Catalog<br/>14 tables"]
     tenancy["Tenancy<br/>4 tables"]
     prompt["Prompt<br/>2 tables"]
@@ -69,16 +78,19 @@ flowchart BT
     release["Release<br/>16 tables"]
     evaluation["Evaluation<br/>21 tables"]
     agent_authorization_module["Agent Authorization<br/>2 tables"]
-    configuration_module["Configuration<br/>9 tables"]
+    configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
     skill["Skill<br/>12 tables"]
     memory["Memory<br/>2 tables"]
     mcp_confirmation["MCP Confirmation<br/>2 tables"]
+    enterprise_configuration["Enterprise Configuration<br/>1 table"]
+    enterprise_agent["Enterprise Agent<br/>1 table"]
+    enterprise_release["Enterprise Release<br/>1 table"]
 ```
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 62 Scout tables — while the full platform is 157. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 61 Scout tables — while the full platform is 156, or 159 with the three `enterprise_*` modules. Those hold Scout's foreign keys into Charter's stored documents, so each needs Charter's schema modules in the same database: `enterprise_configuration` and `enterprise_release` need Charter's `charter_organization`, `enterprise_agent` its `charter_authority`, each with the Charter modules it depends on. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -212,7 +224,6 @@ flowchart RL
     subgraph configuration_module["Configuration"]
         direction BT
         config_scope["config_scope"]
-        config_scope_unit["config_scope_unit"]
         config_scope_binding["config_scope_binding"]
         effective_agent_release["effective_agent_release"]
         audit_event["audit_event"]
@@ -221,7 +232,6 @@ flowchart RL
         tenant_restriction_layer["tenant_restriction_layer"]
         tenant_current_restriction["tenant_current_restriction"]
     end
-    config_scope_unit --> config_scope
     config_scope_binding --> config_scope
     effective_agent_release --> config_scope
     effective_agent_release --> agent_version
@@ -461,6 +471,15 @@ flowchart RL
     agent_memory --> memory_section
     agent_memory --> agent_tenant
 
+    subgraph enterprise_modules["Enterprise Configuration, Agent, and Release"]
+        direction BT
+        config_scope_unit["config_scope_unit"]
+        agent_publish_review_exception["agent_publish_review_exception"]
+        agent_version_pin_assignment["agent_version_pin_assignment"]
+    end
+    config_scope_unit --> config_scope
+    agent_publish_review_exception --> agent_publish_review
+    agent_version_pin_assignment --> agent_version_pin
 ```
 
 ## Storage boundaries
@@ -503,6 +522,11 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `config_scope` | `child_config_scopes` | `config_scope[]` |
 | `config_scope` | `config_scope_bindings` | `config_scope_binding[]` |
 | `config_scope` | `unit_config_scopes` | `config_scope_unit[]` |
+| `organization_unit` | `organization_unit_config_scopes` | `config_scope_unit` |
+| `agent_publish_review` | `publish_review_exceptions` | `agent_publish_review_exception` |
+| `sod_exception` | `sod_exception_publish_reviews` | `agent_publish_review_exception[]` |
+| `agent_version_pin` | `version_pin_assignments` | `agent_version_pin_assignment` |
+| `organization_assignment` | `assignment_version_pins` | `agent_version_pin_assignment[]` |
 | `agent_type` | `agent_type_versions` | `agent_type_version[]` |
 | `agent_type` | `typed_agent_profiles` | `agent_profile[]` |
 | `agent_type` | `agent_templates` | `agent_template[]` |
@@ -989,6 +1013,8 @@ erDiagram
     agent_version ||--o{ agent_publish_review : restore_version_publish_reviews
     agent_publish_review }o--|| user_account : requested_publish_reviews
     agent_publish_review }o--|| user_account : decided_publish_reviews
+    agent_publish_review ||--o| agent_publish_review_exception : publish_review_exceptions
+    sod_exception ||--o{ agent_publish_review_exception : sod_exception_publish_reviews
     agent_version ||--o{ agent_release_activation : agent_release_activations
     agent_version ||--o{ agent_release_activation : base_stable_release_activations
     agent_version ||--o{ agent_release_activation : base_canary_release_activations
@@ -1019,9 +1045,17 @@ erDiagram
         char status_code
         bigint requested_by FK
         bigint decided_by FK
-        varchar sod_exception_id
         varchar published_version FK
         varchar restore_version FK
+    }
+    sod_exception {
+        bigint partner_id PK
+        bigint id PK
+    }
+    agent_publish_review_exception {
+        bigint review_id PK,FK
+        bigint partner_id FK
+        bigint sod_exception_id FK
     }
     agent_release_activation {
         bigint id PK
@@ -1045,7 +1079,7 @@ erDiagram
     }
 ```
 
-`agent_publish_review` asks a second person to approve publishing one exact draft, identified by `definition_digest`. It keeps the draft and prompt-profile revisions, the stable release the diff is taken against (`base_version`), the diff, and optional evaluation results. A new request supersedes one still `R` (requested), and the approver must not be the requester. When the agent's separation policy requires a review, publication needs the latest review approved for the same digest, refuses while any `agent_draft_comment` is open, and consumes the review by setting `published_version`; `sod_exception_id` is the separation-of-duties exception under which a requester may publish their own approved review.
+`agent_publish_review` asks a second person to approve publishing one exact draft, identified by `definition_digest`. It keeps the draft and prompt-profile revisions, the stable release the diff is taken against (`base_version`), the diff, and optional evaluation results. A new request supersedes one still `R` (requested), and the approver must not be the requester. When the agent's separation policy requires a review, publication needs the latest review approved for the same digest, refuses while any `agent_draft_comment` is open, and consumes the review by setting `published_version`; `agent_publish_review_exception`, in the `enterprise_agent` module, references the stored Charter `sod_exception` under which a requester may publish their own approved review.
 
 A restore review is the same row with `restore_version` set: it approves restoring that published version over the release active when it was requested (`base_version`), recording the version's digest, its frozen revisions, and the diff from the active release. Publish and restore reviews are separate tracks, so a new request supersedes only an open review of its own kind. When the separation policy requires restore review, a restore needs the agent's latest restore review approved for exactly that version, digest, and base; open draft comments do not block it, and the restore consumes the review by setting `published_version`.
 
@@ -1161,14 +1195,15 @@ erDiagram
 
 ```mermaid
 erDiagram
-    config_resource_kind ||--o{ config_scope_binding : kind_scoped_bindings
     agent_tenant ||--o{ config_scope : config_scopes
     config_scope_kind ||--o{ config_scope : kind_config_scopes
-    config_scope ||--o{ config_scope : child_config_scopes
+    config_resource_kind ||--o{ config_scope_binding : kind_scoped_bindings
     config_scope ||--o{ config_scope_binding : config_scope_bindings
     config_scope ||--o{ config_scope_unit : unit_config_scopes
+    config_scope_unit |o--}| organization_unit : organization_unit_config_scopes
     config_scope ||--o{ effective_agent_release : scope_effective_agent_releases
     agent_version ||--o| effective_agent_release : effective_agent_releases
+    config_scope ||--o{ config_scope : child_config_scopes
 
     config_scope {
         bigint partner_id PK,FK
@@ -1176,10 +1211,13 @@ erDiagram
         varchar parent_scope_id FK
         varchar scope_kind_code FK
     }
+    organization_unit {
+        bigint partner_id PK
+        bigint id PK
+    }
     config_scope_unit {
         bigint partner_id PK,FK
-        varchar unit_namespace PK
-        varchar unit_id PK
+        bigint unit_id PK,FK
         varchar scope_id FK
     }
     config_scope_binding {
@@ -1209,8 +1247,8 @@ erDiagram
 own levels and Scout seeds only the `tenant` root kind. One `config_scope_binding` table serves every
 resource kind, so adding a level or a kind adds rows, not tables. `sealed` is set by the binding's
 own scope, which is what makes a company clause genuinely non-overridable; a narrower scope that
-tries fails with `domain.ErrSealed`. `config_scope_unit` attaches a scope to a Charter organization
-unit by namespace and id, one scope per unit; `charter.UnitScopes` keeps a child unit's scope under
+tries fails with `domain.ErrSealed`. `config_scope_unit`, in the `enterprise_configuration` module, attaches a scope to
+a stored Charter `organization_unit`, one scope per unit; `charter.UnitScopes` keeps a child unit's scope under
 its nearest attached ancestor's, so inheritance follows the organization tree, and resolves a
 position or assignment to its unit's scope.
 
@@ -1747,32 +1785,34 @@ erDiagram
     turn_queue ||--o| turn_dead_letter : dead_letter_queue_entries
     turn_queue |o--|| conversation_turn : turn_queue_turns
     turn_dead_letter }o--|| conversation_turn : dead_letter_turns
+    usage_category ||--o{ usage_event : category_usage_events
+    model_definition |o--o{ usage_event : model_usage_events
+    usage_event }o--|| conversation_turn : usage_events
     agent_conversation ||--|{ conversation_turn : conversation_turns
     session_snapshot |o--|| step_checkpoint : checkpoint_session_snapshots
+    agent_version ||--o{ agent_run : agent_run_versions
+    agent_run }o--|| turn_status : status_agent_runs
+    turn_status ||--o{ conversation_turn : status_conversation_turns
+    turn_working_set_item }o--|| conversation_turn : conversation_turn_working_set_items
+    turn_feedback }o--|| conversation_turn : turn_feedbacks
+
     conversation_turn ||--o{ step_checkpoint : step_checkpoints
     conversation_turn ||--o{ step_idempotency : step_idempotencies
     step_checkpoint }o--|| execution_step : execution_step_checkpoints
-    step_idempotency }o--|| execution_step : execution_step_idempotencies
-    step_idempotency }o--|| idempotency_status : status_step_idempotencies
+    execution_step ||--o{ step_idempotency : execution_step_idempotencies
+    idempotency_status ||--o{ step_idempotency : status_step_idempotencies
     step_idempotency ||--o{ step_loop_entry : step_loop_entries
-    step_idempotency |o--o{ turn_operator_entry : step_operator_entries
-    step_idempotency ||--o{ turn_call_outcome : step_call_outcomes
-    tool_version ||--o{ turn_call_outcome : tool_call_outcomes
     conversation_turn ||--o{ turn_operator_entry : turn_operator_entries
-    conversation_turn ||--o{ turn_working_set_item : conversation_turn_working_set_items
+    turn_operator_entry }o--o| step_idempotency : step_operator_entries
+    step_idempotency ||--o{ turn_call_outcome : step_call_outcomes
     conversation_turn ||--o{ turn_call_outcome : turn_call_outcomes
+    tool_version ||--o{ turn_call_outcome : tool_call_outcomes
     turn_call_outcome ||--o{ turn_call_attestation : call_outcome_attestations
-    conversation_turn ||--o{ budget_reservation : budget_reservations
-    budget_reservation }o--|| reservation_status : status_budget_reservations
-    budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
-    conversation_turn ||--o{ usage_event : usage_events
-    usage_event }o--|| usage_category : category_usage_events
-    model_definition |o--o{ usage_event : model_usage_events
-    turn_status ||--o{ conversation_turn : status_conversation_turns
-    turn_feedback }o--|| conversation_turn : turn_feedbacks
+
     conversation_turn ||--o| conversation_turn_detail : conversation_turn_details
-    agent_run }o--|| turn_status : status_agent_runs
-    agent_version ||--o{ agent_run : agent_run_versions
+    conversation_turn ||--o{ budget_reservation : budget_reservations
+    budget_reservation ||--o{ conversation_turn_detail : reservation_conversation_turn_details
+    reservation_status ||--o{ budget_reservation : status_budget_reservations
 
     agent_tenant {
         bigint partner_id PK,FK
@@ -2187,6 +2227,8 @@ Agent canaries in `agent_deployment` remain independent from platform rings in `
 ```mermaid
 erDiagram
     agent_version ||--o{ agent_version_pin : agent_version_pins
+    agent_version_pin ||--o| agent_version_pin_assignment : version_pin_assignments
+    organization_assignment ||--o{ agent_version_pin_assignment : assignment_version_pins
     agent_version ||--o{ experiment_cohort : experiment_cohorts
     agent_version ||--o{ agent_pilot_member : agent_version_pilot_members
     agent_conversation ||--o| conversation_release : conversation_releases
@@ -2220,7 +2262,15 @@ erDiagram
         text compatible_index_versions
         timestamp effective_at
         timestamp expires_at
-        varchar assignment_ref
+    }
+    organization_assignment {
+        bigint partner_id PK
+        bigint id PK
+    }
+    agent_version_pin_assignment {
+        bigint pin_id PK,FK
+        bigint partner_id FK
+        bigint assignment_id FK
     }
     experiment_cohort {
         bigint partner_id PK,FK
@@ -2257,7 +2307,7 @@ A conversation carries two independent identities: `agent_conversation.agent_ver
 
 `release_bundle` records what a platform release certifies — model and provider version, tokenizer, runtime, decoding defaults, prompt, embedding and reranker with index generation, tools, safety policy, migration set, residency policy, provenance, compatibility constraints, and rollback target — under a digest and signature. Nothing routes on the bundle; it exists so "roll back to the previous release" names exactly what it restores.
 
-Agent-version and platform-release identity stay separate. `agent_version_pin` holds compliance (`C`), tenant (`T`), and assignment (`A`) pins with effective and expiry dates, owner, approval, and the policy and index versions each pin is compatible with; an assignment pin, and only one, names the opaque Charter assignment (`assignment_ref`) whose conversations it serves; `experiment_cohort` holds the stable-hash cohort assignment. `agent_pilot_member` serves one release to a listed person (`subject_kind` `P`, a `user_account` id) or a product position (`O`, an opaque reference), apart from hash cohorts; it is effective-dated with who added it and why, and a partial unique index keeps one open membership per subject and agent. Resolution precedence is compliance pin, tenant pin, the pin of the assignment the conversation names, pilot, experiment cohort, then the canary/stable split; a person's own membership wins over a position's, and a release still named by a membership in force is retained by garbage collection. A conversation persists both identities: `agent_conversation.agent_version` for the agent and `conversation_release.platform_version` for the release it was created on, so a rollback changes new assignments only and live conversations drain on what they started with.
+Agent-version and platform-release identity stay separate. `agent_version_pin` holds compliance (`C`), tenant (`T`), and assignment (`A`) pins with effective and expiry dates, owner, approval, and the policy and index versions each pin is compatible with; an assignment pin, and only one, has an `agent_version_pin_assignment` row, in the `enterprise_release` module, referencing the stored Charter `organization_assignment` whose conversations it serves; `experiment_cohort` holds the stable-hash cohort assignment. `agent_pilot_member` serves one release to a listed person (`subject_kind` `P`, a `user_account` id) or a product position (`O`, an opaque reference), apart from hash cohorts; it is effective-dated with who added it and why, and a partial unique index keeps one open membership per subject and agent. Resolution precedence is compliance pin, tenant pin, the pin of the assignment the conversation names, pilot, experiment cohort, then the canary/stable split; a person's own membership wins over a position's, and a release still named by a membership in force is retained by garbage collection. A conversation persists both identities: `agent_conversation.agent_version` for the agent and `conversation_release.platform_version` for the release it was created on, so a rollback changes new assignments only and live conversations drain on what they started with.
 
 ### Quality evaluation
 
@@ -2440,9 +2490,9 @@ erDiagram
     golden_set_version |o--o{ evaluation_run : golden_set_version_evaluation_runs
     golden_set_version ||--o{ evaluation_manifest : evaluation_manifests
     evaluation_run_subject }o--|| model_definition : model_evaluation_run_subjects
-    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
     evaluation_run ||--o{ evaluation_comparison : evaluation_comparisons
     evaluation_run ||--o{ evaluation_result : evaluation_results
+    evaluation_run ||--o{ evaluation_run_subject : evaluation_run_subjects
     golden_set_version ||--o{ evaluation_baseline : golden_set_version_baselines
     evaluation_baseline ||--o{ evaluation_baseline_output : evaluation_baseline_outputs
     evaluation_baseline |o--o{ evaluation_run_subject : baseline_evaluation_run_subjects
@@ -2671,10 +2721,13 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `release` | `rollout_stage`, `platform_release`, `release_bundle`, `tenant_ring`, `tenant_ring_member`, `contract_test_case`, `contract_test_run`, `contract_test_result`, `platform_rollout`, `platform_rollout_state`, `platform_rollout_transition`, `platform_rollout_bypass`, `agent_version_pin`, `experiment_cohort`, `agent_pilot_member`, `conversation_release` |
 | `evaluation` | `golden_set`, `human_review_item`, `golden_set_version`, `golden_case`, `agent_golden_set`, `golden_example`, `golden_query`, `evaluation_baseline`, `evaluation_baseline_output`, `evaluation_manifest`, `evaluation_run`, `evaluation_run_subject`, `evaluation_result`, `gate_decision`, `evaluation_sample`, `agent_gate_decision`, `agent_gate_decision_run`, `evaluation_comparison`, `golden_case_turn`, `golden_case_tool`, `golden_case_evidence` |
 | `agent_authorization` | `agent_permission`, `delegation_grant` |
-| `configuration` | `config_scope`, `config_scope_unit`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
+| `configuration` | `config_scope`, `config_scope_binding`, `effective_agent_release`, `audit_event`, `platform_restriction_layer`, `platform_current_restriction`, `tenant_restriction_layer`, `tenant_current_restriction` |
 | `approval` | `turn_approval_request`, `turn_approval_decision` |
 | `mcp_confirmation` | `mcp_confirmation`, `turn_call_confirmation` |
 | `memory` | `memory_section`, `agent_memory` |
+| `enterprise_configuration` | `config_scope_unit` |
+| `enterprise_agent` | `agent_publish_review_exception` |
+| `enterprise_release` | `agent_version_pin_assignment` |
 | `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_origin`, `skill_catalog_tool`, `skill_catalog_example`, `skill_catalog_requirement`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them

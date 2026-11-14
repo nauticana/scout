@@ -192,7 +192,7 @@ func (scope PinScope) Rank() int {
 }
 
 // VersionPin holds one tenant agent on an immutable version for a bounded period. AssignmentRef
-// is set on, and only on, an assignment pin.
+// is set on, and only on, an assignment pin: the id of a Charter assignment in the tenant's namespace.
 type VersionPin struct {
 	ID                       int64
 	Scope                    PinScope

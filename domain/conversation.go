@@ -27,8 +27,8 @@ type TurnRequest struct {
 	// WorkRef is the product's opaque reference to the work the turn serves, such as a
 	// task; usage and decision records carry it so cost reports per work item.
 	WorkRef string
-	// AssignmentRef is the product's opaque reference to the Charter assignment the
-	// conversation serves; a new conversation naming one takes its assignment pin.
+	// AssignmentRef is the id of the Charter assignment the conversation serves, in the
+	// tenant's namespace; a new conversation naming one takes its assignment pin.
 	AssignmentRef string
 	Input         []byte
 }

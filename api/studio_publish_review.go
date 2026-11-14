@@ -18,7 +18,7 @@ const (
 )
 
 // PublishReviewRequest asks a second person to review agent_name's current draft, or restoring
-// its published restore_version when set. sod_exception_id optionally names the
+// its published restore_version when set. sod_exception_id optionally names the stored Charter
 // separation-of-duties exception under which the requester will carry out the approved review themselves.
 type PublishReviewRequest struct {
 	AgentName      string `json:"agent_name"`

@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -22,6 +23,8 @@ const (
 	qPinInsert          = "scout_release_pin_insert"
 	qPinActive          = "scout_release_pin_active"
 	qPinExpire          = "scout_release_pin_expire"
+	qPinAssign          = "scout_release_pin_assign"
+	qPinAssignments     = "scout_release_pin_assignments"
 	qCohortsForAgent    = "scout_release_cohorts_for_agent"
 	qDeploymentGet      = "scout_release_deployment_get"
 	qDeploymentCanary   = "scout_release_deployment_canary"
@@ -38,12 +41,25 @@ var versionPinQueries = map[string]string{
 	qPinInsert: `
 INSERT INTO agent_version_pin
        (partner_id, agent_id, agent_version, scope_code, region, reason, owner, approved_by, signature,
-        compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at, assignment_ref)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
+	qPinAssign: `
+INSERT INTO agent_version_pin_assignment (pin_id, partner_id, assignment_id)
+SELECT ?, a.partner_id, a.id
+  FROM organization_assignment a
+  JOIN enterprise_object o ON o.partner_id = a.partner_id AND o.id = a.id
+ WHERE o.partner_id = ? AND o.namespace = ? AND o.identifier = ?
+RETURNING assignment_id`,
+	qPinAssignments: `
+SELECT a.pin_id, o.identifier
+  FROM agent_version_pin p
+  JOIN agent_version_pin_assignment a ON a.partner_id = p.partner_id AND a.pin_id = p.id
+  JOIN enterprise_object o ON o.partner_id = a.partner_id AND o.id = a.assignment_id
+ WHERE p.partner_id = ? AND p.agent_id = ? AND p.effective_at <= ? AND (p.expires_at IS NULL OR p.expires_at > ?)`,
 	qPinActive: `
 SELECT id, agent_version, scope_code, region, reason, owner, approved_by, signature,
-       compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at, assignment_ref
+       compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at
   FROM agent_version_pin
  WHERE partner_id = ? AND agent_id = ? AND effective_at <= ? AND (expires_at IS NULL OR expires_at > ?)
  ORDER BY CASE scope_code WHEN '` + string(domain.PinScopeCompliance) + `' THEN 0 WHEN '` + string(domain.PinScopeTenant) + `' THEN 1 ELSE 2 END, created_at DESC, id DESC`,
@@ -107,9 +123,12 @@ SELECT EXISTS (SELECT 1 FROM agent_deployment WHERE partner_id = ? AND agent_id 
     OR EXISTS (SELECT 1 FROM agent_conversation WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND closed_at IS NULL)`,
 }
 
-// TableVersionPinStore is the keel-backed VersionPinStore over agent_version_pin.
+// TableVersionPinStore is the keel-backed VersionPinStore over agent_version_pin. An assignment pin
+// references the stored Charter assignment it serves, so it needs the enterprise_release schema module
+// and Namespace, which maps a tenant to the Charter namespace owning its assignments.
 type TableVersionPinStore struct {
-	DB keelport.DatabaseRepository
+	DB        keelport.DatabaseRepository
+	Namespace func(tenantID int64) string
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -152,10 +171,17 @@ func (store *TableVersionPinStore) Put(ctx context.Context, pin domain.VersionPi
 	if createdAt.IsZero() {
 		createdAt = pin.EffectiveAt
 	}
-	result, err := store.qs.Query(ctx, qPinInsert,
-		pin.TenantID, pin.AgentID, pin.Version, string(pin.Scope), nullableString(pin.Region), pin.Reason, pin.Owner,
+	args := []any{pin.TenantID, pin.AgentID, pin.Version, string(pin.Scope), nullableString(pin.Region), pin.Reason, pin.Owner,
 		nullableString(pin.ApprovedBy), nullableString(pin.Signature), encodeList(pin.CompatiblePolicyVersions),
-		encodeList(pin.CompatibleIndexVersions), pin.EffectiveAt, nullableTime(pin.ExpiresAt), createdAt, nullableString(pin.AssignmentRef))
+		encodeList(pin.CompatibleIndexVersions), pin.EffectiveAt, nullableTime(pin.ExpiresAt), createdAt}
+	if pin.Scope != domain.PinScopeAssignment {
+		return insertPin(ctx, store.qs, args)
+	}
+	return store.putAssignmentPin(ctx, pin, args)
+}
+
+func insertPin(ctx context.Context, qs keelport.QueryService, args []any) (int64, error) {
+	result, err := qs.Query(ctx, qPinInsert, args...)
 	if err != nil {
 		return 0, fmt.Errorf("insert version pin: %w", err)
 	}
@@ -163,6 +189,44 @@ func (store *TableVersionPinStore) Put(ctx context.Context, pin domain.VersionPi
 		return 0, fmt.Errorf("insert version pin: no id returned")
 	}
 	return common.AsInt64(result.Rows[0][0]), nil
+}
+
+// putAssignmentPin stores the pin with its reference to the stored assignment, or neither.
+func (store *TableVersionPinStore) putAssignmentPin(ctx context.Context, pin domain.VersionPin, args []any) (id int64, err error) {
+	var namespace string
+	if store.Namespace != nil {
+		namespace = store.Namespace(pin.TenantID)
+	}
+	if namespace == "" {
+		return 0, fmt.Errorf("%w: assignment pins need the charter namespace of tenant %d", domain.ErrNotReady, pin.TenantID)
+	}
+	tx, err := store.DB.BeginTx(ctx, versionPinQueries)
+	if err != nil {
+		return 0, fmt.Errorf("begin assignment pin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(context.WithoutCancel(ctx)); rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("rollback assignment pin: %w", rollbackErr))
+			}
+		}
+	}()
+	if id, err = insertPin(ctx, tx, args); err != nil {
+		return 0, err
+	}
+	assigned, err := tx.Query(ctx, qPinAssign, id, pin.TenantID, namespace, pin.AssignmentRef)
+	if err != nil {
+		return 0, fmt.Errorf("bind pin to assignment %s: %w", pin.AssignmentRef, err)
+	}
+	if len(assigned.Rows) == 0 {
+		return 0, fmt.Errorf("%w: charter assignment %s is not stored in %s", domain.ErrNotFound, pin.AssignmentRef, namespace)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit assignment pin: %w", err)
+	}
+	committed = true
+	return id, nil
 }
 
 func (store *TableVersionPinStore) Active(ctx context.Context, tenantID int64, agentID string, at time.Time) ([]domain.VersionPin, error) {
@@ -174,6 +238,7 @@ func (store *TableVersionPinStore) Active(ctx context.Context, tenantID int64, a
 		return nil, fmt.Errorf("list active pins: %w", err)
 	}
 	pins := make([]domain.VersionPin, 0, len(result.Rows))
+	assigned := false
 	for _, row := range result.Rows {
 		policies, err := decodeList(row[8])
 		if err != nil {
@@ -189,8 +254,22 @@ func (store *TableVersionPinStore) Active(ctx context.Context, tenantID int64, a
 			Owner: common.AsString(row[5]), ApprovedBy: common.AsString(row[6]), Signature: common.AsString(row[7]),
 			CompatiblePolicyVersions: policies, CompatibleIndexVersions: indexes,
 			EffectiveAt: common.AsTime(row[10]), ExpiresAt: common.AsTime(row[11]), CreatedAt: common.AsTime(row[12]),
-			AssignmentRef: common.AsString(row[13]),
 		})
+		assigned = assigned || pins[len(pins)-1].Scope == domain.PinScopeAssignment
+	}
+	if !assigned {
+		return pins, nil
+	}
+	assignments, err := store.qs.Query(ctx, qPinAssignments, tenantID, agentID, at, at)
+	if err != nil {
+		return nil, fmt.Errorf("list pin assignments: %w", err)
+	}
+	refs := make(map[int64]string, len(assignments.Rows))
+	for _, row := range assignments.Rows {
+		refs[common.AsInt64(row[0])] = common.AsString(row[1])
+	}
+	for i := range pins {
+		pins[i].AssignmentRef = refs[pins[i].ID]
 	}
 	return pins, nil
 }

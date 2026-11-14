@@ -9,9 +9,10 @@ import (
 )
 
 type queryFake struct {
-	rows map[string][][]any
-	args map[string][]any
-	err  map[string]error
+	rows               map[string][][]any
+	args               map[string][]any
+	err                map[string]error
+	commits, rollbacks int
 }
 
 func newQueryFake(rows map[string][][]any) *queryFake {
@@ -26,9 +27,9 @@ func (query *queryFake) Query(_ context.Context, name string, args ...any) (*kee
 	return &keelmodel.QueryResult{Rows: query.rows[name]}, nil
 }
 
-func (*queryFake) GenID() int64                   { return 7 }
-func (*queryFake) Commit(context.Context) error   { return nil }
-func (*queryFake) Rollback(context.Context) error { return nil }
+func (*queryFake) GenID() int64                         { return 7 }
+func (query *queryFake) Commit(context.Context) error   { query.commits++; return nil }
+func (query *queryFake) Rollback(context.Context) error { query.rollbacks++; return nil }
 
 type dbFake struct {
 	keelport.DatabaseRepository

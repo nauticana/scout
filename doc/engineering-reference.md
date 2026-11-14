@@ -499,7 +499,7 @@ For Agent Studio, construct `controlplane.StudioService` with its `Principals` a
 | `restrictions` | `policy.StudioRestrictions` | `Layers` and `Writer` are one `policy.TableRestrictionLayers` with its rule compiler and audit sink |
 | `guardrails` | `controlplane.StudioGuardrails` | in both `Sections` and `ReleaseWriters`, with the runtime enforcer's rule compiler, the restriction reader, `guardrail.DefaultBaseline(...).Rules`, and `observability.TableSafetyEventSink` for safety events |
 | `governance` | `controlplane.StudioGovernance` | in both `Sections` and `Guards`; `Required` from `agent_governance_required_fields`, an optional `contract.GovernanceSource` such as `charter.GovernanceSource`, and a `contract.TriggerBindingVerifier`, without which schedule and event triggers are refused |
-| `publish_review`, `comments` | `controlplane.StudioPublishReviews`, `controlplane.StudioDraftComments` | reviews in both `Guards` and `ReleaseWriters`, with a `contract.PublishSeparation`: `charter.PublishSeparation` over Charter separation-of-duty constraints (`Restore` names the restore capability), or `controlplane.BasePublishSeparation` for every or listed tenants (`Restores` reviews restores too) |
+| `publish_review`, `comments` | `controlplane.StudioPublishReviews`, `controlplane.StudioDraftComments` | reviews in both `Guards` and `ReleaseWriters`, with a `contract.PublishSeparation`: `charter.PublishSeparation` over Charter separation-of-duty constraints (`Restore` names the restore capability; `StudioPublishReviews.ExceptionNamespace` and the `enterprise_agent` module let a review name an exception), or `controlplane.BasePublishSeparation` for every or listed tenants (`Restores` reviews restores too) |
 | `approval_routing` | `controlplane.StudioApprovalRouting` | in `Guards`, with the runtime's `contract.ApproverResolver`, the `ToolRegistry`, and the enforcer's `Baseline` and `Restrictions` |
 | `portability` | `controlplane.StudioPortability` | `Documents` is `charter.AgentDocuments`; `Guardrails`, without which a document carrying guardrails is refused |
 | `templates` | `controlplane.StudioTemplates` | `StudioService.Templates` (`controlplane.TableAgentTemplateStore`) and `TemplateLimits` from `agent_studio_max_templates_per_type` and `agent_studio_max_template_versions`; without `Templates` a create from a template is refused |
@@ -611,7 +611,7 @@ Run `mcp/mcptest` conformance checks before publishing a server: manifest and to
 
 ## Database schema
 
-Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 62 Scout tables rather than all 157.
+Scout's schema is the relational source of truth. Do not maintain handwritten DDL beside it. It is modular: a downstream generates only the modules its product uses, so a Studio-only installation creates 61 Scout tables rather than all 159.
 
 The schema uses portable types supported by keel's PostgreSQL and MySQL dialects. Structured definitions are canonical JSON stored as `TEXT` and validated at service or compilation boundaries. Timestamps use `TIMESTAMP`; large data stays outside the relational database behind URI and digest columns.
 
@@ -621,7 +621,7 @@ Every deployment installs keel `tenant_management` because `agent_tenant` is a c
 
 ### Schema modules
 
-Scout's schema is eighteen modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
+Scout's schema is twenty-one modules so a downstream installs only what its product uses. Each module is a directory under `schema/` with an `ab_meta.yml` listing its tables in dependency order, and every table lives in its own `<table>.yml`.
 
 | Module | Tables | Purpose | Depends on |
 |---|---:|---|---|
@@ -639,10 +639,13 @@ Scout's schema is eighteen modules so a downstream installs only what its produc
 | `evaluation` | 21 | Manifests, agent golden sets and cases with their scripted turns and tool responses, immutable set versions, run subjects and results, human baselines, pairwise comparisons, platform and agent gate decisions, the production review queue, production samples | `catalog`, `tenancy`, `model`, `agent`, `knowledge`, `release`, `runtime` |
 | `skill` | 12 | Platform skill catalog with its requirements and import origins, tenant skill profiles, immutable procedure versions, the tools and skills each uses, selection examples, agent bindings | `tenancy`, `agent`, `tool` |
 | `agent_authorization` | 2 | Agent-to-role assignments and typed delegation grants | `catalog`, `agent` |
-| `configuration` | 9 | Configuration hierarchy, its attachment to Charter organization units, scoped bindings, compiled effective releases, governed decision records, platform and tenant restriction layers | `catalog`, `tenancy`, `agent` |
+| `configuration` | 8 | Configuration hierarchy, scoped bindings, compiled effective releases, governed decision records, platform and tenant restriction layers | `catalog`, `tenancy`, `agent` |
 | `approval` | 2 | Durable turn approval requests with the release, route, and approver reference that routed them, their verdicts, and the outbox event that notified the approver | `catalog`, `tenancy`, `agent`, `configuration`, `agent_authorization`, keel `outbox` |
 | `memory` | 2 | Product-defined memory sections and each tenant's bounded, provenance-stamped memory body | `tenancy` |
 | `mcp_confirmation` | 2 | MCP tool calls held for a person's confirmation and run once under a fenced lease, and the runtime tool calls waiting on them | `catalog`, `tenancy`, `runtime`, keel `approval`, keel `outbox` |
+| `enterprise_configuration` | 1 | The configuration scope a stored Charter organization unit is attached to | `configuration`, Charter `charter_organization` |
+| `enterprise_agent` | 1 | The stored Charter separation-of-duties exception a publish review names | `agent`, Charter `charter_authority` |
+| `enterprise_release` | 1 | The stored Charter assignment an assignment pin serves | `release`, Charter `charter_organization` |
 
 `schema/dependency.yml` declares those modules, their dependencies, and their seed files; [Database reference](database.md#module-dependency-graph) draws the graph. `agent` is the common core every other module reaches through; `catalog` and `tenancy` sit under it. Module boundaries follow the `contract/` and `service/` boundaries, so a downstream picks modules by the Scout packages it actually constructs.
 
@@ -667,21 +670,38 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_s
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 49 selected keel tables and 157 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
+That full set is 49 selected keel tables and 156 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|
-| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 62 |
-| … plus agent principals and delegation | `+ agent_authorization` | 64 |
-| … plus compiled execution graphs | `+ execution_graph` | 68 |
-| … plus governed tools and credential bindings | `+ tool` | 73 |
-| … plus durable human approvals | `+ approval` (and keel `outbox`; keel `action_token` for decision links) | 75 |
-| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 85 |
-| … plus the durable turn runtime | `+ runtime` | 104 |
-| Everything, including rollout and evaluation | `+ release`, `evaluation` | 141 |
-| … plus versioned skills | `+ skill` | 153 |
-| … plus confirmed MCP tool calls | `+ mcp_confirmation` (and keel `approval`, `outbox`) | 155 |
-| … plus tenant memory | `+ memory` | 157 |
+| Agent Studio authoring and publication | `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration` | 61 |
+| … plus agent principals and delegation | `+ agent_authorization` | 63 |
+| … plus compiled execution graphs | `+ execution_graph` | 67 |
+| … plus governed tools and credential bindings | `+ tool` | 72 |
+| … plus durable human approvals | `+ approval` (and keel `outbox`; keel `action_token` for decision links) | 74 |
+| … plus knowledge and retrieval | `+ knowledge`, `knowledge_vector` | 84 |
+| … plus the durable turn runtime | `+ runtime` | 103 |
+| Everything, including rollout and evaluation | `+ release`, `evaluation` | 140 |
+| … plus versioned skills | `+ skill` | 152 |
+| … plus confirmed MCP tool calls | `+ mcp_confirmation` (and keel `approval`, `outbox`) | 154 |
+| … plus tenant memory | `+ memory` | 156 |
+| … plus references into stored Charter documents | `+ enterprise_configuration`, `enterprise_agent`, `enterprise_release` (and Charter's schema modules) | 159 |
+
+The `enterprise_*` modules hold foreign keys into Charter's relational document store, so the Charter modules they reference join the run between keel's and Scout's, with their seed files: `charter_organization` for `enterprise_configuration` and `enterprise_release`, `charter_authority` for `enterprise_agent`, each with every Charter module it depends on. Charter's `sdk/schema/dependency.yml` lists them; `charter_authority` reaches these eleven, 111 tables:
+
+```bash
+charter="$(go list -m -f '{{.Dir}}' github.com/nauticana/charter)/sdk/schema"
+charter_in="" charter_seed=""
+for group in json object identity system work information organization capability process evidence authority; do
+  charter_in="${charter_in:+${charter_in},}${charter}/${group}"
+  if [ -f "${charter}/seed/${group}.yml" ]; then charter_seed="${charter_seed:+${charter_seed},}${charter}/seed/${group}.yml"; fi
+done
+scout_in="${scout_in},schema/enterprise_configuration,schema/enterprise_agent,schema/enterprise_release"
+
+go tool schemagen -dialect pgsql -input "${keel_in},${charter_in},${scout_in}" -seed "${keel_seed},${charter_seed},${scout_seed}" -out build/scout_pgsql.sql
+```
+
+The Charter documents these rows reference must be the ones Charter's keel `DocumentStore` keeps in the same database, so compose `charter.UnitScopes`, `charter.PublishSeparation`, and the organization provider over that store's `Source`.
 
 Seed directories mirror module directories, and only the modules with reference data have one: `catalog`, `tenancy`, `prompt`, `model`, `agent`, `configuration`, `approval`, `execution_graph`, `knowledge`, `runtime`, `release`, `evaluation`, `skill`, and `mcp_confirmation`. Pass only the seed directories whose modules you installed — a seed file inserts into its own module's tables, so seeding a module you did not install produces DDL that fails on apply. Pointing `-seed` at the parent `schema/seed` directory silently seeds nothing, because the generator does not descend into subdirectories.
 

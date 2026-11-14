@@ -41,10 +41,6 @@ columns:
   - name: decided_at
     type: TIMESTAMP
     nullable: true
-  - name: sod_exception_id
-    type: VARCHAR(200)
-    nullable: true
-    comment: The separation-of-duties exception the requester named to publish the approved review themselves
   - name: published_version
     type: VARCHAR(80)
     nullable: true
@@ -93,6 +89,9 @@ indexes:
     columns: [partner_id, agent_id, status_code]
   - name: agent_publish_review_digest_ix
     columns: [partner_id, agent_id, definition_digest]
+  - name: agent_publish_review_partner_uq
+    columns: [partner_id, id]
+    unique: true
 checks:
   - name: agent_publish_review_status_ck
     expression: status_code IN ('R', 'A', 'X', 'S')

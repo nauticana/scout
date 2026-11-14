@@ -39,6 +39,7 @@ const (
 	qReviewLatestRestore    = "scout_review_latest_restore"
 	qReviewClaimRestore     = "scout_review_claim_restore"
 	qReviewVersion          = "scout_review_version"
+	qReviewExceptionPut     = "scout_review_exception_put"
 
 	reviewCatalogID     = "scout.controlplane.publish_review"
 	maxReviewNote       = 400
@@ -53,77 +54,97 @@ const (
 	sqlReviewSuperseded = "'" + string(domain.PublishReviewSuperseded) + "'"
 )
 
-const reviewColumns = `id, definition_digest, draft_revision, prompt_profile_revision, base_version, diff, evaluations,
-       status_code, requested_by, request_note, requested_at, decided_by, decision_note, decided_at,
-       sod_exception_id, published_version, restore_version`
+// The exception a review's requester named, as the last-but-two review column: the stored Charter
+// exception's id where the enterprise_agent schema module holds it, and none without the module.
+const (
+	reviewExceptionNone   = `CAST(NULL AS VARCHAR)`
+	reviewExceptionStored = `(SELECT o.identifier
+          FROM agent_publish_review_exception x
+          JOIN enterprise_object o ON o.partner_id = x.partner_id AND o.id = x.sod_exception_id
+         WHERE x.review_id = agent_publish_review.id)`
+)
 
-// reviewLatest is the agent's current publish review: a newer request withdraws any earlier approval.
-const reviewLatest = `
+var (
+	reviewQueries           = reviewCatalog(reviewExceptionNone)
+	enterpriseReviewQueries = reviewCatalog(reviewExceptionStored)
+)
+
+func reviewCatalog(exception string) map[string]string {
+	reviewColumns := `id, definition_digest, draft_revision, prompt_profile_revision, base_version, diff, evaluations,
+       status_code, requested_by, request_note, requested_at, decided_by, decision_note, decided_at,
+       ` + exception + `, published_version, restore_version`
+	// reviewLatest is the agent's current publish review: a newer request withdraws any earlier approval.
+	reviewLatest := `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
  WHERE partner_id = ? AND agent_id = ? AND status_code <> ` + sqlReviewSuperseded + ` AND restore_version IS NULL
  ORDER BY id DESC
  LIMIT 1`
-
-// reviewLatestRestore is the agent's current restore review, whichever version it names.
-const reviewLatestRestore = `
+	// reviewLatestRestore is the agent's current restore review, whichever version it names.
+	reviewLatestRestore := `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
  WHERE partner_id = ? AND agent_id = ? AND status_code <> ` + sqlReviewSuperseded + ` AND restore_version IS NOT NULL
  ORDER BY id DESC
  LIMIT 1`
-
-var reviewQueries = map[string]string{
-	qReviewLockDraft: `
+	return map[string]string{
+		qReviewLockDraft: `
 SELECT draft_revision FROM agent_draft WHERE partner_id = ? AND agent_id = ? FOR UPDATE`,
-	qReviewSupersede: `
+		qReviewSupersede: `
 UPDATE agent_publish_review SET status_code = ` + sqlReviewSuperseded + `
  WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlReviewRequested + ` AND restore_version IS NULL`,
-	qReviewSupersedeRestore: `
+		qReviewSupersedeRestore: `
 UPDATE agent_publish_review SET status_code = ` + sqlReviewSuperseded + `
  WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlReviewRequested + ` AND restore_version IS NOT NULL`,
-	qReviewInsert: `
+		qReviewInsert: `
 INSERT INTO agent_publish_review (id, partner_id, agent_id, definition_digest, draft_revision, prompt_profile_revision,
-       base_version, restore_version, diff, evaluations, status_code, requested_by, request_note, sod_exception_id)
-VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlReviewRequested + `, ?, ?, ?)
+       base_version, restore_version, diff, evaluations, status_code, requested_by, request_note)
+VALUES (nextval('agent_publish_review_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlReviewRequested + `, ?, ?)
 RETURNING id, requested_at`,
-	qReviewLatest:        reviewLatest,
-	qReviewLatestRestore: reviewLatestRestore,
-	qReviewClaimRestore: reviewLatestRestore + `
+		qReviewExceptionPut: `
+INSERT INTO agent_publish_review_exception (review_id, partner_id, sod_exception_id)
+SELECT ?, x.partner_id, x.id
+  FROM sod_exception x
+  JOIN enterprise_object o ON o.partner_id = x.partner_id AND o.id = x.id
+ WHERE o.partner_id = ? AND o.namespace = ? AND o.identifier = ?
+RETURNING sod_exception_id`,
+		qReviewLatest:        reviewLatest,
+		qReviewLatestRestore: reviewLatestRestore,
+		qReviewClaimRestore: reviewLatestRestore + `
    FOR UPDATE`,
-	qReviewVersion: `
+		qReviewVersion: `
 SELECT definition FROM agent_version WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
-	qReviewGet: `
+		qReviewGet: `
 SELECT ` + reviewColumns + `
   FROM agent_publish_review
  WHERE partner_id = ? AND agent_id = ? AND id = ?`,
-	qReviewDecide: `
+		qReviewDecide: `
 UPDATE agent_publish_review
    SET status_code = ?, decided_by = ?, decision_note = ?, decided_at = CURRENT_TIMESTAMP
  WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = ` + sqlReviewRequested + ` AND definition_digest = ?
 RETURNING decided_at`,
-	qReviewClaim: reviewLatest + `
+		qReviewClaim: reviewLatest + `
    FOR UPDATE`,
-	qReviewConsume: `
+		qReviewConsume: `
 UPDATE agent_publish_review SET published_version = ?
  WHERE partner_id = ? AND agent_id = ? AND id = ? AND status_code = ` + sqlReviewApproved + ` AND published_version IS NULL
 RETURNING id`,
-	qReviewOpenComments: `
+		qReviewOpenComments: `
 SELECT COUNT(*) FROM agent_draft_comment WHERE partner_id = ? AND agent_id = ? AND status_code = ` + sqlCommentOpen,
-	qReviewActive: `
+		qReviewActive: `
 SELECT v.agent_version, v.definition
   FROM agent_deployment dep
   JOIN agent_version v ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
  WHERE dep.partner_id = ? AND dep.agent_id = ?`,
-	// In the restore transaction the deployment stays locked until the restore deploys over it.
-	qReviewActiveLocked: `
+		// In the restore transaction the deployment stays locked until the restore deploys over it.
+		qReviewActiveLocked: `
 SELECT v.agent_version, v.definition
   FROM agent_deployment dep
   JOIN agent_version v ON v.partner_id = dep.partner_id AND v.agent_id = dep.agent_id AND v.agent_version = dep.stable_version
  WHERE dep.partner_id = ? AND dep.agent_id = ?
    FOR UPDATE OF dep`,
-	// The people who changed the agent's draft since its last publish or restore.
-	qReviewDraftEditors: `
+		// The people who changed the agent's draft since its last publish or restore.
+		qReviewDraftEditors: `
 SELECT DISTINCT e.principal_id
   FROM agent_studio_event e
  WHERE e.partner_id = ? AND e.agent_id = ? AND e.principal_kind = 'human'
@@ -131,11 +152,12 @@ SELECT DISTINCT e.principal_id
    AND NOT EXISTS (SELECT 1 FROM agent_studio_event p
                     WHERE p.partner_id = e.partner_id AND p.agent_id = e.agent_id
                       AND p.event IN ('PUBLISH', 'RESTORE') AND p.id > e.id)`,
-	qReviewAudit: `
+		qReviewAudit: `
 INSERT INTO agent_studio_event (id, partner_id, agent_id, event, detail, principal_kind, principal_id)
 VALUES (NEXTVAL('agent_studio_event_seq'), ?, ?, ?, ?, ?, ?)`,
-	qCommentList:       commentListAll,
-	qCommentListStatus: commentListStatus,
+		qCommentList:       commentListAll,
+		qCommentListStatus: commentListStatus,
+	}
 }
 
 // StudioPublishReviews is two-person publish. The author requests a review of the exact
@@ -156,6 +178,10 @@ type StudioPublishReviews struct {
 	// Releases reads the active release's settings for the diff; nil uses scope.TableEffectiveReleaseStore.
 	Releases contract.EffectiveReleaseRepository
 	Now      func() time.Time
+	// ExceptionNamespace maps a tenant to the Charter namespace owning its separation exceptions. A
+	// review references the stored exception it names, so naming one needs this and the
+	// enterprise_agent schema module; without it no review carries an exception.
+	ExceptionNamespace func(tenantID int64) string
 
 	once sync.Once
 	qs   keelport.QueryService
@@ -174,8 +200,15 @@ func (r *StudioPublishReviews) init(ctx context.Context) error {
 	if err := r.Studio.init(ctx); err != nil {
 		return err
 	}
-	r.once.Do(func() { r.qs = r.Studio.DB.GetQueryService(ctx, reviewQueries) })
+	r.once.Do(func() { r.qs = r.Studio.DB.GetQueryService(ctx, r.queries()) })
 	return nil
+}
+
+func (r *StudioPublishReviews) queries() map[string]string {
+	if r.ExceptionNamespace != nil {
+		return enterpriseReviewQueries
+	}
+	return reviewQueries
 }
 
 func (r *StudioPublishReviews) now() time.Time {
@@ -214,7 +247,14 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 			return domain.PublishReview{}, err
 		}
 	}
+	var namespace string
 	if exception != "" {
+		if r.ExceptionNamespace != nil {
+			namespace = r.ExceptionNamespace(actor.TenantID)
+		}
+		if namespace == "" {
+			return domain.PublishReview{}, fmt.Errorf("%w: naming a separation exception needs the charter namespace of tenant %d", domain.ErrNotReady, actor.TenantID)
+		}
 		if err := r.Separation.Excuse(ctx, actor.TenantID, request.AgentID, kind, exception, actor.Principal, r.now()); err != nil {
 			return domain.PublishReview{}, err
 		}
@@ -261,7 +301,7 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	review.Evaluations, review.Status = evaluations, domain.PublishReviewRequested
 	review.RequestedBy, review.RequestNote, review.SodExceptionID = *requester, note, exception
 
-	tx, err := r.Studio.DB.BeginTx(ctx, reviewQueries)
+	tx, err := r.Studio.DB.BeginTx(ctx, r.queries())
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("begin review transaction: %w", err)
 	}
@@ -293,7 +333,7 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	}
 	inserted, err := tx.Query(ctx, qReviewInsert, actor.TenantID, request.AgentID, review.DefinitionDigest, review.DraftRevision,
 		review.PromptProfileRevision, common.NullIfEmpty(review.BaseVersion), common.NullIfEmpty(review.RestoreVersion), string(encodedDiff),
-		encodedEvaluations, *requester, common.NullIfEmpty(note), common.NullIfEmpty(exception))
+		encodedEvaluations, *requester, common.NullIfEmpty(note))
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("insert publish review: %w", err)
 	}
@@ -304,6 +344,13 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	review.RequestedAt = common.AsTime(inserted.Rows[0][1])
 	detail = fmt.Sprintf("review %d %s", review.ReviewID, detail)
 	if exception != "" {
+		named, putErr := tx.Query(ctx, qReviewExceptionPut, review.ReviewID, actor.TenantID, namespace, exception)
+		if putErr != nil {
+			return domain.PublishReview{}, fmt.Errorf("record separation exception %s: %w", exception, putErr)
+		}
+		if len(named.Rows) == 0 {
+			return domain.PublishReview{}, fmt.Errorf("%w: separation exception %s is not stored in %s", domain.ErrNotFound, exception, namespace)
+		}
 		detail += " naming separation exception " + exception
 	}
 	if _, err = tx.Query(ctx, qReviewAudit, actor.TenantID, request.AgentID, event, detail,
@@ -448,7 +495,7 @@ func (r *StudioPublishReviews) decidable(ctx context.Context, actor domain.Studi
 
 func (r *StudioPublishReviews) decide(ctx context.Context, actor domain.StudioActor, review domain.PublishReview, status domain.PublishReviewStatus, note string) (domain.PublishReview, error) {
 	decider := *actorUserID(actor)
-	tx, err := r.Studio.DB.BeginTx(ctx, reviewQueries)
+	tx, err := r.Studio.DB.BeginTx(ctx, r.queries())
 	if err != nil {
 		return domain.PublishReview{}, fmt.Errorf("begin review decision: %w", err)
 	}
@@ -512,7 +559,7 @@ func (r *StudioPublishReviews) WriteRelease(ctx context.Context, tx keelport.TxQ
 	if !ok {
 		return fmt.Errorf("%w: the publish transaction cannot bind another query catalog", domain.ErrNotReady)
 	}
-	qs := catalog.QueryService(reviewCatalogID, reviewQueries)
+	qs := catalog.QueryService(reviewCatalogID, r.queries())
 	publisher := domain.PrincipalRef{Kind: domain.PrincipalService}
 	if definition.PublishedBy != nil {
 		publisher = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.FormatInt(*definition.PublishedBy, 10)}

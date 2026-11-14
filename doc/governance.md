@@ -315,7 +315,8 @@ only while the draft still has the reviewed digest.
 Composed as a publish guard and a release writer, it admits a publish under separation only when the
 agent's latest review is approved, unconsumed, and of the candidate's digest, its approver and
 publisher are not authors, and no draft comment is open. The one relief is the requester publishing
-under the `sod_exception_id` named on the request — a Charter `SodException`, checked through
+under the `sod_exception_id` named on the request — a stored Charter `SodException` the review
+references by foreign key (`agent_publish_review_exception`), checked through
 `Excuse` at request and again at publish, so revoking it takes effect; `BasePublishSeparation` admits
 none. The writer re-reads the review under a row lock in the publish transaction and consumes it, so
 a review publishes one version, and a newer request or a rejection withdraws an earlier approval.

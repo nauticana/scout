@@ -992,11 +992,97 @@ var keelGroups = []string{"core", "geo", "tenant_management", "outbox", "approva
 
 func keelSchemaDir(t *testing.T) string {
 	t.Helper()
-	dir, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/nauticana/keel").Output()
+	return filepath.Join(moduleDir(t, "github.com/nauticana/keel"), "schema")
+}
+
+func moduleDir(t *testing.T, module string) string {
+	t.Helper()
+	dir, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", module).Output()
 	if err != nil || strings.TrimSpace(string(dir)) == "" {
-		t.Fatalf("locate the pinned keel module: %v", err)
+		t.Fatalf("locate the pinned %s module: %v", module, err)
 	}
-	return filepath.Join(strings.TrimSpace(string(dir)), "schema")
+	return strings.TrimSpace(string(dir))
+}
+
+// Every Scout foreign key lands on a primary or unique key of a table keel, Charter, or Scout
+// defines, with matching column base types, and only the enterprise_* modules reach Charter's tables.
+func TestForeignKeysResolveAcrossKeelCharterAndScout(t *testing.T) {
+	parse := func(dirs ...string) map[string]*keelschema.Table {
+		parsed, err := keelschema.ParseDirs(dirs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tables := make(map[string]*keelschema.Table, len(parsed.Tables))
+		for _, table := range parsed.Tables {
+			tables[table.Name] = table
+		}
+		return tables
+	}
+	var keelDirs []string
+	for _, group := range keelGroups {
+		keelDirs = append(keelDirs, filepath.Join(keelSchemaDir(t), group))
+	}
+	charter := parse(filepath.Join(moduleDir(t, "github.com/nauticana/charter"), "sdk", "schema"))
+	modules, err := filepath.Glob("schema/*/ab_meta.yml")
+	if err != nil || len(modules) == 0 {
+		t.Fatalf("scout modules: %v", err)
+	}
+	all := parse(keelDirs...)
+	maps.Copy(all, charter)
+	scout := map[string]map[string]*keelschema.Table{}
+	for _, meta := range modules {
+		module := filepath.Base(filepath.Dir(meta))
+		scout[module] = parse(filepath.Dir(meta))
+		for name := range scout[module] {
+			if _, taken := all[name]; taken {
+				t.Fatalf("table %s of module %s is already defined", name, module)
+			}
+		}
+		maps.Copy(all, scout[module])
+	}
+	columnType := func(table *keelschema.Table, name string) string {
+		for _, column := range table.Columns {
+			if column.Name == name {
+				base, _, _ := strings.Cut(strings.ToUpper(column.Type), "(")
+				return base
+			}
+		}
+		return ""
+	}
+	reached := map[string]bool{}
+	for module, tables := range scout {
+		for _, table := range tables {
+			for _, fk := range table.ForeignKeys {
+				target, known := all[fk.References.Table]
+				if !known {
+					t.Fatalf("%s.%s references unknown table %s", table.Name, fk.Name, fk.References.Table)
+				}
+				keyed := slices.Equal(target.PrimaryKey, fk.References.Columns)
+				for _, index := range target.Indexes {
+					keyed = keyed || (index.Unique && index.Where == "" && slices.Equal(index.Columns, fk.References.Columns))
+				}
+				if !keyed || len(fk.Columns) != len(fk.References.Columns) {
+					t.Fatalf("%s.%s references %s%v, which is not a key", table.Name, fk.Name, target.Name, fk.References.Columns)
+				}
+				for i, column := range fk.Columns {
+					if own, parent := columnType(table, column), columnType(target, fk.References.Columns[i]); own == "" || own != parent {
+						t.Fatalf("%s.%s: %s is %q, %s.%s is %q", table.Name, fk.Name, column, own, target.Name, fk.References.Columns[i], parent)
+					}
+				}
+				if _, isCharter := charter[target.Name]; isCharter {
+					if !strings.HasPrefix(module, "enterprise_") {
+						t.Fatalf("%s.%s reaches Charter table %s from module %s", table.Name, fk.Name, target.Name, module)
+					}
+					reached[module] = true
+				}
+			}
+		}
+	}
+	for module := range scout {
+		if strings.HasPrefix(module, "enterprise_") && !reached[module] {
+			t.Fatalf("module %s references no Charter table", module)
+		}
+	}
 }
 
 // keel's seed validation, which schemagen -seed also runs, holds for Scout's schema and seeds:

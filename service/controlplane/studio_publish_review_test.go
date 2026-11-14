@@ -29,7 +29,8 @@ func reviewService(t *testing.T, required bool) (*StudioPublishReviews, *studioQ
 	studio.DB = catalogDBFake{studioDBFake{qs: query}}
 	excused := &[]excuseCall{}
 	reviews := &StudioPublishReviews{Studio: studio, Now: func() time.Time { return reviewedAt },
-		Releases: &fake.EffectiveReleaseRepository{},
+		Releases:           &fake.EffectiveReleaseRepository{},
+		ExceptionNamespace: func(int64) string { return "tenant.example" },
 		Separation: fake.PublishSeparation{
 			RequiredFunc: func(context.Context, int64, string, domain.PublishReviewKind, time.Time) (bool, error) {
 				return required, nil
@@ -101,7 +102,7 @@ func TestRequestRecordsTheCandidateDigestDiffAndEvaluations(t *testing.T) {
 	}
 	args := query.args[qReviewInsert]
 	if args[2] != digest || args[5] != "3" || args[6] != nil || !strings.Contains(args[7].(string), `"prompt_sections"`) || !strings.Contains(args[8].(string), "golden writer-a") ||
-		args[9] != int64(9) || args[11] != nil {
+		args[9] != int64(9) || len(args) != 11 || slices.Contains(query.queries, qReviewExceptionPut) {
 		t.Fatalf("insert args = %v", args)
 	}
 	if !slices.Contains(query.queries, qReviewSupersede) || query.args[qReviewAudit][2] != "PUBLISH_REVIEW_REQUEST" || query.commits != 1 {
@@ -118,12 +119,22 @@ func TestRequestNamesAnExceptionSeparationAdmitsForTheRequester(t *testing.T) {
 		t.Fatalf("refused exception = %v, commits %d", err, query.commits)
 	}
 	request.SodExceptionID = "EXC-OK"
+	// An exception separation admits but the store does not hold has no row to reference.
+	if _, err := reviews.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrNotFound) || query.commits != 0 {
+		t.Fatalf("unstored exception = %v, commits %d", err, query.commits)
+	}
+	query.rows[qReviewExceptionPut] = [][]any{{int64(77)}}
 	review, err := reviews.Request(context.Background(), humanActor(8, 9), request)
-	if err != nil || review.SodExceptionID != "EXC-OK" || query.args[qReviewInsert][11] != "EXC-OK" {
-		t.Fatalf("review = %+v, %v, args %v", review, err, query.args[qReviewInsert])
+	put := query.args[qReviewExceptionPut]
+	if err != nil || review.SodExceptionID != "EXC-OK" || len(put) != 4 || put[0] != int64(11) || put[1] != int64(8) || put[2] != "tenant.example" || put[3] != "EXC-OK" {
+		t.Fatalf("review = %+v, %v, args %v", review, err, put)
 	}
 	if last := (*excused)[len(*excused)-1]; last.person.ID != "9" || last.kind != domain.PublishReviewOfPublish || !strings.Contains(query.args[qReviewAudit][3].(string), "EXC-OK") {
 		t.Fatalf("excused %+v, audit %v", last, query.args[qReviewAudit])
+	}
+	unbound := &StudioPublishReviews{Studio: reviews.Studio, Separation: reviews.Separation, Releases: reviews.Releases, Now: reviews.Now}
+	if _, err = unbound.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrNotReady) {
+		t.Fatalf("exception without a namespace = %v", err)
 	}
 	request.SodExceptionID = strings.Repeat("x", 201)
 	if _, err = reviews.Request(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrValidation) {
@@ -281,6 +292,9 @@ func TestGuardAdmitsOnlyTheLatestApprovedUnconsumedReviewOfTheDigest(t *testing.
 		}
 	}
 	for _, name := range []string{qReviewLatest, qReviewClaim} {
+		if sql := enterpriseReviewQueries[name]; !strings.Contains(sql, "agent_publish_review_exception") || strings.Contains(reviewQueries[name], "agent_publish_review_exception") {
+			t.Fatalf("%s reads the named exception only where it is stored", name)
+		}
 		if sql := reviewQueries[name]; !strings.Contains(sql, "status_code <> "+sqlReviewSuperseded) || strings.Contains(sql, "status_code = "+sqlReviewApproved) ||
 			strings.Contains(sql, "definition_digest = ?") {
 			t.Fatalf("%s must read the latest review whatever its state or digest:\n%s", name, sql)

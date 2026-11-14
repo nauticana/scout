@@ -1,0 +1,24 @@
+table: agent_publish_review_exception
+comment: The Charter separation-of-duties exception a publish review's requester named to carry the approved review out themselves
+columns:
+  - name: review_id
+    type: BIGINT
+  - name: partner_id
+    type: BIGINT
+  - name: sod_exception_id
+    type: BIGINT
+primary_key: [review_id]
+foreign_keys:
+  - name: publish_review_exceptions
+    columns: [partner_id, review_id]
+    references:
+      table: agent_publish_review
+      columns: [partner_id, id]
+  - name: sod_exception_publish_reviews
+    columns: [partner_id, sod_exception_id]
+    references:
+      table: sod_exception
+      columns: [partner_id, id]
+indexes:
+  - name: agent_publish_review_exception_ix
+    columns: [partner_id, sod_exception_id]
