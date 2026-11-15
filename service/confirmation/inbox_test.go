@@ -243,7 +243,7 @@ func TestInboxMapsKeelErrors(t *testing.T) {
 		approval.ErrInvalidState: domain.ErrConflict,
 		approval.ErrExpired:      domain.ErrConflict,
 		approval.ErrNotFound:     domain.ErrNotFound,
-		approval.ErrSameActor:    domain.ErrForbidden,
+		approval.ErrSeparation:   domain.ErrForbidden,
 	} {
 		f := newInboxFixture()
 		key := f.prepare(t, 7, maker, 900)

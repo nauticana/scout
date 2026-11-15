@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,6 +90,7 @@ type LayeredEnforcer struct {
 var (
 	_ contract.GuardrailEnforcer  = (*LayeredEnforcer)(nil)
 	_ contract.StreamingGuardrail = (*LayeredEnforcer)(nil)
+	_ contract.GuardrailMatcher   = (*LayeredEnforcer)(nil)
 )
 
 // NewLayeredEnforcer compiles the baseline and verifies that every baseline classifier has a provider.
@@ -179,6 +181,39 @@ func (enforcer *LayeredEnforcer) AfterTool(ctx context.Context, config domain.Gu
 // returns the verdict so callers can attribute redactions without seeing rule internals.
 func (enforcer *LayeredEnforcer) InspectRetrieved(ctx context.Context, config domain.GuardrailConfig, subject domain.GuardrailSubject, content []byte) ([]byte, domain.GuardrailVerdict, error) {
 	return enforcer.inspect(ctx, config, &inspection{stage: domain.GuardrailStageRetrieval, subject: subject, content: content, sizeBytes: len(content)})
+}
+
+// Match reports the rules of set that match content at stage, in rule order. The tool-input
+// stage judges a tool call, so it is refused; untrusted-content markers transform rather than match.
+func (enforcer *LayeredEnforcer) Match(ctx context.Context, set domain.GuardrailRuleSet, stage domain.GuardrailStage, content []byte) ([]domain.GuardrailMatch, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !slices.Contains(allStages, stage) || stage == domain.GuardrailStageToolInput {
+		return nil, fmt.Errorf("%w: guardrail stage %q cannot be matched outside a run", domain.ErrValidation, stage)
+	}
+	compiled, err := enforcer.compiler.compileSet(set, domain.GuardrailLayerRelease, "", "")
+	if err != nil {
+		return nil, err
+	}
+	if err = enforcer.checkProviders(compiled); err != nil {
+		return nil, err
+	}
+	in := &inspection{stage: stage, content: content, sizeBytes: len(content)}
+	matches := []domain.GuardrailMatch{}
+	for _, rule := range compiled.rules {
+		if _, applies := rule.stages[stage]; !applies || rule.rule.Kind == domain.GuardrailKindUntrustedContentMarker {
+			continue
+		}
+		_, hit, err := enforcer.match(ctx, rule, in)
+		if err != nil {
+			return nil, err
+		}
+		if hit {
+			matches = append(matches, domain.GuardrailMatch{RuleID: rule.rule.ID, Action: rule.rule.Action})
+		}
+	}
+	return matches, nil
 }
 
 // OpenOutputSession starts one streaming inspection with buffered lookback for cross-chunk matches.

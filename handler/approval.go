@@ -10,7 +10,7 @@ import (
 	"time"
 
 	keelhandler "github.com/nauticana/keel/handler"
-	keelmodel "github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/model"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/contract"
@@ -29,19 +29,19 @@ type ApprovalHandler struct {
 func (h *ApprovalHandler) Routes() map[string]http.HandlerFunc {
 	routes := map[string]http.HandlerFunc{
 		api.ApprovalPendingPath: h.JSON(http.MethodGet, h.pending),
-		api.ApprovalResolvePath: bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.resolve)),
-		api.ApprovalLinkPath:    bounded(&h.AbstractHandler, h.JSONPublic(http.MethodPost, h.redeem)),
+		api.ApprovalResolvePath: h.JSON(http.MethodPost, h.resolve),
+		api.ApprovalLinkPath:    h.JSONPublic(http.MethodPost, h.redeem),
 	}
 	if h.Inbox != nil {
 		routes[api.ConfirmationsPath] = sessionQuery(&h.AbstractHandler, h.confirmations)
-		routes[api.ConfirmationDecidePath] = bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.decideConfirmation))
-		routes[api.ConfirmationWithdrawPath] = bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.withdrawConfirmation))
-		routes[api.ConfirmationReconcilePath] = bounded(&h.AbstractHandler, h.JSON(http.MethodPost, h.reconcileConfirmation))
+		routes[api.ConfirmationDecidePath] = h.JSON(http.MethodPost, h.decideConfirmation)
+		routes[api.ConfirmationWithdrawPath] = h.JSON(http.MethodPost, h.withdrawConfirmation)
+		routes[api.ConfirmationReconcilePath] = h.JSON(http.MethodPost, h.reconcileConfirmation)
 	}
 	return routes
 }
 
-func (h *ApprovalHandler) pending(ctx context.Context, session *keelmodel.UserSession, _ json.RawMessage) (any, error) {
+func (h *ApprovalHandler) pending(ctx context.Context, session *model.UserSession, _ json.RawMessage) (any, error) {
 	actor, err := sessionActor(session)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func (h *ApprovalHandler) pending(ctx context.Context, session *keelmodel.UserSe
 	return items, nil
 }
 
-func (h *ApprovalHandler) resolve(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+func (h *ApprovalHandler) resolve(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error) {
 	actor, err := sessionActor(session)
 	if err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func (h *ApprovalHandler) redeem(ctx context.Context, body json.RawMessage) (any
 
 // confirmations lists the person's inbox, ?since=&limit=: open confirmations and those created
 // since an RFC 3339 time, newest first.
-func (h *ApprovalHandler) confirmations(ctx context.Context, session *keelmodel.UserSession, query url.Values) (any, error) {
+func (h *ApprovalHandler) confirmations(ctx context.Context, session *model.UserSession, query url.Values) (any, error) {
 	person, err := sessionPerson(session)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func (h *ApprovalHandler) confirmations(ctx context.Context, session *keelmodel.
 	return h.labeled(ctx, items...)
 }
 
-func (h *ApprovalHandler) decideConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+func (h *ApprovalHandler) decideConfirmation(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error) {
 	var request api.ConfirmationDecideRequest
 	person, err := personRequest(session, body, &request)
 	if err != nil {
@@ -142,7 +142,7 @@ func (h *ApprovalHandler) decideConfirmation(ctx context.Context, session *keelm
 	return h.labeledOne(ctx, apiConfirmation(decided))
 }
 
-func (h *ApprovalHandler) withdrawConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+func (h *ApprovalHandler) withdrawConfirmation(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error) {
 	var request api.ConfirmationKey
 	person, err := personRequest(session, body, &request)
 	if err != nil {
@@ -154,7 +154,7 @@ func (h *ApprovalHandler) withdrawConfirmation(ctx context.Context, session *kee
 	return request, nil
 }
 
-func (h *ApprovalHandler) reconcileConfirmation(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+func (h *ApprovalHandler) reconcileConfirmation(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error) {
 	var request api.ConfirmationReconcileRequest
 	person, err := personRequest(session, body, &request)
 	if err != nil {
@@ -188,14 +188,14 @@ func (h *ApprovalHandler) labeledOne(ctx context.Context, item api.Confirmation)
 }
 
 // sessionPerson is the signed-in person; the confirmation inbox spans tenants, so no partner is needed.
-func sessionPerson(session *keelmodel.UserSession) (domain.PrincipalRef, error) {
+func sessionPerson(session *model.UserSession) (domain.PrincipalRef, error) {
 	if session == nil || session.Id <= 0 {
 		return domain.PrincipalRef{}, keelhandler.NewAPIError(http.StatusUnauthorized, "user session required")
 	}
 	return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: strconv.Itoa(session.Id)}, nil
 }
 
-func personRequest(session *keelmodel.UserSession, body json.RawMessage, request any) (domain.PrincipalRef, error) {
+func personRequest(session *model.UserSession, body json.RawMessage, request any) (domain.PrincipalRef, error) {
 	person, err := sessionPerson(session)
 	if err == nil {
 		err = decode(body, request)

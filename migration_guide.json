@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.3.6",
+      "title": "keel 1.3.4 and Charter 1.9.1, tenant keys on runs and alerts, guardrail matching, exported error statuses",
+      "tags": [
+        "breaking",
+        "additive",
+        "schema"
+      ],
+      "summary": "Adopts keel v1.3.4 and charter v1.9.1. agent_run and agent_alert gain unique tenant keys a child table's foreign key can reference, an enforcer reports which rules of a rule set match a text outside a run, and Scout's sentinel-to-status table registers with keel's error registry. Breaking: an oversized Studio or approval body is 413, and every Scout route answers Scout's sentinels with one status table.",
+      "body_markdown": "## Breaking\n\nkeel moves from v1.3.3 to v1.3.4 and charter from v1.8.2 to v1.9.1; apply their steps first. Scout uses no Charter API that changed.\n\n| Old | New |\n|---|---|\n| A Studio or approval body over `max_request_size` was `400` | `413`, from keel's `handler.JSON`; a duplicate member is `400` |\n| keel `approval.ErrSameActor` mapped by `confirmation.Inbox` | `approval.ErrSeparation`, still `domain.ErrForbidden` |\n| Conversation and Studio routes mapped different sentinel sets | One table: conversation routes also answer `ErrNoPrompts` `400`, `ErrAuthorityExceeded` `403`, `ErrSealed`, `ErrFenceLost`, `ErrTurnHeld` `409`, and `ErrExecutionLimit` `422`; Studio routes answer `ErrReplayExpired` `410` |\n\n## Schema\n\nRebuild from the schema sources, or change a live database:\n\n| Table | Change |\n|---|---|\n| `agent_run` | `agent_run_tenant_ix (partner_id, id)` becomes the unique `agent_run_partner_uq` |\n| `agent_alert` | New unique index `agent_alert_partner_uq (partner_id, id)` |\n\n## Additive\n\n- Importing the `handler` package registers Scout's sentinels with keel's error registry at the statuses Scout's handlers use, so keel's `WriteServiceError` answers them.\n- `contract.GuardrailMatcher`, implemented by `guardrail.LayeredEnforcer.Match(ctx, rules, stage, content)`, returns the `domain.GuardrailMatch{RuleID, Action}` of a rule set's rules matching a text at a stage other than `tool_input`, applying no layer and recording no safety event."
+    },
+    {
       "version": "v1.3.5",
       "title": "Charter 1.8.2 object ids, constant columns removed",
       "tags": [

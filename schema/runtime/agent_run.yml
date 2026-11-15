@@ -43,8 +43,9 @@ indexes:
   - name: agent_run_request_ux
     columns: [partner_id, request_id]
     unique: true
-  - name: agent_run_tenant_ix
+  - name: agent_run_partner_uq
     columns: [partner_id, id]
+    unique: true
 checks:
   - name: agent_run_task_kind_ck
     expression: CHAR_LENGTH(TRIM(task_kind)) > 0

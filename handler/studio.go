@@ -10,7 +10,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	keelhandler "github.com/nauticana/keel/handler"
-	keelmodel "github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/model"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/contract"
@@ -305,7 +305,7 @@ func (h *StudioHandler) setDefault(ctx context.Context, actor domain.StudioActor
 
 // command serves one authenticated JSON POST: the body decodes into R and the backend decides.
 func command[R any](h *keelhandler.AbstractHandler, call func(context.Context, domain.StudioActor, R) (any, error)) http.HandlerFunc {
-	return bounded(h, h.JSON(http.MethodPost, func(ctx context.Context, session *keelmodel.UserSession, body json.RawMessage) (any, error) {
+	return h.JSON(http.MethodPost, func(ctx context.Context, session *model.UserSession, body json.RawMessage) (any, error) {
 		actor, err := sessionActor(session)
 		if err != nil {
 			return nil, err
@@ -315,12 +315,12 @@ func command[R any](h *keelhandler.AbstractHandler, call func(context.Context, d
 			return nil, err
 		}
 		return mapServiceError(call(ctx, actor, request))
-	}))
+	})
 }
 
 // query serves one authenticated GET with its URL parameters.
 func query(h *keelhandler.AbstractHandler, call func(context.Context, domain.StudioActor, url.Values) (any, error)) http.HandlerFunc {
-	return sessionQuery(h, func(ctx context.Context, session *keelmodel.UserSession, values url.Values) (any, error) {
+	return sessionQuery(h, func(ctx context.Context, session *model.UserSession, values url.Values) (any, error) {
 		actor, err := sessionActor(session)
 		if err != nil {
 			return nil, err
@@ -330,7 +330,7 @@ func query(h *keelhandler.AbstractHandler, call func(context.Context, domain.Stu
 }
 
 // sessionQuery serves one authenticated GET with its session and URL parameters.
-func sessionQuery(h *keelhandler.AbstractHandler, call func(context.Context, *keelmodel.UserSession, url.Values) (any, error)) http.HandlerFunc {
+func sessionQuery(h *keelhandler.AbstractHandler, call func(context.Context, *model.UserSession, url.Values) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.RequireMethod(w, r, http.MethodGet) {
 			return
@@ -339,22 +339,29 @@ func sessionQuery(h *keelhandler.AbstractHandler, call func(context.Context, *ke
 		if !ok {
 			return
 		}
-		result, err := mapServiceError(call(r.Context(), session, r.URL.Query()))
-		if err == nil {
-			common.WriteJSON(w, http.StatusOK, result)
+		result, err := call(r.Context(), session, r.URL.Query())
+		if err != nil {
+			writeServiceError(h, w, r, err)
 			return
 		}
-		if apiErr, ok := errors.AsType[*keelhandler.APIError](err); ok {
-			for key, values := range apiErr.Header {
-				for _, value := range values {
-					w.Header().Add(key, value)
-				}
-			}
-			h.WriteRequestError(r, w, apiErr.Status, http.StatusText(apiErr.Status), apiErr.Msg)
-			return
-		}
-		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		common.WriteJSON(w, http.StatusOK, result)
 	}
+}
+
+// writeServiceError writes err with its mapped status and advisory headers; keel withholds a 5xx detail.
+func writeServiceError(h *keelhandler.AbstractHandler, w http.ResponseWriter, r *http.Request, err error) {
+	_, mapped := mapServiceError(nil, err)
+	apiErr, ok := errors.AsType[*keelhandler.APIError](mapped)
+	if !ok {
+		h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		return
+	}
+	for key, values := range apiErr.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	h.WriteRequestError(r, w, apiErr.Status, http.StatusText(apiErr.Status), apiErr.Msg)
 }
 
 // withErrorHeaders carries a typed error's advisory headers onto the API error
@@ -389,28 +396,16 @@ func mapServiceError(result any, err error) (any, error) {
 		}
 		return nil, keelhandler.NewAPIError(http.StatusBadRequest, string(body))
 	}
-	switch {
-	case errors.Is(err, domain.ErrValidation), errors.Is(err, domain.ErrNoPrompts):
-		return nil, keelhandler.NewAPIError(http.StatusBadRequest, err.Error())
-	case errors.Is(err, domain.ErrUnauthorized), errors.Is(err, domain.ErrPrincipalUnknown):
-		return nil, keelhandler.NewAPIError(http.StatusUnauthorized, err.Error())
-	case errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrAuthorityExceeded):
-		return nil, keelhandler.NewAPIError(http.StatusForbidden, err.Error())
-	case errors.Is(err, domain.ErrNotFound):
-		return nil, keelhandler.NewAPIError(http.StatusNotFound, err.Error())
-	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict), errors.Is(err, domain.ErrSealed),
-		errors.Is(err, domain.ErrFenceLost), errors.Is(err, domain.ErrTurnHeld):
-		return nil, keelhandler.NewAPIError(http.StatusConflict, err.Error())
-	case errors.Is(err, domain.ErrRateLimited), errors.Is(err, domain.ErrBudgetExceeded):
-		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error()), err)
-	case errors.Is(err, domain.ErrNotReady), errors.Is(err, domain.ErrCircuitOpen):
-		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusServiceUnavailable, err.Error()), err)
-	case errors.Is(err, domain.ErrExecutionLimit):
-		// The agent's own configured limit stopped the work; the detail may hold provider text.
-		return nil, keelhandler.NewAPIError(http.StatusUnprocessableEntity, domain.ErrExecutionLimit.Error())
-	default:
+	status := errorStatus(err)
+	if status == 0 {
 		return nil, err
 	}
+	message := err.Error()
+	if status == http.StatusUnprocessableEntity {
+		// The agent's own configured limit stopped the work; the detail may hold provider text.
+		message = domain.ErrExecutionLimit.Error()
+	}
+	return nil, withErrorHeaders(keelhandler.NewAPIError(status, message), err)
 }
 
 func domainDraft(value api.AgentDraft) domain.AgentDraft {
@@ -524,7 +519,7 @@ func apiRelease(value domain.AgentRelease) (api.AgentRelease, error) {
 	return release, nil
 }
 
-func sessionActor(session *keelmodel.UserSession) (domain.StudioActor, error) {
+func sessionActor(session *model.UserSession) (domain.StudioActor, error) {
 	if session == nil || session.PartnerId <= 0 {
 		return domain.StudioActor{}, keelhandler.NewAPIError(http.StatusForbidden, "partner context required")
 	}

@@ -24,6 +24,12 @@ type StreamingGuardrail interface {
 	OpenOutputSession(ctx context.Context, config domain.GuardrailConfig, subject domain.GuardrailSubject) (GuardrailOutputSession, error)
 }
 
+// GuardrailMatcher is the optional capability of an enforcer that reports which rules of a rule
+// set match a text outside a run, at a stage without a tool call; it applies no layer and records nothing.
+type GuardrailMatcher interface {
+	Match(ctx context.Context, rules domain.GuardrailRuleSet, stage domain.GuardrailStage, content []byte) ([]domain.GuardrailMatch, error)
+}
+
 // GuardrailOutputSession inspects one ordered model stream; it is not safe for concurrent use.
 type GuardrailOutputSession interface {
 	// Inspect returns the approved part of the chunk; held reports that bytes were retained for lookback.

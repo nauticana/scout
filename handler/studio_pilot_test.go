@@ -56,7 +56,6 @@ func pilotData(t *testing.T, recorder *httptest.ResponseRecorder, target any) {
 }
 
 func TestStudioPilotAddActsAsTheSessionPerson(t *testing.T) {
-	configureConversationRequestLimit(t)
 	backend := &pilotBackendFake{}
 	recorder := httptest.NewRecorder()
 	body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPosition) + `","subject_id":"emea/sales-lead","reason":"pilot"}`)
@@ -76,7 +75,6 @@ func TestStudioPilotAddActsAsTheSessionPerson(t *testing.T) {
 }
 
 func TestStudioPilotRemoveReportsTheEnd(t *testing.T) {
-	configureConversationRequestLimit(t)
 	recorder := httptest.NewRecorder()
 	body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPrincipal) + `","subject_id":"1001","reason":"done"}`)
 	pilotHandler(&pilotBackendFake{}).Routes()[api.StudioPilotRemovePath](recorder, authenticatedRequest(http.MethodPost, api.StudioPilotRemovePath, body))
@@ -88,7 +86,6 @@ func TestStudioPilotRemoveReportsTheEnd(t *testing.T) {
 }
 
 func TestStudioPilotMapsRefusals(t *testing.T) {
-	configureConversationRequestLimit(t)
 	for err, status := range map[error]int{domain.ErrConflict: http.StatusConflict, domain.ErrForbidden: http.StatusForbidden, domain.ErrNotFound: http.StatusNotFound, domain.ErrValidation: http.StatusBadRequest} {
 		recorder := httptest.NewRecorder()
 		body := []byte(`{"agent_name":"writer-a","version":"4","subject_kind":"` + string(domain.PilotPrincipal) + `","subject_id":"1001","reason":"pilot"}`)

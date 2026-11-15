@@ -78,6 +78,15 @@ A blocking rule returns `*ViolationError` wrapping `domain.ErrForbidden` and car
 rule ids, stage, severity, and policy version. `TerminalFrame` builds the payload-free final
 `domain.TurnReply` (`ErrorCode = "guardrail"`) for a stream that must end on policy.
 
+## Matching outside a run
+
+`LayeredEnforcer.Match`, the optional `contract.GuardrailMatcher` capability, reports which rules of a
+caller's `domain.GuardrailRuleSet` match a text at one stage, as `domain.GuardrailMatch{RuleID, Action}`
+in rule order. It compiles the set with the enforcer's compiler and uses its classifiers, but applies
+no baseline, restriction, or release layer, transforms nothing, and records no safety event. The
+`tool_input` stage judges a tool call and is refused with `domain.ErrValidation`; a classifier rule
+without a provider is `domain.ErrDegraded`.
+
 ## Streaming
 
 `AfterModelChunk` sees one frame at a time, so a phrase or bounded regex spanning a chunk boundary

@@ -97,6 +97,12 @@ type GuardrailVerdict struct {
 	Version       string
 }
 
+// GuardrailMatch is one rule a text matched and the action the rule takes.
+type GuardrailMatch struct {
+	RuleID string
+	Action GuardrailAction
+}
+
 // GuardrailSubject identifies the request an inspection belongs to; ReleaseVersion is the agent version.
 type GuardrailSubject struct {
 	TenantID       int64

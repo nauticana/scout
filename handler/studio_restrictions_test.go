@@ -92,7 +92,6 @@ func TestStudioRestrictionsReadTheLayersAndAnAgentsOverrides(t *testing.T) {
 }
 
 func TestStudioRestrictionsReplaceMapsTheWholeLayer(t *testing.T) {
-	configureConversationRequestLimit(t)
 	backend := &restrictionBackend{}
 	recorder := httptest.NewRecorder()
 	newRestrictionHandler(backend)(recorder, authenticatedRequest(http.MethodPost, api.StudioRestrictionsPath, []byte(`{
@@ -120,7 +119,6 @@ func TestStudioRestrictionsReplaceMapsTheWholeLayer(t *testing.T) {
 }
 
 func TestStudioRestrictionsMapRefusals(t *testing.T) {
-	configureConversationRequestLimit(t)
 	for name, test := range map[string]struct {
 		method string
 		err    error
@@ -155,7 +153,7 @@ func TestStudioRestrictionsBoundTheReplaceBody(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	body := `{"expected_digest":"","denials":[{"id":"` + strings.Repeat("a", 128) + `","actions":["*"],"resources":["*"]}]}`
 	newRestrictionHandler(backend)(recorder, authenticatedRequest(http.MethodPost, api.StudioRestrictionsPath, []byte(body)))
-	if recorder.Code != http.StatusBadRequest || backend.calls != 0 {
+	if recorder.Code != http.StatusRequestEntityTooLarge || backend.calls != 0 {
 		t.Fatalf("an oversized body: status = %d, calls = %d", recorder.Code, backend.calls)
 	}
 }

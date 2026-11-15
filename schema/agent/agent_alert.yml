@@ -41,6 +41,9 @@ indexes:
     columns: [partner_id, agent_id, kind_code]
     unique: true
     where: status_code = 'O'
+  - name: agent_alert_partner_uq
+    columns: [partner_id, id]
+    unique: true
   - name: agent_alert_agent_ix
     columns: [partner_id, agent_id, id]
 checks:

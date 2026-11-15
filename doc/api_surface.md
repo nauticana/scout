@@ -208,17 +208,18 @@ With `ApprovalHandler.Inbox` (`confirmation.Inbox`) composed, the confirmation r
 
 | Domain condition | HTTP status |
 |---|---:|
-| malformed request or `domain.ErrValidation` | `400` |
+| malformed request, `domain.ErrValidation`, or `domain.ErrNoPrompts` | `400` |
 | unauthenticated session, `domain.ErrUnauthorized`, or `domain.ErrPrincipalUnknown` | `401` |
 | missing partner context, `domain.ErrForbidden`, or a widening or loosening change / `domain.ErrAuthorityExceeded` | `403` |
 | missing agent, release, conversation, or link / `domain.ErrNotFound` | `404` |
-| stale revision, archived agent, disabled agent / `domain.ErrConflict` or `domain.ErrRevisionConflict`; a layer under a sealed one / `domain.ErrSealed`; a moved turn fence or a held turn / `domain.ErrFenceLost` or `domain.ErrTurnHeld` (Studio routes) | `409` |
-| an agent's own execution limit stopped the work / `domain.ErrExecutionLimit` (Studio and approval routes; the detail is fixed) | `422` |
+| stale revision, archived agent, disabled agent / `domain.ErrConflict` or `domain.ErrRevisionConflict`; a layer under a sealed one / `domain.ErrSealed`; a moved turn fence or a held turn / `domain.ErrFenceLost` or `domain.ErrTurnHeld` | `409` |
+| a conversation cursor past the replay window / `domain.ErrReplayExpired` | `410` |
+| an agent's own execution limit stopped the work / `domain.ErrExecutionLimit` (the detail is fixed) | `422` |
 | quota, turn rate, or budget limit / `domain.ErrRateLimited` or `domain.ErrBudgetExceeded` | `429`, with `Retry-After` when the error carries one, through any wrapping |
 | no executable release / `domain.ErrNotReady` or `domain.ErrCircuitOpen` | `503` |
 | unclassified failure | `500` |
 
-Studio and approval request bodies decode strictly and are capped at keel's `MaxRequestSize`: an unknown member, trailing data, or an oversized body is `400`. Errors use keel's `application/problem+json` envelope. A field-validation failure serializes `api.ValidationProblem` — a message and `fields` of `{field, message}` — into the problem's `detail`. A `5xx` detail is replaced by a request ID; the cause is logged.
+Studio and approval request bodies decode strictly: an unknown or duplicate member or trailing data is `400`, and a body over keel's `max_request_size` is `413`. Importing the `handler` package registers this table with keel's error registry, so a product handler answering through keel's `WriteServiceError` gives Scout's sentinels the same statuses. Errors use keel's `application/problem+json` envelope. A field-validation failure serializes `api.ValidationProblem` — a message and `fields` of `{field, message}` — into the problem's `detail`. A `5xx` detail is replaced by a request ID; the cause is logged.
 
 ## Compatibility boundary
 

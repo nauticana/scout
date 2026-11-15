@@ -500,3 +500,45 @@ func TestOutputSessionUpdatesLookbackWithRestrictionLayer(t *testing.T) {
 		t.Fatalf("cross-chunk restriction: want ErrForbidden, got %v", err)
 	}
 }
+
+func TestMatchReportsTheRuleSetsMatchesWithoutLayersOrEvents(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	set := domain.GuardrailRuleSet{SchemaVersion: RuleSetSchemaVersion, Rules: []domain.GuardrailRule{
+		rule("phrase", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["refund"]}`),
+		rule("digits", domain.GuardrailKindRegex, domain.GuardrailActionRedact, `{"pattern":"[0-9]+","max_match_bytes":8}`),
+		rule("absent", domain.GuardrailKindExactPhrase, domain.GuardrailActionFlag, `{"phrases":["chargeback"]}`),
+		rule("output-only", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["refund"]}`, domain.GuardrailStageOutput),
+	}}
+	matches, err := h.enforcer.Match(context.Background(), set, domain.GuardrailStageInput, []byte("TOPSECRET refund 42"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.GuardrailMatch{{RuleID: "phrase", Action: domain.GuardrailActionBlock}, {RuleID: "digits", Action: domain.GuardrailActionRedact}}
+	if len(matches) != len(want) || matches[0] != want[0] || matches[1] != want[1] {
+		t.Fatalf("matches = %+v", matches)
+	}
+	if len(h.events.Events) != 0 {
+		t.Fatalf("events = %+v", h.events.Events)
+	}
+}
+
+func TestMatchRefusesWhatItCannotJudge(t *testing.T) {
+	h := newHarness(t, EnforcerConfig{})
+	phrase := domain.GuardrailRuleSet{SchemaVersion: RuleSetSchemaVersion, Rules: []domain.GuardrailRule{
+		rule("phrase", domain.GuardrailKindExactPhrase, domain.GuardrailActionBlock, `{"phrases":["x"]}`),
+	}}
+	for name, stage := range map[string]domain.GuardrailStage{"tool input": domain.GuardrailStageToolInput, "unknown": "elsewhere"} {
+		if _, err := h.enforcer.Match(context.Background(), phrase, stage, []byte("x")); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s stage: %v", name, err)
+		}
+	}
+	if _, err := h.enforcer.Match(context.Background(), domain.GuardrailRuleSet{}, domain.GuardrailStageInput, []byte("x")); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("no schema version: %v", err)
+	}
+	pii := domain.GuardrailRuleSet{SchemaVersion: RuleSetSchemaVersion, Rules: []domain.GuardrailRule{
+		rule("pii", domain.GuardrailKindPII, domain.GuardrailActionBlock, ""),
+	}}
+	if _, err := h.enforcer.Match(context.Background(), pii, domain.GuardrailStageInput, []byte("x")); !errors.Is(err, domain.ErrDegraded) {
+		t.Fatalf("no classifier: %v", err)
+	}
+}

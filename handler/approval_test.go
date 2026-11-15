@@ -130,7 +130,6 @@ func TestApprovalConfirmationRoutesActAsTheSessionPerson(t *testing.T) {
 	if routes := (&ApprovalHandler{}).Routes(); routes[api.ConfirmationsPath] != nil {
 		t.Fatal("confirmation routes need a composed inbox")
 	}
-	configureConversationRequestLimit(t)
 	inbox := &confirmationInboxFake{}
 	handler := &ApprovalHandler{UserService: conversationUsers{}, Inbox: inbox}
 	serve := func(method, path, target string, body []byte) *httptest.ResponseRecorder {

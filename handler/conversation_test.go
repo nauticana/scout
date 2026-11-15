@@ -13,10 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nauticana/keel/config"
 	keelhandler "github.com/nauticana/keel/handler"
-	keellimiter "github.com/nauticana/keel/limiter"
-	keelmodel "github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/limiter"
+	"github.com/nauticana/keel/model"
 	"github.com/nauticana/keel/user"
 
 	"github.com/nauticana/scout/api"
@@ -26,13 +25,13 @@ import (
 
 type conversationUsers struct{ user.UserService }
 
-func (conversationUsers) ParseJWT(string) (*keelmodel.UserSession, error) {
-	return &keelmodel.UserSession{Id: 42, PartnerId: 7}, nil
+func (conversationUsers) ParseJWT(string) (*model.UserSession, error) {
+	return &model.UserSession{Id: 42, PartnerId: 7}, nil
 }
 
-type conversationCallerFunc func(context.Context, *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error)
+type conversationCallerFunc func(context.Context, *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error)
 
-func (function conversationCallerFunc) Resolve(ctx context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+func (function conversationCallerFunc) Resolve(ctx context.Context, session *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 	return function(ctx, session)
 }
 
@@ -107,7 +106,7 @@ func newConversationHandler(plane contract.DataPlane) *ConversationHandler {
 	return &ConversationHandler{
 		UserService: conversationUsers{},
 		Plane:       plane,
-		Callers: conversationCallerFunc(func(_ context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+		Callers: conversationCallerFunc(func(_ context.Context, session *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 			if session.PartnerId != 7 {
 				return domain.TenantContext{}, domain.PrincipalRef{}, errors.New("wrong session")
 			}
@@ -124,15 +123,7 @@ func authenticatedRequest(method, target string, body []byte) *http.Request {
 	return request
 }
 
-func configureConversationRequestLimit(t *testing.T) {
-	t.Helper()
-	previous := config.Config()
-	config.SetConfig(&config.KeelConfig{MaxRequestSize: 1 << 20})
-	t.Cleanup(func() { config.SetConfig(previous) })
-}
-
 func TestConversationSubmitMapsSessionIdentityAndAdmitsTurn(t *testing.T) {
-	configureConversationRequestLimit(t)
 	subscription := &conversationSubscription{}
 	var admitted domain.TurnRequest
 	plane := &conversationPlane{ingress: conversationIngressFunc(func(_ context.Context, request domain.TurnRequest) (contract.TurnReplySubscription, error) {
@@ -223,7 +214,6 @@ func TestConversationStreamSanitizesInternalFailure(t *testing.T) {
 }
 
 func TestConversationCancelUsesTenantAndDefaultReason(t *testing.T) {
-	configureConversationRequestLimit(t)
 	var tenantID int64
 	var requestID, reason string
 	plane := &conversationPlane{canceller: conversationCancellerFunc(func(_ context.Context, tenant int64, request, why string) error {
@@ -241,7 +231,7 @@ func TestConversationCancelUsesTenantAndDefaultReason(t *testing.T) {
 }
 
 func TestMapConversationErrorPreservesRetryAfter(t *testing.T) {
-	_, mapped := mapConversationError(nil, &keellimiter.LimitError{Err: domain.ErrRateLimited, Scope: "turn.partner", After: 3 * time.Second})
+	_, mapped := mapServiceError(nil, &limiter.LimitError{Err: domain.ErrRateLimited, Scope: "turn.partner", After: 3 * time.Second})
 	var apiErr *keelhandler.APIError
 	if !errors.As(mapped, &apiErr) || apiErr.Status != http.StatusTooManyRequests || apiErr.Header.Get("Retry-After") != "3" {
 		t.Fatalf("mapped = %#v", mapped)
@@ -271,7 +261,7 @@ func TestConversationAgentsListsSelectableAgents(t *testing.T) {
 
 func TestConversationRefusesASessionWithNoPerson(t *testing.T) {
 	handler := newConversationHandler(&conversationPlane{ingress: conversationIngressFunc(nil)})
-	handler.Callers = conversationCallerFunc(func(context.Context, *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+	handler.Callers = conversationCallerFunc(func(context.Context, *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 		return domain.TenantContext{TenantID: 7}, domain.PrincipalRef{}, nil
 	})
 	recorder := httptest.NewRecorder()

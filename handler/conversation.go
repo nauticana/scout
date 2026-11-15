@@ -12,7 +12,7 @@ import (
 
 	"github.com/nauticana/keel/common"
 	keelhandler "github.com/nauticana/keel/handler"
-	keelmodel "github.com/nauticana/keel/model"
+	"github.com/nauticana/keel/model"
 
 	"github.com/nauticana/scout/api"
 	"github.com/nauticana/scout/contract"
@@ -24,14 +24,14 @@ const defaultCancelReason = "requested by client"
 // CallerResolver maps an authenticated product session onto its tenant context and the
 // person a turn acts for. The data plane resolves and authorizes the serving agent.
 type CallerResolver interface {
-	Resolve(ctx context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error)
+	Resolve(ctx context.Context, session *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error)
 }
 
 // SessionCaller is the CallerResolver of a product whose session partner is the tenant
 // and whose signed-in user is the person; the scope is the tenant root.
 type SessionCaller struct{}
 
-func (SessionCaller) Resolve(_ context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+func (SessionCaller) Resolve(_ context.Context, session *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 	if session == nil || session.PartnerId <= 0 || session.Id <= 0 {
 		return domain.TenantContext{}, domain.PrincipalRef{}, fmt.Errorf("%w: a partner session is required", domain.ErrForbidden)
 	}
@@ -329,7 +329,7 @@ func conversationTurn(turn domain.TurnSummary) api.ConversationTurn {
 
 // caller resolves the session to a person: a turn from HTTP always acts for someone, so
 // its authorization never takes the in-process path of delegated work.
-func (h *ConversationHandler) caller(ctx context.Context, session *keelmodel.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
+func (h *ConversationHandler) caller(ctx context.Context, session *model.UserSession) (domain.TenantContext, domain.PrincipalRef, error) {
 	tenant, person, err := h.Callers.Resolve(ctx, session)
 	if err == nil && (person.Kind == "" || person.ID == "") {
 		err = fmt.Errorf("%w: the session resolves to no person", domain.ErrForbidden)
@@ -397,7 +397,7 @@ func writeSSE(w io.Writer, reply domain.TurnReply) error {
 func (h *ConversationHandler) writeSSEError(w io.Writer, r *http.Request, err error) error {
 	status, detail := http.StatusInternalServerError, err.Error()
 	var apiErr *keelhandler.APIError
-	if _, mapped := mapConversationError(nil, err); errors.As(mapped, &apiErr) {
+	if _, mapped := mapServiceError(nil, err); errors.As(mapped, &apiErr) {
 		status, detail = apiErr.Status, apiErr.Msg
 	}
 	requestID := common.RequestIDFromContext(r.Context())
@@ -463,44 +463,5 @@ func (h *ConversationHandler) writeStoredReply(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ConversationHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
-	_, mapped := mapConversationError(nil, err)
-	var carrier keelhandler.HeaderCarrier
-	if errors.As(mapped, &carrier) {
-		for key, values := range carrier.ErrorHeaders() {
-			for _, value := range values {
-				w.Header().Add(key, value)
-			}
-		}
-	}
-	if apiErr, ok := errors.AsType[*keelhandler.APIError](mapped); ok {
-		h.WriteRequestError(r, w, apiErr.Status, http.StatusText(apiErr.Status), apiErr.Msg)
-		return
-	}
-	h.WriteRequestError(r, w, http.StatusInternalServerError, "Internal Server Error", err.Error())
-}
-
-func mapConversationError(result any, err error) (any, error) {
-	if err == nil {
-		return result, nil
-	}
-	switch {
-	case errors.Is(err, domain.ErrValidation):
-		return nil, keelhandler.NewAPIError(http.StatusBadRequest, err.Error())
-	case errors.Is(err, domain.ErrUnauthorized), errors.Is(err, domain.ErrPrincipalUnknown):
-		return nil, keelhandler.NewAPIError(http.StatusUnauthorized, err.Error())
-	case errors.Is(err, domain.ErrForbidden):
-		return nil, keelhandler.NewAPIError(http.StatusForbidden, err.Error())
-	case errors.Is(err, domain.ErrNotFound):
-		return nil, keelhandler.NewAPIError(http.StatusNotFound, err.Error())
-	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRevisionConflict):
-		return nil, keelhandler.NewAPIError(http.StatusConflict, err.Error())
-	case errors.Is(err, domain.ErrRateLimited), errors.Is(err, domain.ErrBudgetExceeded):
-		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusTooManyRequests, err.Error()), err)
-	case errors.Is(err, domain.ErrNotReady), errors.Is(err, domain.ErrCircuitOpen):
-		return nil, withErrorHeaders(keelhandler.NewAPIError(http.StatusServiceUnavailable, err.Error()), err)
-	case errors.Is(err, domain.ErrReplayExpired):
-		return nil, keelhandler.NewAPIError(http.StatusGone, err.Error())
-	default:
-		return result, err
-	}
+	writeServiceError(&h.AbstractHandler, w, r, err)
 }

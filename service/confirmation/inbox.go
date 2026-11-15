@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nauticana/keel/approval"
-	keelport "github.com/nauticana/keel/port"
+	"github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
@@ -179,7 +179,7 @@ func (in *Inbox) Reconcile(ctx context.Context, person domain.PrincipalRef, key 
 
 // OnDecided is approval.Service.OnDecided: it applies decisions on ApprovalObjectType and
 // ignores other object types, so a product can chain its own.
-func (in *Inbox) OnDecided(ctx context.Context, tx keelport.TxQueryService, request *approval.Request) error {
+func (in *Inbox) OnDecided(ctx context.Context, tx port.TxQueryService, request *approval.Request) error {
 	if request == nil || request.ObjectType != ApprovalObjectType {
 		return nil
 	}
@@ -221,7 +221,7 @@ func keelError(err error) error {
 		return fmt.Errorf("%w: %w", domain.ErrNotFound, err)
 	case errors.Is(err, approval.ErrInvalidState), errors.Is(err, approval.ErrExpired):
 		return fmt.Errorf("%w: %w", domain.ErrConflict, err)
-	case errors.Is(err, approval.ErrSameActor), errors.Is(err, approval.ErrNotMaker):
+	case errors.Is(err, approval.ErrSeparation), errors.Is(err, approval.ErrNotMaker):
 		return fmt.Errorf("%w: %w", domain.ErrForbidden, err)
 	}
 	return err
