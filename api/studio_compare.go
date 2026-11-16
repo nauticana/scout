@@ -11,12 +11,13 @@ const (
 )
 
 // CompareSubject is one arm of a comparison: the draft (draft true, frozen on model when set),
-// one release, for arm a only one recorded baseline, or for arm b only the control of arm a's
-// release; exactly one of them.
+// one release (without the bound skill omit_skill names, when set), for arm a only one recorded
+// baseline, or for arm b only the control of arm a's release; exactly one of them.
 type CompareSubject struct {
 	Draft      bool   `json:"draft,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Release    string `json:"release,omitempty"`
+	OmitSkill  string `json:"omit_skill,omitempty"`
 	BaselineID int64  `json:"baseline_id,omitempty"`
 	Control    bool   `json:"control,omitempty"`
 }
@@ -31,12 +32,14 @@ type AgentCompareRequest struct {
 }
 
 // ComparedSubject is one pinned arm: subject is D (draft), R (release), B (baseline), or W (control of
-// arm a's release); a draft frozen on another text model names it in provider and model.
+// arm a's release); a draft frozen on another text model names it in provider and model, and a
+// release replayed without one of its skills names it in omitted_skill.
 type ComparedSubject struct {
 	Subject          string `json:"subject"`
 	Provider         string `json:"provider,omitempty"`
 	Model            string `json:"model,omitempty"`
 	Release          string `json:"release,omitempty"`
+	OmittedSkill     string `json:"omitted_skill,omitempty"`
 	BaselineID       int64  `json:"baseline_id,omitempty"`
 	DefinitionDigest string `json:"definition_digest,omitempty"`
 }

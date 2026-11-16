@@ -109,6 +109,12 @@ type TenantSkillReference struct {
 	Version  string
 }
 
+// SkillRunCount is, for one release over a window, the settled runs and those of them that loaded a skill.
+type SkillRunCount struct {
+	Settled int64
+	Loaded  int64
+}
+
 // GoldenSetReference names one frozen golden set version.
 type GoldenSetReference struct {
 	GoldenSetID string

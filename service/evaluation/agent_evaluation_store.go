@@ -22,6 +22,7 @@ const (
 	qAgentEvalOpenRuns   = "scout_agent_evaluation_open_runs"
 	qAgentEvalVersion    = "scout_agent_evaluation_version"
 	qAgentEvalRelease    = "scout_agent_evaluation_release"
+	qAgentEvalBoundSkill = "scout_agent_evaluation_bound_skill"
 	qAgentEvalInsertRun  = "scout_agent_evaluation_insert_run"
 	qAgentEvalInsertSubj = "scout_agent_evaluation_insert_subject"
 	qAgentEvalRun        = "scout_agent_evaluation_run"
@@ -60,6 +61,8 @@ SELECT COUNT(e.example_id)
  GROUP BY v.set_version`,
 	qAgentEvalRelease: `
 SELECT definition_digest FROM agent_version WHERE partner_id = ? AND agent_id = ? AND agent_version = ?`,
+	qAgentEvalBoundSkill: `
+SELECT skill_id FROM agent_skill_binding WHERE partner_id = ? AND agent_id = ? AND agent_version = ? AND skill_id = ?`,
 	qAgentEvalInsertRun: `
 INSERT INTO evaluation_run (id, partner_id, agent_id, golden_set_id, set_version, scope_code, status_code, started_at,
                             requested_by_kind, requested_by_id)
@@ -67,8 +70,8 @@ VALUES (?, ?, ?, ?, ?, ?, ` + sqlRunQueued + `, NULL, ?, ?)
 RETURNING queued_at`,
 	qAgentEvalInsertSubj: `
 INSERT INTO evaluation_run_subject (run_id, partner_id, subject_code, agent_id, agent_version, definition_digest, definition_json, settings_json,
-                                    role_code, baseline_id, provider_id, model_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                    role_code, baseline_id, provider_id, model_id, omitted_skill_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	qAgentEvalRun: `
 SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_code, r.queued_at, r.started_at, r.completed_at,
        r.requested_by_kind, r.requested_by_id, r.sample_count, r.input_tokens, r.output_tokens, r.cost_minor_units, r.currency_code,
@@ -78,7 +81,8 @@ SELECT r.id, r.agent_id, r.golden_set_id, r.set_version, r.scope_code, r.status_
           JOIN golden_example e ON e.partner_id = x.partner_id AND e.golden_set_id = x.golden_set_id
                                AND e.set_version = x.set_version AND e.example_id = x.example_id
          WHERE x.partner_id = r.partner_id AND x.run_id = r.id AND e.scope_code = ` + sqlScopeGate + ` AND ? <> ` + sqlScopeGate + `),
-       s.provider_id, s.model_id, b.subject_code, b.agent_version, b.definition_digest, b.baseline_id, b.provider_id, b.model_id
+       s.provider_id, s.model_id, b.subject_code, b.agent_version, b.definition_digest, b.baseline_id, b.provider_id, b.model_id,
+       s.omitted_skill_id, b.omitted_skill_id
   FROM evaluation_run r
   JOIN evaluation_run_subject s ON s.partner_id = r.partner_id AND s.run_id = r.id AND s.role_code = ` + sqlRoleCandidate + `
   LEFT JOIN evaluation_run_subject b ON b.partner_id = r.partner_id AND b.run_id = r.id AND b.role_code = ` + sqlRoleBaseline + `
@@ -240,8 +244,11 @@ func validEnqueue(request domain.AgentEvaluationEnqueue) error {
 		return fmt.Errorf("%w: only arm a of a comparison may be a baseline", domain.ErrValidation)
 	}
 	if request.Subject.Kind == domain.SubjectControl && (request.Baseline == nil || request.Baseline.Subject.Kind != domain.SubjectRelease ||
-		request.Baseline.Subject.Version != request.Subject.Version) {
+		request.Baseline.Subject.Version != request.Subject.Version || request.Baseline.Subject.OmittedSkill != "") {
 		return fmt.Errorf("%w: a control is arm b of a comparison whose arm a is the same release", domain.ErrValidation)
+	}
+	if request.Subject.OmittedSkill != "" && request.Baseline == nil {
+		return fmt.Errorf("%w: only an arm of a comparison omits a skill", domain.ErrValidation)
 	}
 	if err := validArm(request.AgentID, domain.EvaluationArm{Subject: request.Subject, Draft: request.Draft, DraftSettings: request.DraftSettings}); err != nil {
 		return err
@@ -260,8 +267,8 @@ func validArm(agentID string, arm domain.EvaluationArm) error {
 	if subject.AgentID != agentID {
 		return fmt.Errorf("%w: subject agent %q is not agent %q", domain.ErrValidation, subject.AgentID, agentID)
 	}
-	if arm.Outputs != nil || subject.Model != nil && subject.Kind != domain.SubjectDraft {
-		return fmt.Errorf("%w: only a draft subject names a model, and outputs are never enqueued", domain.ErrValidation)
+	if arm.Outputs != nil || subject.Model != nil && subject.Kind != domain.SubjectDraft || subject.OmittedSkill != "" && subject.Kind != domain.SubjectRelease {
+		return fmt.Errorf("%w: only a draft subject names a model, only a release omits a skill, and outputs are never enqueued", domain.ErrValidation)
 	}
 	switch subject.Kind {
 	case domain.SubjectDraft:
@@ -342,7 +349,7 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 		if err != nil {
 			return domain.AgentEvaluationRun{}, err
 		}
-		if subject.DefinitionDigest != "" && subject.DefinitionDigest == run.Subject.DefinitionDigest {
+		if subject.DefinitionDigest != "" && subject.DefinitionDigest == run.Subject.DefinitionDigest && subject.OmittedSkill == run.Subject.OmittedSkill {
 			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: arms a and b are the same definition", domain.ErrValidation)
 		}
 		run.Baseline = &subject
@@ -374,7 +381,7 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 	return run, nil
 }
 
-// pinSubject resolves a release subject's digest and checks that a baseline subject answers
+// pinSubject resolves a release subject's digest and the skill it omits, and checks that a baseline subject answers
 // the run's set version in a scope covering the run's.
 func pinSubject(ctx context.Context, tx keelport.TxQueryService, request domain.AgentEvaluationEnqueue, subject domain.AgentEvaluationSubject, goldenSetID string) (domain.AgentEvaluationSubject, error) {
 	switch subject.Kind {
@@ -387,6 +394,16 @@ func pinSubject(ctx context.Context, tx keelport.TxQueryService, request domain.
 			return subject, fmt.Errorf("%w: release %q of agent %q", domain.ErrNotFound, subject.Version, request.AgentID)
 		}
 		subject.DefinitionDigest = strings.TrimSpace(common.AsString(release.Rows[0][0]))
+		if subject.OmittedSkill == "" {
+			break
+		}
+		bound, err := tx.Query(ctx, qAgentEvalBoundSkill, request.TenantID, request.AgentID, subject.Version, subject.OmittedSkill)
+		if err != nil {
+			return subject, fmt.Errorf("load omitted skill: %w", err)
+		}
+		if len(bound.Rows) == 0 {
+			return subject, fmt.Errorf("%w: release %q of agent %q binds no skill %q", domain.ErrNotFound, subject.Version, request.AgentID, subject.OmittedSkill)
+		}
 	case domain.SubjectBaseline:
 		baseline, err := tx.Query(ctx, qAgentEvalBaseline, request.TenantID, subject.BaselineID, goldenSetID, request.SetVersion)
 		if err != nil {
@@ -423,7 +440,8 @@ func insertSubject(ctx context.Context, tx keelport.TxQueryService, run domain.A
 		provider, model = subject.Model.ProviderID, subject.Model.ModelID
 	}
 	if _, err := tx.Query(ctx, qAgentEvalInsertSubj, run.RunID, run.TenantID, string(subject.Kind), run.AgentID,
-		nullable(subject.Version), nullable(subject.DefinitionDigest), definition, settings, string(role), baseline, provider, model); err != nil {
+		nullable(subject.Version), nullable(subject.DefinitionDigest), definition, settings, string(role), baseline, provider, model,
+		nullable(subject.OmittedSkill)); err != nil {
 		return fmt.Errorf("pin evaluation %s subject: %w", role, err)
 	}
 	return nil
@@ -454,8 +472,8 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("%w: evaluation run %d", domain.ErrNotFound, runID)
 	}
 	row := result.Rows[0]
-	if len(row) < 31 {
-		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("evaluation run row: expected 31 columns, got %d", len(row))
+	if len(row) < 33 {
+		return domain.AgentEvaluationRun{}, 0, fmt.Errorf("evaluation run row: expected 33 columns, got %d", len(row))
 	}
 	run := domain.AgentEvaluationRun{
 		RunID: common.AsInt64(row[0]), TenantID: tenantID, AgentID: common.AsString(row[1]), GoldenSetID: common.AsString(row[2]),
@@ -467,7 +485,7 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 			CostMinorUnits: common.AsInt64(row[14]), Currency: strings.TrimSpace(common.AsString(row[15]))},
 		Exponent: int(common.AsInt64(row[16])), Reason: common.AsString(row[17]),
 		Subject: domain.AgentEvaluationSubject{Kind: domain.EvaluationSubjectKind(common.AsString(row[18])), AgentID: common.AsString(row[1]),
-			Version: common.AsString(row[19]), DefinitionDigest: strings.TrimSpace(common.AsString(row[20]))},
+			Version: common.AsString(row[19]), DefinitionDigest: strings.TrimSpace(common.AsString(row[20])), OmittedSkill: common.AsString(row[31])},
 		HiddenResults: int(common.AsInt64(row[22])),
 	}
 	if !run.Status.Valid() || !run.Scope.Valid() {
@@ -477,7 +495,7 @@ func (store *AgentEvaluationStore) run(ctx context.Context, scope domain.GoldenS
 	if kind := common.AsString(row[25]); kind != "" {
 		run.Baseline = &domain.AgentEvaluationSubject{Kind: domain.EvaluationSubjectKind(kind), AgentID: run.AgentID,
 			Version: common.AsString(row[26]), DefinitionDigest: strings.TrimSpace(common.AsString(row[27])), BaselineID: common.AsInt64(row[28]),
-			Model: optionalModel(row[29], row[30])}
+			Model: optionalModel(row[29], row[30]), OmittedSkill: common.AsString(row[32])}
 	}
 	return run, common.AsInt64(row[21]), nil
 }

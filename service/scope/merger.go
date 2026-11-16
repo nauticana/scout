@@ -140,10 +140,10 @@ func (AutonomyMerger) Merge(_ context.Context, inherited []byte, override domain
 	if err != nil {
 		return nil, err
 	}
-	if autonomyRank[parent.Mode] < autonomyRank[child.Mode] {
+	if parent.Mode.Rank() < child.Mode.Rank() {
 		return json.Marshal(parent)
 	}
-	if autonomyRank[child.Mode] < autonomyRank[parent.Mode] || child.Mode != domain.AutonomyBounded {
+	if child.Mode.Rank() < parent.Mode.Rank() || child.Mode != domain.AutonomyBounded {
 		return json.Marshal(child)
 	}
 	var overlaps bool

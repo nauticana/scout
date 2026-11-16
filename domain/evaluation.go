@@ -108,6 +108,8 @@ type EvaluationSubject struct {
 	Decoding []byte
 	// Control is the reference arm's working set a control replay truncates to; nil replays as the release does.
 	Control *WorkingSet
+	// OmitSkill is a bound skill the replay withholds: absent from the skill index, refused by use_skill.
+	OmitSkill string
 }
 
 // EvaluatorVersion identifies one heuristic, judge, or human evaluator revision.

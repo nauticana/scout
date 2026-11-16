@@ -314,7 +314,14 @@ one release, or the control of arm `a`'s release, and arm `a` the draft, one rel
 recorded human baseline. A draft arm may
 name a `model`, which replaces the draft's text model before it is frozen exactly as a publish
 would (`DraftFreezer.FreezeDraft`) and is validated as a draft's own model is. Two arms of the
-same definition are refused. The comparison is an `evaluation_run` with two
+same definition are refused. A release arm may name `omit_skill`, a skill the release binds, to
+measure that skill's contribution: the arm replays the same release, cases, model, and fixtures
+with the skill withheld, absent from the skill index and refused by `use_skill`. The request
+builder drops it through the replay's `dataplane.SkillWithholding`, and a builder that does not is
+`ErrCapabilityUnsupported` before the model is called. Only an arm of a comparison omits a skill,
+so no such run counts toward a gate; `evaluation_run_subject.omitted_skill_id` pins it with a foreign key
+to the release's binding. The release with and without one skill are different arms; a control
+of a release omitting a skill is refused. The comparison is an `evaluation_run` with two
 `evaluation_run_subject` rows, role `B` (baseline) for `a` and `C` (candidate) for `b`, queued under the same
 open-run cap as any evaluation and recorded as a `COMPARE` Studio event.
 

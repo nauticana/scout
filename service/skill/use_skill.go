@@ -62,6 +62,8 @@ func enumeratedSkills(inputSchema []byte) ([]string, error) {
 // UseSkill serves use_skill: the procedure of one skill the caller's pinned release binds.
 type UseSkill struct {
 	Skills contract.SkillRegistry
+	// Loads records each load of a turn; nil records none, and a failed record fails the call.
+	Loads contract.SkillLoads
 }
 
 // Register serves use_skill from the transport.
@@ -86,9 +88,15 @@ func (tool *UseSkill) Handle(ctx context.Context, call domain.ToolCall) (domain.
 		return domain.ToolResult{}, err
 	}
 	for _, skill := range bound {
-		if skill.SkillID == args.Skill {
-			return procedureResult(skill)
+		if skill.SkillID != args.Skill {
+			continue
 		}
+		if tool.Loads != nil && call.RequestID != "" {
+			if err = tool.Loads.Record(ctx, principal, call.RequestID, skill.SkillID); err != nil {
+				return domain.ToolResult{}, err
+			}
+		}
+		return procedureResult(skill)
 	}
 	return domain.ToolResult{}, fmt.Errorf("%w: %s@%s binds no skill %q", domain.ErrNotFound, principal.ID, principal.Release, args.Skill)
 }

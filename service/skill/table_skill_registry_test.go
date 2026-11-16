@@ -564,3 +564,32 @@ func TestRegisterCopiesCarryTheCatalogRequirements(t *testing.T) {
 		t.Fatalf("stored = %+v, %v", stored, err)
 	}
 }
+
+func TestEnsureProfileReservesTheSkillBeforeItsFirstVersion(t *testing.T) {
+	fake, registry := newRegistry()
+	ctx := context.Background()
+	if err := registry.EnsureProfile(ctx, 1, " audit ", ""); err != nil {
+		t.Fatalf("EnsureProfile: %v", err)
+	}
+	if err := registry.EnsureProfile(ctx, 1, "audit", "audit"); err != nil {
+		t.Fatalf("the same profile again must be a no-op, got %v", err)
+	}
+	if err := registry.EnsureProfile(ctx, 1, "audit", "Audit"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("another display name: want ErrConflict, got %v", err)
+	}
+	if err := registry.Register(ctx, 1, auditSkill("1")); err != nil {
+		t.Fatalf("Register under the reserved profile: %v", err)
+	}
+	for name, call := range map[string]func() error{
+		"no tenant": func() error { return registry.EnsureProfile(ctx, 0, "audit", "") },
+		"blank id":  func() error { return registry.EnsureProfile(ctx, 1, " ", "Audit") },
+		"long id":   func() error { return registry.EnsureProfile(ctx, 1, strings.Repeat("a", maxSkillIdentifier+1), "") },
+	} {
+		if err := call(); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("%s: want ErrValidation, got %v", name, err)
+		}
+	}
+	if len(fake.committed.profiles) != 1 || len(fake.committed.versions) != 1 {
+		t.Fatalf("tables = %+v", fake.committed)
+	}
+}

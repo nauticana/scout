@@ -332,7 +332,7 @@ func (w *AgentEvaluationWorker) execute(ctx context.Context, claim domain.AgentE
 	case arm.Subject.Kind == domain.SubjectControl:
 		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version, Control: reference.WorkingSet}, example, nil)
 	default:
-		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version}, example, nil)
+		evalCase, err = w.Releases.Execute(ctx, domain.EvaluationSubject{AgentID: claim.Run.AgentID, AgentVersion: arm.Subject.Version, OmitSkill: arm.Subject.OmittedSkill}, example, nil)
 	}
 	if err != nil {
 		return domain.EvaluationCase{}, err

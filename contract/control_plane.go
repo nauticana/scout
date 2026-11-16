@@ -72,6 +72,9 @@ type ToolBinder interface {
 type SkillRegistry interface {
 	// Register publishes an immutable tenant-scoped skill version.
 	Register(ctx context.Context, tenantID int64, skill domain.SkillDefinition) error
+	// EnsureProfile creates the skill's profile before its first version; an existing
+	// profile with a different display name is ErrConflict.
+	EnsureProfile(ctx context.Context, tenantID int64, skillID, displayName string) error
 	// Get returns a tenant-scoped skill by immutable version.
 	Get(ctx context.Context, tenantID int64, skillID, version string) (domain.SkillDefinition, error)
 	// List returns the skills an agent version binds, ordered by skill id.
@@ -86,6 +89,9 @@ type SkillCatalog interface {
 	// DerivedFrom; its Requires name registered catalog versions, which each tenant
 	// copy must hold copies of, and its Origin, when set, pins the external source.
 	Register(ctx context.Context, skill domain.SkillDefinition) error
+	// EnsureProfile creates the skill's profile before its first version; an existing
+	// profile with a different display name is ErrConflict.
+	EnsureProfile(ctx context.Context, skillID, displayName string) error
 	// Get returns a catalog version.
 	Get(ctx context.Context, skillID, version string) (domain.SkillDefinition, error)
 	// Derived lists the tenant versions copied from a catalog version, across

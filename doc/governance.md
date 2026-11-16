@@ -78,7 +78,9 @@ The `autonomy` setting frozen into a release decides what the agent may act on, 
 `human_only` calls nothing; `advise` and `draft` call only tools whose version is declared
 `read_only`; `execute_with_approval` calls read-only tools and asks a person, through the
 `ToolApprovalGate` under rule `autonomy`, for every other call; `bounded_autonomous` acts within
-policy. A release with no mode is `human_only`. For Charter work, `charter.Participation` maps the
+policy. A release with no mode is `human_only`. `domain.AutonomyMode.Rank` orders the modes from
+`human_only` (1) to `bounded_autonomous` (5), zero for an unknown value; a child scope may only
+lower it. For Charter work, `charter.Participation` maps the
 modes to `observes`, `recommends`, `prepares`, `performs`, and `executes`, and `Admission` refuses a
 task needing more than the agent's mode reaches.
 

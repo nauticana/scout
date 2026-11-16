@@ -73,16 +73,16 @@ groups:
     depends_on: [catalog, tenancy, agent, runtime]
     seed_depends_on: [core]
 
-  - name: evaluation
-    path: evaluation
-    seed: seed/evaluation/evaluation.yml
-    depends_on: [catalog, tenancy, model, agent, knowledge, release, runtime]
-    seed_depends_on: [core]
-
   - name: skill
     path: skill
     seed: seed/skill/skill.yml
     depends_on: [tenancy, agent, tool]
+    seed_depends_on: [core]
+
+  - name: evaluation
+    path: evaluation
+    seed: seed/evaluation/evaluation.yml
+    depends_on: [catalog, tenancy, model, agent, knowledge, release, runtime, skill]
     seed_depends_on: [core]
 
   - name: configuration

@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.3.7",
+      "title": "Operating mode order, skill profiles before a version, skill-ablated comparison arm, skill load counts",
+      "tags": [
+        "breaking",
+        "additive",
+        "schema"
+      ],
+      "summary": "Exports the operating mode order as AutonomyMode.Rank, lets the skill catalog and registry create a profile before its first version, adds a comparison arm replaying a release without one bound skill, and records the skills each turn loads so a release's settled runs that loaded a skill can be counted. Breaking: SkillRegistry and SkillCatalog gain EnsureProfile, and the evaluation schema module depends on the skill module.",
+      "body_markdown": "## Breaking\n\nkeel moves from v1.3.4 to v1.3.6 and charter from v1.9.1 to v1.9.2; apply their steps first.\n\n| Old | New |\n|---|---|\n| `contract.SkillRegistry` without `EnsureProfile` | `EnsureProfile(ctx, tenantID, skillID, displayName)` on every implementation |\n| `contract.SkillCatalog` without `EnsureProfile` | `EnsureProfile(ctx, skillID, displayName)` on every implementation |\n| `evaluation` module depends on `catalog`, `tenancy`, `model`, `agent`, `knowledge`, `release`, `runtime` | Also on `skill`; pass `schema/skill` and its seed before `schema/evaluation` |\n| A custom `ReleaseCaseExecutor.Requests` | Replays a skill-ablated arm only when it passes its skills through `dataplane.SkillWithholdingFrom(ctx).Drop`, as `dataplane.ReleaseLoopRequestBuilder` does; otherwise the replay is `ErrCapabilityUnsupported` |\n\n## Schema\n\nRebuild from the schema sources, or change a live database:\n\n| Table | Change |\n|---|---|\n| `evaluation_run_subject` | New nullable `omitted_skill_id VARCHAR(80)`, foreign key `skill_binding_evaluation_run_subjects (partner_id, agent_id, agent_version, omitted_skill_id)` to `agent_skill_binding`, check `evaluation_run_subject_omitted_ck` (only a release subject omits a skill) |\n| `skill_load` | New, in the `skill` module: `partner_id`, `request_id`, `skill_id` (primary key), `agent_id`, `agent_version`, `loaded_at`; foreign key `binding_skill_loads` to `agent_skill_binding`; index `skill_load_retention_ix (loaded_at)` |\n\n## Additive\n\n- `domain.AutonomyMode.Rank()` orders the modes from `human_only` (1) to `bounded_autonomous` (5), zero for an unknown value; `service/scope` uses it.\n- `TableSkillRegistry.EnsureProfile` and `TableSkillCatalog.EnsureProfile` create a skill profile before its first version, refusing another display name with `ErrConflict`.\n- `domain.CompareSubject.OmitSkill` (HTTP `omit_skill`) on a release arm replays the release without that bound skill: absent from the skill index and refused by `use_skill`. `AgentEvaluationSubject.OmittedSkill` (HTTP `omitted_skill`) and `EvaluationSubject.OmitSkill` carry it; a control of such an arm and a single-arm run omitting a skill are refused.\n- `contract.SkillLoads` and `skill.TableSkillLoads`: `Record` keeps each skill a turn loads, `Runs` counts a release's runs settled in a window and those that loaded a skill, and `Purge` is a `contract.AgentRunPurger`. `UseSkill.Loads`, composed by `BaseDataPlane.SkillLoads`, records every load; a failed record fails the call.\n- `domain.SkillRunCount`."
+    },
+    {
       "version": "v1.3.6",
       "title": "keel 1.3.4 and Charter 1.9.1, tenant keys on runs and alerts, guardrail matching, exported error statuses",
       "tags": [

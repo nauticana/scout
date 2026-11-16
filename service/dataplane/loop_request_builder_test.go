@@ -290,3 +290,19 @@ func TestPromptCachePutsOnlyReleaseContentInTheStablePrefix(t *testing.T) {
 		t.Fatalf("uncached request = %+v", off)
 	}
 }
+
+func TestReleaseLoopRequestBuilderLeavesAWithheldSkillOutOfTheIndex(t *testing.T) {
+	reader := &definitionReaderStub{definition: domain.AgentDefinition{
+		AgentID: "writer", Version: "v3", Skills: []domain.SkillReference{{SkillID: "audit", Version: "1"}, {SkillID: "rewrite", Version: "1"}},
+		Languages: []domain.CompiledPrompt{{LanguageCode: "en-US", Sections: []domain.CompiledPromptSection{{Instruction: "be brief"}}}},
+	}}
+	builder := &ReleaseLoopRequestBuilder{Definitions: reader, Renderer: taskRenderer{}, MaxOutputTokens: 500,
+		Skills: skillListStub{skills: []domain.SkillDefinition{{SkillID: "audit", Summary: "A page needs an audit."}, {SkillID: "rewrite", Summary: "A page needs a rewrite."}}}}
+	input := loopInput()
+	input.Input = []byte("audit the homepage")
+	withholding := &SkillWithholding{SkillID: "audit"}
+	request, _, err := builder.Build(withholding.Context(context.Background()), input, domain.ToolLoopConfig{})
+	if err != nil || !withholding.Honoured() || strings.Contains(string(request.Prompt), "audit:") || !strings.HasSuffix(string(request.Prompt), "- rewrite: A page needs a rewrite.") {
+		t.Fatalf("prompt %q, %v", request.Prompt, err)
+	}
+}

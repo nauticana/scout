@@ -48,6 +48,24 @@ const (
 	AutonomyBounded             AutonomyMode = "bounded_autonomous"
 )
 
+// Rank orders the operating modes from human_only (1) to bounded_autonomous (5);
+// a value no scope holds ranks zero.
+func (mode AutonomyMode) Rank() int {
+	switch mode {
+	case AutonomyHumanOnly:
+		return 1
+	case AutonomyAdvise:
+		return 2
+	case AutonomyDraft:
+		return 3
+	case AutonomyExecuteWithApproval:
+		return 4
+	case AutonomyBounded:
+		return 5
+	}
+	return 0
+}
+
 // Scope is one node of a tenant's configuration hierarchy. ScopeKind is opaque to
 // Scout: the product names its own levels.
 type Scope struct {

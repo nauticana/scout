@@ -27,15 +27,6 @@ import (
 	"github.com/nauticana/scout/domain"
 )
 
-// autonomyRank orders the operating modes; a child may only lower the rank.
-var autonomyRank = map[domain.AutonomyMode]int{
-	domain.AutonomyHumanOnly:           0,
-	domain.AutonomyAdvise:              1,
-	domain.AutonomyDraft:               2,
-	domain.AutonomyExecuteWithApproval: 3,
-	domain.AutonomyBounded:             4,
-}
-
 type promptValue struct {
 	Instruction string `json:"instruction"`
 	Output      string `json:"output,omitempty"`
@@ -137,7 +128,7 @@ func decodeAutonomy(raw []byte) (autonomyValue, error) {
 	if err := strictDecode(raw, &value); err != nil {
 		return value, fmt.Errorf("%w: autonomy value must be a mode object: %v", domain.ErrValidation, err)
 	}
-	if _, known := autonomyRank[value.Mode]; !known {
+	if value.Mode.Rank() == 0 {
 		return value, fmt.Errorf("%w: unknown autonomy mode %q", domain.ErrValidation, value.Mode)
 	}
 	if value.WindowFrom < 0 || value.WindowFrom >= 1440 || value.WindowTo < 0 || value.WindowTo > 1440 ||

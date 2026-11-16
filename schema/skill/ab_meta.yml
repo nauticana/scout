@@ -11,3 +11,4 @@ tables:
   - skill_example
   - skill_requirement
   - agent_skill_binding
+  - skill_load

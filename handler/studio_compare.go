@@ -57,7 +57,8 @@ func (h *StudioCompareHandler) compare(ctx context.Context, actor domain.StudioA
 }
 
 func compareSubject(subject api.CompareSubject) domain.CompareSubject {
-	return domain.CompareSubject{Draft: subject.Draft, TextModel: subject.Model, Release: subject.Release, BaselineID: subject.BaselineID, Control: subject.Control}
+	return domain.CompareSubject{Draft: subject.Draft, TextModel: subject.Model, Release: subject.Release, OmitSkill: subject.OmitSkill,
+		BaselineID: subject.BaselineID, Control: subject.Control}
 }
 
 func (h *StudioCompareHandler) comparison(ctx context.Context, actor domain.StudioActor, query url.Values) (any, error) {
@@ -114,7 +115,8 @@ func apiComparedAnswer(arm domain.AgentCaseResult) api.ComparedAnswer {
 }
 
 func apiComparedSubject(subject domain.AgentEvaluationSubject) api.ComparedSubject {
-	result := api.ComparedSubject{Subject: string(subject.Kind), Release: subject.Version, BaselineID: subject.BaselineID, DefinitionDigest: subject.DefinitionDigest}
+	result := api.ComparedSubject{Subject: string(subject.Kind), Release: subject.Version, OmittedSkill: subject.OmittedSkill,
+		BaselineID: subject.BaselineID, DefinitionDigest: subject.DefinitionDigest}
 	if subject.Model != nil {
 		result.Provider, result.Model = subject.Model.ProviderID, subject.Model.ModelID
 	}

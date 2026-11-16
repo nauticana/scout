@@ -142,6 +142,8 @@ type AgentEvaluationSubject struct {
 	Model *ModelReference
 	// BaselineID is the recorded baseline a baseline subject replays.
 	BaselineID int64
+	// OmittedSkill is the bound skill a release subject replays without; empty omits none.
+	OmittedSkill string
 }
 
 // FrozenDraft is an agent's current draft frozen exactly as Publish would freeze

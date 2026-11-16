@@ -283,3 +283,20 @@ func TestCatalogRequirementsNameRegisteredCatalogVersions(t *testing.T) {
 		t.Fatalf("a versionless reference: want ErrValidation, got %v", err)
 	}
 }
+
+func TestCatalogEnsureProfileReservesTheSkillBeforeItsFirstVersion(t *testing.T) {
+	fake, catalog := newCatalog()
+	ctx := context.Background()
+	if err := catalog.EnsureProfile(ctx, "audit", ""); err != nil {
+		t.Fatalf("EnsureProfile: %v", err)
+	}
+	if err := catalog.EnsureProfile(ctx, "audit", "Audit"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("another display name: want ErrConflict, got %v", err)
+	}
+	if err := catalog.EnsureProfile(ctx, "", "Audit"); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("blank id: want ErrValidation, got %v", err)
+	}
+	if err := catalog.Register(ctx, catalogSkill()); err != nil || len(fake.profiles) != 1 {
+		t.Fatalf("Register under the reserved profile: %v, profiles %v", err, fake.profiles)
+	}
+}

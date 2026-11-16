@@ -22,7 +22,7 @@ const evidencedAnswerFormat = `Reply with only a JSON object {"answer": "...", "
 // ReleaseLoopRequestBuilder opens a tool loop with the pinned release's compiled
 // prompt and the turn input as the task. Task is the hook for product context; the turn's
 // working set, the tenant's memory, the documents the release binds whole, and the index of its
-// skills follow it.
+// skills, less one a replay's SkillWithholding names, follow it.
 // A loop with require_evidence appends the evidenced answer contract to the output format.
 type ReleaseLoopRequestBuilder struct {
 	Definitions contract.AgentDefinitionReader
@@ -218,7 +218,7 @@ func (builder *ReleaseLoopRequestBuilder) withSkillIndex(ctx context.Context, te
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(taskContext + "\n\n" + skill.Index(skills)), nil
+	return strings.TrimSpace(taskContext + "\n\n" + skill.Index(SkillWithholdingFrom(ctx).Drop(skills))), nil
 }
 
 func pinnedTextModel(definition domain.AgentDefinition) domain.ModelReference {

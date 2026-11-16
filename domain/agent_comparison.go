@@ -12,13 +12,15 @@ type EvaluationArm struct {
 }
 
 // CompareSubject names one arm of a comparison: the current draft, optionally frozen on
-// another text model of the catalog, one release, one recorded human baseline, or, for arm b
-// of a release, its budget-matched control.
+// another text model of the catalog, one release, optionally without one skill it binds, one
+// recorded human baseline, or, for arm b of a release, its budget-matched control.
 type CompareSubject struct {
 	Draft bool
 	// TextModel is the catalog model id a draft is frozen on in place of its own; empty keeps its own.
-	TextModel  string
-	Release    string
+	TextModel string
+	Release   string
+	// OmitSkill is a skill the release binds that the arm replays without; empty omits none.
+	OmitSkill  string
 	BaselineID int64
 	Control    bool
 }

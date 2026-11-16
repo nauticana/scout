@@ -118,8 +118,11 @@ type BaseDataPlane struct {
 	Dispatcher       contract.TurnDispatcher
 	Tools            contract.ToolRegistry
 	Skills           contract.SkillRegistry
-	Credentials      contract.ToolCredentialProvider
-	Egress           contract.ToolEgressPolicy
+	// SkillLoads records the skills each turn loads; composed over skill_load when Skills is
+	// Scout's table registry, whose bindings its rows reference.
+	SkillLoads  contract.SkillLoads
+	Credentials contract.ToolCredentialProvider
+	Egress      contract.ToolEgressPolicy
 	// Policy decides tool:invoke before guardrails; nil decides nothing. Standing denials reach the
 	// gateway only when the product sets a policy.SetEvaluator over policy.RestrictedResolver.
 	Policy      contract.PolicyDecisionPoint
@@ -407,9 +410,12 @@ func (plane *BaseDataPlane) composeTools() error {
 	if plane.Skills == nil {
 		plane.Skills = &skill.TableSkillRegistry{DB: plane.DB}
 	}
+	if _, tables := plane.Skills.(*skill.TableSkillRegistry); tables && plane.SkillLoads == nil {
+		plane.SkillLoads = &skill.TableSkillLoads{DB: plane.DB}
+	}
 	// A transport that is not in-process serves use_skill itself, through skill.UseSkill.
 	if inProcess, ok := plane.Transport.(*toolgateway.InProcessTransport); ok && !inProcess.Serves(domain.UseSkillToolID) {
-		if err := (&skill.UseSkill{Skills: plane.Skills}).Register(inProcess); err != nil {
+		if err := (&skill.UseSkill{Skills: plane.Skills, Loads: plane.SkillLoads}).Register(inProcess); err != nil {
 			return err
 		}
 	}

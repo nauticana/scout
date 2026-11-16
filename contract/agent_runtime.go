@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"time"
 
 	"github.com/nauticana/scout/domain"
 )
@@ -114,6 +115,15 @@ type PricedAgent interface {
 	// Cost prices usage on this agent's own model, returning minor units and
 	// the catalog currency they are denominated in.
 	Cost(ctx context.Context, usage domain.ModelUsage) (int64, string, error)
+}
+
+// SkillLoads records each skill a turn loads and counts, for one release, the
+// settled runs that loaded a skill.
+type SkillLoads interface {
+	// Record keeps that the principal's turn loaded the skill; a repeat is a no-op.
+	Record(ctx context.Context, principal domain.Principal, requestID, skillID string) error
+	// Runs counts the release's runs settled in [from, to) and those that loaded the skill.
+	Runs(ctx context.Context, tenantID int64, agentID, agentVersion, skillID string, from, to time.Time) (domain.SkillRunCount, error)
 }
 
 // AgentRunPurger drops agent run activity past the retention horizon Scout

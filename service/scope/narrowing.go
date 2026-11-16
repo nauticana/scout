@@ -243,7 +243,7 @@ func checkOrdered(kind domain.ResourceKind, inherited, candidate []byte) error {
 	if err != nil {
 		return err
 	}
-	if autonomyRank[child.Mode] > autonomyRank[parent.Mode] {
+	if child.Mode.Rank() > parent.Mode.Rank() {
 		return fmt.Errorf("%w: %s raises the operating mode from %q to %q", domain.ErrAuthorityExceeded, kind, parent.Mode, child.Mode)
 	}
 	if child.Mode == domain.AutonomyBounded && parent.Mode == domain.AutonomyBounded &&

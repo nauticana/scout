@@ -70,7 +70,7 @@ func (s *StudioEvaluation) Compare(ctx context.Context, actor domain.StudioActor
 
 // validCompareSubject refuses an arm that is not exactly one of the draft, one release, for the
 // reference arm only one baseline, or for the challenger only the control of a release reference,
-// and a model named for anything but a draft.
+// and a model named for anything but a draft or a skill omitted from anything but a release.
 func validCompareSubject(arm string, subject domain.CompareSubject, reference bool, referenceRelease string) error {
 	kinds := 0
 	for _, named := range []bool{subject.Draft, strings.TrimSpace(subject.Release) != "", subject.BaselineID != 0, subject.Control} {
@@ -83,6 +83,8 @@ func validCompareSubject(arm string, subject domain.CompareSubject, reference bo
 		return fmt.Errorf("%w: arm %s is the draft, one release, one baseline, or the control", domain.ErrValidation, arm)
 	case strings.TrimSpace(subject.TextModel) != "" && !subject.Draft:
 		return fmt.Errorf("%w: arm %s names a model, which only a draft is frozen on", domain.ErrValidation, arm)
+	case strings.TrimSpace(subject.OmitSkill) != "" && (strings.TrimSpace(subject.Release) == "" || subject.Control):
+		return fmt.Errorf("%w: arm %s omits a skill, which only a release arm may", domain.ErrValidation, arm)
 	case subject.BaselineID != 0 && (!reference || subject.BaselineID < 0):
 		return fmt.Errorf("%w: only arm a may be a recorded baseline, named by a positive id", domain.ErrValidation)
 	case subject.Control && (reference || strings.TrimSpace(referenceRelease) == ""):
@@ -92,7 +94,7 @@ func validCompareSubject(arm string, subject domain.CompareSubject, reference bo
 }
 
 // compareArm pins one arm: the draft frozen as publish would, on its own text model or the one
-// named, a release by version, or a baseline by id.
+// named, a release by version and the skill it omits, or a baseline by id.
 func (s *StudioEvaluation) compareArm(ctx context.Context, actor domain.StudioActor, agentID string, subject domain.CompareSubject) (domain.EvaluationArm, error) {
 	switch {
 	case subject.Draft:
@@ -115,7 +117,8 @@ func (s *StudioEvaluation) compareArm(ctx context.Context, actor domain.StudioAc
 	case subject.Control:
 		return domain.EvaluationArm{Subject: domain.AgentEvaluationSubject{Kind: domain.SubjectControl, AgentID: agentID, Version: strings.TrimSpace(subject.Release)}}, nil
 	default:
-		return domain.EvaluationArm{Subject: domain.AgentEvaluationSubject{Kind: domain.SubjectRelease, AgentID: agentID, Version: strings.TrimSpace(subject.Release)}}, nil
+		return domain.EvaluationArm{Subject: domain.AgentEvaluationSubject{Kind: domain.SubjectRelease, AgentID: agentID, Version: strings.TrimSpace(subject.Release),
+			OmittedSkill: strings.TrimSpace(subject.OmitSkill)}}, nil
 	}
 }
 
@@ -130,9 +133,12 @@ func describeSubject(subject domain.AgentEvaluationSubject) string {
 		return fmt.Sprintf("baseline %d", subject.BaselineID)
 	case domain.SubjectControl:
 		return "control of release " + subject.Version
-	default:
-		return "release " + subject.Version
+	case domain.SubjectRelease:
+		if subject.OmittedSkill != "" {
+			return "release " + subject.Version + " without skill " + subject.OmittedSkill
+		}
 	}
+	return "release " + subject.Version
 }
 
 // Comparison returns a comparison run, its verdict tally, one page of its dev-scope examples

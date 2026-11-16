@@ -217,3 +217,7 @@ func (skills frozenSkills) List(ctx context.Context, tenantID int64, agentID, ag
 func (frozenSkills) Register(context.Context, int64, domain.SkillDefinition) error {
 	return fmt.Errorf("%w: a draft replay registers no skill", domain.ErrForbidden)
 }
+
+func (frozenSkills) EnsureProfile(context.Context, int64, string, string) error {
+	return fmt.Errorf("%w: a draft replay registers no skill", domain.ErrForbidden)
+}

@@ -146,15 +146,8 @@ func (catalog *TableSkillCatalog) Register(ctx context.Context, skill domain.Ski
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	if _, err = tx.Query(ctx, qCatalogProfileEnsure, skill.SkillID, skill.DisplayName); err != nil {
-		return fmt.Errorf("ensure catalog skill profile %q: %w", skill.SkillID, err)
-	}
-	profile, err := tx.Query(ctx, qCatalogProfileLock, skill.SkillID)
-	if err != nil {
-		return fmt.Errorf("read catalog skill profile %q: %w", skill.SkillID, err)
-	}
-	if len(profile.Rows) != 1 || common.AsString(profile.Rows[0][0]) != skill.DisplayName {
-		return fmt.Errorf("%w: catalog skill %s is already registered with a different display name", domain.ErrConflict, skill.SkillID)
+	if err = ensureProfile(ctx, tx, qCatalogProfileEnsure, qCatalogProfileLock, skill.DisplayName, skill.SkillID); err != nil {
+		return err
 	}
 	existing, found, err := readCatalogVersion(ctx, tx, skill.SkillID, skill.Version)
 	if err != nil {
@@ -176,6 +169,19 @@ func (catalog *TableSkillCatalog) Register(ctx context.Context, skill domain.Ski
 	}
 	committed = true
 	return nil
+}
+
+// EnsureProfile creates a catalog skill profile before its first version, refusing an
+// existing profile with a different display name as Register does.
+func (catalog *TableSkillCatalog) EnsureProfile(ctx context.Context, skillID, displayName string) error {
+	if err := catalog.init(ctx); err != nil {
+		return err
+	}
+	skillID, displayName, err := normalizeProfile(skillID, displayName)
+	if err != nil {
+		return err
+	}
+	return ensureProfile(ctx, catalog.qs, qCatalogProfileEnsure, qCatalogProfileLock, displayName, skillID)
 }
 
 func insertCatalogVersion(ctx context.Context, tx port.QueryService, skill domain.SkillDefinition) error {

@@ -1,0 +1,27 @@
+table: skill_load
+comment: A skill a turn loaded through use_skill, at most once per request
+columns:
+  - name: partner_id
+    type: BIGINT
+  - name: request_id
+    type: VARCHAR(120)
+    comment: The durable turn's request id, matching agent_run.request_id once the turn settles
+  - name: skill_id
+    type: VARCHAR(80)
+  - name: agent_id
+    type: VARCHAR(80)
+  - name: agent_version
+    type: VARCHAR(80)
+  - name: loaded_at
+    type: TIMESTAMP
+    default: CURRENT_TIMESTAMP
+primary_key: [partner_id, request_id, skill_id]
+foreign_keys:
+  - name: binding_skill_loads
+    columns: [partner_id, agent_id, agent_version, skill_id]
+    references:
+      table: agent_skill_binding
+      columns: [partner_id, agent_id, agent_version, skill_id]
+indexes:
+  - name: skill_load_retention_ix
+    columns: [loaded_at]

@@ -202,15 +202,8 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	if _, err = tx.Query(ctx, qSkillProfileEnsure, tenantID, skill.SkillID, skill.DisplayName); err != nil {
-		return fmt.Errorf("ensure skill profile %q: %w", skill.SkillID, err)
-	}
-	profile, err := tx.Query(ctx, qSkillProfileLock, tenantID, skill.SkillID)
-	if err != nil {
-		return fmt.Errorf("read skill profile %q: %w", skill.SkillID, err)
-	}
-	if len(profile.Rows) != 1 || common.AsString(profile.Rows[0][0]) != skill.DisplayName {
-		return fmt.Errorf("%w: skill %s is already registered with a different display name", domain.ErrConflict, skill.SkillID)
+	if err = ensureProfile(ctx, tx, qSkillProfileEnsure, qSkillProfileLock, skill.DisplayName, tenantID, skill.SkillID); err != nil {
+		return err
 	}
 	existing, found, err := readVersion(ctx, tx, tenantID, skill.SkillID, skill.Version)
 	if err != nil {
@@ -237,6 +230,22 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 	}
 	committed = true
 	return nil
+}
+
+// EnsureProfile creates a tenant skill profile before its first version, refusing an
+// existing profile with a different display name as Register does.
+func (registry *TableSkillRegistry) EnsureProfile(ctx context.Context, tenantID int64, skillID, displayName string) error {
+	if err := registry.init(ctx); err != nil {
+		return err
+	}
+	if tenantID <= 0 {
+		return fmt.Errorf("%w: tenant is required", domain.ErrValidation)
+	}
+	skillID, displayName, err := normalizeProfile(skillID, displayName)
+	if err != nil {
+		return err
+	}
+	return ensureProfile(ctx, registry.qs, qSkillProfileEnsure, qSkillProfileLock, displayName, tenantID, skillID)
 }
 
 // insertVersion writes the version and returns it with the requirements its catalog origin adds.
@@ -555,22 +564,54 @@ func scanSkillVersion(row []any) domain.SkillDefinition {
 	return skill
 }
 
+// normalizeProfile trims a skill id and display name; a blank display name is the id.
+func normalizeProfile(skillID, displayName string) (string, string, error) {
+	skillID, displayName = strings.TrimSpace(skillID), strings.TrimSpace(displayName)
+	if displayName == "" {
+		displayName = skillID
+	}
+	switch {
+	case skillID == "":
+		return skillID, displayName, fmt.Errorf("%w: skill id is required", domain.ErrValidation)
+	case len([]rune(skillID)) > maxSkillIdentifier:
+		return skillID, displayName, fmt.Errorf("%w: skill id and version are limited to %d characters", domain.ErrValidation, maxSkillIdentifier)
+	case len([]rune(displayName)) > maxSkillDisplayName:
+		return skillID, displayName, fmt.Errorf("%w: skill display name is limited to %d characters", domain.ErrValidation, maxSkillDisplayName)
+	}
+	return skillID, displayName, nil
+}
+
+// ensureProfile creates a skill profile, locks it, and refuses one registered under
+// another display name. key is the profile key without the display name.
+func ensureProfile(ctx context.Context, qs port.QueryService, ensure, lock, displayName string, key ...any) error {
+	skillID := key[len(key)-1]
+	if _, err := qs.Query(ctx, ensure, append(slices.Clone(key), displayName)...); err != nil {
+		return fmt.Errorf("ensure skill profile %q: %w", skillID, err)
+	}
+	profile, err := qs.Query(ctx, lock, key...)
+	if err != nil {
+		return fmt.Errorf("read skill profile %q: %w", skillID, err)
+	}
+	if len(profile.Rows) != 1 || common.AsString(profile.Rows[0][0]) != displayName {
+		return fmt.Errorf("%w: skill %s is already registered with a different display name", domain.ErrConflict, skillID)
+	}
+	return nil
+}
+
 // normalize validates the definition and canonicalizes it, so equal skills
 // compare equal however they were formatted.
 func normalize(skill domain.SkillDefinition) (domain.SkillDefinition, error) {
-	skill.SkillID, skill.Version = strings.TrimSpace(skill.SkillID), strings.TrimSpace(skill.Version)
-	skill.DisplayName, skill.Summary = strings.TrimSpace(skill.DisplayName), strings.TrimSpace(skill.Summary)
-	skill.Procedure = strings.TrimSpace(skill.Procedure)
-	if skill.DisplayName == "" {
-		skill.DisplayName = skill.SkillID
+	var err error
+	if skill.SkillID, skill.DisplayName, err = normalizeProfile(skill.SkillID, skill.DisplayName); err != nil {
+		return skill, err
 	}
+	skill.Version, skill.Summary = strings.TrimSpace(skill.Version), strings.TrimSpace(skill.Summary)
+	skill.Procedure = strings.TrimSpace(skill.Procedure)
 	switch {
-	case skill.SkillID == "" || skill.Version == "" || skill.Summary == "" || skill.Procedure == "":
+	case skill.Version == "" || skill.Summary == "" || skill.Procedure == "":
 		return skill, fmt.Errorf("%w: skill id, version, summary, and procedure are required", domain.ErrValidation)
-	case len([]rune(skill.SkillID)) > maxSkillIdentifier || len([]rune(skill.Version)) > maxSkillIdentifier:
+	case len([]rune(skill.Version)) > maxSkillIdentifier:
 		return skill, fmt.Errorf("%w: skill id and version are limited to %d characters", domain.ErrValidation, maxSkillIdentifier)
-	case len([]rune(skill.DisplayName)) > maxSkillDisplayName:
-		return skill, fmt.Errorf("%w: skill display name is limited to %d characters", domain.ErrValidation, maxSkillDisplayName)
 	case len([]rune(skill.Summary)) > maxSkillSummary || strings.ContainsAny(skill.Summary, "\r\n"):
 		return skill, fmt.Errorf("%w: a skill summary is one line of at most %d characters", domain.ErrValidation, maxSkillSummary)
 	case skill.EvalSet != nil && (strings.TrimSpace(skill.EvalSet.GoldenSetID) == "" || skill.EvalSet.SetVersion <= 0):

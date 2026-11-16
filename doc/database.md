@@ -52,6 +52,7 @@ flowchart BT
     mcp_confirmation --> keel_approval
     evaluation --> knowledge
     evaluation --> release
+    evaluation --> skill
     enterprise_configuration --> configuration_module
     enterprise_configuration --> charter_organization
     enterprise_agent --> agent
@@ -80,7 +81,7 @@ flowchart BT
     agent_authorization_module["Agent Authorization<br/>2 tables"]
     configuration_module["Configuration<br/>8 tables"]
     approval["Approval<br/>2 tables"]
-    skill["Skill<br/>12 tables"]
+    skill["Skill<br/>13 tables"]
     memory["Memory<br/>2 tables"]
     mcp_confirmation["MCP Confirmation<br/>2 tables"]
     enterprise_configuration["Enterprise Configuration<br/>1 table"]
@@ -90,7 +91,7 @@ flowchart BT
 
 Every module that ships reference data also writes seed rows into keel `core` tables — constants, REST metadata, authorization objects, and configuration flags — which is an application-level dependency rather than a foreign key, so it is not drawn.
 
-Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 61 Scout tables — while the full platform is 156, or 159 with the three `enterprise_*` modules. Those hold Scout's foreign keys into Charter's stored documents, so each needs Charter's schema modules in the same database: `enterprise_configuration` and `enterprise_release` need Charter's `charter_organization`, `enterprise_agent` its `charter_authority`, each with the Charter modules it depends on. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
+Selecting modules is how a deployment stays small: Agent Studio authoring and publication needs `catalog`, `tenancy`, `prompt`, `model`, `agent`, and `configuration` — 61 Scout tables — while the full platform is 157, or 160 with the three `enterprise_*` modules. Those hold Scout's foreign keys into Charter's stored documents, so each needs Charter's schema modules in the same database: `enterprise_configuration` and `enterprise_release` need Charter's `charter_organization`, `enterprise_agent` its `charter_authority`, each with the Charter modules it depends on. The [engineering reference](engineering-reference.md#generate-dialect-specific-ddl) lists the common combinations and the exact generator invocation.
 
 `knowledge_vector` is separable for a second reason: it is the only module whose table uses PostgreSQL `VECTOR` and `TSVECTOR`. A MySQL deployment, or one running retrieval on an external vector store behind `contract.KnowledgeVectorIndex`, simply omits the module; whole reads and ingestion without an embedder need only `knowledge`.
 
@@ -440,6 +441,7 @@ flowchart RL
         skill_example["skill_example"]
         skill_requirement["skill_requirement"]
         agent_skill_binding["agent_skill_binding"]
+        skill_load["skill_load"]
     end
     skill_catalog_version --> skill_catalog_profile
     skill_catalog_origin --> skill_catalog_version
@@ -453,6 +455,7 @@ flowchart RL
     skill_example --> skill_version
     skill_requirement --> skill_version
     agent_skill_binding --> skill_version
+    skill_load --> agent_skill_binding
 
     subgraph mcp_confirmation_module["MCP Confirmation"]
         direction BT
@@ -809,6 +812,7 @@ erDiagram
     skill_version ||--o{ skill_example : skill_version_examples
     skill_version ||--o{ agent_skill_binding : skill_agent_bindings
     agent_skill_binding }o--|| agent_version : agent_skill_bindings
+    agent_skill_binding ||--o{ skill_load : binding_skill_loads
     skill_version ||--o{ skill_requirement : skill_version_requirements
     skill_version ||--o{ skill_requirement : required_skill_dependents
     skill_catalog_profile ||--o{ skill_catalog_version : skill_catalog_versions
@@ -900,11 +904,21 @@ erDiagram
         varchar skill_id PK,FK
         varchar skill_version FK
     }
+    skill_load {
+        bigint partner_id PK,FK
+        varchar request_id PK
+        varchar skill_id PK,FK
+        varchar agent_id FK
+        varchar agent_version FK
+        timestamp loaded_at
+    }
 ```
 
 A skill version is immutable like a tool version. `skill_tool` names tools by id, not version: the agent release pins the versions, and publication refuses a release that binds a skill without binding every tool it lists and `use_skill`. `summary` is the one line the agent sees in the skill index; `instructions` reach the model only when it calls `use_skill`. `skill_example` rows seed the selection cases of the golden set the version names; Scout stores that reference and builds the cases, and leaves running the selection eval and gating the publish on it to the application.
 
 `skill_requirement` names another tenant skill version the procedure relies on; both ends are real versions, and a release binding the skill must bind the required one at that version. Because a requirement must exist before the version naming it, the graph cannot cycle. The `skill_catalog_*` tables hold platform versions no tenant owns; a tenant copy names its origin through `origin_skill_id`/`origin_skill_version`, indexed so a withdrawal finds every copy. `skill_catalog_requirement` names another catalog version a platform procedure relies on, under the same existence rule, and is indexed on the required side so a withdrawal finds the versions requiring one; a tenant copy of a catalog version requires the tenant's copy of each. `skill_catalog_origin` pins the external source a catalog version was imported from: a `skill_origin_kind` code (repository, directory, registry, file), the locator URI, an immutable revision or a `sha256:` digest or both, and the license as the source states it; the digest is indexed so a withdrawn or compromised upstream skill finds the catalog versions built from it, and through them every tenant copy. Catalog tool ids are plain values: tools are tenant-owned, and each copy names tools its tenant registered.
+
+`skill_load` records each skill a turn loaded through `use_skill`, once per request id, with a foreign key to the release's binding of that skill. Its `request_id` matches `agent_run.request_id` once the turn settles, so the settled runs of a release that loaded a skill are counted without reading traces; `loaded_at` drives retention.
 
 ## Agent Studio authoring
 
@@ -2484,6 +2498,7 @@ erDiagram
 ```mermaid
 erDiagram
     agent_version |o--o{ evaluation_run_subject : release_evaluation_run_subjects
+    agent_skill_binding |o--o{ evaluation_run_subject : skill_binding_evaluation_run_subjects
     agent_version ||--o{ evaluation_manifest : candidate_evaluation_manifests
     agent_version ||--o{ evaluation_manifest : baseline_evaluation_manifests
     evaluation_manifest |o--o{ evaluation_run : evaluation_runs
@@ -2515,6 +2530,12 @@ erDiagram
         bigint partner_id PK
         varchar agent_id PK
         varchar agent_version PK
+    }
+    agent_skill_binding {
+        bigint partner_id PK
+        varchar agent_id PK
+        varchar agent_version PK
+        varchar skill_id PK
     }
     model_definition {
         varchar provider_id PK
@@ -2561,6 +2582,7 @@ erDiagram
         bigint baseline_id FK
         varchar provider_id FK
         varchar model_id FK
+        varchar omitted_skill_id FK
     }
     evaluation_result {
         bigint run_id PK,FK
@@ -2696,7 +2718,7 @@ erDiagram
 
 Studio authors an agent's cases in `golden_case`, the editable working copy of a golden set; `golden_set.working_revision` guards every edit and freeze, and a freeze snapshots the cases into the next immutable `golden_set_version` and its `golden_example` rows. A scripted case keeps its follow-up turns in `golden_case_turn` (`turn_no` from 2; turn 1 is the case input) and the sandboxed response every call of one tool gets in `golden_case_tool`: JSON `output_json`, or `is_error` with no output. `tool_id` is the id calls name, with no foreign key, since a script may answer a tool the registry does not hold. A freeze stores each scripted case's canonical script in object storage and names it from the example (`golden_example.script_uri`, `script_digest`); an unscripted example has neither. `golden_case_evidence` labels the evidence (`role_code` `E`) and controlling-authority (`A`) ids a case's decision needs to reach the model, with no foreign key, since an id may name a document, chunk, or resource another system holds, and `golden_case.execution_expected` whether a mutating tool call is expected (null is unlabeled); a freeze copies them into the immutable `golden_example.required_evidence_ids` and `controlling_authority_ids` (JSON arrays, like `reviews`) and `execution_expected`. `agent_golden_set` names the one set an agent uses, and `golden_set.owner_agent_id` the agent whose editors may share a Studio-made set; a null owner marks a set the product owns. An `evaluation_run` either executes an `evaluation_manifest` or is a queued agent evaluation of one golden set version (`agent_id`, `golden_set_id`, `set_version`), claimed and leased by the evaluation worker through `lease_token`, `lease_until`, and `attempt`. `evaluation_run_subject` pins what each arm of an agent evaluation executes: a draft frozen as publication would freeze it (`definition_json`, with its frozen settings in `settings_json`, so the draft runs under its own `limits`) or a release (`agent_version`, whose settings its `effective_agent_release` row holds), both by `definition_digest`. Every executed case's trajectory is stored in object storage and named from its result (`evaluation_result.trajectory_uri`, `trajectory_digest`), null when the case produced none. `evaluation_result` keeps a model judge's spend (`evaluator_input_tokens`, `evaluator_output_tokens`, `evaluator_cost_minor_units`, in the row's `currency_code`) apart from the subject's own; the run's totals and cost ceiling include both.
 
-A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `B` (baseline) is arm a and `C` (candidate) arm b. Either arm may be a draft (`subject_code` `D`), which `provider_id` and `model_id` may pin to another text model, or a release (`R`); arm a may instead be an `evaluation_baseline` (`B`), which then carries no `definition_digest`, and arm b the control (`W`) of arm a's release, pinned like a release. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
+A comparison is an `evaluation_run` with two `evaluation_run_subject` rows: role `B` (baseline) is arm a and `C` (candidate) arm b. Either arm may be a draft (`subject_code` `D`), which `provider_id` and `model_id` may pin to another text model, or a release (`R`), which `omitted_skill_id` may replay without one skill it binds, a foreign key to that `agent_skill_binding`; arm a may instead be an `evaluation_baseline` (`B`), which then carries no `definition_digest`, and arm b the control (`W`) of arm a's release, pinned like a release. Each arm's answer to an example is an `evaluation_result` whose stored output `output_uri` and `output_digest` name, and `evaluation_comparison` holds the pairwise verdict per example (`verdict_code` `A` for arm a, `B` for arm b, or `T` for a tie, or a `reason` when judging failed) with the judge's spend. `evaluation_baseline` is an immutable, named set of human reference outputs for every example of one golden set version visible in its scope, each an `evaluation_baseline_output` in object storage; `content_digest` covers the example ids and output digests.
 
 `agent_gate_decision` is the Studio evaluation gate's verdict on one definition digest of an agent: `P` (pass), `F` (fail), or `O` (override), the canonical gate applied (`policy_json`, `policy_digest`), the active release regression is measured against (`base_version`), and the golden set version decided on. `inputs_digest` lets an evaluation of unchanged inputs replay the decision, and a later decision for the digest replaces it. `agent_gate_decision_run` lists the completed runs it read, role `C` (candidate) for the decided digest and `B` (baseline) for the active release, with each run's score in basis points, sample count, and critical failures.
 
@@ -2728,7 +2750,7 @@ Tables are grouped by the schema module that owns them. A downstream generates o
 | `enterprise_configuration` | `config_scope_unit` |
 | `enterprise_agent` | `agent_publish_review_exception` |
 | `enterprise_release` | `agent_version_pin_assignment` |
-| `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_origin`, `skill_catalog_tool`, `skill_catalog_example`, `skill_catalog_requirement`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding` |
+| `skill` | `skill_catalog_profile`, `skill_catalog_version`, `skill_catalog_origin`, `skill_catalog_tool`, `skill_catalog_example`, `skill_catalog_requirement`, `skill_profile`, `skill_version`, `skill_tool`, `skill_example`, `skill_requirement`, `agent_skill_binding`, `skill_load` |
 
 Every catalog table above is a foreign-key target, so the tables referencing them
 cannot accept a row until they hold values — Scout seeds them all. `prompt_section`

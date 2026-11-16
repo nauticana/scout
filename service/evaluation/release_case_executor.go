@@ -18,7 +18,10 @@ import (
 // ReleaseCaseExecutor replays a golden example against a published agent
 // version — its compiled graph, prompt, tools and tool loop — with every tool
 // call answered by a sandbox, so a replay has no path to a live tool. A scripted
-// example replays turn by turn as one conversation.
+// example replays turn by turn as one conversation. A subject that omits a skill
+// replays without it: use_skill refuses it, and Requests must honour the
+// dataplane.SkillWithholding in its context, as dataplane.ReleaseLoopRequestBuilder
+// does, or the replay is ErrCapabilityUnsupported before the model is called.
 type ReleaseCaseExecutor struct {
 	Graphs   contract.DefinitionResolver
 	Requests contract.ToolLoopRequestBuilder
@@ -155,6 +158,11 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	if executor.WorkingSets != nil {
 		requests, records = executor.WorkingSets.requests(subject.Control)
 	}
+	var withholding *dataplane.SkillWithholding
+	if subject.OmitSkill != "" {
+		withholding = &dataplane.SkillWithholding{SkillID: subject.OmitSkill}
+		requests, sandbox = withholdingRequests{ToolLoopRequestBuilder: requests, withholding: withholding}, withheldSkillSandbox{ToolSandbox: sandbox, skillID: subject.OmitSkill}
+	}
 	fences := &dataplane.MemoryTurnFences{}
 	journal := &dataplane.MemoryLoopJournal{Fences: fences}
 	loop, err := dataplane.NewToolLoopExecutor(dataplane.ToolLoopExecutor{
@@ -181,6 +189,9 @@ func (executor *ReleaseCaseExecutor) Execute(ctx context.Context, subject domain
 	}
 	if err := replay.run(ctx, inputs); err != nil {
 		return domain.EvaluationCase{}, err
+	}
+	if withholding != nil && !withholding.Honoured() {
+		return domain.EvaluationCase{}, fmt.Errorf("%w: the replay did not withhold skill %q", domain.ErrCapabilityUnsupported, subject.OmitSkill)
 	}
 	evalCase := replay.evaluationCase(example, matches)
 	if records != nil {
