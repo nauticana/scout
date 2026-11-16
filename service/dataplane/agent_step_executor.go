@@ -73,7 +73,7 @@ func (e *AgentStepExecutor) Execute(ctx context.Context, input domain.StepInput)
 	item, err := e.Work.Assign(ctx, domain.WorkItem{
 		TenantID: caller.TenantID, Assignee: config.Target,
 		Requester: domain.PrincipalRef{Kind: caller.Kind, ID: caller.ID},
-		GrantID:   authorization.GrantID, ParentID: input.WorkItemID, Depth: input.WorkItemDepth + 1,
+		GrantID:   authorization.GrantID, ParentID: input.WorkItemID, ParentRequestID: input.RequestID, Depth: input.WorkItemDepth + 1,
 		ScopeID: caller.ScopeID, TaskKind: taskKindOr(config), Input: ref,
 		RequestID:        delegationRequestID(input, config),
 		BudgetMinorUnits: next.BudgetMinorUnits, Currency: next.Currency,

@@ -19,6 +19,7 @@ import (
 
 const (
 	qControlCancelRequest = "scout_turn_control_cancel_request"
+	qControlStarter       = "scout_turn_control_starter"
 	qControlRead          = "scout_turn_control_read"
 	qControlWake          = "scout_turn_control_wake"
 	qControlHold          = "scout_turn_control_hold"
@@ -54,6 +55,11 @@ UPDATE conversation_turn
        cancel_reason = COALESCE(cancel_reason, ?)
  WHERE partner_id = ? AND request_id = ? AND status_code IN (` + sqlTurnLive + `)
 RETURNING status_code`,
+	qControlStarter: `
+SELECT COALESCE(c.end_user_ref, ''), c.agent_id
+  FROM conversation_turn t
+  JOIN agent_conversation c ON c.partner_id = t.partner_id AND c.conversation_id = t.conversation_id
+ WHERE t.partner_id = ? AND t.request_id = ?`,
 	// Nothing runs a suspended, held, or operated turn, so it goes back to a worker under a new
 	// fence; the worker ends it cancelled and releases the reservation the turn kept.
 	qControlWake: `
@@ -123,6 +129,10 @@ type TableTurnControl struct {
 	Operation  domain.OperatorSettings
 	// MaxResultCardBytes bounds a finished response copied into turn history; default 64 KiB.
 	MaxResultCardBytes int
+	// Roles lets Stop cancel another person's turn for one holding AGENT_OPERATION OPERATE; nil refuses it.
+	Roles contract.PrincipalAuthorizer
+	// EndUserRef maps a person to the value given to TurnLedger.Begin. Nil uses the person's id.
+	EndUserRef func(domain.PrincipalRef) string
 
 	once   sync.Once
 	qs     keelport.QueryService
@@ -131,6 +141,7 @@ type TableTurnControl struct {
 
 var (
 	_ contract.TurnCanceller       = (*TableTurnControl)(nil)
+	_ contract.TurnStopper         = (*TableTurnControl)(nil)
 	_ contract.TurnControlWatcher  = (*TableTurnControl)(nil)
 	_ contract.TurnControl         = (*TableTurnControl)(nil)
 	_ contract.OperatorEntryReader = (*TableTurnControl)(nil)
@@ -208,6 +219,48 @@ func (control *TableTurnControl) Cancel(ctx context.Context, tenantID int64, req
 	}
 	committed = true
 	return control.wake(ctx, tenantID, requestID, "turn cancellation")
+}
+
+// Stop cancels a turn of a conversation opened for the person, or another's when they hold
+// AGENT_OPERATION OPERATE on its agent; any other turn is domain.ErrNotFound, as an unknown one is.
+func (control *TableTurnControl) Stop(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, requestID, reason string) error {
+	if tenant.TenantID <= 0 || person.Kind != domain.PrincipalHuman || strings.TrimSpace(person.ID) == "" {
+		return fmt.Errorf("%w: stopping a turn needs a tenant and a person", domain.ErrForbidden)
+	}
+	if strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("%w: request is required", domain.ErrValidation)
+	}
+	qs, err := control.queries(ctx)
+	if err != nil {
+		return err
+	}
+	turn, err := qs.Query(ctx, qControlStarter, tenant.TenantID, requestID)
+	if err != nil {
+		return fmt.Errorf("read turn starter: %w", err)
+	}
+	endUser := person.ID
+	if control.EndUserRef != nil {
+		endUser = control.EndUserRef(person)
+	}
+	notFound := fmt.Errorf("%w: no turn for request %q", domain.ErrNotFound, requestID)
+	if len(turn.Rows) == 0 {
+		return notFound
+	}
+	if endUser == "" || common.AsString(turn.Rows[0][0]) != endUser {
+		if control.Roles == nil {
+			return notFound
+		}
+		principal := domain.Principal{Kind: person.Kind, ID: person.ID, TenantID: tenant.TenantID, ScopeID: tenant.ScopeID}
+		grant, err := control.Roles.Authorize(ctx, principal, domain.OperationAuthorizationObject, string(domain.OperationOperate),
+			"agent:"+common.AsString(turn.Rows[0][1]))
+		if err != nil {
+			return fmt.Errorf("authorize %s %s: %w", domain.OperationAuthorizationObject, domain.OperationOperate, err)
+		}
+		if !grant.Allowed {
+			return notFound
+		}
+	}
+	return control.Cancel(ctx, tenant.TenantID, requestID, reason)
 }
 
 func (control *TableTurnControl) wake(ctx context.Context, tenantID int64, requestID, what string) error {

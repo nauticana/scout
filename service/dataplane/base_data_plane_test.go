@@ -93,8 +93,11 @@ func TestBaseDataPlaneComposesEveryDefault(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = plane.Close() })
 	var composed contract.DataPlane = plane
-	if composed.Runtime() == nil || composed.Scheduler() == nil || composed.Ingress() == nil || composed.Replies() == nil || composed.Canceller() == nil {
+	if composed.Runtime() == nil || composed.Scheduler() == nil || composed.Ingress() == nil || composed.Replies() == nil || composed.Stopper() == nil {
 		t.Fatal("a composed data plane exposes every surface")
+	}
+	if plane.Roles == nil || plane.Control.Roles != plane.Roles {
+		t.Fatal("the composed turn control authorizes operators with the plane's roles")
 	}
 	worker, err := plane.Worker("worker-1", 2*time.Minute, 4)
 	if err != nil || worker.Runtime != plane.TurnRuntime {

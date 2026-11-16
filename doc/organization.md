@@ -163,7 +163,7 @@ role stops flowing through an older grant immediately.
 
 `agent_work_item` addresses work to a principal rather than to a conversation, so an agent can be assigned
 work it did not start. It is unique on `(tenant, request_id)`, so a redelivered delegation re-attaches
-instead of fanning out twice.
+instead of fanning out twice. `ParentRequestID` names the turn that delegated it, empty for work no turn delegated.
 
 `dataplane.AgentStepExecutor` is the `agent` graph step. It authorizes the grant, narrows the bounds,
 refuses a cycle, records the work item, and hands the call to an injected `contract.AgentInvoker` —

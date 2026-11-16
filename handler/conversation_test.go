@@ -54,10 +54,10 @@ func (function conversationRepliesFunc) SubscribeFrom(ctx context.Context, tenan
 	return function(ctx, tenantID, requestID, cursor)
 }
 
-type conversationCancellerFunc func(context.Context, int64, string, string) error
+type conversationStopperFunc func(context.Context, domain.TenantContext, domain.PrincipalRef, string, string) error
 
-func (function conversationCancellerFunc) Cancel(ctx context.Context, tenantID int64, requestID, reason string) error {
-	return function(ctx, tenantID, requestID, reason)
+func (function conversationStopperFunc) Stop(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, requestID, reason string) error {
+	return function(ctx, tenant, person, requestID, reason)
 }
 
 type conversationSubscription struct {
@@ -83,7 +83,7 @@ func (subscription *conversationSubscription) Close() error { subscription.close
 type conversationPlane struct {
 	ingress      contract.ConversationIngress
 	replies      contract.ReplayTurnReplySubscriber
-	canceller    contract.TurnCanceller
+	stopper      contract.TurnStopper
 	stored       domain.TurnReply
 	storedErr    error
 	storedCursor int64
@@ -95,8 +95,8 @@ func (plane *conversationPlane) Ingress() contract.ConversationIngress { return 
 func (plane *conversationPlane) Replies() contract.ReplayTurnReplySubscriber {
 	return plane.replies
 }
-func (plane *conversationPlane) Canceller() contract.TurnCanceller { return plane.canceller }
-func (*conversationPlane) Close() error                            { return nil }
+func (plane *conversationPlane) Stopper() contract.TurnStopper { return plane.stopper }
+func (*conversationPlane) Close() error                        { return nil }
 func (plane *conversationPlane) StoredReply(_ context.Context, _ int64, _ string, cursor int64) (domain.TurnReply, error) {
 	plane.storedCursor = cursor
 	return plane.stored, plane.storedErr
@@ -213,11 +213,12 @@ func TestConversationStreamSanitizesInternalFailure(t *testing.T) {
 	}
 }
 
-func TestConversationCancelUsesTenantAndDefaultReason(t *testing.T) {
+func TestConversationCancelStopsForTheSessionPerson(t *testing.T) {
 	var tenantID int64
+	var person domain.PrincipalRef
 	var requestID, reason string
-	plane := &conversationPlane{canceller: conversationCancellerFunc(func(_ context.Context, tenant int64, request, why string) error {
-		tenantID, requestID, reason = tenant, request, why
+	plane := &conversationPlane{stopper: conversationStopperFunc(func(_ context.Context, tenant domain.TenantContext, by domain.PrincipalRef, request, why string) error {
+		tenantID, person, requestID, reason = tenant.TenantID, by, request, why
 		return nil
 	})}
 	handler := newConversationHandler(plane)
@@ -225,8 +226,18 @@ func TestConversationCancelUsesTenantAndDefaultReason(t *testing.T) {
 	handler.Routes()["/api/wingmate/turn/cancel"](recorder,
 		authenticatedRequest(http.MethodPost, "/api/wingmate/turn/cancel", []byte(`{"request_id":"request-1"}`)))
 
-	if recorder.Code != http.StatusAccepted || tenantID != 7 || requestID != "request-1" || reason != defaultCancelReason {
-		t.Fatalf("status = %d, cancel = %d/%s/%s", recorder.Code, tenantID, requestID, reason)
+	if recorder.Code != http.StatusAccepted || tenantID != 7 || person.Kind != domain.PrincipalHuman || person.ID == "" ||
+		requestID != "request-1" || reason != defaultCancelReason {
+		t.Fatalf("status = %d, stop = %d/%+v/%s/%s", recorder.Code, tenantID, person, requestID, reason)
+	}
+	plane.stopper = conversationStopperFunc(func(context.Context, domain.TenantContext, domain.PrincipalRef, string, string) error {
+		return domain.ErrNotFound
+	})
+	recorder = httptest.NewRecorder()
+	handler.Routes()["/api/wingmate/turn/cancel"](recorder,
+		authenticatedRequest(http.MethodPost, "/api/wingmate/turn/cancel", []byte(`{"request_id":"request-2"}`)))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("another person's turn: status = %d", recorder.Code)
 	}
 }
 

@@ -129,6 +129,12 @@ type TurnCanceller interface {
 	Cancel(ctx context.Context, tenantID int64, requestID, reason string) error
 }
 
+// TurnStopper cancels a turn for a person: one of a conversation opened for them, or any turn of an
+// agent on which they hold AGENT_OPERATION OPERATE. Any other turn is domain.ErrNotFound.
+type TurnStopper interface {
+	Stop(ctx context.Context, tenant domain.TenantContext, person domain.PrincipalRef, requestID, reason string) error
+}
+
 // TurnControlWatcher lets the process executing a turn observe control requested anywhere.
 type TurnControlWatcher interface {
 	// Watch derives the owner's turn context: a cancellation fails it with domain.ErrTurnCanceled
@@ -294,8 +300,9 @@ type TurnRecordStore interface {
 	// Selectable lists the deployed agents of aliasID's type that admit work, the alias target first.
 	Selectable(ctx context.Context, tenantID int64, aliasID string) ([]domain.SelectableAgent, error)
 	// Open assigns the conversation's next turn number on first use and returns it; a reused id with different
-	// input is ErrConflict, an agent that does not admit work refuses the turn, and a new turn beyond the
-	// turns per minute of the conversation's release is ErrRateLimited with retry advice.
+	// input is ErrConflict, an agent that does not admit work refuses the turn, a person's turn into a
+	// conversation opened for another person is ErrForbidden, and a new turn beyond the turns per minute
+	// of the conversation's release is ErrRateLimited with retry advice.
 	Open(ctx context.Context, request domain.TurnRequest, input domain.ObjectRef) (int64, error)
 	// Find returns the turn number, status, fence, and once terminal the stored payload: the response of a
 	// completed turn or the error code of a failed one; unknown ids are ErrNotFound.
@@ -334,6 +341,6 @@ type DataPlane interface {
 	Scheduler() FairTurnScheduler
 	Ingress() ConversationIngress
 	Replies() ReplayTurnReplySubscriber
-	Canceller() TurnCanceller
+	Stopper() TurnStopper
 	Close() error
 }

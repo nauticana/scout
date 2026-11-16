@@ -35,7 +35,7 @@ func newTestRecordStore(query *queueQueryFake) *TableTurnRecordStore {
 
 func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1", ""}},
 		qRecordOpen:        {{int64(4)}},
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
 	store := newTestRecordStore(query)
@@ -70,7 +70,7 @@ func TestTableTurnRecordStoreOpensUnderConversationLock(t *testing.T) {
 
 func TestTableTurnRecordStoreDetectsReusedRequestID(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1", ""}},
 		qRecordOpen:        nil,
 		qRecordFind:        {{int64(4), "conversation-1", string(domain.TurnQueued), testDigest("other"), nil, nil, int64(0), ""}},
 	}}
@@ -148,7 +148,7 @@ func testDigest(payload string) string { return DigestBytes([]byte(payload)) }
 
 func TestTableTurnRecordStoreWritesTheHistoryRowForANewTurn(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1", ""}},
 		qRecordOpen:        {{int64(4)}},
 	}}
 	store := newTestRecordStore(query)
@@ -165,7 +165,7 @@ func TestTableTurnRecordStoreWritesTheHistoryRowForANewTurn(t *testing.T) {
 }
 
 func TestTableTurnRecordStoreRejectsConversationPinnedToAnotherAgent(t *testing.T) {
-	query := &queueQueryFake{rows: map[string][][]any{qRecordPinnedAgent: {{"other-agent", "v1"}}}}
+	query := &queueQueryFake{rows: map[string][][]any{qRecordPinnedAgent: {{"other-agent", "v1", ""}}}}
 	store := newTestRecordStore(query)
 	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
 	if _, err := store.Open(context.Background(), ingressRequest(), input); !errors.Is(err, domain.ErrConflict) {
@@ -173,6 +173,26 @@ func TestTableTurnRecordStoreRejectsConversationPinnedToAnotherAgent(t *testing.
 	}
 	if query.firstArgs(qRecordOpen) != nil {
 		t.Fatal("a turn must not be opened against another agent's conversation")
+	}
+}
+
+// A person joins only a conversation opened for them or for no one.
+func TestTableTurnRecordStoreRefusesAnotherPersonsConversation(t *testing.T) {
+	input := domain.ObjectRef{URI: "scout://turns/input", Digest: testDigest("input")}
+	request := ingressRequest()
+	request.OnBehalfOf = domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: "42"}
+	for opener, want := range map[string]error{"41": domain.ErrForbidden, "42": nil, "": nil} {
+		query := &queueQueryFake{rows: map[string][][]any{
+			qRecordPinnedAgent: {{request.AgentID, "v1", opener}},
+			qRecordOpen:        {{int64(4)}},
+		}}
+		_, err := newTestRecordStore(query).Open(context.Background(), request, input)
+		if want == nil && err != nil || want != nil && !errors.Is(err, want) {
+			t.Fatalf("opener %q: error = %v, want %v", opener, err, want)
+		}
+		if opened := query.firstArgs(qRecordOpen) != nil; opened != (want == nil) {
+			t.Fatalf("opener %q: turn opened = %v", opener, opened)
+		}
 	}
 }
 
@@ -207,14 +227,14 @@ func TestTableTurnRecordStorePinsOnlyAKnownRelease(t *testing.T) {
 	}
 	query = &queueQueryFake{rows: map[string][][]any{
 		qRecordRelease:     {{int64(1)}},
-		qRecordPinnedAgent: {{request.AgentID, "3"}},
+		qRecordPinnedAgent: {{request.AgentID, "3", ""}},
 	}}
 	if _, err := newTestRecordStore(query).Open(context.Background(), request, input); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("conversation on another release = %v, want conflict", err)
 	}
 	query = &queueQueryFake{rows: map[string][][]any{
 		qRecordRelease:     {{int64(1)}},
-		qRecordPinnedAgent: {{request.AgentID, "2"}},
+		qRecordPinnedAgent: {{request.AgentID, "2", ""}},
 		qReleaseGet:        {frozenRelease("2")},
 		qRecordOpen:        {{int64(1)}},
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
@@ -228,7 +248,7 @@ func TestTableTurnRecordStorePinsOnlyAKnownRelease(t *testing.T) {
 
 func TestTableTurnRecordStoreTakesTheTrafficPolicysRelease(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordPinnedAgent: {{ingressRequest().AgentID, "5"}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "5", ""}},
 		qReleaseGet:        {frozenRelease("5")},
 		qRecordOpen:        {{int64(1)}},
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}
@@ -246,7 +266,7 @@ func TestTableTurnRecordStoreTakesTheTrafficPolicysRelease(t *testing.T) {
 
 func TestTableTurnRecordStoreResolvesForTheTrustedSubject(t *testing.T) {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordPinnedAgent: {{ingressRequest().AgentID, "6"}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "6", ""}},
 		qReleaseGet:        {frozenRelease("6")},
 		qRecordOpen:        {{int64(1)}},
 	}, sequence: map[string][][][]any{qRecordPinnedAgent: {nil}}}

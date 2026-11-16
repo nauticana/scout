@@ -155,7 +155,7 @@ func (plane *BaseDataPlane) Runtime() contract.ConversationRuntime       { retur
 func (plane *BaseDataPlane) Scheduler() contract.FairTurnScheduler       { return plane.TurnScheduler }
 func (plane *BaseDataPlane) Ingress() contract.ConversationIngress       { return plane.TurnIngress }
 func (plane *BaseDataPlane) Replies() contract.ReplayTurnReplySubscriber { return plane.ReplyHub }
-func (plane *BaseDataPlane) Canceller() contract.TurnCanceller           { return plane.Control }
+func (plane *BaseDataPlane) Stopper() contract.TurnStopper               { return plane.Control }
 
 // LoopDeadline is the longest one step may run; a queue lease must outlast it.
 func (plane *BaseDataPlane) LoopDeadline() time.Duration { return plane.Limits.Deadline }
@@ -354,6 +354,12 @@ func (plane *BaseDataPlane) composeGovernance() error {
 			return err
 		}
 	}
+	if plane.Roles == nil {
+		plane.Roles = &principal.RoleAuthorizer{DB: plane.DB}
+	}
+	if plane.Principals == nil {
+		plane.Principals = &principal.TableResolver{DB: plane.DB, RootScopeID: controlplane.RootPromptScopeID}
+	}
 	if plane.Estimator == nil {
 		plane.Estimator = LoopBudgetEstimator{Limits: plane.Limits, Currency: plane.Currency}
 	}
@@ -374,7 +380,7 @@ func (plane *BaseDataPlane) composeDelivery() error {
 		}
 		plane.Control = &TableTurnControl{DB: plane.DB, Cache: plane.Cache, PollInterval: settings.CancelPollInterval,
 			MaxReadFailures: settings.CancelMaxReadFailures, Objects: plane.Objects, Settlement: writer, Operation: plane.Operation,
-			MaxResultCardBytes: settings.ResultCardMaxBytes}
+			MaxResultCardBytes: settings.ResultCardMaxBytes, Roles: plane.Roles}
 		plane.closers = append(plane.closers, plane.Control)
 	}
 	if _, err := plane.Control.operation(); err != nil {
@@ -548,12 +554,6 @@ func (plane *BaseDataPlane) composeRuntime() error {
 			Limiter: plane.RateLimiter, Records: plane.Records, Objects: plane.Objects, Estimator: plane.Estimator,
 			Budget: plane.Budget, Replies: plane.ReplyHub, Dispatcher: plane.Dispatcher, Audit: plane.Audit,
 			Roles: plane.Roles, Principals: plane.Principals,
-		}
-		if ingress.Roles == nil {
-			ingress.Roles = &principal.RoleAuthorizer{DB: plane.DB}
-		}
-		if ingress.Principals == nil {
-			ingress.Principals = &principal.TableResolver{DB: plane.DB, RootScopeID: controlplane.RootPromptScopeID}
 		}
 		if err := ingress.validate(); err != nil {
 			return err

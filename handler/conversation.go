@@ -224,7 +224,7 @@ func (h *ConversationHandler) cancel(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, fmt.Errorf("%w: request_id is required", domain.ErrValidation))
 		return
 	}
-	tenant, _, err := h.Callers.Resolve(r.Context(), session)
+	tenant, person, err := h.caller(r.Context(), session)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -233,12 +233,12 @@ func (h *ConversationHandler) cancel(w http.ResponseWriter, r *http.Request) {
 	if reason == "" {
 		reason = defaultCancelReason
 	}
-	canceller := h.Plane.Canceller()
-	if canceller == nil {
+	stopper := h.Plane.Stopper()
+	if stopper == nil {
 		h.writeError(w, r, fmt.Errorf("%w: conversation cancellation is unavailable", domain.ErrNotReady))
 		return
 	}
-	if err = canceller.Cancel(r.Context(), tenant.TenantID, request.RequestID, reason); err != nil {
+	if err = stopper.Stop(r.Context(), tenant, person, request.RequestID, reason); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
@@ -274,7 +274,7 @@ func (h *ConversationHandler) feedback(w http.ResponseWriter, r *http.Request) {
 	common.WriteJSON(w, http.StatusAccepted, api.ConversationTurnAccepted{RequestID: request.RequestID})
 }
 
-// turns pages the signed-in person's turns, ?work_ref=&before=&limit=, newest first.
+// turns pages the signed-in person's turns, ?work_ref=&request_id=&before=&limit=, newest first.
 func (h *ConversationHandler) turns(w http.ResponseWriter, r *http.Request) {
 	if !h.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -301,7 +301,7 @@ func (h *ConversationHandler) turns(w http.ResponseWriter, r *http.Request) {
 	var page domain.TurnHistoryPage
 	if err == nil {
 		page, err = h.History.Turns(r.Context(), tenant, person, domain.TurnHistoryFilter{
-			WorkRef: query.Get("work_ref"), Before: query.Get("before"), Limit: int(limit),
+			WorkRef: query.Get("work_ref"), RequestID: query.Get("request_id"), Before: query.Get("before"), Limit: int(limit),
 		})
 	}
 	if err != nil {

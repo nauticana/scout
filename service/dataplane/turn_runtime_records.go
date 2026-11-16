@@ -116,7 +116,7 @@ SELECT dep.partner_id, ?, dep.agent_id, COALESCE(NULLIF(?, ''), dep.stable_versi
  WHERE dep.partner_id = ? AND dep.agent_id = ?
 ON CONFLICT (partner_id, conversation_id) DO NOTHING`,
 	qRecordPinnedAgent: `
-SELECT agent_id, agent_version
+SELECT agent_id, agent_version, COALESCE(end_user_ref, '')
   FROM agent_conversation
  WHERE partner_id = ? AND conversation_id = ?`,
 
@@ -406,6 +406,9 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 		}
 		if pinnedAgent := common.AsString(pinned.Rows[0][0]); pinnedAgent != request.AgentID {
 			return 0, fmt.Errorf("%w: conversation %q is pinned to agent %q, not %q", domain.ErrConflict, request.ConversationID, pinnedAgent, request.AgentID)
+		}
+		if person, opener := endUserRef(request), common.AsString(pinned.Rows[0][2]); person != nil && opener != "" && person != opener {
+			return 0, fmt.Errorf("%w: conversation %q was opened for another person", domain.ErrForbidden, request.ConversationID)
 		}
 		pinnedVersion := strings.TrimSpace(common.AsString(pinned.Rows[0][1]))
 		if pinnedVersion == "" {

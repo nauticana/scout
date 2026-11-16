@@ -31,6 +31,8 @@ type WorkItem struct {
 	Requester PrincipalRef
 	GrantID   string
 	ParentID  int64
+	// ParentRequestID is the turn the item was delegated from; empty when no turn delegated it.
+	ParentRequestID string
 	// Depth is the delegation depth this item sits at; it only ever increases.
 	Depth    int
 	ScopeID  string

@@ -100,6 +100,9 @@ func TestAgentStepNarrowsBoundsBeforeInvoking(t *testing.T) {
 	if len(work.assigned) != 1 || work.assigned[0].Assignee.ID != "assistant" {
 		t.Fatalf("assigned = %+v", work.assigned)
 	}
+	if work.assigned[0].ParentRequestID != "request" {
+		t.Fatalf("parent request = %q, want the delegating turn", work.assigned[0].ParentRequestID)
+	}
 	if work.assigned[0].GrantID != "g1" || invoker.call.Authority.GrantID != "g1" {
 		t.Fatalf("delegation lost grant identity: item = %+v, call = %+v", work.assigned[0], invoker.call)
 	}

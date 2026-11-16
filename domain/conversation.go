@@ -42,12 +42,13 @@ type SelectableAgent struct {
 	Release string
 }
 
-// TurnHistoryFilter pages a person's turns, newest first, optionally of one work item;
-// Before is the previous page's NextBefore.
+// TurnHistoryFilter pages a person's turns, newest first, optionally of one work item or one
+// request; Before is the previous page's NextBefore.
 type TurnHistoryFilter struct {
-	WorkRef string
-	Before  string
-	Limit   int
+	WorkRef   string
+	RequestID string
+	Before    string
+	Limit     int
 }
 
 // TurnSummary is one turn of a person's history. Its settled cost is in minor units of

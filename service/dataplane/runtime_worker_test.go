@@ -33,7 +33,7 @@ func (plane *workerPlane) Runtime() contract.ConversationRuntime { return plane.
 func (plane *workerPlane) Scheduler() contract.FairTurnScheduler { return plane.scheduler }
 func (*workerPlane) Ingress() contract.ConversationIngress       { return nil }
 func (*workerPlane) Replies() contract.ReplayTurnReplySubscriber { return nil }
-func (*workerPlane) Canceller() contract.TurnCanceller           { return nil }
+func (*workerPlane) Stopper() contract.TurnStopper               { return nil }
 func (*workerPlane) StoredReply(context.Context, int64, string, int64) (domain.TurnReply, error) {
 	return domain.TurnReply{}, domain.ErrNotFound
 }

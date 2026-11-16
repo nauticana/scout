@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.3.8",
+      "title": "keel 1.3.7, person-scoped turn cancellation, turn history by request, delegating turn of a work item",
+      "tags": [
+        "breaking",
+        "additive",
+        "schema"
+      ],
+      "summary": "Adopts keel v1.3.7. The conversation cancel route stops only a turn of a conversation opened for the person unless they hold AGENT_OPERATION OPERATE on its agent, a person's turn into a conversation opened for another person is refused, turn history filters by request id, and a work item names the turn it was delegated from. Breaking: contract.DataPlane exposes Stopper() instead of Canceller().",
+      "body_markdown": "## Breaking\n\nkeel moves from v1.3.6 to v1.3.7; apply its steps first. Scout uses no keel API that changed.\n\n| Old | New |\n|---|---|\n| `contract.DataPlane.Canceller() TurnCanceller` | `Stopper() TurnStopper`; a system caller that cancels any turn injects the plane's `Control` as its `contract.TurnCanceller` |\n| `POST <base>/turn/cancel` cancelled any turn of the tenant | Stops a turn of a conversation opened for the person; any other needs `AGENT_OPERATION` `OPERATE` on its agent, else `404` |\n| `TurnRecordStore.Open` admitted a person's turn into any conversation of the tenant | A conversation opened for another person is `domain.ErrForbidden` (`403`) |\n| A `TableTurnControl` the product builds itself | Set `Roles`, and `EndUserRef` when conversations are keyed by the product's own end-user ref |\n\n## Schema\n\nRebuild from the schema sources, or change a live database:\n\n| Table | Change |\n|---|---|\n| `agent_work_item` | New nullable `parent_request_id VARCHAR(120)`, foreign key `turn_delegated_work_items (partner_id, parent_request_id)` to `conversation_turn (partner_id, request_id)` |\n\n## Additive\n\n- `contract.TurnStopper`, implemented by `dataplane.TableTurnControl.Stop(ctx, tenant, person, requestID, reason)`. `TableTurnControl.Roles` authorizes stopping another person's turn, and nil refuses it; `EndUserRef` maps the person as `TurnHistory.EndUserRef` does. `BaseDataPlane` defaults `Roles` and `Principals` once and passes `Roles` to the turn control it composes.\n- `domain.TurnHistoryFilter.RequestID` (HTTP `turns?request_id=`) returns at most the one turn of that request, at most 120 bytes.\n- `domain.WorkItem.ParentRequestID` is the turn an item was delegated from; `AgentStepExecutor` sets it to the delegating step's request id."
+    },
+    {
       "version": "v1.3.7",
       "title": "Operating mode order, skill profiles before a version, skill-ablated comparison arm, skill load counts",
       "tags": [

@@ -334,6 +334,7 @@ flowchart RL
     turn_feedback --> conversation_turn
     agent_work_item --> delegation_grant
     agent_work_item --> agent_work_item
+    agent_work_item --> conversation_turn
     step_idempotency --> conversation_turn
     step_loop_entry --> step_idempotency
     turn_call_outcome --> conversation_turn
@@ -539,6 +540,7 @@ Keel uses each foreign-key constraint name as the generated parent-side relation
 | `agent_version` | `agent_version_quarantines` | `agent_version_quarantine[]` |
 | `delegation_grant` | `grant_work_items` | `agent_work_item[]` |
 | `agent_work_item` | `child_work_items` | `agent_work_item[]` |
+| `conversation_turn` | `turn_delegated_work_items` | `agent_work_item[]` |
 | `agent_profile` | `agent_permissions` | `agent_permission[]` |
 | `authorization_role` | `permitted_agents` | `agent_permission[]` |
 | `effective_agent_release` | `released_turn_approval_requests` | `turn_approval_request[]` |
@@ -1513,6 +1515,7 @@ erDiagram
     agent_profile ||--o{ delegation_grant : grantee_delegation_grants
     delegation_grant ||--o{ agent_work_item : grant_work_items
     agent_work_item ||--o{ agent_work_item : child_work_items
+    conversation_turn ||--o{ agent_work_item : turn_delegated_work_items
 
     agent_type_version {
         bigint partner_id PK,FK
@@ -1576,9 +1579,16 @@ erDiagram
         varchar requester_id
         varchar grant_id FK
         bigint parent_work_item_id FK
+        varchar parent_request_id FK
         smallint delegation_depth
         varchar request_id UK
         char status_code FK
+    }
+    conversation_turn {
+        bigint partner_id PK
+        varchar conversation_id PK
+        bigint turn_no PK
+        varchar request_id UK
     }
 ```
 
@@ -1592,6 +1602,8 @@ deployment pointers that would otherwise select it.
 `delegation_grant` records who may assign or approve what, for how deep, under what budget, and until
 when. `agent_work_item` is unique on `(partner_id, request_id)` so a redelivered delegation re-attaches
 rather than fanning out, and `parent_work_item_id` gives the chain that cycle detection walks.
+`parent_request_id` names the turn the item was delegated from, so a product can attribute delegated work to
+the route of that turn.
 [doc/organization.md](organization.md) has the rules.
 
 ## Knowledge

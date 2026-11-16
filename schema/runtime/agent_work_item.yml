@@ -19,6 +19,9 @@ columns:
   - name: parent_work_item_id
     type: BIGINT
     nullable: true
+  - name: parent_request_id
+    type: VARCHAR(120)
+    nullable: true
   - name: delegation_depth
     type: SMALLINT
     default: "0"
@@ -63,6 +66,11 @@ foreign_keys:
     references:
       table: agent_work_item
       columns: [id, partner_id]
+  - name: turn_delegated_work_items
+    columns: [partner_id, parent_request_id]
+    references:
+      table: conversation_turn
+      columns: [partner_id, request_id]
   - name: grant_work_items
     columns: [partner_id, grant_id]
     references:

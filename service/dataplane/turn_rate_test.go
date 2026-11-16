@@ -47,7 +47,7 @@ func turnLimits(value string) domain.EffectiveResource {
 // turnsPerMinute; rows adds the answers of the test.
 func rateLimitedQuery(turnsPerMinute string, rows map[string][][]any) *queueQueryFake {
 	query := &queueQueryFake{rows: map[string][][]any{
-		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1"}},
+		qRecordPinnedAgent: {{ingressRequest().AgentID, "v1", ""}},
 		qReleaseGet:        {frozenRelease("v1", turnLimits(`{"turns_per_minute":`+turnsPerMinute+`,"max_steps":0,"max_tool_calls":0,"max_duration_seconds":0}`))},
 	}}
 	maps.Copy(query.rows, rows)

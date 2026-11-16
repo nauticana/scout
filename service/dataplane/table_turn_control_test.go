@@ -14,6 +14,7 @@ import (
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/fake"
 )
 
 // controlTable is the one conversation_turn row every process sees, with the semantics of the
@@ -29,6 +30,10 @@ type controlTable struct {
 	holdCode   domain.TurnHoldCode
 	woken      []string
 	readErr    error
+	// starter is the end user of the turn's conversation; missing means no such turn.
+	starter     string
+	missing     bool
+	starterArgs []any
 	// openOutcomes counts the turn's in-flight, accepted, and unknown calls; unknown the ones a cancellation marked.
 	openOutcomes int
 	inFlight     int
@@ -70,6 +75,10 @@ func (table *controlTable) Query(_ context.Context, name string, args ...any) (*
 				table.reason = &reason
 			}
 			result.Rows = [][]any{{string(table.status)}}
+		}
+	case qControlStarter:
+		if table.starterArgs = args; !table.missing {
+			result.Rows = [][]any{{table.starter, "writer-a"}}
 		}
 	case qControlWake:
 		if table.status == domain.TurnSuspended || table.status == domain.TurnHeld {
@@ -292,5 +301,75 @@ func TestTableTurnControlHoldsAParkedTurnAtOnceAndReleasesItUnderANewFence(t *te
 	cancelled.reason = &reason
 	if _, err := (&TableTurnControl{DB: cancelled}).RequestHold(context.Background(), 7, "request-1", domain.HoldCheckpoint, "hold"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a cancelled turn cannot be held, got %v", err)
+	}
+}
+
+// A person stops a turn of their own conversation; any other only with AGENT_OPERATION OPERATE on its agent.
+func TestTableTurnControlStopsOnlyATurnThePersonMayStop(t *testing.T) {
+	ctx, tenant := context.Background(), domain.TenantContext{TenantID: 7}
+	human := func(id string) domain.PrincipalRef { return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: id} }
+	broken := errors.New("role store is down")
+	var asked []string
+	operators := fake.PrincipalAuthorizerFunc(func(_ context.Context, principal domain.Principal, object, action, value string) (domain.AuthorizationGrant, error) {
+		asked = append(asked, principal.ID+" "+object+" "+action+" "+value)
+		if principal.ID == "44" {
+			return domain.AuthorizationGrant{}, broken
+		}
+		return domain.AuthorizationGrant{Allowed: principal.ID == "43"}, nil
+	})
+	workspace := func(person domain.PrincipalRef) string {
+		if person.ID == "41" {
+			return "workspace:41"
+		}
+		return ""
+	}
+	for name, tc := range map[string]struct {
+		tenant  domain.TenantContext
+		person  domain.PrincipalRef
+		request string
+		roles   bool
+		mapper  func(domain.PrincipalRef) string
+		starter string
+		missing bool
+		want    error
+	}{
+		"own turn":                    {tenant, human("41"), "request-1", false, nil, "41", false, nil},
+		"another's turn":              {tenant, human("42"), "request-1", true, nil, "41", false, domain.ErrNotFound},
+		"another's without roles":     {tenant, human("42"), "request-1", false, nil, "41", false, domain.ErrNotFound},
+		"an operator":                 {tenant, human("43"), "request-1", true, nil, "41", false, nil},
+		"roles unreadable":            {tenant, human("44"), "request-1", true, nil, "41", false, broken},
+		"no turn":                     {tenant, human("41"), "request-1", true, nil, "", true, domain.ErrNotFound},
+		"nobody's turn":               {tenant, human("42"), "request-1", true, nil, "", false, domain.ErrNotFound},
+		"nobody's turn, an operator":  {tenant, human("43"), "request-1", true, nil, "", false, nil},
+		"mapped end user":             {tenant, human("41"), "request-1", false, workspace, "workspace:41", false, nil},
+		"an id that is another's ref": {tenant, human("41"), "request-1", false, workspace, "41", false, domain.ErrNotFound},
+		"unmapped person":             {tenant, human("42"), "request-1", false, workspace, "", false, domain.ErrNotFound},
+		"a service":                   {tenant, domain.PrincipalRef{Kind: domain.PrincipalService, ID: "41"}, "request-1", true, nil, "41", false, domain.ErrForbidden},
+		"no person":                   {tenant, human(" "), "request-1", true, nil, "41", false, domain.ErrForbidden},
+		"no tenant":                   {domain.TenantContext{}, human("41"), "request-1", true, nil, "41", false, domain.ErrForbidden},
+		"no request":                  {tenant, human("41"), " ", true, nil, "41", false, domain.ErrValidation},
+	} {
+		table := newControlTable(domain.TurnRunning, 1)
+		table.starter, table.missing = tc.starter, tc.missing
+		control := &TableTurnControl{DB: table, EndUserRef: tc.mapper}
+		if tc.roles {
+			control.Roles = operators
+		}
+		err := control.Stop(ctx, tc.tenant, tc.person, tc.request, "stop")
+		if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+			t.Fatalf("%s: error = %v, want %v", name, err, tc.want)
+		}
+		if errors.Is(tc.want, broken) && (errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden)) {
+			t.Fatalf("%s: an authorizer failure must not read as a refusal: %v", name, err)
+		}
+		if cancelled := table.reason != nil; cancelled != (tc.want == nil) {
+			t.Fatalf("%s: cancelled = %v", name, cancelled)
+		}
+		if args := table.starterArgs; args != nil && (args[0] != int64(7) || args[1] != "request-1") {
+			t.Fatalf("%s: starter read args = %v, want the tenant and request", name, args)
+		}
+	}
+	if !slices.Contains(asked, "43 AGENT_OPERATION OPERATE agent:writer-a") {
+		t.Fatalf("authorizations = %v", asked)
 	}
 }

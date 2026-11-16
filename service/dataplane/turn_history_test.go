@@ -23,12 +23,12 @@ func TestTurnHistoryPagesThePersonsTurnsNewestFirst(t *testing.T) {
 		historyRow("request-3", newest, 1), historyRow("request-2", newest.Add(-time.Minute), 1), historyRow("request-1", newest.Add(-2*time.Minute), 1),
 	}}}
 	history := &TurnHistory{DB: queueDBFake{query: query}}
-	page, err := history.Turns(context.Background(), domain.TenantContext{TenantID: 7}, historyPerson, domain.TurnHistoryFilter{WorkRef: "case-9", Limit: 2})
+	page, err := history.Turns(context.Background(), domain.TenantContext{TenantID: 7}, historyPerson, domain.TurnHistoryFilter{WorkRef: "case-9", RequestID: "request-3", Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	args := query.firstArgs(qTurnHistory)
-	if args[0] != int64(7) || args[1] != "41" || args[2] != "case-9" || args[4] != "" || args[len(args)-1] != 3 {
+	if args[0] != int64(7) || args[1] != "41" || args[2] != "case-9" || args[4] != "request-3" || args[6] != "" || args[len(args)-1] != 3 {
 		t.Fatalf("query args = %v", args)
 	}
 	if !strings.Contains(turnHistoryQueries[qTurnHistory], "c.end_user_ref = ?") {
@@ -49,7 +49,7 @@ func TestTurnHistoryPagesThePersonsTurnsNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	args = query.args[qTurnHistory][1]
-	if args[4] != page.NextBefore || !args[5].(time.Time).Equal(newest.Add(-time.Minute)) || args[7] != "request-2" || args[len(args)-1] != DefaultTurnHistoryPageSize+1 {
+	if args[4] != "" || args[6] != page.NextBefore || !args[7].(time.Time).Equal(newest.Add(-time.Minute)) || args[9] != "request-2" || args[len(args)-1] != DefaultTurnHistoryPageSize+1 {
 		t.Fatalf("cursor args = %v", args)
 	}
 	if len(next.Turns) != 3 || next.NextBefore != "" {
@@ -73,6 +73,7 @@ func TestTurnHistoryRefusesWhatItCannotAnswer(t *testing.T) {
 		"negative limit":  {&TurnHistory{}, tenant, historyPerson, domain.TurnHistoryFilter{Limit: -1}, domain.ErrValidation},
 		"limit too large": {&TurnHistory{}, tenant, historyPerson, domain.TurnHistoryFilter{Limit: 201}, domain.ErrValidation},
 		"long work ref":   {&TurnHistory{}, tenant, historyPerson, domain.TurnHistoryFilter{WorkRef: strings.Repeat("w", 201)}, domain.ErrValidation},
+		"long request id": {&TurnHistory{}, tenant, historyPerson, domain.TurnHistoryFilter{RequestID: strings.Repeat("r", 121)}, domain.ErrValidation},
 		"bad cursor":      {&TurnHistory{}, tenant, historyPerson, domain.TurnHistoryFilter{Before: "yesterday"}, domain.ErrValidation},
 	} {
 		if tc.history.DB == nil && name != "no database" {

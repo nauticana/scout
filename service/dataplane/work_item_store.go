@@ -23,7 +23,7 @@ const (
 
 	workColumns = `id, assignee_kind, assignee_id, requester_kind, requester_id, grant_id,
        parent_work_item_id, delegation_depth, scope_id, task_kind, input_uri, input_digest,
-       request_id, status_code, budget_minor_units, currency_code, created_at, completed_at`
+       request_id, status_code, budget_minor_units, currency_code, created_at, completed_at, parent_request_id`
 
 	defaultWorkItemDepth = 32
 )
@@ -32,8 +32,8 @@ var workItemQueries = map[string]string{
 	qWorkAssign: `
 INSERT INTO agent_work_item (id, partner_id, assignee_kind, assignee_id, requester_kind, requester_id, grant_id,
                        parent_work_item_id, delegation_depth, scope_id, task_kind, input_uri, input_digest,
-                       request_id, status_code, budget_minor_units, currency_code)
-VALUES (nextval('agent_work_item_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlTurnQueued + `, ?, ?)
+                       request_id, status_code, budget_minor_units, currency_code, parent_request_id)
+VALUES (nextval('agent_work_item_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + sqlTurnQueued + `, ?, ?, ?)
 ON CONFLICT (partner_id, request_id) DO NOTHING
 RETURNING id`,
 	qWorkGet: `
@@ -59,10 +59,10 @@ WITH RECURSIVE chain AS (
     SELECT ` + workColumns + `
       FROM agent_work_item WHERE partner_id = ? AND id = ?
     UNION ALL
-    SELECT parent.` + `id, parent.assignee_kind, parent.assignee_id, parent.requester_kind, parent.requester_id,
+    SELECT parent.id, parent.assignee_kind, parent.assignee_id, parent.requester_kind, parent.requester_id,
            parent.grant_id, parent.parent_work_item_id, parent.delegation_depth, parent.scope_id, parent.task_kind,
            parent.input_uri, parent.input_digest, parent.request_id, parent.status_code,
-           parent.budget_minor_units, parent.currency_code, parent.created_at, parent.completed_at
+           parent.budget_minor_units, parent.currency_code, parent.created_at, parent.completed_at, parent.parent_request_id
       FROM agent_work_item parent
       JOIN chain child ON child.parent_work_item_id = parent.id
 )
@@ -108,6 +108,8 @@ func (s *TableWorkItemStore) Assign(ctx context.Context, item domain.WorkItem) (
 		return domain.WorkItem{}, fmt.Errorf("%w: a work item needs tenant, assignee, and requester", domain.ErrValidation)
 	case strings.TrimSpace(item.RequestID) == "":
 		return domain.WorkItem{}, fmt.Errorf("%w: a work item needs a request id to stay idempotent", domain.ErrValidation)
+	case len(item.ParentRequestID) > 120:
+		return domain.WorkItem{}, fmt.Errorf("%w: a parent request id is at most 120 bytes", domain.ErrValidation)
 	case len(item.Input.Digest) != 64:
 		return domain.WorkItem{}, fmt.Errorf("%w: a work item needs a digest-verified input reference", domain.ErrValidation)
 	case item.Depth < 0 || item.Depth > s.maxDepth():
@@ -118,7 +120,7 @@ func (s *TableWorkItemStore) Assign(ctx context.Context, item domain.WorkItem) (
 		string(item.Assignee.Kind), item.Assignee.ID, string(item.Requester.Kind), item.Requester.ID,
 		common.NullIfEmpty(item.GrantID), nullableID(item.ParentID), item.Depth, common.NullIfEmpty(item.ScopeID),
 		item.TaskKind, item.Input.URI, item.Input.Digest, item.RequestID,
-		nullableAmount(item.BudgetMinorUnits), common.NullIfEmpty(item.Currency))
+		nullableAmount(item.BudgetMinorUnits), common.NullIfEmpty(item.Currency), common.NullIfEmpty(item.ParentRequestID))
 	if err != nil {
 		return domain.WorkItem{}, fmt.Errorf("assign work item: %w", err)
 	}
@@ -218,7 +220,7 @@ func scanWorkItem(tenantID int64, row []any) domain.WorkItem {
 		Input:     domain.ObjectRef{URI: common.AsString(row[10]), Digest: common.AsString(row[11])},
 		RequestID: common.AsString(row[12]), Status: domain.TurnStatus(common.AsString(row[13])),
 		BudgetMinorUnits: common.AsInt64(row[14]), Currency: common.AsString(row[15]),
-		CreatedAt: common.AsTime(row[16]), CompletedAt: completed,
+		CreatedAt: common.AsTime(row[16]), CompletedAt: completed, ParentRequestID: common.AsString(row[18]),
 	}
 }
 

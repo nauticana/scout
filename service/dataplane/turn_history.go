@@ -39,7 +39,7 @@ SELECT t.request_id, t.conversation_id, c.agent_id, c.agent_version, t.status_co
          FROM usage_event e
         WHERE e.partner_id = t.partner_id AND e.conversation_id = t.conversation_id AND e.turn_no = t.turn_no) u ON TRUE
   LEFT JOIN currency cur ON cur.code = u.currency
- WHERE t.partner_id = ? AND c.end_user_ref = ? AND (? = '' OR t.work_ref = ?)
+ WHERE t.partner_id = ? AND c.end_user_ref = ? AND (? = '' OR t.work_ref = ?) AND (? = '' OR t.request_id = ?)
    AND (? = '' OR t.queued_at < ? OR t.queued_at = ? AND t.request_id < ?)
  ORDER BY t.queued_at DESC, t.request_id DESC
  LIMIT ?`,
@@ -83,8 +83,8 @@ func (h *TurnHistory) Turns(ctx context.Context, tenant domain.TenantContext, pe
 		return domain.TurnHistoryPage{}, fmt.Errorf("%w: the person has no end-user ref", domain.ErrForbidden)
 	case filter.Limit < 0 || filter.Limit > maxPageSize:
 		return domain.TurnHistoryPage{}, fmt.Errorf("%w: limit must lie within 0..%d", domain.ErrValidation, maxPageSize)
-	case len(filter.WorkRef) > 200:
-		return domain.TurnHistoryPage{}, fmt.Errorf("%w: work_ref is at most 200 bytes", domain.ErrValidation)
+	case len(filter.WorkRef) > 200 || len(filter.RequestID) > 120:
+		return domain.TurnHistoryPage{}, fmt.Errorf("%w: work_ref is at most 200 bytes and request_id at most 120", domain.ErrValidation)
 	}
 	beforeAt, beforeRequest, err := decodeTurnCursor(filter.Before)
 	if err != nil {
@@ -92,7 +92,7 @@ func (h *TurnHistory) Turns(ctx context.Context, tenant domain.TenantContext, pe
 	}
 	h.once.Do(func() { h.qs = h.DB.GetQueryService(ctx, turnHistoryQueries) })
 	limit := cmp.Or(filter.Limit, pageSize)
-	result, err := h.qs.Query(ctx, qTurnHistory, tenant.TenantID, endUser, filter.WorkRef, filter.WorkRef,
+	result, err := h.qs.Query(ctx, qTurnHistory, tenant.TenantID, endUser, filter.WorkRef, filter.WorkRef, filter.RequestID, filter.RequestID,
 		filter.Before, beforeAt, beforeAt, beforeRequest, limit+1)
 	if err != nil {
 		return domain.TurnHistoryPage{}, fmt.Errorf("list turns: %w", err)
