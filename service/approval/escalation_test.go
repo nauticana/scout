@@ -155,6 +155,24 @@ func TestSweepExpiresUnderTheFenceAndFailsTheTurn(t *testing.T) {
 	}
 }
 
+func TestSweepDueVisitsEveryTenantPageByPage(t *testing.T) {
+	f := newSweepFixture(t, func(domain.ApprovalRequest) (domain.EscalationStep, error) {
+		return domain.EscalationStep{Action: domain.EscalationExpire, Reason: "escalation exhausted"}, nil
+	})
+	f.open(t, dueAt(routedOwed("late", "77", 1), gateNow.Add(-time.Minute)))
+	f.table.tenantsDue = []int64{7, 9}
+	if moved, err := f.sweeper.SweepDue(context.Background(), 1); moved != 1 || err != nil {
+		t.Fatalf("moved %d, %v", moved, err)
+	}
+	if got := f.table.dueAfter; len(got) != 3 || got[0] != int64(0) || got[1] != int64(7) || got[2] != int64(9) {
+		t.Fatalf("tenant pages after %v, want 0, 7, 9", got)
+	}
+	f.table.failQuery = qApprovalTenantsDue
+	if _, err := f.sweeper.SweepDue(context.Background(), 1); err == nil {
+		t.Fatal("a failed tenant listing was not reported")
+	}
+}
+
 func TestSweepNeedsTurnRecords(t *testing.T) {
 	f := newSweepFixture(t, func(domain.ApprovalRequest) (domain.EscalationStep, error) { return domain.EscalationStep{}, nil })
 	f.sweeper.Records = nil

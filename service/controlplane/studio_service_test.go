@@ -101,6 +101,43 @@ func TestStudioSetEnabledIsTargeted(t *testing.T) {
 	if query.args[qStudioSetProfileActive][0] != string(domain.AgentStateSuspended) {
 		t.Fatalf("profile update did not receive the kill-switch state: %v", query.args[qStudioSetProfileActive])
 	}
+	if args := query.args[qStudioSetDraftEnabled]; args[4] != false || args[5] != int64(4) {
+		t.Fatalf("an editor's switch must hold to the revision they saw: %v", args)
+	}
+}
+
+func TestStudioSuspendNeedsOperateAndNoRevision(t *testing.T) {
+	newService := func(operate bool) (*StudioService, *studioQueryFake) {
+		query := &studioQueryFake{rows: map[string][][]any{
+			qStudioGetDraft:        {{"writer", "Writer", string(domain.AgentStateActive), true, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+			qStudioSetDraftEnabled: {{int64(5)}},
+		}, args: map[string][]any{}}
+		roles := fake.PrincipalAuthorizerFunc(func(_ context.Context, _ domain.Principal, object, action, value string) (domain.AuthorizationGrant, error) {
+			allowed := object == StudioAuthorizationObject && action == string(domain.StudioView) ||
+				operate && object == domain.OperationAuthorizationObject && action == string(domain.OperationOperate) && value == "agent:writer-a"
+			return domain.AuthorizationGrant{Allowed: allowed}, nil
+		})
+		return &StudioService{Principals: studioPrincipals, Roles: roles, Scopes: studioScopes(nil),
+			DB: studioDBFake{qs: query}, Sources: unusedSources{}, Assembler: unusedAssembler{}, Compiler: unusedCompiler{},
+		}, query
+	}
+	if _, err := func() (domain.AgentEnabledState, error) {
+		service, _ := newService(false)
+		return service.Suspend(context.Background(), humanActor(8, 9), "writer-a", "paused: incident")
+	}(); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("suspend without OPERATE = %v, want forbidden", err)
+	}
+	service, query := newService(true)
+	state, err := service.Suspend(context.Background(), humanActor(8, 9), "writer-a", "paused: incident")
+	if err != nil || state.Enabled || state.DraftRevision != 5 {
+		t.Fatalf("suspend = %+v, %v", state, err)
+	}
+	if args := query.args[qStudioSetDraftEnabled]; args[0] != false || args[4] != true {
+		t.Fatalf("an operator's suspend applies at any revision: %v", args)
+	}
+	if args := query.args[qStudioSetProfileActive]; args[0] != string(domain.AgentStateSuspended) || args[1] != "paused: incident" {
+		t.Fatalf("profile state = %v", args)
+	}
 }
 
 // An agent-only save must not look like a type-level edit, or it would bump the shared profile revision.

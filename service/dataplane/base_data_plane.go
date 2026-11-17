@@ -157,6 +157,15 @@ func (plane *BaseDataPlane) Ingress() contract.ConversationIngress       { retur
 func (plane *BaseDataPlane) Replies() contract.ReplayTurnReplySubscriber { return plane.ReplyHub }
 func (plane *BaseDataPlane) Stopper() contract.TurnStopper               { return plane.Control }
 
+// OutcomeSweeper settles the composed plane's due unknown call outcomes, for a product's worker to run.
+func (plane *BaseDataPlane) OutcomeSweeper() (*CallOutcomeSweeper, error) {
+	if plane.Outcomes == nil || plane.Control == nil {
+		return nil, fmt.Errorf("%w: data plane is not composed", domain.ErrNotReady)
+	}
+	return &CallOutcomeSweeper{DB: plane.DB, Outcomes: plane.Outcomes, Journal: plane.Journal, Reconciler: plane.Reconciler,
+		Control: plane.Control, Principals: plane.Principals, Audit: plane.Audit}, nil
+}
+
 // LoopDeadline is the longest one step may run; a queue lease must outlast it.
 func (plane *BaseDataPlane) LoopDeadline() time.Duration { return plane.Limits.Deadline }
 

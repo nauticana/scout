@@ -43,7 +43,8 @@ SELECT turn.request_id
  LIMIT ?`,
 }
 
-// StudioPause pauses an agent. Disabling it through Studio closes admission first: the
+// StudioPause pauses an agent for an operator holding AGENT_OPERATION OPERATE on it, at any draft
+// revision. Disabling it through Studio's Suspend closes admission first: the
 // turn record store reads the agent's state under a share lock in the transaction that
 // opens a turn, so no turn opens after the pause commits. Then the policy applies to the
 // turns already live: finish leaves them, cancel asks each to stop through the durable
@@ -82,9 +83,7 @@ func (p *StudioPause) Pause(ctx context.Context, actor domain.StudioActor, reque
 	case request.Policy == domain.PauseSuspend && p.Control == nil:
 		return domain.AgentPauseResult{}, fmt.Errorf("%w: studio pause has no turn control to suspend turns with", domain.ErrNotReady)
 	}
-	state, err := p.Studio.SetEnabled(ctx, actor, domain.AgentSetEnabledRequest{
-		AgentID: request.AgentID, Enabled: false, Reason: "paused: " + reason, ExpectedDraftRevision: request.ExpectedDraftRevision,
-	})
+	state, err := p.Studio.Suspend(ctx, actor, request.AgentID, "paused: "+reason)
 	if err != nil {
 		return domain.AgentPauseResult{}, err
 	}

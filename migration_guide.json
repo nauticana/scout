@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.3.9",
+      "title": "keel 1.3.8 and Charter 1.9.3, operator pause, due call outcome sweep, approval tenants due",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "Adopts keel v1.3.8 and charter v1.9.3. Pausing an agent needs AGENT_OPERATION OPERATE instead of Studio edit rights and names no draft revision, a sweeper settles open calls past their deadline across tenants without a person, and the approval sweeper lists the tenants it must visit. Breaking: AgentStudioHTTPBackend gains Suspend, and the pause request drops its revision.",
+      "body_markdown": "## Breaking\n\nkeel moves from v1.3.7 to v1.3.8 and charter from v1.9.2 to v1.9.3; apply their steps first. Scout uses no keel or Charter API that changed.\n\n| Old | New |\n|---|---|\n| `POST <studio>/pause {agent_name, policy, reason, expected_agent_revision}` under `AGENT_STUDIO` `EDIT` | `{agent_name, policy, reason}` under `AGENT_OPERATION` `OPERATE` (and `AGENT_STUDIO` `VIEW`); the strict body refuses `expected_agent_revision` with `400`. The `pause` feature is version 3 with object `AGENT_OPERATION` |\n| `domain.AgentPauseRequest.ExpectedDraftRevision` | Removed; a pause applies at any draft revision and bumps it |\n| `contract.AgentStudioHTTPBackend` without `Suspend` | `Suspend(ctx, actor, agentID, reason) (domain.AgentEnabledState, error)` on every implementation; `StudioPause` calls it instead of `SetEnabled` |\n\nGrant `AGENT_OPERATION` `OPERATE` on the agent to whoever pauses it.\n\n## Additive\n\n- `dataplane.CallOutcomeSweeper.Sweep(ctx, limit)` settles, across tenants, open calls of held or ended turns past their deadline by the store clock from the composed reconciler, resolving a definite answer as `domain.PlatformPrincipal` (resolution `E` or `L`) and auditing `call_outcome_resolved`; anything else stays open. `BaseDataPlane.OutcomeSweeper()` composes it; run it from a worker binary.\n- `approval.TableStore.TenantsDue(ctx, after, limit)` lists the tenants holding an overdue, vacant, or unsettled request, and `approval.Sweeper.SweepDue(ctx, tenants)` sweeps each of them.\n- `domain.PlatformPrincipal` (`service:platform`) names Scout acting without a person."
+    },
+    {
       "version": "v1.3.8",
       "title": "keel 1.3.7, person-scoped turn cancellation, turn history by request, delegating turn of a work item",
       "tags": [

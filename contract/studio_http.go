@@ -40,7 +40,8 @@ type StudioUsageBackend interface {
 	Usage(ctx context.Context, actor domain.StudioActor, agentID string, from, to time.Time) ([]domain.UsageLine, error)
 }
 
-// StudioPauseBackend stops an agent's admission and applies a policy to its live turns.
+// StudioPauseBackend stops an agent's admission and applies a policy to its live turns, for an
+// actor holding AGENT_OPERATION OPERATE on the agent.
 type StudioPauseBackend interface {
 	Pause(ctx context.Context, actor domain.StudioActor, request domain.AgentPauseRequest) (domain.AgentPauseResult, error)
 }
@@ -99,6 +100,8 @@ type AgentStudioHTTPBackend interface {
 	Settings(ctx context.Context, actor domain.StudioActor, agentID string) (domain.AgentSettings, error)
 	SaveSetting(ctx context.Context, actor domain.StudioActor, change domain.AgentSettingChange) (domain.AgentSettings, error)
 	SetEnabled(ctx context.Context, actor domain.StudioActor, request domain.AgentSetEnabledRequest) (domain.AgentEnabledState, error)
+	// Suspend disables the agent at any draft revision for an actor holding AGENT_OPERATION OPERATE on it.
+	Suspend(ctx context.Context, actor domain.StudioActor, agentID, reason string) (domain.AgentEnabledState, error)
 	Rename(ctx context.Context, actor domain.StudioActor, request domain.AgentRenameRequest) (domain.AgentSummary, error)
 	Archive(ctx context.Context, actor domain.StudioActor, request domain.AgentArchiveRequest) (domain.AgentSummary, error)
 	Unarchive(ctx context.Context, actor domain.StudioActor, request domain.AgentArchiveRequest) (domain.AgentSummary, error)

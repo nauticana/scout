@@ -203,7 +203,7 @@ func TestStudioPauseRouteSuspendsAndReportsHolds(t *testing.T) {
 	handler := &StudioPauseHandler{UserService: conversationUsers{}, Backend: backend}
 	recorder := httptest.NewRecorder()
 	handler.Routes()[api.StudioPausePath](recorder, authenticatedRequest(http.MethodPost, api.StudioPausePath,
-		[]byte(`{"agent_name":"writer-a","policy":"suspend","reason":"incident","expected_agent_revision":4}`)))
+		[]byte(`{"agent_name":"writer-a","policy":"suspend","reason":"incident"}`)))
 	var result api.AgentPauseResult
 	if recorder.Code != http.StatusOK || envelopeData(recorder, &result) != nil || backend.request.Policy != domain.PauseSuspend ||
 		result.Held != 2 || result.HoldRequested != 1 || result.ExpectedAgentRevision != 5 {

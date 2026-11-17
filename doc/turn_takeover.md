@@ -42,7 +42,7 @@ Every non-read-only call of the tool loop has a `turn_call_outcome` row written 
 
 - **Pre-observation.** The gateway observes before acting on `VerifyEffect` tools: a satisfied effect means the transport is not invoked.
 - **`ToolOutcomeReconciler`.** `GovernedGateway.Reconcile` settles an unobserved call without sending it: the effect verifier first (resolution `E`), then the composed `ToolOutcomeLookup` when the composition declares the tool's lookup support (resolution `L`). A completed answer passes the same output validation and `AfterTool` guardrails as a sent call's.
-- **Studio.** `turn/outcome/lookup` runs the reconciler for one call of a held or ended turn; `turn/outcome/attest` lets authorized people attest the outcome after the call's deadline (resolution `T`).
+- **Studio.** `turn/outcome/lookup` runs the reconciler for one call of a held or ended turn, and `CallOutcomeSweeper` does the same for every due call; `turn/outcome/attest` lets authorized people attest the outcome after the call's deadline (resolution `T`).
 - **Confirmation `Reconcile`,** by a person who is an authorized decider, settles linked calls in its own transaction.
 - The actiontoken `UnknownOutcome` for decision links (approval/resumer.go `RedeemLink`) covers approval links, not tool calls.
 
@@ -227,6 +227,8 @@ Outcome results and evidence use private state storage under `call-outcome/<tena
 
 **Lookup by a person.** `turn/outcome/lookup` (OPERATE) acts only on a turn held or ended at the fence the operator saw. It rebuilds the call as it was sent (the turn's acting identity at the conversation's pinned release, the arguments from the journal including a revision) and runs the reconciler; an operator call (origin `O`) takes its arguments and person from its entry, so the lookup resolves the person's credential as the call did. A definite answer is written by `Resolve` (`E` or `L`, the person as resolver, `resolved_fence` = the turn fence) with `WHERE status IN ('I','A','U') AND EXISTS (turn at the fence in H or ended)`, and audited `call_outcome_resolved`; any other answer returns the row unchanged. Without a composed reconciler the lookup is `ErrNotReady`.
 
+**Sweep.** `dataplane.CallOutcomeSweeper.Sweep(ctx, limit)`, which `BaseDataPlane.OutcomeSweeper()` composes for a product's worker, does the same without a person: across tenants it reads at most `limit` open calls of turns held or ended whose `deadline_at` passed by the store clock, in (`deadline_at`, tenant, `request_id`, `execution_step_id`, `call_id`) order over `turn_call_outcome_due_ix`, rebuilds and reconciles each as a lookup does, and resolves a definite answer with `domain.PlatformPrincipal` (`service:platform`) as resolver at the turn's current fence, audited `call_outcome_resolved`. Any other answer stays open for a person; a call a person or another sweep settled first, or whose turn moved on, is skipped. A full page leaves a cursor after its last call so the next sweep continues there, and a short page starts the next one over, so a call that stays unknown never starves later ones. Settling a held turn's last open call does not release it.
+
 **Attestation.** `turn/outcome/attest` needs `RECONCILE` and acts only on a turn held or ended at the stated fence, only once `deadline_at <= CURRENT_TIMESTAMP`, with a mandatory note of 1 to 500 characters and optional evidence (a uri and its SHA-256 digest) that the composed `EvidenceObjectVerifier` must accept; evidence without a verifier is refused. `OperationSeparation` (§2) is evaluated first and fails closed. Each person's statement is a `turn_call_attestation` row, and a conditional touch of the outcome row orders concurrent attesters. When the required number of distinct people agree (one, or two when `Required` says so), the row settles `T` with the last attester as resolver, the note, the evidence, and `resolved_fence`; until then the response carries `awaits_second`. An identical repeat is a no-op; a conflicting outcome, from the same person or another, is `ErrConflict`. Each statement is audited `call_outcome_attested`, the settlement `call_outcome_resolved`.
 
 **Gate.** Release carries `AND NOT EXISTS (SELECT 1 FROM turn_call_outcome WHERE partner_id = ? AND request_id = ? AND status_code IN ('I','A','U'))` in the same `UPDATE`; takeover, handback, and finish carry it too. After a hold no fenced writer can add rows, and rows only move toward resolution or, for a call that never left, are retracted, so the predicate is race-free without locks.
@@ -301,7 +303,7 @@ sequenceDiagram
 
 ## 6. SCOUT-3: `suspend` at the next durable checkpoint
 
-`domain.PauseSuspend = "suspend"`. `StudioPause` first disables admission (unchanged), then lists the agent's live turns that are neither cancelled nor already asked to hold, and for each:
+`domain.PauseSuspend = "suspend"`. `StudioPause` first disables admission through Studio's `Suspend` (`AGENT_OPERATION` `OPERATE`, any draft revision), then lists the agent's live turns that are neither cancelled nor already asked to hold, and for each:
 
 - `Q`/`U`: hold immediately (fence +1, hold code `A`), with no frame (§3).
 - `R`/`S`: set `hold_requested_at` and `hold_reason`, using the same "first request wins" `COALESCE` as the cancel flag.
@@ -471,7 +473,7 @@ Besides the tenant advisory lock the budget ledger already takes, which a turn's
 
    Closes SCOUT-2.
 
-Open work no slice owns yet (§1.5): a fence column or store-clock lease for `step_idempotency` claims, the worker-clock queue claim (G4), the writes outside the owner guard (approval requests opened by a fenced-out worker's gateway, the synchronous `TurnLedger` path), a stream absent from the cache restarting at any fence, and a background reconciliation worker over `turn_call_outcome_due_ix`: nothing re-checks accepted `A` rows on its own yet, so a lookup runs only on resume and through `turn/outcome/lookup`.
+Open work no slice owns yet (§1.5): a fence column or store-clock lease for `step_idempotency` claims, the worker-clock queue claim (G4), the writes outside the owner guard (approval requests opened by a fenced-out worker's gateway, the synchronous `TurnLedger` path), a stream absent from the cache restarting at any fence. An `A` row before its deadline is re-checked only on resume and through `turn/outcome/lookup`; the sweep takes it once its deadline passes.
 
 ## 11. Decisions
 

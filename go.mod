@@ -7,8 +7,8 @@ tool github.com/nauticana/keel/cmd/schemagen
 require (
 	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/mark3labs/mcp-go v1.1.1
-	github.com/nauticana/charter v1.9.2
-	github.com/nauticana/keel v1.3.7
+	github.com/nauticana/charter v1.9.3
+	github.com/nauticana/keel v1.3.8
 	github.com/openai/openai-go v1.12.0
 	google.golang.org/genai v1.72.0
 )

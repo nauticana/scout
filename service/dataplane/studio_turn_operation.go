@@ -258,7 +258,7 @@ type pinnedTurnContext struct {
 }
 
 func (s *StudioTurnControl) pinnedTurn(ctx context.Context, tenantID int64, requestID string) (pinnedTurnContext, error) {
-	dispatch, err := s.dispatch(ctx, s.qs, tenantID, requestID)
+	dispatch, err := s.calls().dispatch(ctx, tenantID, requestID)
 	if err != nil {
 		return pinnedTurnContext{}, err
 	}
@@ -413,7 +413,7 @@ func (s *StudioTurnControl) HandBack(ctx context.Context, actor domain.StudioAct
 	if err != nil {
 		return domain.LiveTurn{}, err
 	}
-	turn, err := s.dispatched(ctx, s.qs, actor.TenantID, request.RequestID)
+	turn, err := s.calls().dispatched(ctx, actor.TenantID, request.RequestID)
 	if err != nil {
 		return domain.LiveTurn{}, err
 	}

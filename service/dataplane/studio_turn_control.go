@@ -131,6 +131,12 @@ func (s *StudioTurnControl) ready(ctx context.Context) (port.QueryService, error
 	return s.qs, nil
 }
 
+// calls is valid once ready has run.
+func (s *StudioTurnControl) calls() dispatchedCalls {
+	return dispatchedCalls{qs: s.qs, Outcomes: s.Outcomes, Journal: s.Journal, Control: s.Control, Principals: s.Principals,
+		Reconciler: s.Reconciler, Audit: s.Audit, Now: s.Now}
+}
+
 func (s *StudioTurnControl) now() time.Time {
 	return clk.Now(s.Now)
 }
@@ -441,7 +447,7 @@ func (s *StudioTurnControl) Hold(ctx context.Context, actor domain.StudioActor, 
 // A refused re-admission leaves the turn held; a refused release, such as a stale fence,
 // releases only a reservation this call newly took.
 func (s *StudioTurnControl) Release(ctx context.Context, actor domain.StudioActor, request domain.TurnReleaseRequest) (domain.LiveTurn, error) {
-	qs, err := s.ready(ctx)
+	_, err := s.ready(ctx)
 	if err != nil {
 		return domain.LiveTurn{}, err
 	}
@@ -458,7 +464,7 @@ func (s *StudioTurnControl) Release(ctx context.Context, actor domain.StudioActo
 	if held.Status != domain.TurnHeld || held.Fence != request.Fence {
 		return domain.LiveTurn{}, fmt.Errorf("%w: turn %q is %s at fence %d, not held at %d", domain.ErrConflict, request.RequestID, held.Status, held.Fence, request.Fence)
 	}
-	turn, err := s.dispatched(ctx, qs, actor.TenantID, request.RequestID)
+	turn, err := s.calls().dispatched(ctx, actor.TenantID, request.RequestID)
 	if err != nil {
 		return domain.LiveTurn{}, err
 	}
@@ -482,28 +488,4 @@ func (s *StudioTurnControl) Release(ctx context.Context, actor domain.StudioActo
 		return domain.LiveTurn{}, err
 	}
 	return s.turn(ctx, actor.TenantID, request.AgentID, request.RequestID)
-}
-
-// dispatched rebuilds the acting identity a turn was admitted under from its queue row.
-func (s *StudioTurnControl) dispatched(ctx context.Context, qs port.QueryService, tenantID int64, requestID string) (domain.TurnRequest, error) {
-	dispatch, err := s.dispatch(ctx, qs, tenantID, requestID)
-	return dispatch.Turn, err
-}
-
-// dispatch rebuilds the turn's delivery from its queue row: its acting identity and reply route.
-func (s *StudioTurnControl) dispatch(ctx context.Context, qs port.QueryService, tenantID int64, requestID string) (domain.TurnDispatch, error) {
-	result, err := qs.Query(ctx, qOperateDispatch, tenantID, requestID)
-	if err != nil {
-		return domain.TurnDispatch{}, fmt.Errorf("read dispatch of turn %q: %w", requestID, err)
-	}
-	if len(result.Rows) == 0 || len(result.Rows[0]) < 4 {
-		return domain.TurnDispatch{}, fmt.Errorf("%w: turn %q was never dispatched", domain.ErrConflict, requestID)
-	}
-	row := result.Rows[0]
-	turn := domain.TurnRequest{
-		TenantContext: domain.TenantContext{TenantID: tenantID}, RequestID: requestID,
-		ConversationID: common.AsString(row[0]), AgentID: common.AsString(row[1]),
-	}
-	err = decodeActingContext(common.AsString(row[2]), &turn)
-	return domain.TurnDispatch{Turn: turn, ReplyRoute: common.AsString(row[3])}, err
 }

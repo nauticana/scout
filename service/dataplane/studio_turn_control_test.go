@@ -82,8 +82,8 @@ func TestStudioPauseSuspendHoldsParkedTurnsAndAsksRunningOnesToHold(t *testing.T
 	if err != nil || result.Held != 2 || result.HoldRequested != 1 || result.Cancelled != 0 {
 		t.Fatalf("result = %+v, %v", result, err)
 	}
-	if studio.request.Enabled || slices.Contains(query.calls, qPauseLiveTurns) {
-		t.Fatalf("admission must close first and only holdable turns are listed: %+v, %v", studio.request, query.calls)
+	if studio.agentID != "writer-a" || slices.Contains(query.calls, qPauseLiveTurns) {
+		t.Fatalf("admission must close first and only holdable turns are listed: %q, %v", studio.agentID, query.calls)
 	}
 	if control.holds[0] != "queued/"+string(domain.HoldAgentPaused)+"/agent paused: incident 12" {
 		t.Fatalf("holds = %v", control.holds)

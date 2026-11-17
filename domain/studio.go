@@ -380,10 +380,9 @@ const (
 
 // AgentPauseRequest disables an agent and applies Policy to its live turns.
 type AgentPauseRequest struct {
-	AgentID               string
-	Policy                PausePolicy
-	Reason                string
-	ExpectedDraftRevision int64
+	AgentID string
+	Policy  PausePolicy
+	Reason  string
 }
 
 // AgentPauseResult is the disabled agent's revision and what its policy did to the live

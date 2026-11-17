@@ -61,10 +61,9 @@ type ReleaseFeedback struct {
 // asks them to stop, and suspend holds queued and parked turns at once and running ones at
 // their next durable checkpoint.
 type AgentPauseRequest struct {
-	AgentName             string `json:"agent_name"`
-	Policy                string `json:"policy"`
-	Reason                string `json:"reason"`
-	ExpectedAgentRevision int64  `json:"expected_agent_revision"`
+	AgentName string `json:"agent_name"`
+	Policy    string `json:"policy"`
+	Reason    string `json:"reason"`
 }
 
 // AgentPauseResult is the paused agent's revision and the live turns asked to stop, held at

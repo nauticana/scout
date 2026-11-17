@@ -29,6 +29,8 @@ type approvalTable struct {
 	escalations [][]any
 	vacantArgs  []any
 	settled     map[int64]bool
+	tenantsDue  []int64
+	dueAfter    []any
 }
 
 type approvalTx struct {
@@ -112,6 +114,15 @@ func (table *approvalTable) query(name string, args []any, tx *approvalTx) (*kee
 		return result, nil
 	case qApprovalTurnSettled:
 		table.settled[args[2].(int64)] = true
+	case qApprovalTenantsDue:
+		table.dueAfter = append(table.dueAfter, args[0])
+		result := &keelmodel.QueryResult{}
+		for _, tenant := range table.tenantsDue {
+			if tenant > args[0].(int64) && len(result.Rows) < args[2].(int) {
+				result.Rows = append(result.Rows, []any{tenant})
+			}
+		}
+		return result, nil
 	case qApprovalDue:
 		return table.selectRows(func(row []any) bool {
 			deadline, timed := row[19].(time.Time)

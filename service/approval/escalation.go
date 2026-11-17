@@ -99,6 +99,34 @@ func (s *Sweeper) Sweep(ctx context.Context, tenantID int64) (int, error) {
 	return moved, errors.Join(errs...)
 }
 
+// SweepDue sweeps every tenant holding an overdue, vacant, or unsettled request, listing them a page
+// of the given size at a time (zero takes the store's page default). A failing tenant is collected
+// and the sweep goes on to the next.
+func (s *Sweeper) SweepDue(ctx context.Context, tenants int) (int, error) {
+	if s.Store == nil {
+		return 0, fmt.Errorf("approval sweeper: store is required")
+	}
+	moved, after := 0, int64(0)
+	var errs []error
+	for {
+		due, err := s.Store.TenantsDue(ctx, after, tenants)
+		if err != nil {
+			return moved, errors.Join(append(errs, err)...)
+		}
+		for _, tenantID := range due {
+			n, err := s.Sweep(ctx, tenantID)
+			moved += n
+			if err != nil {
+				errs = append(errs, fmt.Errorf("tenant %d: %w", tenantID, err))
+			}
+			after = tenantID
+		}
+		if len(due) < pageLimit(tenants) {
+			return moved, errors.Join(errs...)
+		}
+	}
+}
+
 // move applies one escalation step and reports whether the request changed; a failure after the
 // change, such as its audit or notice, is returned with it.
 func (s *Sweeper) move(ctx context.Context, request domain.ApprovalRequest) (bool, error) {
@@ -130,7 +158,7 @@ func (s *Sweeper) move(ctx context.Context, request domain.ApprovalRequest) (boo
 func (s *Sweeper) expire(ctx context.Context, request domain.ApprovalRequest, reason string) (bool, error) {
 	key := domain.ApprovalKey{TenantID: request.TenantID, RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID}
 	verdict := domain.ApprovalVerdict{
-		RequestKey: key, Status: domain.ApprovalStatusExpired, Decider: platformPrincipal,
+		RequestKey: key, Status: domain.ApprovalStatusExpired, Decider: domain.PlatformPrincipal,
 		ProposedDigest: request.ProposedDigest, Reason: reason, DecidedAt: s.now(), Assignment: fenceOf(request),
 	}
 	if _, err := s.Store.Resolve(ctx, verdict); err != nil {
@@ -192,7 +220,7 @@ func (s *Sweeper) record(ctx context.Context, request domain.ApprovalRequest, ac
 		resource = backup.ID
 	}
 	return s.Audit.Record(ctx, domain.DecisionRecord{
-		TenantID: request.TenantID, Principal: platformPrincipal, ScopeID: request.ScopeID,
+		TenantID: request.TenantID, Principal: domain.PlatformPrincipal, ScopeID: request.ScopeID,
 		Category: domain.DecisionCategoryApproval, Action: action, Resource: resource,
 		Outcome: domain.DecisionDeny, Reason: reason,
 		RequestID: request.RequestID, ConversationID: request.ConversationID, OccurredAt: s.now(),
@@ -202,8 +230,5 @@ func (s *Sweeper) record(ctx context.Context, request domain.ApprovalRequest, ac
 func (s *Sweeper) now() time.Time {
 	return clk.Now(s.Now)
 }
-
-// platformPrincipal attributes an expiry or escalation the platform performed.
-var platformPrincipal = domain.PrincipalRef{Kind: domain.PrincipalService, ID: "platform"}
 
 var _ contract.EscalationPolicy = (*BackupEscalation)(nil)

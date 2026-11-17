@@ -375,7 +375,7 @@ func (drainer *SessionDrainer) audit(ctx context.Context, release domain.Convers
 		return fmt.Errorf("encode drain audit: %w", err)
 	}
 	record := domain.DecisionRecord{
-		TenantID: release.TenantID, Principal: platformPrincipal, Category: category, Action: "drain",
+		TenantID: release.TenantID, Principal: domain.PlatformPrincipal, Category: category, Action: "drain",
 		Resource: release.PlatformVersion, ReleaseVersion: release.AgentVersion, Outcome: domain.DecisionAllow,
 		Reason: reason, ConversationID: release.ConversationID, Payload: payload, OccurredAt: drainer.now(),
 	}

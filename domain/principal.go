@@ -18,6 +18,9 @@ type PrincipalRef struct {
 	ID string `json:"id"`
 }
 
+// PlatformPrincipal names Scout itself acting without a person, such as a sweep or a rollout.
+var PlatformPrincipal = PrincipalRef{Kind: PrincipalService, ID: "platform"}
+
 // Principal is the acting subject of one governed operation. The zero value is
 // never authorized; every enforcement point rejects it.
 type Principal struct {

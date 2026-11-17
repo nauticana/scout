@@ -120,7 +120,7 @@ UPDATE agent_draft
 	qStudioSetDraftEnabled: `
 UPDATE agent_draft
    SET enabled = ?, modified_by = ?, modified_at = CURRENT_TIMESTAMP, draft_revision = draft_revision + 1
- WHERE partner_id = ? AND agent_id = ? AND draft_revision = ?
+ WHERE partner_id = ? AND agent_id = ? AND (? OR draft_revision = ?)
  RETURNING draft_revision`,
 	qStudioLockAlias: `SELECT agent_id, revision FROM agent_alias WHERE partner_id = ? AND agent_type_id = ? FOR UPDATE`,
 	qStudioBumpAlias: `

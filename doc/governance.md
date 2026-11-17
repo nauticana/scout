@@ -205,7 +205,8 @@ reassignment in between refuses a stale one with `ErrConflict`, and a vacant req
 verdict, decision links included.
 
 `approval.Sweeper` moves requests on, and `ReleaseRouter.Escalate` follows the route each was
-opened under:
+opened under. `Sweep` visits one tenant; `SweepDue` visits every tenant `TableStore.TenantsDue`
+lists as holding an overdue, vacant, or unsettled request, a page of tenants at a time:
 
 - a vacancy not yet overdue is filled under its current deadline once someone is eligible;
 - an overdue request goes to the next step with an eligible holder, with that step's extension,

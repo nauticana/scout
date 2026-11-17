@@ -478,6 +478,45 @@ func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor
 	if _, err := s.editable(ctx, actor, domain.StudioEdit, request.AgentID); err != nil {
 		return domain.AgentEnabledState{}, err
 	}
+	return s.setEnabled(ctx, actor, request, false)
+}
+
+// Suspend turns the kill switch off for an operator holding AGENT_OPERATION OPERATE on the agent,
+// at whatever revision the draft stands; the bumped revision makes an editor's stale save conflict.
+func (s *StudioService) Suspend(ctx context.Context, actor domain.StudioActor, agentID, reason string) (domain.AgentEnabledState, error) {
+	if agentID == "" {
+		return domain.AgentEnabledState{}, validationError("agent_id", "required")
+	}
+	principal, err := s.principal(ctx, actor)
+	if err != nil {
+		return domain.AgentEnabledState{}, err
+	}
+	grant, err := s.grant(ctx, principal, domain.StudioView, agentScopeValue(agentID))
+	if err != nil {
+		return domain.AgentEnabledState{}, err
+	}
+	if !grant.Allowed {
+		return domain.AgentEnabledState{}, fmt.Errorf("%w: agent %q", domain.ErrNotFound, agentID)
+	}
+	grant, err = s.Roles.Authorize(ctx, principal, domain.OperationAuthorizationObject, string(domain.OperationOperate), agentScopeValue(agentID))
+	if err != nil {
+		return domain.AgentEnabledState{}, fmt.Errorf("authorize %s %s: %w", domain.OperationAuthorizationObject, domain.OperationOperate, err)
+	}
+	if !grant.Allowed {
+		return domain.AgentEnabledState{}, fmt.Errorf("%w: %s %s on agent %q", domain.ErrForbidden, domain.OperationAuthorizationObject, domain.OperationOperate, agentID)
+	}
+	draft, err := s.getDraft(ctx, actor.TenantID, agentID)
+	if err != nil {
+		return domain.AgentEnabledState{}, err
+	}
+	if draft.Archived {
+		return domain.AgentEnabledState{}, fmt.Errorf("%w: agent %q is archived", domain.ErrConflict, agentID)
+	}
+	return s.setEnabled(ctx, actor, domain.AgentSetEnabledRequest{AgentID: agentID, Reason: reason}, true)
+}
+
+// setEnabled writes the kill switch at the expected draft revision, or at any revision.
+func (s *StudioService) setEnabled(ctx context.Context, actor domain.StudioActor, request domain.AgentSetEnabledRequest, anyRevision bool) (domain.AgentEnabledState, error) {
 	tx, err := s.DB.BeginTx(ctx, studioQueries)
 	if err != nil {
 		return domain.AgentEnabledState{}, fmt.Errorf("begin enabled transaction: %w", err)
@@ -488,7 +527,7 @@ func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	res, err := tx.Query(ctx, qStudioSetDraftEnabled, request.Enabled, actorUser(actor), actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
+	res, err := tx.Query(ctx, qStudioSetDraftEnabled, request.Enabled, actorUser(actor), actor.TenantID, request.AgentID, anyRevision, request.ExpectedDraftRevision)
 	if err != nil {
 		return domain.AgentEnabledState{}, fmt.Errorf("set draft enabled: %w", err)
 	}

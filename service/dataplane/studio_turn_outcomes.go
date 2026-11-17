@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nauticana/keel/common"
-
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/stage"
 	"github.com/nauticana/scout/service/observability"
@@ -36,26 +34,8 @@ func (s *StudioTurnControl) LookupOutcome(ctx context.Context, actor domain.Stud
 		}
 		return outcome, err
 	}
-	if s.Reconciler == nil {
-		return domain.CallOutcome{}, fmt.Errorf("%w: no call outcome reconciler is composed", domain.ErrNotReady)
-	}
-	call, err := s.dispatchedCall(ctx, actor.TenantID, outcome)
-	if err != nil {
-		return domain.CallOutcome{}, err
-	}
-	report, err := s.Reconciler.Reconcile(ctx, call)
-	if err != nil {
-		return domain.CallOutcome{}, fmt.Errorf("reconcile call %q: %w", outcome.Key.CallID, err)
-	}
-	settlement, definite := reportSettlement(outcome, report)
-	if !definite {
-		return outcome, nil
-	}
-	resolved, err := s.Outcomes.Resolve(ctx, settlement, actor.Principal, request.Fence)
-	if err != nil {
-		return domain.CallOutcome{}, err
-	}
-	return resolved, s.auditOutcome(ctx, actor, request, observability.AuditCategoryCallOutcomeResolved, resolved, string(resolved.Resolution))
+	resolved, _, err := s.calls().settle(ctx, outcome, request.AgentID, request.Fence, actor.Principal)
+	return resolved, err
 }
 
 // AttestOutcome records the actor's attestation of one open call of a turn held or ended at the
@@ -126,6 +106,12 @@ func (s *StudioTurnControl) AttestOutcome(ctx context.Context, actor domain.Stud
 	return result, s.auditOutcome(ctx, actor, request.TurnOutcomeRequest, observability.AuditCategoryCallOutcomeResolved, result.Outcome, string(domain.ResolvedByAttestation))
 }
 
+// auditOutcome records one person's act on the call a request names.
+func (s *StudioTurnControl) auditOutcome(ctx context.Context, actor domain.StudioActor, request domain.TurnOutcomeRequest, category string, outcome domain.CallOutcome, reason string) error {
+	key := domain.CallOutcomeKey{TenantID: actor.TenantID, RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, CallID: request.CallID}
+	return s.calls().audit(ctx, actor.Principal, key, request.AgentID, request.Fence, category, outcome, reason)
+}
+
 func validOutcomeRequest(request domain.TurnOutcomeRequest) error {
 	if request.Fence <= 0 || request.ExecutionStepID <= 0 || strings.TrimSpace(request.RequestID) == "" || strings.TrimSpace(request.CallID) == "" {
 		return fmt.Errorf("%w: request_id, the fence, execution_step_id, and call_id are required", domain.ErrValidation)
@@ -152,70 +138,6 @@ func (s *StudioTurnControl) unworkedOutcome(ctx context.Context, tenantID int64,
 		return domain.CallOutcome{}, fmt.Errorf("%w: call %q of turn %q", domain.ErrNotFound, request.CallID, request.RequestID)
 	}
 	return outcome, nil
-}
-
-// dispatchedCall rebuilds the call as it was sent: the turn's acting identity at the
-// conversation's pinned release, and the arguments the journal shows it ran with.
-func (s *StudioTurnControl) dispatchedCall(ctx context.Context, tenantID int64, outcome domain.CallOutcome) (domain.ToolCall, error) {
-	turn, err := s.dispatched(ctx, s.qs, tenantID, outcome.Key.RequestID)
-	if err != nil {
-		return domain.ToolCall{}, err
-	}
-	pinned, err := s.qs.Query(ctx, qOperateRelease, tenantID, turn.ConversationID)
-	if err != nil {
-		return domain.ToolCall{}, fmt.Errorf("read release of conversation %q: %w", turn.ConversationID, err)
-	}
-	if len(pinned.Rows) == 0 {
-		return domain.ToolCall{}, fmt.Errorf("%w: conversation %q has no pinned release", domain.ErrConflict, turn.ConversationID)
-	}
-	entries, err := s.Journal.Load(ctx, domain.LoopKey{TenantID: tenantID, RequestID: outcome.Key.RequestID, ExecutionStepID: outcome.Key.ExecutionStepID})
-	if err != nil {
-		return domain.ToolCall{}, fmt.Errorf("load loop journal: %w", err)
-	}
-	call := domain.ToolCall{
-		TenantContext: turn.TenantContext, Principal: pinnedPrincipal(turn, common.AsString(pinned.Rows[0][0])), OnBehalfOf: turn.OnBehalfOf,
-		RequestID: outcome.Key.RequestID, ConversationID: turn.ConversationID, ToolID: outcome.Tool.ToolID, ToolVersion: outcome.Tool.Version,
-		IdempotencyKey: outcome.IdempotencyKey,
-	}
-	if outcome.Origin == domain.CallFromOperator {
-		return s.operatorCall(ctx, tenantID, call, outcome)
-	}
-	found := false
-	for _, entry := range entries {
-		switch {
-		case entry.Kind == domain.LoopEntryModel && entry.Model != nil:
-			for _, proposed := range entry.Model.ToolCalls {
-				if proposed.CallID == outcome.Key.CallID {
-					call.Arguments, call.RevisesProposal, found = proposed.Arguments, 0, true
-				}
-			}
-		case entry.Kind == domain.LoopEntryRevision && entry.Revision != nil && entry.Observation != nil && entry.Observation.CallID == outcome.Key.CallID:
-			call.Arguments, call.RevisesProposal = entry.Revision.Arguments, entry.Revision.RevisesProposal
-		}
-	}
-	if !found {
-		return domain.ToolCall{}, fmt.Errorf("%w: the journal of turn %q proposes no call %q", domain.ErrConflict, outcome.Key.RequestID, outcome.Key.CallID)
-	}
-	return call, nil
-}
-
-// operatorCall rebuilds a person's call from the entry that records it: its arguments, and the
-// person, whose credential a lookup resolves as the call's own did.
-func (s *StudioTurnControl) operatorCall(ctx context.Context, tenantID int64, call domain.ToolCall, outcome domain.CallOutcome) (domain.ToolCall, error) {
-	entries, err := s.Control.OperatorEntries(ctx, tenantID, outcome.Key.RequestID)
-	if err != nil {
-		return domain.ToolCall{}, err
-	}
-	for _, entry := range entries {
-		if use := entry.Body.Tool; use != nil && use.CallID == outcome.Key.CallID {
-			if call.Operator, err = s.Principals.Resolve(ctx, tenantID, entry.Actor); err != nil {
-				return domain.ToolCall{}, err
-			}
-			call.Arguments = use.Arguments
-			return call, nil
-		}
-	}
-	return domain.ToolCall{}, fmt.Errorf("%w: no operator entry of turn %q records call %q", domain.ErrConflict, outcome.Key.RequestID, outcome.Key.CallID)
 }
 
 // reportSettlement turns a reconciliation answer into the call's settlement; false when the
@@ -250,28 +172,4 @@ func resultRecord(result domain.ToolResult) domain.CallRecord {
 func failedRecord(cause error, usage domain.Usage) domain.CallRecord {
 	output, _ := json.Marshal(map[string]string{"error": stage.ErrorClass(cause)})
 	return domain.CallRecord{Output: output, IsError: true, Usage: usage}
-}
-
-// auditOutcome records one person's act on a call, keyed by the call and person so each is recorded once.
-func (s *StudioTurnControl) auditOutcome(ctx context.Context, actor domain.StudioActor, request domain.TurnOutcomeRequest, category string, outcome domain.CallOutcome, reason string) error {
-	if s.Audit == nil {
-		return nil
-	}
-	payload, err := json.Marshal(map[string]any{
-		"request_id": request.RequestID, "agent_id": request.AgentID, "fence": request.Fence,
-		"execution_step_id": request.ExecutionStepID, "call_id": request.CallID, "tool_id": outcome.Tool.ToolID,
-		"status": outcome.Status, "resolution": outcome.Resolution,
-	})
-	if err != nil {
-		return fmt.Errorf("encode %s audit: %w", category, err)
-	}
-	scoped := domain.WithDecisionScope(context.WithoutCancel(ctx), "turn/", request.RequestID, "/fence/", request.Fence,
-		"/call/", request.ExecutionStepID, "/", request.CallID, "/by/", actor.Principal.Kind, ":", actor.Principal.ID)
-	if err := s.Audit.Record(scoped, domain.DecisionRecord{
-		TenantID: actor.TenantID, Principal: actor.Principal, Category: category, Action: "call", Resource: request.AgentID,
-		Outcome: domain.DecisionAllow, Reason: reason, RequestID: request.RequestID, Payload: payload, OccurredAt: s.now(),
-	}); err != nil {
-		return fmt.Errorf("record %s: %w", category, err)
-	}
-	return nil
 }

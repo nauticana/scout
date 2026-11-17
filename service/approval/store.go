@@ -38,6 +38,7 @@ const (
 	qApprovalVacant       = "scout_approval_vacant"
 	qApprovalUnsettled    = "scout_approval_unsettled"
 	qApprovalTurnSettled  = "scout_approval_turn_settled"
+	qApprovalTenantsDue   = "scout_approval_tenants_due"
 
 	// maxResolutionBytes bounds the resolver's evidence reference kept on a routed request.
 	maxResolutionBytes = 256
@@ -154,6 +155,15 @@ SELECT ` + approvalColumns + `
   FROM turn_approval_request
  WHERE partner_id = ? AND status_code = ` + sqlApprovalExpired + ` AND turn_settled_at IS NULL
  ORDER BY resolved_at, id
+ LIMIT ?`,
+	// The union of what DueBy, Vacant, and Unsettled list; a vacant request past its deadline is due anyway.
+	qApprovalTenantsDue: `
+SELECT DISTINCT partner_id
+  FROM turn_approval_request
+ WHERE partner_id > ?
+   AND (status_code IN ` + sqlApprovalOpen + ` AND (deadline_at <= ? OR approval_route_id IS NOT NULL AND approver_id IS NULL)
+        OR status_code = ` + sqlApprovalExpired + ` AND turn_settled_at IS NULL)
+ ORDER BY partner_id
  LIMIT ?`,
 	qApprovalTurnSettled: `
 UPDATE turn_approval_request
@@ -512,6 +522,23 @@ func (s *TableStore) Unsettled(ctx context.Context, tenantID int64, limit int) (
 		return nil, fmt.Errorf("list unsettled approvals: %w", err)
 	}
 	return scanRequests(tenantID, result.Rows), nil
+}
+
+// TenantsDue returns, in order, the tenants after the given one that hold an overdue, vacant, or
+// unsettled request: those a sweep has work in.
+func (s *TableStore) TenantsDue(ctx context.Context, after int64, limit int) ([]int64, error) {
+	if err := s.init(ctx); err != nil {
+		return nil, err
+	}
+	result, err := s.qs.Query(ctx, qApprovalTenantsDue, after, s.now(), pageLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list tenants with due approvals: %w", err)
+	}
+	tenants := make([]int64, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		tenants = append(tenants, common.AsInt64(row[0]))
+	}
+	return tenants, nil
 }
 
 // TurnSettled records that the turn parked on an expired request is failed or no longer parked.

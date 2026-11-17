@@ -22,7 +22,7 @@ type StudioPauseHandler struct {
 
 // Feature is the manifest entry a product adds to StudioHandler.Features when it mounts this route.
 func (h *StudioPauseHandler) Feature() api.StudioFeature {
-	return api.StudioFeature{ID: StudioFeaturePause, Version: 2, Actions: []string{string(domain.StudioEdit)}}
+	return api.StudioFeature{ID: StudioFeaturePause, Version: 3, Object: domain.OperationAuthorizationObject, Actions: []string{string(domain.OperationOperate)}}
 }
 
 // Routes returns the pause route.
@@ -33,7 +33,6 @@ func (h *StudioPauseHandler) Routes() map[string]http.HandlerFunc {
 func (h *StudioPauseHandler) pause(ctx context.Context, actor domain.StudioActor, request api.AgentPauseRequest) (any, error) {
 	result, err := h.Backend.Pause(ctx, actor, domain.AgentPauseRequest{
 		AgentID: request.AgentName, Policy: domain.PausePolicy(request.Policy), Reason: request.Reason,
-		ExpectedDraftRevision: request.ExpectedAgentRevision,
 	})
 	if err != nil {
 		return nil, err

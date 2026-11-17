@@ -642,7 +642,7 @@ func (manager *PinnedTrafficManager) auditResolution(ctx context.Context, reques
 		return fmt.Errorf("encode version audit: %w", err)
 	}
 	record := domain.DecisionRecord{
-		TenantID: tenantID, Principal: platformPrincipal, Category: "agent_version.resolved", Action: "resolve",
+		TenantID: tenantID, Principal: domain.PlatformPrincipal, Category: "agent_version.resolved", Action: "resolve",
 		Resource: agentID, ReleaseVersion: resolution.Version, Outcome: domain.DecisionAllow,
 		Reason: string(resolution.Source), ConversationID: conversationID, Payload: payload, OccurredAt: manager.now(),
 	}
@@ -751,7 +751,7 @@ func (manager *PinnedTrafficManager) auditChange(ctx context.Context, tenantID i
 		return fmt.Errorf("encode traffic audit: %w", err)
 	}
 	record := domain.DecisionRecord{
-		TenantID: tenantID, Principal: platformPrincipal, Category: category, Action: "set_traffic",
+		TenantID: tenantID, Principal: domain.PlatformPrincipal, Category: category, Action: "set_traffic",
 		Resource: agentID, ReleaseVersion: version, Outcome: domain.DecisionAllow,
 		Payload: payload, OccurredAt: manager.now(),
 	}

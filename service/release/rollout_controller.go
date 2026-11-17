@@ -542,14 +542,11 @@ func (controller *RolloutController) transition(ctx context.Context, from, next 
 	return controller.audit(ctx, record)
 }
 
-// platformPrincipal attributes an operation the platform itself performed.
-var platformPrincipal = domain.PrincipalRef{Kind: domain.PrincipalService, ID: "platform"}
-
 // operatorPrincipal attributes an operation to the human who requested it.
 func operatorPrincipal(actor string) domain.PrincipalRef {
 	actor = strings.TrimSpace(actor)
 	if actor == "" || actor == actorController {
-		return platformPrincipal
+		return domain.PlatformPrincipal
 	}
 	if _, err := strconv.ParseInt(actor, 10, 64); err == nil {
 		return domain.PrincipalRef{Kind: domain.PrincipalHuman, ID: actor}

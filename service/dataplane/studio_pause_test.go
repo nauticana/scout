@@ -11,12 +11,12 @@ import (
 
 type enabledStudio struct {
 	contract.AgentStudioHTTPBackend
-	request domain.AgentSetEnabledRequest
+	agentID, reason string
 }
 
-func (studio *enabledStudio) SetEnabled(_ context.Context, _ domain.StudioActor, request domain.AgentSetEnabledRequest) (domain.AgentEnabledState, error) {
-	studio.request = request
-	return domain.AgentEnabledState{DraftRevision: request.ExpectedDraftRevision + 1}, nil
+func (studio *enabledStudio) Suspend(_ context.Context, _ domain.StudioActor, agentID, reason string) (domain.AgentEnabledState, error) {
+	studio.agentID, studio.reason = agentID, reason
+	return domain.AgentEnabledState{DraftRevision: 5}, nil
 }
 
 type cancellerFunc func(context.Context, int64, string, string) error
@@ -33,12 +33,12 @@ func TestStudioPauseDisablesFirstThenCancelsLiveTurns(t *testing.T) {
 		cancelled = append(cancelled, requestID)
 		return nil
 	})}
-	result, err := pause.Pause(context.Background(), usageActor, domain.AgentPauseRequest{AgentID: "writer-a", Policy: domain.PauseCancel, Reason: "incident 12", ExpectedDraftRevision: 4})
+	result, err := pause.Pause(context.Background(), usageActor, domain.AgentPauseRequest{AgentID: "writer-a", Policy: domain.PauseCancel, Reason: "incident 12"})
 	if err != nil || result.Cancelled != 2 || result.DraftRevision != 5 || len(cancelled) != 2 {
 		t.Fatalf("result = %+v, cancelled = %v, error = %v", result, cancelled, err)
 	}
-	if studio.request.Enabled || studio.request.Reason != "paused: incident 12" {
-		t.Fatalf("set enabled = %+v", studio.request)
+	if studio.agentID != "writer-a" || studio.reason != "paused: incident 12" {
+		t.Fatalf("suspended %q for %q", studio.agentID, studio.reason)
 	}
 }
 

@@ -81,7 +81,7 @@ seeds:
       - [AGENT_CONVERSATION, USE, Converse with an agent]
       - [AGENT_CONVERSATION, PIN_RELEASE, Pin a conversation to one agent release]
       - [AGENT_OPERATION, VIEW, View an agent's live turns and open call outcomes]
-      - [AGENT_OPERATION, OPERATE, Hold and take over an agent's live turns]
+      - [AGENT_OPERATION, OPERATE, Pause an agent and hold or take over its live turns]
       - [AGENT_OPERATION, PREEMPT, Hold a running turn at once]
       - [AGENT_OPERATION, RECONCILE, Attest an unknown tool call outcome]
   - table: authorization_role_permission
