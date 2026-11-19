@@ -54,7 +54,7 @@ type StudioService struct {
 	Scopes        contract.ScopeRepository
 	Mergers       contract.ResourceMergerRegistry
 	MaxScopeDepth int
-	// Guards may refuse a publish or restore; Sections freeze named parts into each release.
+	// Guards may refuse a release going live; Sections freeze named parts into each release.
 	Guards     []contract.PublishGuard
 	Sections   []contract.DefinitionSection
 	Sources    contract.PromptSourceRepository
@@ -475,10 +475,47 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 
 // SetEnabled changes the kill switch without invoking draft validators.
 func (s *StudioService) SetEnabled(ctx context.Context, actor domain.StudioActor, request domain.AgentSetEnabledRequest) (domain.AgentEnabledState, error) {
-	if _, err := s.editable(ctx, actor, domain.StudioEdit, request.AgentID); err != nil {
+	current, err := s.editable(ctx, actor, domain.StudioEdit, request.AgentID)
+	if err != nil {
 		return domain.AgentEnabledState{}, err
 	}
+	if request.Enabled && !current.Enabled {
+		if err := s.guardEnable(ctx, actor, request.AgentID); err != nil {
+			return domain.AgentEnabledState{}, err
+		}
+	}
 	return s.setEnabled(ctx, actor, request, false)
+}
+
+// guardEnable lets the publish guards refuse the active release going back into service.
+func (s *StudioService) guardEnable(ctx context.Context, actor domain.StudioActor, agentID string) error {
+	if len(s.Guards) == 0 {
+		return nil
+	}
+	active, err := s.qs.Query(ctx, qStudioActiveDefinition, actor.TenantID, agentID)
+	if err != nil {
+		return fmt.Errorf("load active definition: %w", err)
+	}
+	if len(active.Rows) == 0 {
+		return nil
+	}
+	definition, err := decodeDefinition(active.Rows[0][1])
+	if err != nil {
+		return err
+	}
+	version := common.AsString(active.Rows[0][0])
+	frozen, err := s.qs.Query(ctx, qStudioGetSettings, actor.TenantID, agentID, version)
+	if err != nil {
+		return fmt.Errorf("load active settings: %w", err)
+	}
+	settings := domain.EffectiveRelease{TenantID: actor.TenantID, AgentID: agentID}
+	if len(frozen.Rows) > 0 {
+		if settings, err = decodeSettings(frozen.Rows[0], actor.TenantID, agentID); err != nil {
+			return fmt.Errorf("decode active settings: %w", err)
+		}
+	}
+	settings.AgentVersion = version
+	return s.guard(ctx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings, Version: version, Activation: true})
 }
 
 // Suspend turns the kill switch off for an operator holding AGENT_OPERATION OPERATE on the agent,

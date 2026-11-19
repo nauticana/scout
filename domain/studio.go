@@ -290,7 +290,8 @@ type PublishCandidate struct {
 	// for a publish. Definition.DefinitionDigest stays the source's, which reviews and the gate judged.
 	RestoredFrom string
 	Version      string
-	// Activation marks a scheduled release going live, already admitted when it was published.
+	// Activation marks an admitted release going live: a scheduled activation, or enabling the
+	// agent, which also sets Version to its active release.
 	Activation bool
 }
 

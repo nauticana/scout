@@ -49,7 +49,8 @@ type AgentActivityReporter interface {
 }
 
 // PublishGuard may refuse a release before it is written, with its own typed error. Guards
-// run on publish and restore, outside the release transaction.
+// run outside the release transaction on publish, restore, a scheduled activation, and enabling
+// an agent, which offers its active release with Activation set.
 type PublishGuard interface {
 	CheckPublish(ctx context.Context, candidate domain.PublishCandidate) error
 }

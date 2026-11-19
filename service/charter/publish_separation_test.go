@@ -59,6 +59,10 @@ func (failingSource) Fetch(context.Context, corpus.DocumentKey) (*model.Document
 	return nil, errors.New("document source unavailable")
 }
 
+func (failingSource) FetchVersion(context.Context, corpus.DocumentKey, string) (*model.Document, error) {
+	return nil, errors.New("document source unavailable")
+}
+
 func (failingSource) List(context.Context, model.Kind) ([]*model.Document, error) {
 	return nil, errors.New("document source unavailable")
 }

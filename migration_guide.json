@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.3.10",
+      "title": "keel 1.3.9 and Charter 1.10.0, publish guards on enabling an agent",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "Adopts keel v1.3.9 and charter v1.10.0. Enabling an agent runs the publish guards over its active release, so a product guard can refuse an agent going back into service, including after unarchive.",
+      "body_markdown": "## Breaking\n\nkeel moves from v1.3.8 to v1.3.9 and charter from v1.9.3 to v1.10.0; apply their steps first. Scout uses no keel or Charter API that changed; a `corpus.Source` a product passes to Scout adds `FetchVersion`.\n\n| Old | New |\n|---|---|\n| `StudioService.SetEnabled` with `enabled` true ran no publish guard | Runs every `contract.PublishGuard` over the active release, with `PublishCandidate.Activation` set and `Version` and `Settings.AgentVersion` naming it; a guard's error refuses the switch and nothing is written. An agent without a release is enabled unguarded; disabling, or enabling an agent already enabled, runs no guard |\n\nA guard that refuses only new content treats `Activation` as already admitted, as the shipped guards do. `Unarchive` still returns an agent disabled, so enabling it is where a serving quota refuses."
+    },
+    {
       "version": "v1.3.9",
       "title": "keel 1.3.8 and Charter 1.9.3, operator pause, due call outcome sweep, approval tenants due",
       "tags": [

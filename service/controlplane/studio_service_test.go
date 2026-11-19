@@ -2,7 +2,9 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -392,5 +394,41 @@ func studioScopes(bindings []domain.ScopedBinding) *fake.ScopeRepository {
 		BindingsFunc: func(context.Context, int64, []string, time.Time) ([]domain.ScopedBinding, error) {
 			return bindings, nil
 		},
+	}
+}
+
+func TestStudioEnablingRunsThePublishGuardsOverTheActiveRelease(t *testing.T) {
+	encoded, err := json.Marshal(domain.AgentDefinition{AgentID: "writer-a", Version: "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := &studioQueryFake{rows: map[string][][]any{
+		qStudioGetDraft:         {{"writer", "Writer", string(domain.AgentStateSuspended), false, "provider-a", "model-a", nil, nil, nil, nil, nil, int64(4), int64(2), true}},
+		qStudioActiveDefinition: {{"3", string(encoded)}},
+		qStudioSetDraftEnabled:  {{int64(5)}},
+	}, args: map[string][]any{}}
+	var seen domain.PublishCandidate
+	service := &StudioService{Principals: studioPrincipals, Roles: studioRoles, Scopes: studioScopes(nil),
+		DB: studioDBFake{qs: query}, Sources: unusedSources{}, Assembler: unusedAssembler{}, Compiler: unusedCompiler{},
+		Guards: []contract.PublishGuard{guardFunc(func(_ context.Context, candidate domain.PublishCandidate) error {
+			seen = candidate
+			return domain.ErrForbidden
+		})},
+	}
+	request := domain.AgentSetEnabledRequest{AgentID: "writer-a", Enabled: true, ExpectedDraftRevision: 4}
+	if _, err := service.SetEnabled(context.Background(), humanActor(8, 9), request); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("error = %v, want the guard's refusal", err)
+	}
+	if !seen.Activation || seen.Version != "3" || seen.Settings.AgentVersion != "3" || seen.Definition.AgentID != "writer-a" || slices.Contains(query.queries, qStudioSetDraftEnabled) {
+		t.Fatalf("candidate = %+v, queries = %v", seen, query.queries)
+	}
+	request.Enabled = false
+	if _, err := service.SetEnabled(context.Background(), humanActor(8, 9), request); err != nil {
+		t.Fatalf("disabling runs no guard: %v", err)
+	}
+	request.Enabled = true
+	query.rows[qStudioGetDraft][0][3] = true
+	if _, err := service.SetEnabled(context.Background(), humanActor(8, 9), request); err != nil {
+		t.Fatalf("an agent already serving is not guarded again: %v", err)
 	}
 }
