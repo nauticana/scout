@@ -30,8 +30,10 @@ SHA-256 content key, then in one transaction writes the next immutable
 read examples back through `GoldenSetStore`, so the scope rule above decides what
 runs. An agent uses one set (`agent_golden_set`). A set created through Studio is
 owned by its agent (`golden_set.owner_agent_id`); sharing an existing set needs
-EDIT on its owning agent, and a set no agent owns belongs to the product and is
-refused.
+EDIT on its owning agent. A product curates a set with no agent owner under its own authorization:
+`CreateSet` creates it, `SetCases` reads it by id, and `PutCase`, `RemoveCase`, and
+`Freeze` edit and freeze it by id. `Associate` with an empty owner points an agent at
+it, so that agent's evaluations pin its versions.
 
 A case may be scripted. Its input is turn 1; `turns` lists the inputs of turns 2..n
 (`golden_case_turn`), each submitted once the previous turn completes, and `tools` the

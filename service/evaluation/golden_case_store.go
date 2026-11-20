@@ -167,9 +167,8 @@ INSERT INTO golden_case_evidence (partner_id, golden_set_id, case_id, role_code,
 
 var goldenIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// GoldenCaseStore keeps the golden_case working copy and the agent_golden_set
-// association. Freeze uploads each case input to object storage under its content
-// digest and writes the set version and its golden_example rows in one transaction.
+// GoldenCaseStore keeps editable cases and agent associations. Freeze uploads
+// case inputs by content digest and writes a version in one transaction.
 type GoldenCaseStore struct {
 	keelStore
 	// Storage is bound to the bucket frozen case inputs are written to.
@@ -242,21 +241,32 @@ func (store *GoldenCaseStore) SetOwner(ctx context.Context, tenantID int64, gold
 	return common.AsString(owner.Rows[0][0]), nil
 }
 
+// CreateSet creates a set no agent owns, curated and frozen by its id under the product's
+// authorization; an existing set no agent owns is kept, one an agent owns is domain.ErrConflict.
+func (store *GoldenCaseStore) CreateSet(ctx context.Context, tenantID int64, goldenSetID, name string) error {
+	if tenantID <= 0 {
+		return fmt.Errorf("%w: tenant is required", domain.ErrValidation)
+	}
+	name, err := setName(goldenSetID, name)
+	if err != nil {
+		return err
+	}
+	qs, err := store.queries(ctx, "golden case store", caseQueries)
+	if err != nil {
+		return err
+	}
+	return ensureSet(ctx, qs, tenantID, goldenSetID, name, "")
+}
+
 // Associate points the agent at the golden set, creating it under its name and owner when it is new.
 func (store *GoldenCaseStore) Associate(ctx context.Context, association domain.GoldenSetAssociation) error {
 	tenantID, agentID, goldenSetID := association.TenantID, association.AgentID, association.GoldenSetID
 	if tenantID <= 0 || strings.TrimSpace(agentID) == "" {
 		return fmt.Errorf("%w: tenant and agent are required", domain.ErrValidation)
 	}
-	if err := validIdentifier("golden_set_id", goldenSetID, 80); err != nil {
+	name, err := setName(goldenSetID, association.Name)
+	if err != nil {
 		return err
-	}
-	name := strings.TrimSpace(association.Name)
-	if name == "" {
-		name = goldenSetID
-	}
-	if utf8.RuneCountInString(name) > 200 {
-		return fmt.Errorf("%w: golden set name exceeds 200 characters", domain.ErrValidation)
 	}
 	tx, err := store.begin(ctx, "golden case store", caseQueries)
 	if err != nil {
@@ -275,18 +285,8 @@ func (store *GoldenCaseStore) Associate(ctx context.Context, association domain.
 	if len(agent.Rows) == 0 {
 		return fmt.Errorf("%w: agent %q", domain.ErrNotFound, agentID)
 	}
-	created, err := tx.Query(ctx, qCaseSetCreate, tenantID, goldenSetID, name, nullable(association.Owner))
-	if err != nil {
-		return fmt.Errorf("create golden set: %w", err)
-	}
-	if len(created.Rows) == 0 {
-		owner, err := tx.Query(ctx, qCaseSetOwner, tenantID, goldenSetID)
-		if err != nil {
-			return fmt.Errorf("load golden set owner: %w", err)
-		}
-		if len(owner.Rows) == 0 || common.AsString(owner.Rows[0][0]) != association.Owner {
-			return fmt.Errorf("%w: golden set %q changed owner", domain.ErrConflict, goldenSetID)
-		}
+	if err = ensureSet(ctx, tx, tenantID, goldenSetID, name, association.Owner); err != nil {
+		return err
 	}
 	kind, id := principalColumns(association.By)
 	result, err := tx.Query(ctx, qCaseAssociate, goldenSetID, kind, id, store.now(), tenantID, agentID)
@@ -300,6 +300,38 @@ func (store *GoldenCaseStore) Associate(ctx context.Context, association domain.
 		return fmt.Errorf("commit golden set association: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func setName(goldenSetID, name string) (string, error) {
+	if err := validIdentifier("golden_set_id", goldenSetID, 80); err != nil {
+		return "", err
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		name = goldenSetID
+	}
+	if utf8.RuneCountInString(name) > 200 {
+		return "", fmt.Errorf("%w: golden set name exceeds 200 characters", domain.ErrValidation)
+	}
+	return name, nil
+}
+
+// ensureSet creates the set under owner, empty for none, or verifies an existing set has that owner.
+func ensureSet(ctx context.Context, qs keelport.QueryService, tenantID int64, goldenSetID, name, owner string) error {
+	created, err := qs.Query(ctx, qCaseSetCreate, tenantID, goldenSetID, name, nullable(owner))
+	if err != nil {
+		return fmt.Errorf("create golden set: %w", err)
+	}
+	if len(created.Rows) > 0 {
+		return nil
+	}
+	current, err := qs.Query(ctx, qCaseSetOwner, tenantID, goldenSetID)
+	if err != nil {
+		return fmt.Errorf("load golden set owner: %w", err)
+	}
+	if len(current.Rows) == 0 || common.AsString(current.Rows[0][0]) != owner {
+		return fmt.Errorf("%w: golden set %q changed owner", domain.ErrConflict, goldenSetID)
+	}
 	return nil
 }
 
@@ -339,15 +371,49 @@ func (store *GoldenCaseStore) Cases(ctx context.Context, scope domain.GoldenScop
 	if err != nil {
 		return domain.GoldenCaseSet{}, err
 	}
+	return store.fill(ctx, scope, tenantID, set)
+}
+
+// SetCases returns the set's working copy visible in scope, the withheld gate count, and recent versions.
+func (store *GoldenCaseStore) SetCases(ctx context.Context, scope domain.GoldenScope, tenantID int64, goldenSetID string) (domain.GoldenCaseSet, error) {
+	if err := validScope(scope); err != nil {
+		return domain.GoldenCaseSet{}, err
+	}
+	if err := store.validateLimits(); err != nil {
+		return domain.GoldenCaseSet{}, err
+	}
+	if tenantID <= 0 {
+		return domain.GoldenCaseSet{}, fmt.Errorf("%w: tenant is required", domain.ErrValidation)
+	}
+	if err := validIdentifier("golden_set_id", goldenSetID, 80); err != nil {
+		return domain.GoldenCaseSet{}, err
+	}
 	qs, err := store.queries(ctx, "golden case store", caseQueries)
 	if err != nil {
 		return domain.GoldenCaseSet{}, err
 	}
-	if set.Cases, err = store.list(ctx, qs, scope, tenantID, set.GoldenSetID); err != nil {
+	revision, err := qs.Query(ctx, qCaseSetRevision, tenantID, goldenSetID)
+	if err != nil {
+		return domain.GoldenCaseSet{}, fmt.Errorf("load golden set revision: %w", err)
+	}
+	if len(revision.Rows) == 0 {
+		return domain.GoldenCaseSet{}, fmt.Errorf("%w: golden set %q", domain.ErrNotFound, goldenSetID)
+	}
+	return store.fill(ctx, scope, tenantID, domain.GoldenCaseSet{GoldenSetID: goldenSetID, Revision: common.AsInt64(revision.Rows[0][0])})
+}
+
+// fill reads the set's cases visible in scope, its withheld gate count, and recent versions.
+func (store *GoldenCaseStore) fill(ctx context.Context, scope domain.GoldenScope, tenantID int64, set domain.GoldenCaseSet) (domain.GoldenCaseSet, error) {
+	qs, err := store.queries(ctx, "golden case store", caseQueries)
+	if err != nil {
+		return domain.GoldenCaseSet{}, err
+	}
+	goldenSetID := set.GoldenSetID
+	if set.Cases, err = store.list(ctx, qs, scope, tenantID, goldenSetID); err != nil {
 		return domain.GoldenCaseSet{}, err
 	}
 	if scope != domain.GoldenScopeGate {
-		hidden, err := qs.Query(ctx, qCaseHiddenCount, tenantID, set.GoldenSetID)
+		hidden, err := qs.Query(ctx, qCaseHiddenCount, tenantID, goldenSetID)
 		if err != nil {
 			return domain.GoldenCaseSet{}, fmt.Errorf("count gate cases: %w", err)
 		}
@@ -355,13 +421,13 @@ func (store *GoldenCaseStore) Cases(ctx context.Context, scope domain.GoldenScop
 			set.HiddenCases = int(common.AsInt64(hidden.Rows[0][0]))
 		}
 	}
-	versions, err := qs.Query(ctx, qCaseVersions, tenantID, set.GoldenSetID, orDefault(store.VersionsShown, 20))
+	versions, err := qs.Query(ctx, qCaseVersions, tenantID, goldenSetID, orDefault(store.VersionsShown, 20))
 	if err != nil {
 		return domain.GoldenCaseSet{}, fmt.Errorf("list golden set versions: %w", err)
 	}
 	for _, row := range versions.Rows {
 		set.Versions = append(set.Versions, domain.GoldenSetVersion{
-			TenantID: tenantID, GoldenSetID: set.GoldenSetID, SetVersion: common.AsInt64(row[0]),
+			TenantID: tenantID, GoldenSetID: goldenSetID, SetVersion: common.AsInt64(row[0]),
 			DatasetRevision: common.AsString(row[1]), ExampleCount: int(common.AsInt64(row[2])), FrozenAt: common.AsTime(row[3]),
 		})
 	}

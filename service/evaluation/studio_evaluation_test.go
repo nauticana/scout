@@ -42,6 +42,12 @@ func (store *caseStoreFake) Associate(_ context.Context, association domain.Gold
 	return nil
 }
 
+func (store *caseStoreFake) CreateSet(context.Context, int64, string, string) error { return nil }
+
+func (store *caseStoreFake) SetCases(context.Context, domain.GoldenScope, int64, string) (domain.GoldenCaseSet, error) {
+	return domain.GoldenCaseSet{}, nil
+}
+
 func (store *caseStoreFake) AgentSet(context.Context, int64, string) (string, int64, error) {
 	return "support", 4, nil
 }

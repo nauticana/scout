@@ -24,15 +24,21 @@ type DraftCaseExecutor interface {
 // GoldenCaseStore keeps the editable working copy of golden sets and which set
 // each agent uses. Gate cases are invisible and immutable in the dev scope;
 // Freeze snapshots every case of both scopes into a new immutable set version.
+// A set no agent owns is created, read, edited, and frozen by its id under the
+// product's own authorization; Associate lets an agent's evaluations pin it.
 type GoldenCaseStore interface {
 	// SetOwner returns the agent owning the golden set, empty when no agent owns it, or domain.ErrNotFound.
 	SetOwner(ctx context.Context, tenantID int64, goldenSetID string) (string, error)
+	// CreateSet creates a set no agent owns; an existing one is kept, one an agent owns is domain.ErrConflict.
+	CreateSet(ctx context.Context, tenantID int64, goldenSetID, name string) error
 	// Associate points the agent at the set; an existing set owned by another than association.Owner is domain.ErrConflict.
 	Associate(ctx context.Context, association domain.GoldenSetAssociation) error
 	// AgentSet returns the agent's golden set id and working revision, or domain.ErrNotFound.
 	AgentSet(ctx context.Context, tenantID int64, agentID string) (string, int64, error)
 	// Cases returns the agent's set as the scope sees it; an agent with no set yields an empty GoldenSetID.
 	Cases(ctx context.Context, scope domain.GoldenScope, tenantID int64, agentID string) (domain.GoldenCaseSet, error)
+	// SetCases returns the set as the scope sees it, or domain.ErrNotFound.
+	SetCases(ctx context.Context, scope domain.GoldenScope, tenantID int64, goldenSetID string) (domain.GoldenCaseSet, error)
 	PutCase(ctx context.Context, scope domain.GoldenScope, goldenCase domain.GoldenCase, expectedRevision int64) (int64, error)
 	RemoveCase(ctx context.Context, scope domain.GoldenScope, tenantID int64, goldenSetID, caseID string, expectedRevision int64) (int64, error)
 	Freeze(ctx context.Context, tenantID int64, goldenSetID string, expectedRevision int64) (domain.GoldenSetVersion, int64, error)

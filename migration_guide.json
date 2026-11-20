@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.3.12",
+      "title": "Golden sets without an agent",
+      "tags": [
+        "breaking",
+        "additive"
+      ],
+      "summary": "A product creates, reads, edits, and freezes a golden set no agent owns by its id. Breaking: contract.GoldenCaseStore gains CreateSet and SetCases.",
+      "body_markdown": "## Breaking\n\n| Old | New |\n|---|---|\n| `contract.GoldenCaseStore` without `CreateSet` and `SetCases` | `CreateSet(ctx, tenantID, goldenSetID, name) error` and `SetCases(ctx, scope, tenantID, goldenSetID) (domain.GoldenCaseSet, error)` on every implementation |\n\n## Additive\n\n- `GoldenCaseStore.CreateSet` creates a set no agent owns; an existing one is kept, one an agent owns is `ErrConflict`. An empty name takes the set id.\n- `GoldenCaseStore.SetCases` reads a set's working copy by id as the scope sees it, or `ErrNotFound`.\n- `PutCase`, `RemoveCase`, and `Freeze` already take the set id, and `Associate` with an empty owner lets an agent's evaluations pin the set's versions; the product authorizes these calls itself."
+    },
+    {
       "version": "v1.3.11",
       "title": "keel 1.3.11, tenant-scoped agent types and Charter maps, executable releases, terminal turn failures",
       "tags": [

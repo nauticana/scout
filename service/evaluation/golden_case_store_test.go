@@ -222,6 +222,45 @@ func TestGoldenCaseStoreAssociatesAnExistingSetOnlyUnderItsOwner(t *testing.T) {
 	}
 }
 
+// A product creates and reads a set no agent owns by its id; an agent's set is not taken over.
+func TestGoldenCaseStoreCreatesAndReadsASetNoAgentOwns(t *testing.T) {
+	ctx := context.Background()
+	query := newQueryFake(map[string][][]any{qCaseSetCreate: {{"pack"}}})
+	store, _ := caseStore(query)
+	if err := store.CreateSet(ctx, 7, "pack", " "); err != nil {
+		t.Fatal(err)
+	}
+	if args := query.args[qCaseSetCreate]; args[1] != "pack" || args[2] != "pack" || args[3] != nil {
+		t.Fatalf("create args = %v", args)
+	}
+	for owner, want := range map[any]error{nil: nil, "writer-a": domain.ErrConflict} {
+		existing := newQueryFake(map[string][][]any{qCaseSetOwner: {{owner}}})
+		store, _ := caseStore(existing)
+		if err := store.CreateSet(ctx, 7, "pack", "Pack"); !errors.Is(err, want) || want != nil && err == nil {
+			t.Fatalf("existing set owned by %v = %v, want %v", owner, err, want)
+		}
+	}
+	if err := store.CreateSet(ctx, 7, "bad id", ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("invalid id = %v", err)
+	}
+	if err := store.CreateSet(ctx, 0, "pack", ""); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("missing tenant = %v", err)
+	}
+
+	reads := newQueryFake(map[string][][]any{
+		qCaseSetRevision: {{int64(3)}}, qCaseList: {caseRow("refund", "dev", "hi")}, qCaseHiddenCount: {{int64(1)}},
+	})
+	store, _ = caseStore(reads)
+	set, err := store.SetCases(ctx, domain.GoldenScopeDev, 7, "pack")
+	if err != nil || set.GoldenSetID != "pack" || set.AgentID != "" || set.Revision != 3 || len(set.Cases) != 1 || set.HiddenCases != 1 {
+		t.Fatalf("SetCases = %+v, %v", set, err)
+	}
+	reads.rows[qCaseSetRevision] = nil
+	if _, err := store.SetCases(ctx, domain.GoldenScopeDev, 7, "pack"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing set = %v", err)
+	}
+}
+
 func TestGoldenCaseStoreFreezeSnapshotsBothScopes(t *testing.T) {
 	ctx := context.Background()
 	query := newQueryFake(map[string][][]any{
