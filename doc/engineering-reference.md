@@ -414,7 +414,7 @@ Use released module coordinates; never use a local `replace` or filesystem depen
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.3.8
+go get github.com/nauticana/keel@v1.3.11
 ```
 
 Import Scout contracts and keel infrastructure directly:
