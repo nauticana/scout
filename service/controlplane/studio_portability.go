@@ -166,7 +166,7 @@ func (p *StudioPortability) Import(ctx context.Context, actor domain.StudioActor
 	if err = validateCreate(create, studio.referenceLimit()); err != nil {
 		return domain.AgentSummary{}, err
 	}
-	if err = studio.offered(ctx, agent.AgentTypeID); err != nil {
+	if err = studio.offered(ctx, actor.TenantID, agent.AgentTypeID); err != nil {
 		return domain.AgentSummary{}, err
 	}
 	sum := sha256.Sum256([]byte(strings.Join([]string{"import", agent.Digest, create.DisplayName, canonicalReferences(request.References)}, "\x1f")))
@@ -366,7 +366,7 @@ func (p *StudioPortability) checkRelease(ctx context.Context, tenantID int64, ag
 	if len(release.Tools) == 0 && len(release.Skills) == 0 {
 		return nil
 	}
-	descriptor, err := studio.descriptor(ctx, agent.AgentTypeID)
+	descriptor, err := studio.descriptor(ctx, tenantID, agent.AgentTypeID)
 	if err != nil {
 		return err
 	}

@@ -40,9 +40,9 @@ const (
 var versionPinQueries = map[string]string{
 	qPinInsert: `
 INSERT INTO agent_version_pin
-       (partner_id, agent_id, agent_version, scope_code, region, reason, owner, approved_by, signature,
+       (id, partner_id, agent_id, agent_version, scope_code, region, reason, owner, approved_by, signature,
         compatible_policy_versions, compatible_index_versions, effective_at, expires_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (nextval('agent_version_pin_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id`,
 	qPinAssign: `
 INSERT INTO agent_version_pin_assignment (pin_id, partner_id, assignment_id)

@@ -62,30 +62,39 @@ type harborGateway struct {
 	runtime validate.Runtime
 	inner   *[]domain.ToolCall
 	answer  *func() (domain.ToolResult, error)
+	// fence, when set, rewrites a successful output as the tool-output guardrails do.
+	fence *bool
 }
 
 func newHarborGateway(t *testing.T) harborGateway {
 	t.Helper()
 	c := harbor(t)
-	calls, answer := &[]domain.ToolCall{}, new(func() (domain.ToolResult, error))
+	calls, answer, fence := &[]domain.ToolCall{}, new(func() (domain.ToolResult, error)), new(bool)
 	*answer = func() (domain.ToolResult, error) {
 		return domain.ToolResult{Output: []byte(`{"outcome":"reserved"}`), Usage: domain.Usage{ToolCalls: 1}}, nil
 	}
-	inner := gatewayFunc(func(_ context.Context, call domain.ToolCall) (domain.ToolResult, error) {
+	inner := gatewayFunc(func(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
 		*calls = append(*calls, call)
-		return (*answer)()
+		result, err := (*answer)()
+		if err == nil {
+			domain.ObserveToolOutput(ctx, result.Output)
+			if *fence {
+				result.Output = append(append([]byte("<untrusted_content>"), result.Output...), "</untrusted_content>"...)
+			}
+		}
+		return result, err
 	})
 	key := corpus.KeyOf(harborNS, model.Ref{Namespace: harborNS, ID: "BIND-S4-RESERVE-ORDER-STOCK-1"})
 	transport := &Transport{Namespace: harborNS, Bindings: binding.NewBaseProvider(c), Endpoint: &GatewayEndpoint{Gateway: inner},
-		Binder: &MappedBinder{Tools: map[corpus.DocumentKey]domain.ToolReference{key: {ToolID: "reserve", Version: "v1"}}}}
+		Binder: &MappedBinder{Tools: BindingMap{key: {ToolID: "reserve", Version: "v1"}}}}
 	runtime, err := (Runtime{Documents: c, Transport: transport, Observer: reservationHeld{}}).Compose(context.Background(), nil, validate.External{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return harborGateway{
 		gateway: &CapabilityGateway{Invoker: runtime.Invoker, Next: inner, Invocations: harborInvocations{}, Now: func() time.Time { return harborAttempt },
-			Capabilities: map[string]Capability{"reserve": {ID: model.Ref{ID: "CAP-RESERVE-ORDER-STOCK"}, ContractVersion: "1"}}},
-		runtime: runtime, inner: calls, answer: answer,
+			Capabilities: CapabilityMap{"reserve": {ID: model.Ref{ID: "CAP-RESERVE-ORDER-STOCK"}, ContractVersion: "1"}}},
+		runtime: runtime, inner: calls, answer: answer, fence: fence,
 	}
 }
 
@@ -114,6 +123,20 @@ func TestCapabilityGatewayRecordsTheRunsActionAndKeepsTheCall(t *testing.T) {
 	}
 	if other, _ := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(ctx, harborNS, "turn-43", 10); len(other) != 0 {
 		t.Fatalf("another run's actions = %+v", other)
+	}
+}
+
+// Charter maps the tool's declared outcome while the loop receives the guarded output.
+func TestCapabilityGatewayMapsTheOutcomeBeforeGuardrails(t *testing.T) {
+	h := newHarborGateway(t)
+	*h.fence = true
+	result, err := h.gateway.Invoke(context.Background(), reserveCall("turn-42:9"))
+	if err != nil || string(result.Output) != `<untrusted_content>{"outcome":"reserved"}</untrusted_content>` {
+		t.Fatalf("Invoke = %s, %v", result.Output, err)
+	}
+	actions, err := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(context.Background(), harborNS, "turn-42", 10)
+	if err != nil || len(actions) != 1 || actions[0].Disposition != string(capability.StatusExecuted) {
+		t.Fatalf("run actions = %+v, %v", actions, err)
 	}
 }
 
@@ -215,7 +238,7 @@ func TestReplayedOutcomeEncodesDecodedOutputs(t *testing.T) {
 }
 
 func TestBusinessErrorReplacesTheToolsSuccessPayload(t *testing.T) {
-	attempted := &attempt{call: domain.ToolCall{ToolID: "reserve"}, reached: true,
+	attempted := &attempt{call: domain.ToolCall{ToolID: "reserve"}, reached: true, declared: []byte(`{"outcome":"reserved"}`),
 		result: domain.ToolResult{Output: []byte(`{"outcome":"reserved"}`), Usage: domain.Usage{ToolCalls: 1}}}
 	result, err := attempted.outcome(capability.Result{Status: capability.StatusBusinessError,
 		BusinessError: "insufficient_stock", Outputs: json.RawMessage(`{"available":0}`)})
@@ -227,6 +250,22 @@ func TestBusinessErrorReplacesTheToolsSuccessPayload(t *testing.T) {
 	}
 }
 
+// Outputs the guardrails rewrote never reach the loop unguarded through Charter's record.
+func TestBusinessErrorKeepsGuardedOutput(t *testing.T) {
+	fenced := []byte(`<untrusted_content>{"outcome":"","business_error":"insufficient_stock","outputs":{"available":0}}</untrusted_content>`)
+	declared := &attempt{call: domain.ToolCall{ToolID: "reserve"}, reached: true,
+		declared: []byte(`{"outcome":"","business_error":"insufficient_stock","outputs":{"available":0}}`), result: domain.ToolResult{Output: fenced}}
+	charterResult := capability.Result{Status: capability.StatusBusinessError, BusinessError: "insufficient_stock", Outputs: json.RawMessage(`{"available":0}`)}
+	if result, err := declared.outcome(charterResult); err != nil || string(result.Output) != string(fenced) {
+		t.Fatalf("declared business error = %s, %v", result.Output, err)
+	}
+	overridden := &attempt{call: domain.ToolCall{ToolID: "reserve"}, reached: true,
+		declared: []byte(`{"outcome":"reserved","outputs":{"available":0}}`), result: domain.ToolResult{Output: fenced}}
+	if result, err := overridden.outcome(charterResult); err != nil || string(result.Output) != `{"outcome":"","business_error":"insufficient_stock"}` {
+		t.Fatalf("postcondition business error = %s, %v", result.Output, err)
+	}
+}
+
 func TestReconciliationIsJudgedWhenItHappens(t *testing.T) {
 	h := newHarborGateway(t)
 	h.gateway.Reconciler = h.runtime.Reconciler
@@ -234,5 +273,38 @@ func TestReconciliationIsJudgedWhenItHappens(t *testing.T) {
 	*h.answer = func() (domain.ToolResult, error) { return domain.ToolResult{}, errors.New("timeout") }
 	if _, err := h.gateway.Invoke(context.Background(), reserveCall("turn-42:9")); !errors.Is(err, domain.ErrEffectUnknown) {
 		t.Fatalf("a reconciliation after the approval expired must not settle the call: %v", err)
+	}
+}
+
+// Charter's store keeps microseconds, so a finer reconciliation time would be refused.
+func TestCapabilityGatewayTimesInMicroseconds(t *testing.T) {
+	gateway := &CapabilityGateway{Now: func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC) }}
+	if got := gateway.now(); got.Nanosecond() != 123456000 {
+		t.Fatalf("now = %v", got)
+	}
+}
+
+type tenantCapabilities map[int64]CapabilityMap
+
+func (m tenantCapabilities) Capability(ctx context.Context, tenantID int64, toolID string) (Capability, bool, error) {
+	return m[tenantID].Capability(ctx, tenantID, toolID)
+}
+
+// A tool is governed only for the tenants whose capability lookup maps it.
+func TestCapabilityGatewayLooksCapabilitiesUpPerTenant(t *testing.T) {
+	h := newHarborGateway(t)
+	h.gateway.Capabilities = tenantCapabilities{7: {"reserve": {ID: model.Ref{ID: "CAP-RESERVE-ORDER-STOCK"}, ContractVersion: "1"}}}
+	other := reserveCall("turn-43:1")
+	other.TenantContext.TenantID, other.RequestID = 8, "turn-43"
+	if _, err := h.gateway.Invoke(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.gateway.Invoke(context.Background(), reserveCall("turn-42:1")); err != nil {
+		t.Fatal(err)
+	}
+	ungoverned, _ := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(context.Background(), harborNS, "turn-43", 10)
+	governed, _ := (evidence.Queries{Provider: h.runtime.Evidence}).ActionsIn(context.Background(), harborNS, "turn-42", 10)
+	if len(ungoverned) != 0 || len(governed) != 1 || len(*h.inner) != 2 {
+		t.Fatalf("actions: tenant 8 %d, tenant 7 %d; calls %d", len(ungoverned), len(governed), len(*h.inner))
 	}
 }

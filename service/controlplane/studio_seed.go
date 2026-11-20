@@ -525,7 +525,7 @@ func (s *StudioService) offer(ctx context.Context, tenantID int64, agentTypeID s
 	}
 	var offer offering
 	if kinds[domain.ResourceTool] || kinds[domain.ResourceSkill] {
-		descriptor, err := s.descriptor(ctx, agentTypeID)
+		descriptor, err := s.descriptor(ctx, tenantID, agentTypeID)
 		if err != nil {
 			return offering{}, err
 		}
@@ -563,11 +563,11 @@ func (s *StudioService) offer(ctx context.Context, tenantID int64, agentTypeID s
 }
 
 // descriptor is the product's type; without a type catalog tools and skills cannot be checked.
-func (s *StudioService) descriptor(ctx context.Context, agentTypeID string) (domain.AgentTypeDescriptor, error) {
+func (s *StudioService) descriptor(ctx context.Context, tenantID int64, agentTypeID string) (domain.AgentTypeDescriptor, error) {
 	if s.Kinds == nil {
 		return domain.AgentTypeDescriptor{}, fmt.Errorf("%w: the tools and skills of agent type %q cannot be checked without an agent type catalog", domain.ErrNotReady, agentTypeID)
 	}
-	descriptor, err := s.Kinds.Get(ctx, agentTypeID)
+	descriptor, err := s.Kinds.Get(ctx, tenantID, agentTypeID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.AgentTypeDescriptor{}, validationError("agent_type", "the product does not offer this agent type")
 	}

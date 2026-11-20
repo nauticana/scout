@@ -118,13 +118,13 @@ var (
 	searchTool  = domain.ToolReference{ToolID: "search", Version: "1"}
 	crawlTool   = domain.ToolReference{ToolID: "crawl", Version: "1"}
 	writerKinds = fake.KindCatalog{
-		GetFunc: func(_ context.Context, kind string) (domain.AgentTypeDescriptor, error) {
+		GetFunc: func(_ context.Context, _ int64, kind string) (domain.AgentTypeDescriptor, error) {
 			if kind != "writer" {
 				return domain.AgentTypeDescriptor{}, domain.ErrNotFound
 			}
 			return domain.AgentTypeDescriptor{AgentTypeID: kind, Tools: []domain.ToolReference{searchTool, crawlTool}, Skills: []domain.SkillReference{{SkillID: "outline", Version: "1"}}}, nil
 		},
-		ListFunc: func(context.Context) ([]domain.AgentTypeDescriptor, error) { return nil, nil },
+		ListFunc: func(context.Context, int64) ([]domain.AgentTypeDescriptor, error) { return nil, nil },
 	}
 	writerModels = fake.ModelCatalog{
 		ListFunc: func(context.Context, int64) ([]domain.StudioModel, error) {
@@ -568,8 +568,8 @@ func TestStudioImportChecksGuardrailsWhereComposed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.studio.Kinds = fake.KindCatalog{GetFunc: func(ctx context.Context, kind string) (domain.AgentTypeDescriptor, error) {
-		descriptor, err := writerKinds.Get(ctx, kind)
+	h.studio.Kinds = fake.KindCatalog{GetFunc: func(ctx context.Context, tenantID int64, kind string) (domain.AgentTypeDescriptor, error) {
+		descriptor, err := writerKinds.Get(ctx, tenantID, kind)
 		descriptor.Guardrails = []domain.GuardrailRule{typeSize}
 		return descriptor, err
 	}, ListFunc: writerKinds.ListFunc}

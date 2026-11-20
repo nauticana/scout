@@ -5,6 +5,7 @@ import (
 
 	"github.com/nauticana/charter/sdk/binding"
 	"github.com/nauticana/charter/sdk/capability"
+	"github.com/nauticana/charter/sdk/corpus"
 	"github.com/nauticana/charter/sdk/model"
 
 	"github.com/nauticana/scout/domain"
@@ -16,6 +17,16 @@ import (
 // CallContext resolves who is calling a Charter capability from the request context.
 type CallContext interface {
 	Caller(ctx context.Context) (domain.TenantContext, domain.Principal, error)
+}
+
+// Capabilities names the Charter capability a tenant's tool realizes; a tool not found is not governed.
+type Capabilities interface {
+	Capability(ctx context.Context, tenantID int64, toolID string) (Capability, bool, error)
+}
+
+// BindingTools names the Scout tool a tenant's capability binding realizes; a binding not found runs nothing.
+type BindingTools interface {
+	Tool(ctx context.Context, tenantID int64, binding corpus.DocumentKey) (domain.ToolReference, bool, error)
 }
 
 // ToolBinder turns a Charter capability request into the Scout tool call the binding realizes.

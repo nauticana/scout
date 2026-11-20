@@ -215,7 +215,7 @@ func (s *StudioService) freeze(ctx context.Context, tenantID int64, draft domain
 		return domain.EffectiveRelease{}, err
 	}
 	if s.Kinds != nil {
-		descriptor, err := s.Kinds.Get(ctx, definition.AgentTypeID)
+		descriptor, err := s.Kinds.Get(ctx, tenantID, definition.AgentTypeID)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return domain.EffectiveRelease{}, fmt.Errorf("load agent type %q: %w", definition.AgentTypeID, err)
 		}

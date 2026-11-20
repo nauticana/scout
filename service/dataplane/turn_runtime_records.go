@@ -152,13 +152,13 @@ SELECT turn.status_code, EXISTS (` + currentLease + `)
   FROM conversation_turn turn
  WHERE turn.partner_id = ? AND turn.request_id = ?`,
 
-	// The worker holds its turn at a checkpoint or on an unknown call outcome, and a pending hold
-	// request is cleared as the hold is taken. A hold or suspension yields to a cancellation
+	// The worker holds its turn at a checkpoint or on an unknown call outcome; a pending hold
+	// request is taken, its reason kept until release. A hold or suspension yields to a cancellation
 	// requested before it, which nothing could wake out of a parked turn; the worker ends it instead.
 	qRecordHold: `
 UPDATE conversation_turn
    SET status_code = ` + sqlTurnHeld + `, fence = fence + 1, hold_code = ?,
-       held_at = CURRENT_TIMESTAMP, hold_requested_at = NULL, hold_reason = NULL
+       held_at = CURRENT_TIMESTAMP, hold_requested_at = NULL
  WHERE partner_id = ? AND request_id = ? AND fence = ? AND status_code IN (` + sqlTurnOwned + `)
    AND cancel_requested_at IS NULL
 RETURNING fence`,

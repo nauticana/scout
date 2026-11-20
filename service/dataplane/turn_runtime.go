@@ -114,6 +114,8 @@ type turnExecution struct {
 	// operator are the turn's operator entries, and replies the frames of its replies by sequence.
 	operator []domain.OperatorEntry
 	replies  map[int64]domain.TurnReply
+	// failure is the redacted message of the cause a failed turn records beside its class.
+	failure string
 }
 
 // loadOperator reads the turn's operator entries once per delivery: a turn no worker runs gains
@@ -293,7 +295,7 @@ func (runtime *TurnRuntime) replayTerminal(ctx context.Context, execution *turnE
 		return domain.TurnResult{}, err
 	}
 	if status != domain.TurnCompleted {
-		return domain.TurnResult{}, fmt.Errorf("%w: turn %q is already terminal (%s)", domain.ErrConflict, turn.RequestID, errorCode)
+		return domain.TurnResult{}, fmt.Errorf("%w: %w: turn %q is already terminal (%s)", domain.ErrConflict, domain.ErrTurnTerminal, turn.RequestID, errorCode)
 	}
 	return domain.TurnResult{Response: payload, AgentVersion: snapshot.AgentVersion}, nil
 }
@@ -569,6 +571,7 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 		status = domain.TurnCancelled
 	}
 	errs := []error{cause}
+	execution.failure = common.TruncateRunes(common.RedactForStorage(cause.Error()), 400)
 	billed := hasUsage(execution.usage)
 	if billed {
 		if err := runtime.settled(failCtx, execution); err != nil {
@@ -581,6 +584,7 @@ func (runtime *TurnRuntime) fail(ctx context.Context, execution *turnExecution, 
 	} else if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
+	errs = append(errs, domain.ErrTurnTerminal)
 	runtime.recordRun(failCtx, execution, domain.RunStatus(status))
 	if err := runtime.audit(failCtx, execution, turnAuditCategory(status), errorCode); err != nil {
 		errs = append(errs, err)
@@ -789,7 +793,7 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 		return nil
 	}
 	turn := execution.dispatch.Turn
-	payload, err := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"request_id":       turn.RequestID,
 		"conversation_id":  turn.ConversationID,
 		"turn_no":          execution.turnNo,
@@ -801,7 +805,11 @@ func (runtime *TurnRuntime) audit(ctx context.Context, execution *turnExecution,
 		"currency":         execution.usage.Currency,
 		"error_code":       errorCode,
 		"fence":            execution.owner.Fence,
-	})
+	}
+	if execution.failure != "" {
+		fields["error_message"] = execution.failure
+	}
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return fmt.Errorf("encode turn audit: %w", err)
 	}

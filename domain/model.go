@@ -198,6 +198,8 @@ type ModelToolCall struct {
 	CallID    string
 	Name      string
 	Arguments []byte
+	// Signature is opaque provider state sent back with the call, such as a Gemini thought signature.
+	Signature []byte `json:",omitempty"`
 }
 
 // ModelToolObservation answers one ModelToolCall.

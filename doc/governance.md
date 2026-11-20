@@ -486,7 +486,8 @@ intermediate `turn_suspended`, `turn_hold_requested`, `turn_held`, `turn_release
 `turn_operator_action`, `turn_handed_back`, `turn_hold_lapsed`, `call_outcome_attested`, and
 `call_outcome_resolved`, and closes with
 exactly one of `turn_completed`, `turn_failed`, or `turn_cancelled`; the suspension, hold, release,
-operator, and terminal records carry the turn's `fence` in their payload, and a worker whose fence
+operator, and terminal records carry the turn's `fence` in their payload, `turn_failed` and `turn_cancelled` also the
+redacted `error_message` of their cause beside the `error_code` class, and a worker whose fence
 moved writes no terminal record. A person's finish records `turn_completed` under the key the
 runtime's terminal record takes, so a stale delivery's terminal replay writes nothing. An audit write that fails fails
 the delivery rather than passing silently, and the terminal replay offers the terminal record again,

@@ -316,7 +316,7 @@ The worker checks `HoldRequested()` at three durable boundaries:
 2. Before loop iterations 2 and later, once the previous iteration's observations are journaled.
 3. Before each non-read-only invoke, after the decision is journaled.
 
-At a boundary the step returns `ErrTurnHeld`; a hold inside a step first abandons the step claim under the owner's fence, and the step's usage is not counted, because the released turn replays the journal and counts it then. The runtime then does a cooperative R/S→H (fence +1 by the worker itself, hold code `C` whoever asked, hold request cleared, `held_at` set, reservation kept), records `turn_held`, and publishes a final `held` frame (error code `held`; resumed turns continue that sequence, like `approval_pending`). A delegate that ends on a `held` frame holds its delegator at the delegating step. There are no open outcomes by construction, so release is immediate. Unpausing does not auto-release: an operator releases held turns per turn. Pause's cancel listing, `TableTurnControl.Cancel`, and the cancel wake include `H` and `O`.
+At a boundary the step returns `ErrTurnHeld`; a hold inside a step first abandons the step claim under the owner's fence, and the step's usage is not counted, because the released turn replays the journal and counts it then. The runtime then does a cooperative R/S→H (fence +1 by the worker itself, hold code `C` whoever asked, `hold_requested_at` cleared and `hold_reason` kept, `held_at` set, reservation kept), records `turn_held`, and publishes a final `held` frame (error code `held`; resumed turns continue that sequence, like `approval_pending`). A delegate that ends on a `held` frame holds its delegator at the delegating step. There are no open outcomes by construction, so release is immediate. Unpausing does not auto-release: an operator releases held turns per turn. Pause's cancel listing, `TableTurnControl.Cancel`, and the cancel wake include `H` and `O`.
 
 **Release.** Studio's `turn/release` re-admits the turn's budget (a refusal, including `ErrBudgetSettled`, leaves it held), then `TableTurnControl.Release` moves H→Q at the expected held fence (fence +1), clears the hold columns, and requeues the queue row in the same transaction; any other state or fence, or an open outcome of the turn (§4), is `ErrConflict` (409).
 
@@ -332,7 +332,7 @@ Both scheduler claim paths and `qSessionActiveTurn` order by the durable turn nu
 
 - `conversation_turn` columns:
   - `fence BIGINT NOT NULL DEFAULT 0` (CHECK `>= 0`)
-  - `hold_requested_at`, `hold_reason VARCHAR(200)` (both null or both set)
+  - `hold_requested_at`, `hold_reason VARCHAR(200)`: a request carries its reason, and an `H` or `O` turn keeps the reason it was held for until it is released, handed back, finished, or woken
   - `hold_code CHAR(1)`: C = checkpoint request (an operator's hold, or any cooperative hold), A = agent paused, P = preempted by an operator, U = held on an unknown outcome, E = held on a conflicted or insufficient working set. The CHECKs are `IN ('C','A','P','U','E')` and `(status_code IN ('H','O')) = (hold_code IS NOT NULL)`. A cooperative hold always records `C`, also when pause asked for it; `A` marks a `Q` or `U` turn pause held at once.
   - `held_at`, CHECK `(status_code IN ('H','O')) = (held_at IS NOT NULL)`
   - `holder_kind VARCHAR(20)`, `holder_id VARCHAR(120)`: `conversation_turn_holder_ck` keeps the pair together, and `conversation_turn_operated_ck` requires the holder in `O` and allows it only in `O` or `C`, where it names the person who finished the turn

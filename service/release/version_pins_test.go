@@ -327,3 +327,10 @@ func TestTableVersionPinStoreActiveNamesAssignments(t *testing.T) {
 	}
 	requireArgs(t, query, qPinAssignments, int64(8), "writer-a", at, at)
 }
+
+func TestPinInsertDrawsIDFromSequence(t *testing.T) {
+	if !strings.Contains(versionPinQueries[qPinInsert], "(id, partner_id") ||
+		!strings.Contains(versionPinQueries[qPinInsert], "nextval('agent_version_pin_seq')") {
+		t.Fatalf("pin insert must draw its id from agent_version_pin_seq: %s", versionPinQueries[qPinInsert])
+	}
+}

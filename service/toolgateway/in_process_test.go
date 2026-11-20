@@ -3,6 +3,7 @@ package toolgateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -84,15 +85,20 @@ func TestInProcessTransportRefusesEndpointsItDoesNotServe(t *testing.T) {
 
 type egressRuleFake struct {
 	keelport.DatabaseRepository
-	allowed map[string]bool
+	allowed  map[string]bool
+	inserted *[][]any
 }
 
 func (db egressRuleFake) GetQueryService(context.Context, map[string]string) keelport.QueryService {
 	return db
 }
 
-func (db egressRuleFake) Query(_ context.Context, _ string, args ...any) (*keelmodel.QueryResult, error) {
-	if db.allowed[args[1].(string)+"://"+args[2].(string)] && args[3].(int) == 443 {
+func (db egressRuleFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
+	if name == qEgressRuleInsert {
+		*db.inserted = append(*db.inserted, args)
+		return &keelmodel.QueryResult{}, nil
+	}
+	if args[1] == "search" && args[2] == "v1" && db.allowed[args[3].(string)+"://"+args[4].(string)] && args[5].(int) == 443 {
 		return &keelmodel.QueryResult{Rows: [][]any{{1}}}, nil
 	}
 	return &keelmodel.QueryResult{}, nil
@@ -103,16 +109,41 @@ func (egressRuleFake) GenID() int64 { return 0 }
 func TestTableEgressPolicyAdmitsOnlyRuledDestinations(t *testing.T) {
 	policy := &TableEgressPolicy{DB: egressRuleFake{allowed: map[string]bool{"https://api.example.com": true}}}
 	ctx := context.Background()
-	if err := policy.ValidateDestination(ctx, 7, "https://API.example.com/v1/search"); err != nil {
+	if err := policy.ValidateDestination(ctx, 7, domain.ToolReference{ToolID: "search", Version: "v1"}, "https://API.example.com/v1/search"); err != nil {
 		t.Fatalf("a ruled destination must pass on its default port: %v", err)
 	}
 	for _, endpoint := range []string{"https://evil.example.com/x", "https://api.example.com:8443/x", "http://api.example.com/x", "ftp://api.example.com/x"} {
-		if err := policy.ValidateDestination(ctx, 7, endpoint); !errors.Is(err, domain.ErrForbidden) {
+		if err := policy.ValidateDestination(ctx, 7, domain.ToolReference{ToolID: "search", Version: "v1"}, endpoint); !errors.Is(err, domain.ErrForbidden) {
 			t.Fatalf("%s: want ErrForbidden, got %v", endpoint, err)
 		}
 	}
-	if err := policy.ValidateDestination(ctx, 7, "not a url"); !errors.Is(err, domain.ErrValidation) {
+	if err := policy.ValidateDestination(ctx, 7, domain.ToolReference{ToolID: "crawl", Version: "v1"}, "https://api.example.com/x"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("another tool's rule must not admit: %v", err)
+	}
+	if err := policy.ValidateDestination(ctx, 7, domain.ToolReference{ToolID: "search", Version: "v1"}, "not a url"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("want ErrValidation, got %v", err)
+	}
+}
+
+func TestTableEgressPolicyAllowsARegisteredToolsEndpoint(t *testing.T) {
+	var inserted [][]any
+	policy := &TableEgressPolicy{DB: egressRuleFake{inserted: &inserted}}
+	ctx := context.Background()
+	tool := domain.ToolReference{ToolID: "search", Version: "v1"}
+	if err := policy.Allow(ctx, 7, tool, "https://API.example.com/v1/search"); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Allow(ctx, 7, tool, InProcessEndpoint("search")); err != nil {
+		t.Fatal(err)
+	}
+	if len(inserted) != 1 || fmt.Sprint(inserted[0]) != "[7 search v1 https api.example.com 443]" {
+		t.Fatalf("inserted = %v", inserted)
+	}
+	if err := policy.Allow(ctx, 7, domain.ToolReference{ToolID: "search"}, "https://api.example.com"); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("want ErrValidation without a version, got %v", err)
+	}
+	if err := policy.Allow(ctx, 7, tool, "ftp://api.example.com/x"); !errors.Is(err, domain.ErrForbidden) || len(inserted) != 1 {
+		t.Fatalf("want ErrForbidden for an unsupported protocol, got %v", err)
 	}
 }
 

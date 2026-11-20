@@ -21,10 +21,10 @@ import (
 
 // RuntimeWorker is the keel leased queue worker that drains turn_queue into a
 // ConversationRuntime, handing it the leased row as the turn's claim. A turn that
-// returns an error is nacked for bounded retry; a turn the runtime suspended, held, or
-// finished is acked. A delivery that no longer owns its turn, or finds it held, is
-// acknowledged when its lease still stands and otherwise dropped, never retried or
-// dead-lettered.
+// returns an error is nacked for bounded retry; a turn the runtime suspended, held,
+// finished, or recorded as failed is acked, a failure journaled with its cause. A
+// delivery that no longer owns its turn, or finds it held, is acknowledged when its
+// lease still stands and otherwise dropped, never retried or dead-lettered.
 type RuntimeWorker struct {
 	worker.AbstractWorker
 	Scheduler contract.ClaimedTurnScheduler
@@ -59,7 +59,7 @@ func (w *RuntimeWorker) QueueQueries() (pending, claim, reclaim, name string) {
 	return w.pending, w.claim, w.reclaim, "runtime"
 }
 
-func (w *RuntimeWorker) HandleJob(ctx context.Context, _ logger.ApplicationLogger, _ port.DatabaseRepository, _ port.QuotaService, _ port.QueryService, _ int64, row []any) error {
+func (w *RuntimeWorker) HandleJob(ctx context.Context, journal logger.ApplicationLogger, _ port.DatabaseRepository, _ port.QuotaService, _ port.QueryService, _ int64, row []any) error {
 	lease, err := w.Scheduler.LeaseFromClaimRow(ctx, row)
 	if err != nil {
 		return err
@@ -69,9 +69,13 @@ func (w *RuntimeWorker) HandleJob(ctx context.Context, _ logger.ApplicationLogge
 		return err
 	}
 	_, err = w.Runtime.HandleTurn(ctx, claim)
+	if errors.Is(err, domain.ErrTurnTerminal) && journal != nil {
+		turn := claim.Dispatch.Turn
+		journal.Warning(fmt.Sprintf("turn %s of tenant %d: %s", turn.RequestID, turn.TenantContext.TenantID, common.RedactForStorage(err.Error())))
+	}
 	switch {
-	case errors.Is(err, domain.ErrFenceLost), errors.Is(err, domain.ErrTurnHeld):
-		// A stale delivery or a held turn is never retried: whoever moved the fence owns the turn.
+	case errors.Is(err, domain.ErrTurnTerminal), errors.Is(err, domain.ErrFenceLost), errors.Is(err, domain.ErrTurnHeld):
+		// A recorded end, a stale delivery, or a held turn is never retried.
 		ackErr := w.Scheduler.Ack(context.WithoutCancel(ctx), lease.Message.MessageID, w.WorkerID)
 		if errors.Is(ackErr, domain.ErrConflict) {
 			return nil

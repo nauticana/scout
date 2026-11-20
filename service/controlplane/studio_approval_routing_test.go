@@ -257,7 +257,7 @@ func routingViewService(t *testing.T, bindings []domain.ScopedBinding) (*StudioA
 	t.Helper()
 	service, _ := publishService()
 	service.Scopes = studioScopes(bindings)
-	service.Kinds = fake.KindCatalog{GetFunc: func(context.Context, string) (domain.AgentTypeDescriptor, error) {
+	service.Kinds = fake.KindCatalog{GetFunc: func(context.Context, int64, string) (domain.AgentTypeDescriptor, error) {
 		return domain.AgentTypeDescriptor{AgentTypeID: "writer", Tools: []domain.ToolReference{{ToolID: "pay.wire", Version: "v1"}, {ToolID: "search", Version: "v1"}}}, nil
 	}}
 	var checked []string

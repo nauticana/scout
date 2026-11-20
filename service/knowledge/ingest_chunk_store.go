@@ -57,7 +57,7 @@ func (store *ObjectChunkStore) PutChunk(ctx context.Context, chunk domain.Knowle
 	if scheme == "" {
 		scheme = "object"
 	}
-	return domain.ObjectRef{URI: scheme + "://" + store.Storage.Bucket() + "/" + key, Digest: digest}, nil
+	return domain.ObjectRef{URI: domain.ObjectAddress{Scheme: scheme, Bucket: store.Storage.Bucket(), Key: key}.String(), Digest: digest}, nil
 }
 
 func (store *ObjectChunkStore) key(chunk domain.KnowledgeChunk) string {

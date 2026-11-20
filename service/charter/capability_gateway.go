@@ -1,6 +1,7 @@
 package charter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,10 +33,11 @@ type Capability struct {
 // unknown when the call is redelivered. Unmapped tools go straight to Next. As the turn's
 // ToolOutcomeLookup it reconciles a governed call's key from observation alone, never sending it.
 type CapabilityGateway struct {
-	Invoker      capability.Invoker
-	Reconciler   capability.Reconciler
-	Next         contract.GovernedToolGateway
-	Capabilities map[string]Capability
+	Invoker    capability.Invoker
+	Reconciler capability.Reconciler
+	Next       contract.GovernedToolGateway
+	// Capabilities maps a tenant's tools; nil governs none.
+	Capabilities Capabilities
 	Invocations  Invocations
 	// Actions finds the recorded attempt a lookup's reconciliation names; without it a lookup
 	// answers unknown.
@@ -60,7 +62,10 @@ func (g *CapabilityGateway) Invoke(ctx context.Context, call domain.ToolCall) (d
 	if g.Next == nil {
 		return domain.ToolResult{}, fmt.Errorf("%w: capability gateway needs the governed gateway", domain.ErrNotReady)
 	}
-	target, governed := g.Capabilities[call.ToolID]
+	target, governed, err := g.capability(ctx, call)
+	if err != nil {
+		return domain.ToolResult{}, fmt.Errorf("%w: %w", domain.ErrNotSent, err)
+	}
 	if !governed {
 		return g.Next.Invoke(ctx, call)
 	}
@@ -87,6 +92,17 @@ func (g *CapabilityGateway) Invoke(ctx context.Context, call domain.ToolCall) (d
 		}
 	}
 	return attempt.outcome(result)
+}
+
+func (g *CapabilityGateway) capability(ctx context.Context, call domain.ToolCall) (Capability, bool, error) {
+	if g.Capabilities == nil {
+		return Capability{}, false, nil
+	}
+	target, found, err := g.Capabilities.Capability(ctx, call.TenantContext.TenantID, call.ToolID)
+	if err != nil {
+		return Capability{}, false, fmt.Errorf("capability of %s: %w", call.ToolID, err)
+	}
+	return target, found, nil
 }
 
 // report logs a lost record or ledger write; the call's own outcome stands rather than becoming a failure.
@@ -119,7 +135,10 @@ func (g *CapabilityGateway) invocation(ctx context.Context, call domain.ToolCall
 // and unknown otherwise, including for a call no recorded attempt names.
 func (g *CapabilityGateway) Lookup(ctx context.Context, call domain.ToolCall, _ domain.ToolDefinition) (domain.CallReport, error) {
 	unknown := domain.CallReport{Status: domain.CallUnknown}
-	target, governed := g.Capabilities[call.ToolID]
+	target, governed, err := g.capability(ctx, call)
+	if err != nil {
+		return domain.CallReport{}, err
+	}
 	if !governed || g.Reconciler == nil || g.Invocations == nil || g.Actions.Provider == nil {
 		return unknown, nil
 	}
@@ -188,8 +207,9 @@ func attemptToReconcile(actions []model.ActionRecord, capabilityID model.Ref, in
 	return model.Ref{Namespace: latest.Namespace, ID: latest.ID}, true
 }
 
+// now is microsecond-precise, the finest time Charter's store keeps.
 func (g *CapabilityGateway) now() time.Time {
-	return clk.Now(g.Now)
+	return clk.Now(g.Now).Truncate(time.Microsecond)
 }
 
 // attempt carries the originating tool call to the binder and the governed gateway's answer back, so the loop keeps
@@ -199,6 +219,8 @@ type attempt struct {
 	reached bool
 	result  domain.ToolResult
 	err     error
+	// declared is the tool's output before guardrails; it reaches Charter, never the loop.
+	declared []byte
 }
 
 type attemptKey struct{}
@@ -218,7 +240,7 @@ func (a *attempt) outcome(result capability.Result) (domain.ToolResult, error) {
 	case result.Status == capability.StatusBusinessError:
 		// Charter may map a failed postcondition to a declared business error even
 		// when the tool returned success, so its governed result is authoritative.
-		return a.recordedOutcome(result)
+		return a.businessError(result)
 	case a.reached && a.err != nil && result.Status != capability.StatusUnknown:
 		return a.result, a.err
 	case result.Status == capability.StatusDenied:
@@ -231,6 +253,19 @@ func (a *attempt) outcome(result capability.Result) (domain.ToolResult, error) {
 		return domain.ToolResult{}, fmt.Errorf("%w: charter %s %s: %s", domain.ErrNoEffect, result.Status, result.Requirement, result.Reason)
 	}
 	return domain.ToolResult{}, fmt.Errorf("%w: charter %s %s: %s", domain.ErrEffectUnknown, result.Status, result.Requirement, result.Reason)
+}
+
+// businessError reports Charter's declaration. When guardrails rewrote a reached call's output, it
+// keeps the guarded output if the tool declared the error itself, and otherwise drops the unguarded outputs.
+func (a *attempt) businessError(result capability.Result) (domain.ToolResult, error) {
+	if a.reached && a.err == nil && !bytes.Equal(a.declared, a.result.Output) {
+		var declared toolOutput
+		if json.Unmarshal(a.declared, &declared) == nil && declared.BusinessError == result.BusinessError {
+			return a.result, nil
+		}
+		result.Outputs = nil
+	}
+	return a.recordedOutcome(result)
 }
 
 func (a *attempt) recordedOutcome(result capability.Result) (domain.ToolResult, error) {

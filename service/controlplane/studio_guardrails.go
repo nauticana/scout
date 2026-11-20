@@ -219,7 +219,7 @@ func (g *StudioGuardrails) Section(ctx context.Context, tenantID int64, draft do
 	if err != nil {
 		return nil, err
 	}
-	typeRules, err := g.typeRules(ctx, draft.AgentTypeID)
+	typeRules, err := g.typeRules(ctx, tenantID, draft.AgentTypeID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (g *StudioGuardrails) WriteRelease(ctx context.Context, tx keelport.TxQuery
 	if definition.RestoredFromVersion == "" {
 		err = g.checkPublish(ctx, qs, tenantID, definition, rules, frozen)
 	} else {
-		err = g.checkRestore(ctx, definition, rules)
+		err = g.checkRestore(ctx, tenantID, definition, rules)
 	}
 	if err != nil {
 		return err
@@ -306,8 +306,8 @@ func (g *StudioGuardrails) checkPublish(ctx context.Context, qs keelport.QuerySe
 // checkRestore refuses to restore rules that drop or loosen a rule the type declares now. The
 // platform and tenant layers are enforced at runtime whatever the release carries, but the
 // type's rules exist only in the release's own rule set.
-func (g *StudioGuardrails) checkRestore(ctx context.Context, definition domain.AgentDefinition, rules []domain.GuardrailRule) error {
-	typeRules, err := g.typeRules(ctx, definition.AgentTypeID)
+func (g *StudioGuardrails) checkRestore(ctx context.Context, tenantID int64, definition domain.AgentDefinition, rules []domain.GuardrailRule) error {
+	typeRules, err := g.typeRules(ctx, tenantID, definition.AgentTypeID)
 	if err != nil {
 		return err
 	}
@@ -358,7 +358,7 @@ func (g *StudioGuardrails) inherited(ctx context.Context, tenantID int64, agentT
 	if err != nil {
 		return nil, fmt.Errorf("read restriction layers: %w", err)
 	}
-	typeRules, err := g.typeRules(ctx, agentTypeID)
+	typeRules, err := g.typeRules(ctx, tenantID, agentTypeID)
 	if err != nil {
 		return nil, err
 	}
@@ -377,11 +377,11 @@ func (g *StudioGuardrails) inherited(ctx context.Context, tenantID int64, agentT
 }
 
 // typeRules are the product type's rules; a type the catalog does not know declares none.
-func (g *StudioGuardrails) typeRules(ctx context.Context, agentTypeID string) ([]domain.GuardrailRule, error) {
+func (g *StudioGuardrails) typeRules(ctx context.Context, tenantID int64, agentTypeID string) ([]domain.GuardrailRule, error) {
 	if g.Studio.Kinds == nil {
 		return nil, nil
 	}
-	descriptor, err := g.Studio.Kinds.Get(ctx, agentTypeID)
+	descriptor, err := g.Studio.Kinds.Get(ctx, tenantID, agentTypeID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, nil
 	}

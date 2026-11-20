@@ -68,10 +68,10 @@ type AgentDraftTestExecutor interface {
 	Execute(ctx context.Context, actor domain.StudioActor, request domain.AgentTestRequest, definition domain.AgentDefinition) (domain.AgentTestResult, error)
 }
 
-// AgentTypeCatalog supplies product-owned labels and purposes for open agent kinds.
+// AgentTypeCatalog supplies a tenant's agent types: product-owned labels, purposes, tools, and tool loop.
 type AgentTypeCatalog interface {
-	Get(ctx context.Context, agentTypeID string) (domain.AgentTypeDescriptor, error)
-	List(ctx context.Context) ([]domain.AgentTypeDescriptor, error)
+	Get(ctx context.Context, tenantID int64, agentTypeID string) (domain.AgentTypeDescriptor, error)
+	List(ctx context.Context, tenantID int64) ([]domain.AgentTypeDescriptor, error)
 }
 
 // StudioModelCatalog lists tenant-selectable models without provider SDK types.

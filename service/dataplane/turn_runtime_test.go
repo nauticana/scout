@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ type runtimeRecorder struct {
 	usage     []domain.Usage
 	failures  []string
 	audits    []string
+	payloads  [][]byte
 	snapshot  domain.SessionSnapshot
 	// settlements are the settlements every turn end carried.
 	settlements []domain.TurnSettlement
@@ -124,6 +126,7 @@ func newTestRuntime(t *testing.T, recorder *runtimeRecorder) *TurnRuntime {
 		},
 		Audit: &fake.AuditSink{RecordFunc: func(_ context.Context, event domain.DecisionRecord) error {
 			recorder.audits = append(recorder.audits, event.Category)
+			recorder.payloads = append(recorder.payloads, event.Payload)
 			return nil
 		}},
 		Limits:   &fake.PrincipalLimits{},
@@ -289,7 +292,7 @@ func TestTurnRuntimeGuardrailRejectionPublishesNoRawOutput(t *testing.T) {
 		return domain.ModelChunk{}, rejection
 	}}
 	_, err := runtime.HandleTurn(context.Background(), runtimeClaim())
-	if !errors.Is(err, rejection) {
+	if !errors.Is(err, rejection) || !errors.Is(err, domain.ErrTurnTerminal) {
 		t.Fatalf("error = %v", err)
 	}
 	if countCalls(recorder.calls, "checkpoint") != 0 {
@@ -307,8 +310,9 @@ func TestTurnRuntimeGuardrailRejectionPublishesNoRawOutput(t *testing.T) {
 	if len(recorder.failures) != 1 || recorder.failures[0] != string(domain.TurnFailed)+":internal" {
 		t.Fatalf("failures = %v", recorder.failures)
 	}
-	if len(recorder.audits) != 1 || recorder.audits[0] != "turn_failed" {
-		t.Fatalf("audits = %v", recorder.audits)
+	if len(recorder.audits) != 1 || recorder.audits[0] != "turn_failed" || !strings.Contains(string(recorder.payloads[0]), `"error_message":"`) ||
+		!strings.Contains(string(recorder.payloads[0]), "policy violation") {
+		t.Fatalf("audits = %v, payloads = %s", recorder.audits, recorder.payloads)
 	}
 }
 

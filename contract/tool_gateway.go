@@ -43,7 +43,7 @@ type CredentialRevoker interface {
 // ToolEgressPolicy restricts tool calls to approved destinations.
 type ToolEgressPolicy interface {
 	// ValidateDestination enforces the tenant's network egress allowlist.
-	ValidateDestination(ctx context.Context, tenantID int64, endpoint string) error
+	ValidateDestination(ctx context.Context, tenantID int64, tool domain.ToolReference, endpoint string) error
 }
 
 // ToolTransport invokes approved tools within a bounded timeout.

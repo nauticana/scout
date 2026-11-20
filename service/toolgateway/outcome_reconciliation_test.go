@@ -36,7 +36,9 @@ func TestGovernedGatewayClassifiesWhatBecameOfAFailedCall(t *testing.T) {
 	}
 	var calls []string
 	refused := governedGateway(&calls, transportErr(nil, false))
-	refused.Egress = fake.ToolEgressPolicyFunc(func(context.Context, int64, string) error { return fmt.Errorf("%w: destination", domain.ErrForbidden) })
+	refused.Egress = fake.ToolEgressPolicyFunc(func(context.Context, int64, domain.ToolReference, string) error {
+		return fmt.Errorf("%w: destination", domain.ErrForbidden)
+	})
 	if _, err := refused.Invoke(context.Background(), validToolCall()); !errors.Is(err, domain.ErrNotSent) || !errors.Is(err, domain.ErrForbidden) ||
 		errors.Is(err, domain.ErrEffectUnknown) {
 		t.Fatalf("a call refused before it left = %v", err)

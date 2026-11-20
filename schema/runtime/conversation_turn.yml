@@ -116,7 +116,7 @@ checks:
   - name: conversation_turn_fence_ck
     expression: fence >= 0
   - name: conversation_turn_hold_request_ck
-    expression: (hold_requested_at IS NULL) = (hold_reason IS NULL)
+    expression: (hold_requested_at IS NULL OR hold_reason IS NOT NULL) AND (hold_reason IS NULL OR hold_requested_at IS NOT NULL OR status_code IN ('H', 'O'))
   - name: conversation_turn_hold_code_ck
     expression: hold_code IN ('C', 'A', 'P', 'U', 'E')
   - name: conversation_turn_working_set_code_ck

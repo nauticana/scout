@@ -186,7 +186,7 @@ func TestToolVendorMapsOutcomesAndRefusals(t *testing.T) {
 		return domain.ToolResult{Output: []byte(`{"outcome":"reserved","outputs":{"reservation":"R-1"},"external_reference":"S4-9"}`)}, nil
 	})
 	vendor := &ToolVendor{Binding: cb, Endpoint: &GatewayEndpoint{Gateway: gateway},
-		Binder: &MappedBinder{Tools: map[corpus.DocumentKey]domain.ToolReference{key: {ToolID: "reserve", Version: "v1"}}, Callers: callers{}}}
+		Binder: &MappedBinder{Tools: BindingMap{key: {ToolID: "reserve", Version: "v1"}}, Callers: callers{}}}
 	req := binding.Request{Capability: model.Ref{ID: "CAP-1"}, Inputs: map[string]any{"order": "O-1"}, IdempotencyKey: "idem-1"}
 
 	payload, err := vendor.MapRequest(context.Background(), req)
@@ -229,7 +229,7 @@ func TestTransportRealizesTheBindingARequestNames(t *testing.T) {
 	key := corpus.KeyOf(harborNS, model.Ref{Namespace: harborNS, ID: "BIND-S4-RESERVE-ORDER-STOCK-1"})
 	calls := 0
 	transport := &Transport{Namespace: harborNS, Bindings: binding.NewBaseProvider(c),
-		Binder: &MappedBinder{Tools: map[corpus.DocumentKey]domain.ToolReference{key: {ToolID: "reserve", Version: "v1"}}, Callers: callers{}},
+		Binder: &MappedBinder{Tools: BindingMap{key: {ToolID: "reserve", Version: "v1"}}, Callers: callers{}},
 		Endpoint: &GatewayEndpoint{Gateway: gatewayFunc(func(context.Context, domain.ToolCall) (domain.ToolResult, error) {
 			calls++
 			return domain.ToolResult{Output: []byte(`{"outcome":"reserved"}`)}, nil

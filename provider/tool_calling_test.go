@@ -154,6 +154,21 @@ func TestGoogleSynthesizesCallIDsUniqueAcrossConversationTurns(t *testing.T) {
 	}
 }
 
+// Gemini 3 refuses a follow-up whose function call lacks the thought signature it was sent with.
+func TestGoogleSendsAThoughtSignatureBackWithItsCall(t *testing.T) {
+	response := &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: []*genai.Part{
+		{FunctionCall: &genai.FunctionCall{ID: "g1", Name: "lookup", Args: map[string]any{"q": "x"}}, ThoughtSignature: []byte("sig")},
+	}}}}}
+	result, err := googleResult(response, domain.ModelRequest{})
+	if err != nil || len(result.ToolCalls) != 1 || string(result.ToolCalls[0].Signature) != "sig" {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	content, err := googleContent(domain.ModelMessage{Role: domain.ModelRoleAssistant, ToolCalls: result.ToolCalls})
+	if err != nil || string(content.Parts[0].ThoughtSignature) != "sig" {
+		t.Fatalf("content = %+v, %v", content, err)
+	}
+}
+
 func TestAdaptersRefuseAnOutputModeTheyCannotEnforce(t *testing.T) {
 	request := toolRequest()
 	request.Output.Mode = "grammar"

@@ -17,7 +17,7 @@ and the cache discipline in `SessionCoordinator` (`session_coordinator.go`).
 | `domain.TurnResult.Response` | `conversation_turn.response_uri`/`response_digest` | Written by `Complete` on the owner's turn, which must be the conversation's oldest non-terminal turn and `R` (running) or `S` (streaming) at the owner's fence. |
 | `domain.StepResult` (JSON) | `step_idempotency.result_uri`/`result_digest` | Keyed by `(partner_id, request_id, execution_step_id)`. |
 | `domain.CallOutcome` | `turn_call_outcome` (+ `turn_call_attestation`, `turn_call_confirmation`) | Keyed by `CallOutcomeKey` `(partner_id, request_id, execution_step_id, call_id)`; the `domain.CallRecord` (output, usage, evidence links, effect, or acceptance) is dehydrated to `result_uri`/`result_digest`. |
-| `domain.ObjectRef{URI, Digest}` | any `*_uri`/`*_digest` pair | URI `<scheme>://<bucket>/<key>`, digest lowercase SHA-256 hex. |
+| `domain.ObjectRef{URI, Digest}` | any `*_uri`/`*_digest` pair | URI `<scheme>://<bucket>/<key>` (`domain.ObjectAddress`), the bucket path-escaped so a file-storage directory stays one segment; digest lowercase SHA-256 hex. |
 
 The repository never invents a fingerprint, currency, or digest: `Checkpoint` rejects a checkpoint that lacks them
 (`domain.ErrValidation`).
@@ -88,8 +88,9 @@ is `ErrDigestMismatch`/download error, never empty state.
 4. Guardrail-approved *intermediate* frames publish (sequence-deduplicated by the reply hub, so replay republishes the same sequences).
 5. Terminal result + settlement persist in one transaction (`Complete` or `Fail` with its `TurnSettlement`, or the `TurnLedger` terminal tx; one `usage_event` set per turn).
 6. Final frame publishes. It is never client-visible before step 5 exists; a crash between 5 and 6 replays the frame from the durable result.
-7. Queue ack. Nothing is acked from cache state. A delivery refused with `ErrFenceLost` or `ErrTurnHeld` is acked,
-   or dropped when its lease is already gone; it is never retried or dead-lettered.
+7. Queue ack. Nothing is acked from cache state. A delivery refused with `ErrFenceLost` or `ErrTurnHeld`, or whose
+   turn's failure is recorded (`ErrTurnTerminal`), is acked, or dropped when its lease is already gone; it is never
+   retried or dead-lettered. The worker journals a recorded failure's redacted cause.
 
 ## Turn fence
 
@@ -161,8 +162,8 @@ stateDiagram-v2
   cancelled turn is not held. The running worker honors the request at its next durable boundary — after a step's
   checkpoint and frame when another step follows, before each loop iteration after the first, and before each
   non-read-only tool call once its decision is journaled — abandoning the open step claim under its fence, then
-  `TurnRecordStore.Hold` moves the turn to `H` with `hold_code` `C`, clears the request, and keeps the budget
-  reservation. The worker holds the same way with `hold_code` `U` when a call's outcome is unknown
+  `TurnRecordStore.Hold` moves the turn to `H` with `hold_code` `C`, clears `hold_requested_at`, and keeps the budget
+  reservation. A held turn keeps `hold_reason` until it leaves `H` or `O`, so a holder can tell its own holds apart. The worker holds the same way with `hold_code` `U` when a call's outcome is unknown
   ([call outcomes](#call-outcomes)).
 - **Preempt.** `TableTurnControl.Preempt` moves a live, uncancelled `Q`, `U`, `R`, or `S` turn to `H` at once
   (fence +1, `hold_code` `P`, pending hold request cleared) in one statement and wakes the watcher through the

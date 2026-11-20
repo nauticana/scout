@@ -30,19 +30,6 @@ var (
 // DefaultMaxSourceBytes bounds one source object when MaxBytes is zero.
 const DefaultMaxSourceBytes = 32 << 20
 
-// ParseObjectURI splits <scheme>://bucket/key into its parts.
-func ParseObjectURI(uri string) (scheme, bucket, key string, err error) {
-	scheme, rest, ok := strings.Cut(uri, "://")
-	if !ok || scheme == "" {
-		return "", "", "", fmt.Errorf("%w: object URI %q must be <scheme>://bucket/key", domain.ErrValidation, uri)
-	}
-	bucket, key, ok = strings.Cut(rest, "/")
-	if !ok || bucket == "" || key == "" {
-		return "", "", "", fmt.Errorf("%w: object URI %q must be <scheme>://bucket/key", domain.ErrValidation, uri)
-	}
-	return scheme, bucket, key, nil
-}
-
 // Load downloads the object; the pipeline verifies the digest.
 func (loader *ObjectStorageLoader) Load(ctx context.Context, document domain.KnowledgeDocument) ([]byte, error) {
 	return loader.download(ctx, document.SourceURI)
@@ -60,21 +47,21 @@ func (loader *ObjectStorageLoader) download(ctx context.Context, uri string) ([]
 	if loader.MaxBytes < 0 {
 		return nil, fmt.Errorf("%w: max bytes cannot be negative", domain.ErrValidation)
 	}
-	scheme, bucket, key, err := ParseObjectURI(uri)
+	address, err := domain.ParseObjectAddress(uri)
 	if err != nil {
 		return nil, err
 	}
-	if len(loader.Schemes) > 0 && !containsFold(loader.Schemes, scheme) {
-		return nil, fmt.Errorf("%w: URI scheme %q is not accepted", domain.ErrValidation, scheme)
+	if len(loader.Schemes) > 0 && !containsFold(loader.Schemes, address.Scheme) {
+		return nil, fmt.Errorf("%w: URI scheme %q is not accepted", domain.ErrValidation, address.Scheme)
 	}
 	maxBytes := loader.MaxBytes
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxSourceBytes
 	}
-	if bucket != loader.Storage.Bucket() {
+	if address.Bucket != loader.Storage.Bucket() {
 		return nil, fmt.Errorf("%w: object URI %q is outside bucket %q", domain.ErrForbidden, uri, loader.Storage.Bucket())
 	}
-	reader, err := loader.Storage.GetObject(ctx, key)
+	reader, err := loader.Storage.GetObject(ctx, address.Key)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", uri, err)
 	}

@@ -42,18 +42,18 @@ func (s *StudioService) Create(ctx context.Context, actor domain.StudioActor, re
 		}
 		prepare = func() (*agentSeed, error) { return s.templateSeed(ctx, actor, request) }
 	}
-	if err := s.offered(ctx, request.AgentTypeID); err != nil {
+	if err := s.offered(ctx, actor.TenantID, request.AgentTypeID); err != nil {
 		return domain.AgentSummary{}, err
 	}
 	return s.create(ctx, actor, request, createDigest(request), prepare)
 }
 
 // offered refuses a type the product's catalog does not offer; without a catalog every type is offered.
-func (s *StudioService) offered(ctx context.Context, agentTypeID string) error {
+func (s *StudioService) offered(ctx context.Context, tenantID int64, agentTypeID string) error {
 	if s.Kinds == nil {
 		return nil
 	}
-	if _, err := s.Kinds.Get(ctx, agentTypeID); errors.Is(err, domain.ErrNotFound) {
+	if _, err := s.Kinds.Get(ctx, tenantID, agentTypeID); errors.Is(err, domain.ErrNotFound) {
 		return validationError("agent_type", "the product does not offer this agent type")
 	} else if err != nil {
 		return fmt.Errorf("load agent type %q: %w", agentTypeID, err)

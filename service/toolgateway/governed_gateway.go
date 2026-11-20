@@ -179,7 +179,7 @@ func (gateway *GovernedGateway) prepare(ctx context.Context, call domain.ToolCal
 			return preparedCall{}, stage.At(domain.StageGuardrail, err)
 		}
 	}
-	if err := gateway.Egress.ValidateDestination(ctx, call.TenantContext.TenantID, definition.Endpoint); err != nil {
+	if err := gateway.Egress.ValidateDestination(ctx, call.TenantContext.TenantID, domain.ToolReference{ToolID: definition.ToolID, Version: definition.Version}, definition.Endpoint); err != nil {
 		return preparedCall{}, err
 	}
 	generation, err := gateway.admit(ctx, call, definition)
@@ -250,6 +250,7 @@ func (gateway *GovernedGateway) dispatch(ctx context.Context, prepared preparedC
 			if err := gateway.settle(ctx, call, definition, prepared.generation, true); err != nil {
 				return result, withheld(err)
 			}
+			domain.ObserveToolOutput(ctx, result.Output)
 			if gateway.Guardrails != nil {
 				subject := domain.GuardrailSubject{
 					TenantID: call.TenantContext.TenantID, Principal: actor(call),

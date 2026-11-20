@@ -119,8 +119,8 @@ func (s *StudioService) writeRelease(ctx context.Context, tx keelport.TxQuerySer
 	return requirePinnedGuardrails(ctx, tx, tenantID, definition)
 }
 
-// requireReleaseBindings refuses a release whose tools, skills, or tool loop no composed writer
-// bound, so it never publishes an agent whose every tool call would be denied.
+// requireReleaseBindings refuses a release without an execution graph, or whose tools or skills no
+// composed writer bound, so it never publishes an agent that cannot run or whose tool calls would be denied.
 func requireReleaseBindings(ctx context.Context, tx keelport.TxQueryService, tenantID int64, definition domain.AgentDefinition) error {
 	tools := map[string]struct{}{}
 	for _, tool := range definition.Tools {
@@ -130,14 +130,10 @@ func requireReleaseBindings(ctx context.Context, tx keelport.TxQueryService, ten
 	for _, skill := range definition.Skills {
 		skills[skill.SkillID] = struct{}{}
 	}
-	graphs := 0
-	if definition.ToolLoop != nil {
-		graphs = 1
-	}
 	for _, binding := range []struct {
 		query, what string
 		declared    int
-	}{{qStudioReleaseTools, "tools", len(tools)}, {qStudioReleaseSkills, "skills", len(skills)}, {qStudioReleaseGraph, "a tool loop", graphs}} {
+	}{{qStudioReleaseTools, "tools", len(tools)}, {qStudioReleaseSkills, "skills", len(skills)}, {qStudioReleaseGraph, "an execution graph", 1}} {
 		if binding.declared == 0 {
 			continue
 		}
@@ -246,7 +242,7 @@ func (s *StudioService) summaries(ctx context.Context, tenantID int64, keep func
 	}
 	descriptors := map[string]domain.AgentTypeDescriptor{}
 	if s.Kinds != nil {
-		items, listErr := s.Kinds.List(ctx)
+		items, listErr := s.Kinds.List(ctx, tenantID)
 		if listErr != nil {
 			return nil, fmt.Errorf("list agent kinds: %w", listErr)
 		}

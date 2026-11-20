@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +30,12 @@ type studioQueryFake struct {
 func (f *studioQueryFake) Query(_ context.Context, name string, args ...any) (*keelmodel.QueryResult, error) {
 	f.queries = append(f.queries, name)
 	f.args[name] = args
-	return &keelmodel.QueryResult{Rows: f.rows[name]}, nil
+	rows, ok := f.rows[name]
+	if !ok && name == qStudioReleaseGraph {
+		// Every release needs a graph; a test refusing one sets the rows empty.
+		rows = [][]any{{int64(1)}}
+	}
+	return &keelmodel.QueryResult{Rows: rows}, nil
 }
 
 func (*studioQueryFake) GenID() int64                   { return 0 }
@@ -285,7 +291,10 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 		}, query
 	}
 	request := domain.AgentPublishRequest{AgentID: "writer-a", ExpectedDraftRevision: 4, ExpectedPromptProfileRevision: 2}
-	typeTools := fake.KindCatalog{GetFunc: func(_ context.Context, kind string) (domain.AgentTypeDescriptor, error) {
+	typeTools := fake.KindCatalog{GetFunc: func(_ context.Context, tenantID int64, kind string) (domain.AgentTypeDescriptor, error) {
+		if tenantID != 8 {
+			return domain.AgentTypeDescriptor{}, fmt.Errorf("agent type asked for tenant %d", tenantID)
+		}
 		return domain.AgentTypeDescriptor{AgentTypeID: kind, ToolLoop: &domain.ToolLoopConfig{MaxIterations: 4},
 			Tools: []domain.ToolReference{{ToolID: "search", Version: "1"}, {ToolID: "crawl", Version: "2"}}}, nil
 	}}
@@ -333,6 +342,12 @@ func TestStudioPublishFreezesToolsAndRunsReleaseWritersInTheTransaction(t *testi
 	unbound.Kinds = typeTools
 	if _, err := unbound.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotReady) || unboundQuery.commits != 0 {
 		t.Fatalf("want ErrNotReady when no writer bound the tools, got %v", err)
+	}
+	// A release with no tool loop still cannot publish without an execution graph.
+	graphless, graphlessQuery := newService()
+	graphlessQuery.rows[qStudioReleaseGraph] = nil
+	if _, err := graphless.Publish(context.Background(), actor, request); !errors.Is(err, domain.ErrNotReady) || graphlessQuery.commits != 0 {
+		t.Fatalf("want ErrNotReady without an execution graph, got %v", err)
 	}
 	failing, failed := newService(&releaseWriterRecorder{err: domain.ErrNotFound})
 	failing.Kinds = typeTools

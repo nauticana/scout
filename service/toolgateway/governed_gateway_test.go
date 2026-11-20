@@ -42,7 +42,7 @@ func governedGateway(calls *[]string, transport fake.ToolTransportFunc) *Governe
 			*calls = append(*calls, "credential")
 			return []byte("secret"), domain.AuthorityRef{}, nil
 		}),
-		Egress: fake.ToolEgressPolicyFunc(func(context.Context, int64, string) error {
+		Egress: fake.ToolEgressPolicyFunc(func(context.Context, int64, domain.ToolReference, string) error {
 			*calls = append(*calls, "egress")
 			return nil
 		}),
@@ -133,7 +133,7 @@ func TestGovernedGatewayStopsBeforeCredentialsWhenEgressFails(t *testing.T) {
 		t.Fatal("transport must not be called")
 		return domain.ToolResult{}, nil
 	}))
-	gateway.Egress = fake.ToolEgressPolicyFunc(func(context.Context, int64, string) error { return want })
+	gateway.Egress = fake.ToolEgressPolicyFunc(func(context.Context, int64, domain.ToolReference, string) error { return want })
 	_, err := gateway.Invoke(context.Background(), validToolCall())
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
@@ -175,9 +175,11 @@ func TestGovernedGatewayEnforcesGuardrailsAroundTheCall(t *testing.T) {
 		}
 		return domain.ToolResult{Output: []byte("raw")}, nil
 	}))
-	result, err := gateway.Invoke(context.Background(), validToolCall())
-	if err != nil || string(result.Output) != "guarded" {
-		t.Fatalf("result = %+v, error = %v", result, err)
+	var observed []byte
+	ctx := domain.WithToolOutputObserver(context.Background(), func(output []byte) { observed = output })
+	result, err := gateway.Invoke(ctx, validToolCall())
+	if err != nil || string(result.Output) != "guarded" || string(observed) != "raw" {
+		t.Fatalf("result = %+v, observed = %q, error = %v", result, observed, err)
 	}
 	want := []string{"rate", "registry", "authorize", "guardrail_config", "guardrail_before", "egress", "circuit_allow", "credential", "transport", "validate", "circuit_success", "guardrail_after"}
 	if !reflect.DeepEqual(calls, want) {

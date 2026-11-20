@@ -23,45 +23,57 @@ type toolOutput struct {
 	ExternalReference string          `json:"external_reference,omitempty"`
 }
 
-// MappedBinder resolves the Scout tool a binding realizes from an explicit map and the caller from the request;
+// MappedBinder resolves the Scout tool a binding realizes through Tools and the caller from the request;
 // an unmapped binding provably runs nothing. A call routed by CapabilityGateway keeps its own identity and caller.
 type MappedBinder struct {
-	Tools   map[corpus.DocumentKey]domain.ToolReference
+	Tools   BindingTools
 	Callers CallContext
 }
 
 var _ ToolBinder = (*MappedBinder)(nil)
 
 func (b *MappedBinder) Bind(ctx context.Context, cb model.CapabilityBinding, req binding.Request) (domain.ToolCall, error) {
-	if b == nil {
+	if b == nil || b.Tools == nil {
 		return domain.ToolCall{}, fmt.Errorf("%w: binder is required", binding.ErrNotExecuted)
 	}
-	tool, ok := b.Tools[corpus.KeyOf(cb.Namespace, model.Ref{Namespace: cb.Namespace, ID: cb.ID})]
+	origin := attemptFrom(ctx)
+	var call domain.ToolCall
+	if origin != nil {
+		call = origin.call
+	} else {
+		if b.Callers == nil {
+			return domain.ToolCall{}, fmt.Errorf("%w: caller resolver is required", binding.ErrNotExecuted)
+		}
+		tenant, principal, err := b.Callers.Caller(ctx)
+		if err != nil {
+			return domain.ToolCall{}, fmt.Errorf("%w: %w", binding.ErrNotExecuted, err)
+		}
+		arguments, err := json.Marshal(req.Inputs)
+		if err != nil {
+			return domain.ToolCall{}, fmt.Errorf("%w: %w", binding.ErrNotExecuted, err)
+		}
+		call = domain.ToolCall{TenantContext: tenant, Principal: principal, RequestID: req.IdempotencyKey, Arguments: arguments}
+	}
+	tool, ok, err := b.Tools.Tool(ctx, call.TenantContext.TenantID, corpus.KeyOf(cb.Namespace, model.Ref{Namespace: cb.Namespace, ID: cb.ID}))
+	if err != nil {
+		return domain.ToolCall{}, fmt.Errorf("%w: tool of binding %s: %w", binding.ErrNotExecuted, cb.ID, err)
+	}
 	if !ok {
 		return domain.ToolCall{}, fmt.Errorf("%w: no Scout tool is mapped for binding %s", binding.ErrNotExecuted, cb.ID)
 	}
-	if origin := attemptFrom(ctx); origin != nil {
-		if origin.call.ToolID != tool.ToolID || origin.call.ToolVersion != tool.Version {
+	if origin != nil {
+		if call.ToolID != tool.ToolID || call.ToolVersion != tool.Version {
 			return domain.ToolCall{}, fmt.Errorf("%w: binding %s realizes %s@%s, not the called %s@%s", binding.ErrNotExecuted,
-				cb.ID, tool.ToolID, tool.Version, origin.call.ToolID, origin.call.ToolVersion)
+				cb.ID, tool.ToolID, tool.Version, call.ToolID, call.ToolVersion)
 		}
-		return origin.call, nil
+		return call, nil
 	}
-	if b.Callers == nil {
-		return domain.ToolCall{}, fmt.Errorf("%w: caller resolver is required", binding.ErrNotExecuted)
-	}
-	tenant, principal, err := b.Callers.Caller(ctx)
-	if err != nil {
-		return domain.ToolCall{}, fmt.Errorf("%w: %w", binding.ErrNotExecuted, err)
-	}
-	arguments, err := json.Marshal(req.Inputs)
-	if err != nil {
-		return domain.ToolCall{}, fmt.Errorf("%w: %w", binding.ErrNotExecuted, err)
-	}
-	return domain.ToolCall{TenantContext: tenant, Principal: principal, RequestID: req.IdempotencyKey, ToolID: tool.ToolID, ToolVersion: tool.Version, Arguments: arguments}, nil
+	call.ToolID, call.ToolVersion = tool.ToolID, tool.Version
+	return call, nil
 }
 
-// GatewayEndpoint is the production vendor endpoint: Scout's governed tool gateway.
+// GatewayEndpoint is the production vendor endpoint: Scout's governed tool gateway. Charter maps the
+// tool's output as validated, before the tool-output guardrails that fence it for the model.
 type GatewayEndpoint struct {
 	Gateway contract.GovernedToolGateway
 }
@@ -76,12 +88,17 @@ func (e *GatewayEndpoint) Call(ctx context.Context, payload any) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: payload is %T, not a tool call", binding.ErrNotExecuted, payload)
 	}
-	result, err := e.Gateway.Invoke(ctx, call)
+	var declared []byte
+	result, err := e.Gateway.Invoke(domain.WithToolOutputObserver(ctx, func(output []byte) { declared = output }), call)
 	if origin := attemptFrom(ctx); origin != nil {
-		origin.reached, origin.result, origin.err = true, result, err
+		origin.reached, origin.result, origin.err, origin.declared = true, result, err, declared
 	}
 	if err != nil {
 		return nil, notExecuted(err)
+	}
+	// Charter reads the tool's declared outcome; the loop keeps the guarded result.
+	if declared != nil {
+		result.Output = declared
 	}
 	return result, nil
 }

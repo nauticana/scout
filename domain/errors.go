@@ -79,6 +79,9 @@ var (
 	ErrFenceLost = errors.New("turn fence lost")
 	// ErrTurnHeld indicates the turn is held; nothing runs it until it is released.
 	ErrTurnHeld = errors.New("turn held")
+	// ErrTurnTerminal indicates the turn's failure or cancellation is recorded: its delivery is
+	// settled, never retried.
+	ErrTurnTerminal = errors.New("turn terminal")
 	// ErrEffectUnknown indicates a mutation's effect could not be observed; the outcome is
 	// unknown, never success, and the mutation is not invoked again until it can be.
 	ErrEffectUnknown = errors.New("effect unknown")

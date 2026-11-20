@@ -231,6 +231,8 @@ func TestRuntimeWorkerAcknowledgesOrDropsAStaleOrHeldDelivery(t *testing.T) {
 		"held, lease gone":          {outcome: domain.ErrTurnHeld},
 		"fenced out, lease current": {outcome: domain.ErrFenceLost, acked: [][]any{{int64(11)}}},
 		"fenced out, lease gone":    {outcome: domain.ErrFenceLost},
+		"failed, lease current":     {outcome: domain.ErrTurnTerminal, acked: [][]any{{int64(11)}}},
+		"failed, lease gone":        {outcome: domain.ErrTurnTerminal},
 	} {
 		query := &queueQueryFake{rows: map[string][][]any{qSchedAck: tc.acked}}
 		scheduler := &QueueTurnScheduler{

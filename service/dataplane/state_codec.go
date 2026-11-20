@@ -92,7 +92,7 @@ func (store *ObjectStateStore) Dehydrate(ctx context.Context, name string, paylo
 	if err := store.Storage.PutObject(ctx, key, bytes.NewReader(payload), store.contentType(), nil); err != nil {
 		return domain.ObjectRef{}, fmt.Errorf("upload %s: %w", key, err)
 	}
-	return domain.ObjectRef{URI: fmt.Sprintf("%s://%s/%s", store.scheme(), store.Storage.Bucket(), key), Digest: digest}, nil
+	return domain.ObjectRef{URI: domain.ObjectAddress{Scheme: store.scheme(), Bucket: store.Storage.Bucket(), Key: key}.String(), Digest: digest}, nil
 }
 
 // Hydrate downloads the referenced object and fails closed on any digest drift.
@@ -141,15 +141,15 @@ func (store *ObjectStateStore) locate(ref domain.ObjectRef) (string, error) {
 	if len(ref.Digest) != 64 {
 		return "", fmt.Errorf("%w: object reference %q lacks a sha-256 digest", domain.ErrValidation, ref.URI)
 	}
-	rest, ok := strings.CutPrefix(ref.URI, store.scheme()+"://")
-	if !ok {
+	address, err := domain.ParseObjectAddress(ref.URI)
+	if err != nil {
+		return "", err
+	}
+	if address.Scheme != store.scheme() {
 		return "", fmt.Errorf("%w: object uri %q does not use scheme %q", domain.ErrValidation, ref.URI, store.scheme())
 	}
-	bucket, key, ok := strings.Cut(rest, "/")
-	if !ok || bucket == "" || key == "" {
-		return "", fmt.Errorf("%w: object uri %q lacks bucket or key", domain.ErrValidation, ref.URI)
-	}
-	if bucket != store.Storage.Bucket() {
+	key := address.Key
+	if address.Bucket != store.Storage.Bucket() {
 		return "", fmt.Errorf("%w: object uri %q is outside bucket %q", domain.ErrForbidden, ref.URI, store.Storage.Bucket())
 	}
 	if prefix := strings.Trim(store.KeyPrefix, "/"); prefix != "" && key != prefix && !strings.HasPrefix(key, prefix+"/") {

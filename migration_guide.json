@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.3.11",
+      "title": "Tenant-scoped agent types and Charter maps, executable releases, terminal turn failures",
+      "tags": [
+        "breaking",
+        "additive",
+        "schema"
+      ],
+      "summary": "Agent types and Charter capability and binding maps are looked up per tenant. A release without an execution graph is refused at publish, a turn whose failure is recorded is never retried, and Charter maps a guarded call's declared outcome. Version pins store, file-storage buckets round-trip in object addresses, held turns keep their reason, Gemini 3 tool calls keep their thought signature, and egress rules have a writer.",
+      "body_markdown": "## Breaking\n\n| Old | New |\n|---|---|\n| `contract.AgentTypeCatalog.Get(ctx, agentTypeID)`, `List(ctx)` | `Get(ctx, tenantID, agentTypeID)`, `List(ctx, tenantID)`; Studio passes the acting tenant |\n| `charter.CapabilityGateway.Capabilities map[string]Capability` | `Capabilities charter.Capabilities`, looked up per tenant; `charter.CapabilityMap` is the fixed map |\n| `charter.MappedBinder.Tools map[corpus.DocumentKey]domain.ToolReference` | `Tools charter.BindingTools`, looked up per tenant; `charter.BindingMap` is the fixed map |\n| `knowledge.ParseObjectURI(uri)` | `domain.ParseObjectAddress(uri)` and `domain.ObjectAddress.String()`; the bucket is path-escaped, so a file-storage directory bucket round-trips |\n| Publish refused a missing graph only when the type declared a tool loop | Every publish and restore needs an execution graph bound in its transaction, or is `ErrNotReady` |\n| `contract.ToolEgressPolicy.ValidateDestination(ctx, tenantID, endpoint)`; `TableEgressPolicy` admitted a destination any of the tenant's tools held a rule for | `ValidateDestination(ctx, tenantID, tool, endpoint)`; a rule admits only its own tool version |\n| A turn whose failure was recorded returned its cause and was retried until dead-lettered; replaying a failed turn was `ErrConflict` | Both also wrap `domain.ErrTurnTerminal`; `RuntimeWorker` acks the delivery and journals the redacted cause |\n\n## Additive\n\n- `agent_version_pin` rows take their id from `agent_version_pin_seq`; storing a pin no longer violates `NOT NULL`.\n- `turn_failed` and `turn_cancelled` audit payloads carry `error_message`, the redacted cause.\n- A held turn keeps `hold_reason` until it leaves `H` or `O`. Schema: `conversation_turn_hold_request_ck` becomes `(hold_requested_at IS NULL OR hold_reason IS NOT NULL) AND (hold_reason IS NULL OR hold_requested_at IS NOT NULL OR status_code IN ('H', 'O'))`; rebuild the table definition.\n- The governed gateway hands a successful call's validated output to a `domain.WithToolOutputObserver` before tool-output guardrails. `charter.GatewayEndpoint` gives that output to Charter, so a guarded deployment's Charter calls map their declared outcome; the loop keeps the guarded result.\n- `charter.CapabilityGateway` times actions and reconciliations in microseconds.\n- `domain.ModelToolCall.Signature` carries Gemini's thought signature back with the call.\n- `toolgateway.TableEgressPolicy.Allow(ctx, tenantID, tool, endpoint)` writes the `tool_egress_rule` for a registered tool version's endpoint."
+    },
+    {
       "version": "v1.3.10",
       "title": "keel 1.3.9 and Charter 1.10.0, publish guards on enabling an agent",
       "tags": [

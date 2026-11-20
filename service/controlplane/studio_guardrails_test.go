@@ -88,7 +88,7 @@ func newGuardrailHarness(t *testing.T, rows map[string][][]any) *guardrailHarnes
 		Sources: studioSourcesFake{resolved: domain.ResolvedPrompts{AgentID: "writer-a", AgentTypeID: "writer", BaselineKey: "global",
 			LanguageCode: "en-US", Sections: []domain.PromptSectionSource{layered(1, 1, baseLayer("write", ""))}}},
 		Assembler: &PromptDraftAssembler{Compiler: &PromptCompiler{}}, Compiler: &PromptCompiler{},
-		Kinds: fake.KindCatalog{GetFunc: func(_ context.Context, kind string) (domain.AgentTypeDescriptor, error) {
+		Kinds: fake.KindCatalog{GetFunc: func(_ context.Context, _ int64, kind string) (domain.AgentTypeDescriptor, error) {
 			return domain.AgentTypeDescriptor{AgentTypeID: kind, Guardrails: h.typeRules}, nil
 		}},
 	}

@@ -74,7 +74,7 @@ SELECT cancel_reason, cancel_requested_at IS NOT NULL, hold_requested_at IS NOT 
   FROM conversation_turn
  WHERE partner_id = ? AND request_id = ?`,
 	// A turn no worker runs is held at once under a new fence; a running one is asked to hold,
-	// first request wins, and holds itself at its next durable checkpoint.
+	// first request wins, and holds itself at its next durable checkpoint. The reason stays until release.
 	qControlHold: `
 UPDATE conversation_turn
    SET status_code = CASE WHEN status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `) THEN ` + sqlTurnHeld + ` ELSE status_code END,
@@ -83,7 +83,7 @@ UPDATE conversation_turn
        held_at = CASE WHEN status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `) THEN CURRENT_TIMESTAMP ELSE held_at END,
        hold_requested_at = CASE WHEN status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `) THEN NULL
                                 ELSE COALESCE(hold_requested_at, CURRENT_TIMESTAMP) END,
-       hold_reason = CASE WHEN status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `) THEN NULL ELSE COALESCE(hold_reason, ?) END
+       hold_reason = COALESCE(hold_reason, ?)
  WHERE partner_id = ? AND request_id = ? AND cancel_requested_at IS NULL
    AND status_code IN (` + sqlTurnQueued + `, ` + sqlTurnSuspended + `, ` + sqlTurnOwned + `)
 RETURNING status_code, fence`,

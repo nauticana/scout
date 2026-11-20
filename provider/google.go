@@ -182,7 +182,7 @@ func googleContent(message domain.ModelMessage) (*genai.Content, error) {
 			return nil, fmt.Errorf("%w: arguments of tool call %q: %w", domain.ErrValidation, call.CallID, err)
 		}
 		part := genai.NewPartFromFunctionCall(call.Name, args)
-		part.FunctionCall.ID = call.CallID
+		part.FunctionCall.ID, part.ThoughtSignature = call.CallID, call.Signature
 		parts = append(parts, part)
 	}
 	for _, observation := range message.Observations {
@@ -218,7 +218,15 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 			turnNo++
 		}
 	}
-	for index, call := range resp.FunctionCalls() {
+	var parts []*genai.Part
+	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
+		parts = resp.Candidates[0].Content.Parts
+	}
+	for _, part := range parts {
+		if part == nil || part.FunctionCall == nil {
+			continue
+		}
+		call, index := part.FunctionCall, len(calls)
 		arguments, err := json.Marshal(call.Args)
 		if err != nil {
 			return domain.ModelResult{}, fmt.Errorf("genai: encode arguments of %q: %w", call.Name, err)
@@ -232,14 +240,12 @@ func googleResult(resp *genai.GenerateContentResponse, request domain.ModelReque
 			// remain distinct across a multi-iteration tool conversation.
 			callID = fmt.Sprintf("call_%d_%d", turnNo, index+1)
 		}
-		calls = append(calls, domain.ModelToolCall{CallID: callID, Name: call.Name, Arguments: arguments})
+		calls = append(calls, domain.ModelToolCall{CallID: callID, Name: call.Name, Arguments: arguments, Signature: part.ThoughtSignature})
 	}
 	var text strings.Builder
-	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
-		for _, part := range resp.Candidates[0].Content.Parts {
-			if part != nil && !part.Thought {
-				text.WriteString(part.Text)
-			}
+	for _, part := range parts {
+		if part != nil && !part.Thought {
+			text.WriteString(part.Text)
 		}
 	}
 	if err := emptyResult(GoogleProviderID, text.String(), calls); err != nil {

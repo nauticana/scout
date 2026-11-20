@@ -47,11 +47,11 @@ func (function ToolCredentialProviderFunc) Credential(ctx context.Context, princ
 }
 
 // ToolEgressPolicyFunc adapts a function to contract.ToolEgressPolicy.
-type ToolEgressPolicyFunc func(context.Context, int64, string) error
+type ToolEgressPolicyFunc func(context.Context, int64, domain.ToolReference, string) error
 
 // ValidateDestination invokes the configured function.
-func (function ToolEgressPolicyFunc) ValidateDestination(ctx context.Context, tenantID int64, endpoint string) error {
-	return function(ctx, tenantID, endpoint)
+func (function ToolEgressPolicyFunc) ValidateDestination(ctx context.Context, tenantID int64, tool domain.ToolReference, endpoint string) error {
+	return function(ctx, tenantID, tool, endpoint)
 }
 
 // ToolTransportFunc adapts a function to contract.ToolTransport.

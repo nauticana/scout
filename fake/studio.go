@@ -54,16 +54,16 @@ func (f DraftTester) Execute(ctx context.Context, actor domain.StudioActor, requ
 }
 
 type KindCatalog struct {
-	GetFunc  func(context.Context, string) (domain.AgentTypeDescriptor, error)
-	ListFunc func(context.Context) ([]domain.AgentTypeDescriptor, error)
+	GetFunc  func(context.Context, int64, string) (domain.AgentTypeDescriptor, error)
+	ListFunc func(context.Context, int64) ([]domain.AgentTypeDescriptor, error)
 }
 
-func (f KindCatalog) Get(ctx context.Context, kind string) (domain.AgentTypeDescriptor, error) {
-	return f.GetFunc(ctx, kind)
+func (f KindCatalog) Get(ctx context.Context, tenantID int64, kind string) (domain.AgentTypeDescriptor, error) {
+	return f.GetFunc(ctx, tenantID, kind)
 }
 
-func (f KindCatalog) List(ctx context.Context) ([]domain.AgentTypeDescriptor, error) {
-	return f.ListFunc(ctx)
+func (f KindCatalog) List(ctx context.Context, tenantID int64) ([]domain.AgentTypeDescriptor, error) {
+	return f.ListFunc(ctx, tenantID)
 }
 
 type ModelCatalog struct {
