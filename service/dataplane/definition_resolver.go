@@ -41,19 +41,14 @@ func (resolver *DefinitionResolver) Resolve(ctx context.Context, tenantID int64,
 	if resolver.Repository == nil || resolver.Cache == nil || resolver.Metrics == nil {
 		return domain.ExecutionGraph{}, fmt.Errorf("definition resolver: repository, cache, and metrics are required")
 	}
-	graph, found, err := resolver.Cache.Get(ctx, tenantID, agentID, version)
-	if err != nil {
-		resolver.recordCacheError(ctx, tenantID, "get", err)
-	} else if found && graph.AgentID == agentID && graph.Version == version {
+	if graph, found := resolver.cached(ctx, tenantID, agentID, version); found {
 		return graph, nil
-	} else if found {
-		cacheErr := fmt.Errorf("%w: cached execution graph identity mismatch", domain.ErrConflict)
-		resolver.recordCacheError(ctx, tenantID, "get", cacheErr)
-		if err := resolver.Cache.Invalidate(ctx, tenantID, agentID, version); err != nil {
-			resolver.recordCacheError(ctx, tenantID, "invalidate", err)
-		}
 	}
 	return resolver.flights.Do(ctx, definitionKey{tenantID, agentID, version}, func(loadCtx context.Context) (domain.ExecutionGraph, error) {
+		// A load may have finished between the caller's miss and this one.
+		if graph, found := resolver.cached(loadCtx, tenantID, agentID, version); found {
+			return graph, nil
+		}
 		graph, err := resolver.Repository.Get(loadCtx, tenantID, agentID, version)
 		if err != nil {
 			return domain.ExecutionGraph{}, fmt.Errorf("load execution graph %q version %q: %w", agentID, version, err)
@@ -66,6 +61,23 @@ func (resolver *DefinitionResolver) Resolve(ctx context.Context, tenantID int64,
 		}
 		return graph, nil
 	})
+}
+
+// cached reads the cache; a failed read or a graph of another identity is recorded and is a miss.
+func (resolver *DefinitionResolver) cached(ctx context.Context, tenantID int64, agentID, version string) (domain.ExecutionGraph, bool) {
+	graph, found, err := resolver.Cache.Get(ctx, tenantID, agentID, version)
+	switch {
+	case err != nil:
+		resolver.recordCacheError(ctx, tenantID, "get", err)
+	case found && graph.AgentID == agentID && graph.Version == version:
+		return graph, true
+	case found:
+		resolver.recordCacheError(ctx, tenantID, "get", fmt.Errorf("%w: cached execution graph identity mismatch", domain.ErrConflict))
+		if err := resolver.Cache.Invalidate(ctx, tenantID, agentID, version); err != nil {
+			resolver.recordCacheError(ctx, tenantID, "invalidate", err)
+		}
+	}
+	return domain.ExecutionGraph{}, false
 }
 
 func (resolver *DefinitionResolver) recordCacheError(ctx context.Context, tenantID int64, operation string, err error) {

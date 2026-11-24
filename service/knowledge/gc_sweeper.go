@@ -7,11 +7,11 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -148,67 +148,55 @@ func (collector *GarbageCollector) reclaim(ctx context.Context, snapshot gcManif
 	if err := collector.removeVectors(ctx, snapshot, removed); err != nil {
 		return false, err
 	}
-	tx, err := collector.DB.BeginTx(ctx, gcQueries)
-	if err != nil {
-		return false, fmt.Errorf("begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.Value(ctx, txn.New(collector.DB, gcQueries, "reclaim document"), func(tx keelport.TxQueryService) (bool, error) {
+		if _, err := tx.Query(ctx, qGCLock, manifestLockKey(snapshot.tenantID, snapshot.knowledgeBaseID, snapshot.documentID)); err != nil {
+			return false, fmt.Errorf("lock: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qGCLock, manifestLockKey(snapshot.tenantID, snapshot.knowledgeBaseID, snapshot.documentID)); err != nil {
-		return false, fmt.Errorf("lock: %w", err)
-	}
-	current, err := tx.Query(ctx, qGCGetManifest, snapshot.tenantID, snapshot.knowledgeBaseID, snapshot.documentID)
-	if err != nil {
-		return false, fmt.Errorf("reread manifest: %w", err)
-	}
-	if len(current.Rows) == 0 {
-		return false, nil
-	}
-	manifest, err := decodeGCManifest(current.Rows[0])
-	if err != nil {
-		return false, err
-	}
-	// Only versions whose vectors this sweep removed may lose their rows; anything newer waits for the next sweep.
-	reclaimable := 0
-	deleteManifest := false
-	for _, version := range manifest.versions() {
-		if !containsFold(removed, version) {
-			continue
+		current, err := tx.Query(ctx, qGCGetManifest, snapshot.tenantID, snapshot.knowledgeBaseID, snapshot.documentID)
+		if err != nil {
+			return false, fmt.Errorf("reread manifest: %w", err)
 		}
-		reclaimable++
-		if err = collector.Objects.DeleteChunks(ctx, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
-			return false, fmt.Errorf("delete chunk objects of version %q: %w", version, err)
+		if len(current.Rows) == 0 {
+			return false, nil
 		}
-		if _, err = tx.Query(ctx, qGCDeleteChunks, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
-			return false, fmt.Errorf("delete chunks of version %q: %w", version, err)
+		manifest, err := decodeGCManifest(current.Rows[0])
+		if err != nil {
+			return false, err
 		}
-		if manifest.tombstoned && version == manifest.activeVersion {
-			deleteManifest = true
-			if _, err = tx.Query(ctx, qGCDeleteManifest, manifest.tenantID, manifest.knowledgeBaseID, manifest.documentID); err != nil {
-				return false, fmt.Errorf("delete manifest: %w", err)
+		// Only versions whose vectors this sweep removed may lose their rows; anything newer waits for the next sweep.
+		reclaimable := 0
+		deleteManifest := false
+		for _, version := range manifest.versions() {
+			if !containsFold(removed, version) {
+				continue
+			}
+			reclaimable++
+			if err := collector.Objects.DeleteChunks(ctx, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
+				return false, fmt.Errorf("delete chunk objects of version %q: %w", version, err)
+			}
+			if _, err := tx.Query(ctx, qGCDeleteChunks, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
+				return false, fmt.Errorf("delete chunks of version %q: %w", version, err)
+			}
+			if manifest.tombstoned && version == manifest.activeVersion {
+				deleteManifest = true
+				if _, err := tx.Query(ctx, qGCDeleteManifest, manifest.tenantID, manifest.knowledgeBaseID, manifest.documentID); err != nil {
+					return false, fmt.Errorf("delete manifest: %w", err)
+				}
+			}
+			if _, err := tx.Query(ctx, qGCDeleteDocument, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
+				return false, fmt.Errorf("delete document of version %q: %w", version, err)
 			}
 		}
-		if _, err = tx.Query(ctx, qGCDeleteDocument, manifest.tenantID, manifest.knowledgeBaseID, version, manifest.documentID); err != nil {
-			return false, fmt.Errorf("delete document of version %q: %w", version, err)
+		if reclaimable == 0 {
+			return false, nil
 		}
-	}
-	if reclaimable == 0 {
-		return false, nil
-	}
-	if !deleteManifest {
-		if _, err = tx.Query(ctx, qGCClearPending, manifest.tenantID, manifest.knowledgeBaseID, manifest.documentID); err != nil {
-			return false, fmt.Errorf("clear pending: %w", err)
+		if !deleteManifest {
+			if _, err := tx.Query(ctx, qGCClearPending, manifest.tenantID, manifest.knowledgeBaseID, manifest.documentID); err != nil {
+				return false, fmt.Errorf("clear pending: %w", err)
+			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit: %w", err)
-	}
-	committed = true
-	return reclaimable == len(manifest.versions()), nil
+		return reclaimable == len(manifest.versions()), nil
+	})
 }
 
 func (collector *GarbageCollector) removeVectors(ctx context.Context, snapshot gcManifest, versions []string) error {

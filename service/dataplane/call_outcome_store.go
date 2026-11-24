@@ -16,6 +16,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/confirmation"
 )
 
@@ -315,37 +316,28 @@ func (store *TableCallOutcomeStore) Accept(ctx context.Context, owner domain.Tur
 		return domain.CallOutcome{}, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := store.DB.BeginTx(ctx, callOutcomeQueries)
-	if err != nil {
-		return domain.CallOutcome{}, fmt.Errorf("accept call: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(store.DB, callOutcomeQueries, "accept call").Run(ctx, func(tx port.TxQueryService) error {
+		args := append([]any{ref.URI, ref.Digest, seconds}, keyArgs(key)...)
+		result, err := tx.Query(ctx, qOutcomeAccept, ownerArgs(owner, append(args, owner.Fence)...)...)
+		if err != nil {
+			return fmt.Errorf("accept call: %w", err)
 		}
-	}()
-	args := append([]any{ref.URI, ref.Digest, seconds}, keyArgs(key)...)
-	result, err := tx.Query(ctx, qOutcomeAccept, ownerArgs(owner, append(args, owner.Fence)...)...)
-	if err != nil {
-		return domain.CallOutcome{}, fmt.Errorf("accept call: %w", err)
-	}
-	accepted, err := fencedOutcome(result, owner)
-	if err != nil {
+		accepted, err := fencedOutcome(result, owner)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return fmt.Errorf("%w: call %q is not in flight under fence %d", domain.ErrConflict, key.CallID, owner.Fence)
+		}
+		if id := record.Acceptance.MCPConfirmationID; id > 0 {
+			if _, err := tx.Query(ctx, qOutcomeLink, append(keyArgs(key), id)...); err != nil {
+				return fmt.Errorf("link call to confirmation %d: %w", id, err)
+			}
+		}
+		return nil
+	}); err != nil {
 		return domain.CallOutcome{}, err
 	}
-	if !accepted {
-		return domain.CallOutcome{}, fmt.Errorf("%w: call %q is not in flight under fence %d", domain.ErrConflict, key.CallID, owner.Fence)
-	}
-	if id := record.Acceptance.MCPConfirmationID; id > 0 {
-		if _, err = tx.Query(ctx, qOutcomeLink, append(keyArgs(key), id)...); err != nil {
-			return domain.CallOutcome{}, fmt.Errorf("link call to confirmation %d: %w", id, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.CallOutcome{}, fmt.Errorf("accept call: commit: %w", err)
-	}
-	committed = true
 	return store.mustFind(ctx, key)
 }
 
@@ -380,51 +372,39 @@ func (store *TableCallOutcomeStore) SettleAndAppend(ctx context.Context, owner d
 		return domain.LoopEntry{}, fmt.Errorf("dehydrate loop entry: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := store.DB.BeginTx(ctx, callOutcomeQueries)
-	if err != nil {
-		return domain.LoopEntry{}, fmt.Errorf("settle call: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	if err = guardOwner(ctx, tx, qOutcomeOwnerGuard, owner); err != nil {
-		return domain.LoopEntry{}, err
-	}
-	settled, err := tx.Query(ctx, qOutcomeSettle, append([]any{string(settlement.Status), string(settlement.Resolution), ref.URI, ref.Digest, owner.Fence},
-		keyArgs(settlement.Key)...)...)
-	if err != nil {
-		return domain.LoopEntry{}, fmt.Errorf("settle call: %w", err)
-	}
-	if len(settled.Rows) == 0 {
-		if err = store.alreadySettled(ctx, tx, settlement); err != nil {
+	return txn.Value(ctx, txn.New(store.DB, callOutcomeQueries, "settle call"), func(tx port.TxQueryService) (domain.LoopEntry, error) {
+		if err := guardOwner(ctx, tx, qOutcomeOwnerGuard, owner); err != nil {
 			return domain.LoopEntry{}, err
 		}
-	}
-	inserted, err := tx.Query(ctx, qOutcomeJournal, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo, entryRef.URI, entryRef.Digest)
-	if err != nil {
-		return domain.LoopEntry{}, fmt.Errorf("append loop entry: %w", err)
-	}
-	stored := entry
-	if len(inserted.Rows) == 0 {
-		existing, err := tx.Query(ctx, qLoopEntryGet, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo)
+		settled, err := tx.Query(ctx, qOutcomeSettle, append([]any{string(settlement.Status), string(settlement.Resolution), ref.URI, ref.Digest, owner.Fence},
+			keyArgs(settlement.Key)...)...)
 		if err != nil {
-			return domain.LoopEntry{}, fmt.Errorf("read loop entry: %w", err)
+			return domain.LoopEntry{}, fmt.Errorf("settle call: %w", err)
 		}
-		if len(existing.Rows) == 0 {
-			return domain.LoopEntry{}, fmt.Errorf("loop entry %d of %q disappeared after insert", entry.EntryNo, key.RequestID)
+		if len(settled.Rows) == 0 {
+			if err := store.alreadySettled(ctx, tx, settlement); err != nil {
+				return domain.LoopEntry{}, err
+			}
 		}
-		if stored, err = (&TableLoopJournal{Objects: store.Objects}).hydrate(ctx, existing.Rows[0]); err != nil {
-			return domain.LoopEntry{}, err
+		inserted, err := tx.Query(ctx, qOutcomeJournal, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo, entryRef.URI, entryRef.Digest)
+		if err != nil {
+			return domain.LoopEntry{}, fmt.Errorf("append loop entry: %w", err)
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.LoopEntry{}, fmt.Errorf("settle call: commit: %w", err)
-	}
-	committed = true
-	return stored, nil
+		stored := entry
+		if len(inserted.Rows) == 0 {
+			existing, err := tx.Query(ctx, qLoopEntryGet, key.TenantID, key.RequestID, key.ExecutionStepID, entry.EntryNo)
+			if err != nil {
+				return domain.LoopEntry{}, fmt.Errorf("read loop entry: %w", err)
+			}
+			if len(existing.Rows) == 0 {
+				return domain.LoopEntry{}, fmt.Errorf("loop entry %d of %q disappeared after insert", entry.EntryNo, key.RequestID)
+			}
+			if stored, err = (&TableLoopJournal{Objects: store.Objects}).hydrate(ctx, existing.Rows[0]); err != nil {
+				return domain.LoopEntry{}, err
+			}
+		}
+		return stored, nil
+	})
 }
 
 // alreadySettled accepts a repeat of the same settlement and refuses any other.
@@ -610,63 +590,57 @@ func (store *TableCallOutcomeStore) Attest(ctx context.Context, attestation doma
 	attestation.Note = strings.TrimSpace(attestation.Note)
 	key := attestation.Key
 	ctx = context.WithoutCancel(ctx)
-	tx, err := store.DB.BeginTx(ctx, callOutcomeQueries)
-	if err != nil {
-		return domain.AttestationResult{}, fmt.Errorf("attest call: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	touched, err := tx.Query(ctx, qOutcomeAttestTouch, append(keyArgs(key), attestation.TurnFence)...)
-	if err != nil {
-		return domain.AttestationResult{}, fmt.Errorf("attest call: %w", err)
-	}
-	if len(touched.Rows) == 0 {
-		return store.refusedAttestation(ctx, tx, attestation)
-	}
-	others, own, err := attestationsOf(ctx, tx, attestation)
-	if err != nil {
-		return domain.AttestationResult{}, err
-	}
-	replay := own != nil
-	if replay && !sameAttestation(*own, attestation) {
-		return domain.AttestationResult{}, fmt.Errorf("%w: %s already attested call %q differently", domain.ErrConflict, attestation.Attester.ID, key.CallID)
-	}
-	agreeing := 1
-	for _, other := range others {
-		if other.Outcome != attestation.Outcome {
-			return domain.AttestationResult{}, fmt.Errorf("%w: %s attested call %q %s", domain.ErrConflict, other.Attester.ID, key.CallID, other.Outcome)
-		}
-		agreeing++
-	}
-	if !replay {
-		evidenceURI, evidenceDigest := nullable(attestation.Evidence.URI), nullable(attestation.Evidence.Digest)
-		if _, err = tx.Query(ctx, qOutcomeAttestInsert, append(keyArgs(key), string(attestation.Attester.Kind), attestation.Attester.ID,
-			string(attestation.Outcome), attestation.Note, evidenceURI, evidenceDigest)...); err != nil {
-			return domain.AttestationResult{}, fmt.Errorf("record attestation: %w", err)
-		}
-	}
-	awaits := agreeing < attestation.Persons
-	if !awaits {
-		resolved, err := tx.Query(ctx, qOutcomeAttestResolve, append([]any{string(attestation.Outcome), attestation.TurnFence,
-			string(attestation.Attester.Kind), attestation.Attester.ID, attestation.Note,
-			nullable(attestation.Evidence.URI), nullable(attestation.Evidence.Digest)}, keyArgs(key)...)...)
+	refused := false
+	result, err := txn.Value(ctx, txn.New(store.DB, callOutcomeQueries, "attest call"), func(tx port.TxQueryService) (domain.AttestationResult, error) {
+		touched, err := tx.Query(ctx, qOutcomeAttestTouch, append(keyArgs(key), attestation.TurnFence)...)
 		if err != nil {
-			return domain.AttestationResult{}, fmt.Errorf("settle attested call: %w", err)
+			return domain.AttestationResult{}, fmt.Errorf("attest call: %w", err)
 		}
-		if len(resolved.Rows) == 0 {
-			return domain.AttestationResult{}, fmt.Errorf("%w: call %q settled meanwhile", domain.ErrConflict, key.CallID)
+		if len(touched.Rows) == 0 {
+			refused = true
+			return store.refusedAttestation(ctx, tx, attestation)
 		}
+		others, own, err := attestationsOf(ctx, tx, attestation)
+		if err != nil {
+			return domain.AttestationResult{}, err
+		}
+		replay := own != nil
+		if replay && !sameAttestation(*own, attestation) {
+			return domain.AttestationResult{}, fmt.Errorf("%w: %s already attested call %q differently", domain.ErrConflict, attestation.Attester.ID, key.CallID)
+		}
+		agreeing := 1
+		for _, other := range others {
+			if other.Outcome != attestation.Outcome {
+				return domain.AttestationResult{}, fmt.Errorf("%w: %s attested call %q %s", domain.ErrConflict, other.Attester.ID, key.CallID, other.Outcome)
+			}
+			agreeing++
+		}
+		if !replay {
+			evidenceURI, evidenceDigest := nullable(attestation.Evidence.URI), nullable(attestation.Evidence.Digest)
+			if _, err := tx.Query(ctx, qOutcomeAttestInsert, append(keyArgs(key), string(attestation.Attester.Kind), attestation.Attester.ID,
+				string(attestation.Outcome), attestation.Note, evidenceURI, evidenceDigest)...); err != nil {
+				return domain.AttestationResult{}, fmt.Errorf("record attestation: %w", err)
+			}
+		}
+		awaits := agreeing < attestation.Persons
+		if !awaits {
+			resolved, err := tx.Query(ctx, qOutcomeAttestResolve, append([]any{string(attestation.Outcome), attestation.TurnFence,
+				string(attestation.Attester.Kind), attestation.Attester.ID, attestation.Note,
+				nullable(attestation.Evidence.URI), nullable(attestation.Evidence.Digest)}, keyArgs(key)...)...)
+			if err != nil {
+				return domain.AttestationResult{}, fmt.Errorf("settle attested call: %w", err)
+			}
+			if len(resolved.Rows) == 0 {
+				return domain.AttestationResult{}, fmt.Errorf("%w: call %q settled meanwhile", domain.ErrConflict, key.CallID)
+			}
+		}
+		return domain.AttestationResult{AwaitsSecond: awaits, AlreadyStated: replay}, nil
+	})
+	if err != nil || refused {
+		return result, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AttestationResult{}, fmt.Errorf("attest call: commit: %w", err)
-	}
-	committed = true
-	outcome, err := store.mustFind(ctx, key)
-	return domain.AttestationResult{Outcome: outcome, AwaitsSecond: awaits, AlreadyStated: replay}, err
+	result.Outcome, err = store.mustFind(ctx, key)
+	return result, err
 }
 
 // refusedAttestation explains a record the attestation could not touch: an identical repeat of a

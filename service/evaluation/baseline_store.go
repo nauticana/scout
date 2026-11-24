@@ -9,13 +9,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/storage"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -125,37 +125,25 @@ func (store *EvaluationBaselineStore) Record(ctx context.Context, scope domain.G
 		content.WriteString(output.CaseID + "\x00" + refs[i].Digest + "\n")
 	}
 	baseline.Scope, baseline.ExampleCount, baseline.ContentDigest, baseline.RecordedAt = scope, len(ordered), sha256Hex([]byte(content.String())), store.now()
-	tx, err := store.begin(ctx, "evaluation baseline store", baselineQueries)
-	if err != nil {
-		return domain.EvaluationBaseline{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.Value(ctx, txn.New(store.DB, baselineQueries, "evaluation baseline store"), func(tx keelport.TxQueryService) (domain.EvaluationBaseline, error) {
+		baseline.BaselineID = tx.GenID()
+		kind, id := principalColumns(baseline.RecordedBy)
+		inserted, err := tx.Query(ctx, qBaselineInsert, baseline.BaselineID, baseline.TenantID, baseline.GoldenSetID, baseline.SetVersion, baseline.Name,
+			string(scope), baseline.ExampleCount, baseline.ContentDigest, kind, id, baseline.RecordedAt)
+		if err != nil {
+			return domain.EvaluationBaseline{}, fmt.Errorf("insert baseline: %w", err)
 		}
-	}()
-	baseline.BaselineID = tx.GenID()
-	kind, id := principalColumns(baseline.RecordedBy)
-	inserted, err := tx.Query(ctx, qBaselineInsert, baseline.BaselineID, baseline.TenantID, baseline.GoldenSetID, baseline.SetVersion, baseline.Name,
-		string(scope), baseline.ExampleCount, baseline.ContentDigest, kind, id, baseline.RecordedAt)
-	if err != nil {
-		return domain.EvaluationBaseline{}, fmt.Errorf("insert baseline: %w", err)
-	}
-	if len(inserted.Rows) == 0 {
-		return domain.EvaluationBaseline{}, fmt.Errorf("%w: golden set version %d already has a baseline named %q", domain.ErrConflict, baseline.SetVersion, baseline.Name)
-	}
-	for i, output := range ordered {
-		if _, err = tx.Query(ctx, qBaselineOutput, baseline.BaselineID, baseline.TenantID, baseline.GoldenSetID, baseline.SetVersion,
-			output.CaseID, refs[i].URI, refs[i].Digest); err != nil {
-			return domain.EvaluationBaseline{}, fmt.Errorf("insert baseline output %q: %w", output.CaseID, err)
+		if len(inserted.Rows) == 0 {
+			return domain.EvaluationBaseline{}, fmt.Errorf("%w: golden set version %d already has a baseline named %q", domain.ErrConflict, baseline.SetVersion, baseline.Name)
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.EvaluationBaseline{}, fmt.Errorf("commit baseline: %w", err)
-	}
-	committed = true
-	return baseline, nil
+		for i, output := range ordered {
+			if _, err := tx.Query(ctx, qBaselineOutput, baseline.BaselineID, baseline.TenantID, baseline.GoldenSetID, baseline.SetVersion,
+				output.CaseID, refs[i].URI, refs[i].Digest); err != nil {
+				return domain.EvaluationBaseline{}, fmt.Errorf("insert baseline output %q: %w", output.CaseID, err)
+			}
+		}
+		return baseline, nil
+	})
 }
 
 // admissible refuses a version already holding MaxBaselines baselines or one named like baseline.

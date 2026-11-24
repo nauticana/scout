@@ -18,6 +18,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -111,84 +112,72 @@ func (s *StudioService) SaveSetting(ctx context.Context, actor domain.StudioActo
 			return domain.AgentSettings{}, err
 		}
 	}
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("begin setting transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(s.DB, studioQueries, "save setting").Run(ctx, func(tx keelport.TxQueryService) error {
+		lockedDraft, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, change.AgentID)
+		if err != nil {
+			return fmt.Errorf("lock setting draft: %w", err)
 		}
-	}()
-	lockedDraft, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, change.AgentID)
-	if err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("lock setting draft: %w", err)
-	}
-	if len(lockedDraft.Rows) == 0 {
-		return domain.AgentSettings{}, domain.ErrNotFound
-	}
-	lockedAlias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
-	if err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("lock setting type: %w", err)
-	}
-	// A type without an alias has prompt profile revision 0, as Publish reads it.
-	aliasRevision := int64(0)
-	if len(lockedAlias.Rows) > 0 {
-		aliasRevision = common.AsInt64(lockedAlias.Rows[0][1])
-	}
-	if common.AsInt64(lockedDraft.Rows[0][0]) != change.ExpectedDraftRevision || aliasRevision != change.ExpectedPromptProfileRevision {
-		return domain.AgentSettings{}, domain.ErrRevisionConflict
-	}
-	if change.ScopeID == scopes.TypeScopeID && len(lockedAlias.Rows) == 0 {
-		return domain.AgentSettings{}, fmt.Errorf("%w: type %q has no alias to hold its defaults' revision", domain.ErrConflict, draft.AgentTypeID)
-	}
-	if _, err = s.compileSettings(ctx, actor.TenantID, scopes.AgentScopeID, change.AgentID, &binding, nil); err != nil {
-		return domain.AgentSettings{}, err
-	}
-	var loosening *gateLoosening
-	if change.ResourceKind == domain.ResourceEvaluationGate {
-		after := changedScopes{ScopeRepository: s.scopeRepository(), change: binding}
-		if loosening, err = s.checkGateChange(ctx, actor, change.AgentID, change.ScopeID, after); err != nil {
-			return domain.AgentSettings{}, err
+		if len(lockedDraft.Rows) == 0 {
+			return domain.ErrNotFound
 		}
-	}
-	bump, args := qStudioBumpDraft, []any{actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision}
-	if change.ScopeID == scopes.TypeScopeID {
-		bump, args = qStudioBumpAlias, []any{actorUser(actor), actor.TenantID, draft.AgentTypeID, change.ExpectedPromptProfileRevision}
-	}
-	bumped, err := tx.Query(ctx, bump, args...)
-	if err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("bump setting revision: %w", err)
-	}
-	if len(bumped.Rows) == 0 {
-		return domain.AgentSettings{}, domain.ErrRevisionConflict
-	}
-	key := []any{actor.TenantID, change.ScopeID, string(change.ResourceKind), change.ResourceID}
-	if _, err = tx.Query(ctx, qStudioDropSetting, key...); err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("drop setting: %w", err)
-	}
-	if _, err = tx.Query(ctx, qStudioEndSetting, key...); err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("end setting: %w", err)
-	}
-	detail := string(change.ResourceKind) + " " + change.ResourceID + " at " + change.ScopeID
-	if change.Remove {
-		detail = "removed " + detail
-	} else if _, err = tx.Query(ctx, qStudioInsertSetting, actor.TenantID, change.ScopeID, string(binding.ResourceKind),
-		binding.ResourceID, binding.ResourceVersion, string(binding.MergeMode), binding.Sealed, string(binding.Value),
-		binding.ValueDigest, actorUser(actor)); err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("bind setting: %w", err)
-	}
-	if err = auditStudio(ctx, tx, actor, change.AgentID, "SETTING", detail); err != nil {
+		lockedAlias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
+		if err != nil {
+			return fmt.Errorf("lock setting type: %w", err)
+		}
+		// A type without an alias has prompt profile revision 0, as Publish reads it.
+		aliasRevision := int64(0)
+		if len(lockedAlias.Rows) > 0 {
+			aliasRevision = common.AsInt64(lockedAlias.Rows[0][1])
+		}
+		if common.AsInt64(lockedDraft.Rows[0][0]) != change.ExpectedDraftRevision || aliasRevision != change.ExpectedPromptProfileRevision {
+			return domain.ErrRevisionConflict
+		}
+		if change.ScopeID == scopes.TypeScopeID && len(lockedAlias.Rows) == 0 {
+			return fmt.Errorf("%w: type %q has no alias to hold its defaults' revision", domain.ErrConflict, draft.AgentTypeID)
+		}
+		if _, err := s.compileSettings(ctx, actor.TenantID, scopes.AgentScopeID, change.AgentID, &binding, nil); err != nil {
+			return err
+		}
+		var loosening *gateLoosening
+		if change.ResourceKind == domain.ResourceEvaluationGate {
+			after := changedScopes{ScopeRepository: s.scopeRepository(), change: binding}
+			if loosening, err = s.checkGateChange(ctx, actor, change.AgentID, change.ScopeID, after); err != nil {
+				return err
+			}
+		}
+		bump, args := qStudioBumpDraft, []any{actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision}
+		if change.ScopeID == scopes.TypeScopeID {
+			bump, args = qStudioBumpAlias, []any{actorUser(actor), actor.TenantID, draft.AgentTypeID, change.ExpectedPromptProfileRevision}
+		}
+		bumped, err := tx.Query(ctx, bump, args...)
+		if err != nil {
+			return fmt.Errorf("bump setting revision: %w", err)
+		}
+		if len(bumped.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		key := []any{actor.TenantID, change.ScopeID, string(change.ResourceKind), change.ResourceID}
+		if _, err := tx.Query(ctx, qStudioDropSetting, key...); err != nil {
+			return fmt.Errorf("drop setting: %w", err)
+		}
+		if _, err := tx.Query(ctx, qStudioEndSetting, key...); err != nil {
+			return fmt.Errorf("end setting: %w", err)
+		}
+		detail := string(change.ResourceKind) + " " + change.ResourceID + " at " + change.ScopeID
+		if change.Remove {
+			detail = "removed " + detail
+		} else if _, err := tx.Query(ctx, qStudioInsertSetting, actor.TenantID, change.ScopeID, string(binding.ResourceKind),
+			binding.ResourceID, binding.ResourceVersion, string(binding.MergeMode), binding.Sealed, string(binding.Value),
+			binding.ValueDigest, actorUser(actor)); err != nil {
+			return fmt.Errorf("bind setting: %w", err)
+		}
+		if err := auditStudio(ctx, tx, actor, change.AgentID, "SETTING", detail); err != nil {
+			return err
+		}
+		return s.recordGateLoosening(ctx, tx, actor, loosening)
+	}); err != nil {
 		return domain.AgentSettings{}, err
 	}
-	if err = s.recordGateLoosening(ctx, tx, actor, loosening); err != nil {
-		return domain.AgentSettings{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentSettings{}, fmt.Errorf("commit setting: %w", err)
-	}
-	committed = true
 	return s.Settings(ctx, actor, change.AgentID)
 }
 

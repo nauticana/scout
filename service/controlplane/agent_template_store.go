@@ -17,6 +17,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -292,73 +293,56 @@ func (s *TableAgentTemplateStore) Save(ctx context.Context, actor domain.StudioA
 		return domain.AgentTemplate{}, err
 	}
 	digest := valueDigest(payload)
-	tx, err := s.DB.BeginTx(ctx, agentTemplateQueries)
-	if err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("begin template transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
 	templateID := version.TemplateID
-	if templateID == "" {
-		created, replayed, err := s.createTemplate(ctx, tx, actor, version, createKey, digest, limits)
-		if err != nil {
-			return domain.AgentTemplate{}, err
-		}
-		if replayed {
-			if err = tx.Commit(ctx); err != nil {
-				return domain.AgentTemplate{}, fmt.Errorf("commit template: %w", err)
+	if err := txn.New(s.DB, agentTemplateQueries, "template").Run(ctx, func(tx keelport.TxQueryService) error {
+		if templateID == "" {
+			created, replayed, err := s.createTemplate(ctx, tx, actor, version, createKey, digest, limits)
+			if err != nil {
+				return err
 			}
-			committed = true
-			return s.Own(ctx, actor.TenantID, created)
-		}
-		templateID = created
-	} else {
-		locked, err := tx.Query(ctx, qTemplateLock, actor.TenantID, templateID)
-		if err != nil {
-			return domain.AgentTemplate{}, fmt.Errorf("lock template: %w", err)
-		}
-		if len(locked.Rows) == 0 || common.AsString(locked.Rows[0][0]) != version.AgentTypeID {
-			return domain.AgentTemplate{}, domain.ErrNotFound
-		}
-	}
-	newest, err := tx.Query(ctx, qTemplateNewest, actor.TenantID, templateID)
-	if err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("load newest template version: %w", err)
-	}
-	next := int64(1)
-	if len(newest.Rows) > 0 {
-		row := newest.Rows[0]
-		if strings.TrimSpace(common.AsString(row[1])) == digest && common.AsString(row[2]) == version.DisplayName &&
-			common.AsString(row[3]) == version.Description && common.AsString(row[4]) == version.TypeVersion {
-			if err = tx.Commit(ctx); err != nil {
-				return domain.AgentTemplate{}, fmt.Errorf("commit template: %w", err)
+			templateID = created
+			if replayed {
+				return nil
 			}
-			committed = true
-			return s.Own(ctx, actor.TenantID, templateID)
+		} else {
+			locked, err := tx.Query(ctx, qTemplateLock, actor.TenantID, templateID)
+			if err != nil {
+				return fmt.Errorf("lock template: %w", err)
+			}
+			if len(locked.Rows) == 0 || common.AsString(locked.Rows[0][0]) != version.AgentTypeID {
+				return domain.ErrNotFound
+			}
 		}
-		next = common.AsInt64(row[0]) + 1
-	}
-	if next > int64(limits.MaxVersions) {
-		return domain.AgentTemplate{}, fmt.Errorf("%w: template %s already has %d versions, the limit is %d", domain.ErrConflict, templateID, next-1, limits.MaxVersions)
-	}
-	if _, err = tx.Query(ctx, qTemplateInsertVersion, actor.TenantID, templateID, next, version.AgentTypeID, version.DisplayName,
-		common.NullIfEmpty(version.Description), common.NullIfEmpty(version.TypeVersion), string(payload), digest, common.NullIfEmpty(version.ChangeSummary),
-		common.NullIfEmpty(version.SourceAgentID), sourceRevision(version), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("insert template version: %w", err)
-	}
-	if version.SourceAgentID != "" {
-		if err = auditStudio(ctx, tx, actor, version.SourceAgentID, "TEMPLATE", fmt.Sprintf("template %s version %d", templateID, next)); err != nil {
-			return domain.AgentTemplate{}, err
+		newest, err := tx.Query(ctx, qTemplateNewest, actor.TenantID, templateID)
+		if err != nil {
+			return fmt.Errorf("load newest template version: %w", err)
 		}
+		next := int64(1)
+		if len(newest.Rows) > 0 {
+			row := newest.Rows[0]
+			if strings.TrimSpace(common.AsString(row[1])) == digest && common.AsString(row[2]) == version.DisplayName &&
+				common.AsString(row[3]) == version.Description && common.AsString(row[4]) == version.TypeVersion {
+				return nil
+			}
+			next = common.AsInt64(row[0]) + 1
+		}
+		if next > int64(limits.MaxVersions) {
+			return fmt.Errorf("%w: template %s already has %d versions, the limit is %d", domain.ErrConflict, templateID, next-1, limits.MaxVersions)
+		}
+		if _, err := tx.Query(ctx, qTemplateInsertVersion, actor.TenantID, templateID, next, version.AgentTypeID, version.DisplayName,
+			common.NullIfEmpty(version.Description), common.NullIfEmpty(version.TypeVersion), string(payload), digest, common.NullIfEmpty(version.ChangeSummary),
+			common.NullIfEmpty(version.SourceAgentID), sourceRevision(version), string(actor.Principal.Kind), actor.Principal.ID); err != nil {
+			return fmt.Errorf("insert template version: %w", err)
+		}
+		if version.SourceAgentID != "" {
+			if err := auditStudio(ctx, tx, actor, version.SourceAgentID, "TEMPLATE", fmt.Sprintf("template %s version %d", templateID, next)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return domain.AgentTemplate{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("commit template: %w", err)
-	}
-	committed = true
 	return s.Own(ctx, actor.TenantID, templateID)
 }
 
@@ -414,54 +398,45 @@ func (s *TableAgentTemplateStore) Publish(ctx context.Context, actor domain.Stud
 	if err := s.init(ctx); err != nil {
 		return domain.AgentTemplate{}, err
 	}
-	tx, err := s.DB.BeginTx(ctx, agentTemplateQueries)
-	if err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("begin publication transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	locked, err := tx.Query(ctx, qTemplateLock, actor.TenantID, publication.TemplateID)
-	if err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("lock template: %w", err)
-	}
-	if len(locked.Rows) == 0 {
-		return domain.AgentTemplate{}, domain.ErrNotFound
-	}
-	owner, by, id := actor.TenantID, string(actor.Principal.Kind), actor.Principal.ID
-	if publication.Audience.All {
-		if publication.Withdraw {
-			_, err = tx.Query(ctx, qTemplateWithdrawAll, by, id, owner, publication.TemplateID)
-		} else {
-			_, err = tx.Query(ctx, qTemplatePublishAll, owner, publication.TemplateID, by, id, owner, publication.TemplateID)
-		}
+	if err := txn.New(s.DB, agentTemplateQueries, "publish template").Run(ctx, func(tx keelport.TxQueryService) error {
+		locked, err := tx.Query(ctx, qTemplateLock, actor.TenantID, publication.TemplateID)
 		if err != nil {
-			return domain.AgentTemplate{}, fmt.Errorf("publish template: %w", err)
+			return fmt.Errorf("lock template: %w", err)
 		}
-	} else {
-		if !publication.Withdraw {
-			if err = requireTenants(ctx, tx, publication.Audience.Tenants); err != nil {
-				return domain.AgentTemplate{}, err
-			}
+		if len(locked.Rows) == 0 {
+			return domain.ErrNotFound
 		}
-		for _, tenant := range publication.Audience.Tenants {
+		owner, by, id := actor.TenantID, string(actor.Principal.Kind), actor.Principal.ID
+		if publication.Audience.All {
 			if publication.Withdraw {
-				_, err = tx.Query(ctx, qTemplateWithdrawTenant, by, id, owner, publication.TemplateID, tenant)
+				_, err = tx.Query(ctx, qTemplateWithdrawAll, by, id, owner, publication.TemplateID)
 			} else {
-				_, err = tx.Query(ctx, qTemplatePublishTenant, owner, publication.TemplateID, tenant, by, id, owner, publication.TemplateID, tenant)
+				_, err = tx.Query(ctx, qTemplatePublishAll, owner, publication.TemplateID, by, id, owner, publication.TemplateID)
 			}
 			if err != nil {
-				return domain.AgentTemplate{}, fmt.Errorf("publish template to %d: %w", tenant, err)
+				return fmt.Errorf("publish template: %w", err)
+			}
+		} else {
+			if !publication.Withdraw {
+				if err := requireTenants(ctx, tx, publication.Audience.Tenants); err != nil {
+					return err
+				}
+			}
+			for _, tenant := range publication.Audience.Tenants {
+				if publication.Withdraw {
+					_, err = tx.Query(ctx, qTemplateWithdrawTenant, by, id, owner, publication.TemplateID, tenant)
+				} else {
+					_, err = tx.Query(ctx, qTemplatePublishTenant, owner, publication.TemplateID, tenant, by, id, owner, publication.TemplateID, tenant)
+				}
+				if err != nil {
+					return fmt.Errorf("publish template to %d: %w", tenant, err)
+				}
 			}
 		}
+		return nil
+	}); err != nil {
+		return domain.AgentTemplate{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentTemplate{}, fmt.Errorf("commit publication: %w", err)
-	}
-	committed = true
 	return s.Own(ctx, actor.TenantID, publication.TemplateID)
 }
 
@@ -496,59 +471,43 @@ func (s *TableAgentTemplateStore) RegisterPlatform(ctx context.Context, version 
 		return err
 	}
 	digest := valueDigest(payload)
-	tx, err := s.DB.BeginTx(ctx, agentTemplateQueries)
-	if err != nil {
-		return fmt.Errorf("begin platform template transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(s.DB, agentTemplateQueries, "platform template").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qTemplateCatalogEnsure, version.TemplateID, version.AgentTypeID); err != nil {
+			return fmt.Errorf("register platform template: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qTemplateCatalogEnsure, version.TemplateID, version.AgentTypeID); err != nil {
-		return fmt.Errorf("register platform template: %w", err)
-	}
-	locked, err := tx.Query(ctx, qTemplateCatalogLock, version.TemplateID)
-	if err != nil {
-		return fmt.Errorf("lock platform template: %w", err)
-	}
-	if len(locked.Rows) == 0 || common.AsString(locked.Rows[0][0]) != version.AgentTypeID {
-		return fmt.Errorf("%w: platform template %s belongs to another agent type", domain.ErrConflict, version.TemplateID)
-	}
-	existing, err := tx.Query(ctx, qTemplateCatalogVersion, version.TemplateID, version.Version)
-	if err != nil {
-		return fmt.Errorf("load platform template version: %w", err)
-	}
-	if len(existing.Rows) > 0 {
-		row := existing.Rows[0]
-		if strings.TrimSpace(common.AsString(row[0])) != digest || common.AsString(row[1]) != version.DisplayName ||
-			common.AsString(row[2]) != version.Description || common.AsString(row[3]) != version.TypeVersion ||
-			strings.TrimSpace(common.AsString(row[4])) != version.TypeDigest || common.AsString(row[5]) != version.ChangeSummary {
-			return fmt.Errorf("%w: platform template %s version %d is registered with other content", domain.ErrConflict, version.TemplateID, version.Version)
+		locked, err := tx.Query(ctx, qTemplateCatalogLock, version.TemplateID)
+		if err != nil {
+			return fmt.Errorf("lock platform template: %w", err)
 		}
-		if err = tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit platform template: %w", err)
+		if len(locked.Rows) == 0 || common.AsString(locked.Rows[0][0]) != version.AgentTypeID {
+			return fmt.Errorf("%w: platform template %s belongs to another agent type", domain.ErrConflict, version.TemplateID)
 		}
-		committed = true
+		existing, err := tx.Query(ctx, qTemplateCatalogVersion, version.TemplateID, version.Version)
+		if err != nil {
+			return fmt.Errorf("load platform template version: %w", err)
+		}
+		if len(existing.Rows) > 0 {
+			row := existing.Rows[0]
+			if strings.TrimSpace(common.AsString(row[0])) != digest || common.AsString(row[1]) != version.DisplayName ||
+				common.AsString(row[2]) != version.Description || common.AsString(row[3]) != version.TypeVersion ||
+				strings.TrimSpace(common.AsString(row[4])) != version.TypeDigest || common.AsString(row[5]) != version.ChangeSummary {
+				return fmt.Errorf("%w: platform template %s version %d is registered with other content", domain.ErrConflict, version.TemplateID, version.Version)
+			}
+			return nil
+		}
+		newest, err := tx.Query(ctx, qTemplateCatalogMax, version.TemplateID)
+		if err != nil {
+			return fmt.Errorf("load newest platform template version: %w", err)
+		}
+		if max := common.AsInt64(newest.Rows[0][0]); version.Version != max+1 {
+			return fmt.Errorf("%w: platform template %s is at version %d, so the next is %d", domain.ErrConflict, version.TemplateID, max, max+1)
+		}
+		if _, err := tx.Query(ctx, qTemplateCatalogNewVersion, version.TemplateID, version.Version, version.DisplayName, common.NullIfEmpty(version.Description),
+			common.NullIfEmpty(version.TypeVersion), common.NullIfEmpty(version.TypeDigest), string(payload), digest, common.NullIfEmpty(version.ChangeSummary)); err != nil {
+			return fmt.Errorf("insert platform template version: %w", err)
+		}
 		return nil
-	}
-	newest, err := tx.Query(ctx, qTemplateCatalogMax, version.TemplateID)
-	if err != nil {
-		return fmt.Errorf("load newest platform template version: %w", err)
-	}
-	if max := common.AsInt64(newest.Rows[0][0]); version.Version != max+1 {
-		return fmt.Errorf("%w: platform template %s is at version %d, so the next is %d", domain.ErrConflict, version.TemplateID, max, max+1)
-	}
-	if _, err = tx.Query(ctx, qTemplateCatalogNewVersion, version.TemplateID, version.Version, version.DisplayName, common.NullIfEmpty(version.Description),
-		common.NullIfEmpty(version.TypeVersion), common.NullIfEmpty(version.TypeDigest), string(payload), digest, common.NullIfEmpty(version.ChangeSummary)); err != nil {
-		return fmt.Errorf("insert platform template version: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit platform template: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }
 
 func (s *TableAgentTemplateStore) newTemplateID() (string, error) {

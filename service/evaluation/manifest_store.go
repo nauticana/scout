@@ -7,10 +7,11 @@ import (
 	"strings"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 
+	keelport "github.com/nauticana/keel/port"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -45,35 +46,23 @@ func (store *ManifestStore) Put(ctx context.Context, manifest domain.EvaluationM
 	if err != nil {
 		return fmt.Errorf("encode manifest: %w", err)
 	}
-	tx, err := store.begin(ctx, "manifest store", manifestQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(store.DB, manifestQueries, "manifest store").Run(ctx, func(tx keelport.TxQueryService) error {
+		existing, err := tx.Query(ctx, qManifestGet, manifest.TenantID, manifest.ManifestID)
+		if err != nil {
+			return fmt.Errorf("find manifest: %w", err)
 		}
-	}()
-	existing, err := tx.Query(ctx, qManifestGet, manifest.TenantID, manifest.ManifestID)
-	if err != nil {
-		return fmt.Errorf("find manifest: %w", err)
-	}
-	if len(existing.Rows) > 0 {
-		if common.AsString(existing.Rows[0][0]) != string(encoded) {
-			return fmt.Errorf("%w: manifest %q already stored with different content", domain.ErrConflict, manifest.ManifestID)
+		if len(existing.Rows) > 0 {
+			if common.AsString(existing.Rows[0][0]) != string(encoded) {
+				return fmt.Errorf("%w: manifest %q already stored with different content", domain.ErrConflict, manifest.ManifestID)
+			}
+		} else if _, err := tx.Query(ctx, qManifestInsert,
+			manifest.ManifestID, manifest.TenantID, manifest.Candidate.AgentID, manifest.Candidate.AgentVersion, manifest.Baseline.AgentVersion,
+			manifest.GoldenSetID, manifest.GoldenSetVersion, manifest.DatasetRevision, manifest.SafetyPolicyVersion, string(encoded), manifest.CreatedAt.UTC(),
+		); err != nil {
+			return fmt.Errorf("insert manifest: %w", err)
 		}
-	} else if _, err = tx.Query(ctx, qManifestInsert,
-		manifest.ManifestID, manifest.TenantID, manifest.Candidate.AgentID, manifest.Candidate.AgentVersion, manifest.Baseline.AgentVersion,
-		manifest.GoldenSetID, manifest.GoldenSetVersion, manifest.DatasetRevision, manifest.SafetyPolicyVersion, string(encoded), manifest.CreatedAt.UTC(),
-	); err != nil {
-		return fmt.Errorf("insert manifest: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit manifest: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // Get returns the stored manifest after re-verifying its content id.

@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -198,133 +198,117 @@ func (ledger *BudgetLedger) Reserve(ctx context.Context, request domain.BudgetRe
 		return domain.BudgetReservation{}, err
 	}
 	windowSeconds := durationSeconds(limits.Window)
-	tx, err := ledger.DB.BeginTx(ctx, budgetQueries)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.Value(ctx, txn.New(ledger.DB, budgetQueries, "reserve budget"), func(tx keelport.TxQueryService) (domain.BudgetReservation, error) {
+		if _, err := tx.Query(ctx, qLockBudget, strconv.FormatInt(tenantID, 10)); err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: lock tenant: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qLockBudget, strconv.FormatInt(tenantID, 10)); err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: lock tenant: %w", err)
-	}
-	turnState, err := tx.Query(ctx, qGetTurnState, tenantID, requestID)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: find turn: %w", err)
-	}
-	if len(turnState.Rows) == 0 {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q does not exist", domain.ErrNotFound, requestID)
-	}
-	if common.AsBool(turnState.Rows[0][0]) {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q is terminal", domain.ErrConflict, requestID)
-	}
-	now, ok := common.AsTimeOK(turnState.Rows[0][1])
-	if !ok {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: invalid database clock %q", common.AsString(turnState.Rows[0][1]))
-	}
-	existing, err := tx.Query(ctx, qFindBudget, tenantID, requestID)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: find request: %w", err)
-	}
-	attempt := int64(1)
-	if len(existing.Rows) > 0 {
-		row, err := decodeBudgetRow(tenantID, existing.Rows[0])
+		turnState, err := tx.Query(ctx, qGetTurnState, tenantID, requestID)
 		if err != nil {
-			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: decode existing reservation: %w", err)
+			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: find turn: %w", err)
 		}
-		reservation := row.reservation
-		if reservation.GrantedTokens != tokens || reservation.GrantedCostMinorUnits != costMinorUnits || reservation.Currency != currency {
-			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q has a different budget reservation", domain.ErrConflict, requestID)
+		if len(turnState.Rows) == 0 {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q does not exist", domain.ErrNotFound, requestID)
 		}
-		if row.status == domain.ReservationHeld && !row.expired {
-			if err = tx.Commit(ctx); err != nil {
-				return domain.BudgetReservation{}, fmt.Errorf("reserve budget: commit replay: %w", err)
-			}
-			committed = true
-			reservation.Replayed = true
-			return reservation, nil
+		if common.AsBool(turnState.Rows[0][0]) {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q is terminal", domain.ErrConflict, requestID)
 		}
-		if row.status == domain.ReservationSettled {
-			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation", domain.ErrBudgetSettled, requestID)
+		now, ok := common.AsTimeOK(turnState.Rows[0][1])
+		if !ok {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: invalid database clock %q", common.AsString(turnState.Rows[0][1]))
 		}
-		if row.status != domain.ReservationExpired && !(row.status == domain.ReservationHeld && row.expired) {
-			return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation is terminal", domain.ErrConflict, requestID)
+		existing, err := tx.Query(ctx, qFindBudget, tenantID, requestID)
+		if err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: find request: %w", err)
 		}
-		if row.status == domain.ReservationHeld {
-			expired, err := tx.Query(ctx, qExpireOneBudget, tenantID, reservation.ReservationID)
+		attempt := int64(1)
+		if len(existing.Rows) > 0 {
+			row, err := decodeBudgetRow(tenantID, existing.Rows[0])
 			if err != nil {
-				return domain.BudgetReservation{}, fmt.Errorf("reserve budget: expire prior attempt: %w", err)
+				return domain.BudgetReservation{}, fmt.Errorf("reserve budget: decode existing reservation: %w", err)
 			}
-			if len(expired.Rows) == 0 {
-				current, err := tx.Query(ctx, qGetBudget, tenantID, reservation.ReservationID)
+			reservation := row.reservation
+			if reservation.GrantedTokens != tokens || reservation.GrantedCostMinorUnits != costMinorUnits || reservation.Currency != currency {
+				return domain.BudgetReservation{}, fmt.Errorf("%w: request %q has a different budget reservation", domain.ErrConflict, requestID)
+			}
+			if row.status == domain.ReservationHeld && !row.expired {
+				reservation.Replayed = true
+				return reservation, nil
+			}
+			if row.status == domain.ReservationSettled {
+				return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation", domain.ErrBudgetSettled, requestID)
+			}
+			if row.status != domain.ReservationExpired && !(row.status == domain.ReservationHeld && row.expired) {
+				return domain.BudgetReservation{}, fmt.Errorf("%w: request %q budget reservation is terminal", domain.ErrConflict, requestID)
+			}
+			if row.status == domain.ReservationHeld {
+				expired, err := tx.Query(ctx, qExpireOneBudget, tenantID, reservation.ReservationID)
 				if err != nil {
-					return domain.BudgetReservation{}, fmt.Errorf("reserve budget: verify prior attempt: %w", err)
+					return domain.BudgetReservation{}, fmt.Errorf("reserve budget: expire prior attempt: %w", err)
 				}
-				if len(current.Rows) == 0 {
-					return domain.BudgetReservation{}, fmt.Errorf("%w: reservation %q disappeared", domain.ErrConflict, reservation.ReservationID)
-				}
-				fenced, err := decodeBudgetRow(tenantID, current.Rows[0])
-				if err != nil {
-					return domain.BudgetReservation{}, fmt.Errorf("reserve budget: decode prior attempt: %w", err)
-				}
-				if fenced.status != domain.ReservationExpired {
-					return domain.BudgetReservation{}, fmt.Errorf("%w: reservation %q became %s", domain.ErrConflict, reservation.ReservationID, fenced.status)
+				if len(expired.Rows) == 0 {
+					current, err := tx.Query(ctx, qGetBudget, tenantID, reservation.ReservationID)
+					if err != nil {
+						return domain.BudgetReservation{}, fmt.Errorf("reserve budget: verify prior attempt: %w", err)
+					}
+					if len(current.Rows) == 0 {
+						return domain.BudgetReservation{}, fmt.Errorf("%w: reservation %q disappeared", domain.ErrConflict, reservation.ReservationID)
+					}
+					fenced, err := decodeBudgetRow(tenantID, current.Rows[0])
+					if err != nil {
+						return domain.BudgetReservation{}, fmt.Errorf("reserve budget: decode prior attempt: %w", err)
+					}
+					if fenced.status != domain.ReservationExpired {
+						return domain.BudgetReservation{}, fmt.Errorf("%w: reservation %q became %s", domain.ErrConflict, reservation.ReservationID, fenced.status)
+					}
 				}
 			}
+			if reservation.Attempt == int64(^uint64(0)>>1) {
+				return domain.BudgetReservation{}, fmt.Errorf("%w: reservation attempt overflow", domain.ErrConflict)
+			}
+			attempt = reservation.Attempt + 1
 		}
-		if reservation.Attempt == int64(^uint64(0)>>1) {
-			return domain.BudgetReservation{}, fmt.Errorf("%w: reservation attempt overflow", domain.ErrConflict)
+		// Admission runs only for a new attempt: a live hold was admitted already, and Abandon and
+		// cancellation recover it to release it even after the budget became unenforceable.
+		if err := enforceable(budget, currency); err != nil {
+			return domain.BudgetReservation{}, err
 		}
-		attempt = reservation.Attempt + 1
-	}
-	// Admission runs only for a new attempt: a live hold was admitted already, and Abandon and
-	// cancellation recover it to release it even after the budget became unenforceable.
-	if err = enforceable(budget, currency); err != nil {
-		return domain.BudgetReservation{}, err
-	}
-	if _, err = scope.CheckBudgetUnit(ctx, ledger.Currencies, budget); err != nil {
-		return domain.BudgetReservation{}, err
-	}
-	if err = ledger.checkPeriod(ctx, tx, tenantID, agent.ID, budget, now, tokens, costMinorUnits, currency); err != nil {
-		return domain.BudgetReservation{}, err
-	}
-	reservationID, err := newReservationID()
-	if err != nil {
-		return domain.BudgetReservation{}, err
-	}
-	result, err := tx.Query(ctx, qReserveBudget,
-		tenantID, reservationID, requestID, string(domain.PrincipalAgent), agent.ID, attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
-		tenantID, windowSeconds, tokens, limits.WindowTokens,
-		tenantID, currency, windowSeconds, costMinorUnits, limits.WindowCostMinorUnits,
-	)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: %w", err)
-	}
-	if len(result.Rows) == 0 {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of tenant %d is exhausted", domain.ErrBudgetExceeded, tenantID)
-	}
-	expiresAt, ok := common.AsTimeOK(result.Rows[0][1])
-	if !ok {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: invalid expires_at %q", common.AsString(result.Rows[0][1]))
-	}
-	reservation := domain.BudgetReservation{
-		TenantID:              tenantID,
-		ReservationID:         common.AsString(result.Rows[0][0]),
-		RequestID:             requestID,
-		Attempt:               attempt,
-		GrantedTokens:         tokens,
-		GrantedCostMinorUnits: costMinorUnits,
-		Currency:              currency,
-		ExpiresAt:             expiresAt,
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve budget: commit: %w", err)
-	}
-	committed = true
-	return reservation, nil
+		if _, err := scope.CheckBudgetUnit(ctx, ledger.Currencies, budget); err != nil {
+			return domain.BudgetReservation{}, err
+		}
+		if err := ledger.checkPeriod(ctx, tx, tenantID, agent.ID, budget, now, tokens, costMinorUnits, currency); err != nil {
+			return domain.BudgetReservation{}, err
+		}
+		reservationID, err := newReservationID()
+		if err != nil {
+			return domain.BudgetReservation{}, err
+		}
+		result, err := tx.Query(ctx, qReserveBudget,
+			tenantID, reservationID, requestID, string(domain.PrincipalAgent), agent.ID, attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
+			tenantID, windowSeconds, tokens, limits.WindowTokens,
+			tenantID, currency, windowSeconds, costMinorUnits, limits.WindowCostMinorUnits,
+		)
+		if err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: %w", err)
+		}
+		if len(result.Rows) == 0 {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of tenant %d is exhausted", domain.ErrBudgetExceeded, tenantID)
+		}
+		expiresAt, ok := common.AsTimeOK(result.Rows[0][1])
+		if !ok {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve budget: invalid expires_at %q", common.AsString(result.Rows[0][1]))
+		}
+		reservation := domain.BudgetReservation{
+			TenantID:              tenantID,
+			ReservationID:         common.AsString(result.Rows[0][0]),
+			RequestID:             requestID,
+			Attempt:               attempt,
+			GrantedTokens:         tokens,
+			GrantedCostMinorUnits: costMinorUnits,
+			Currency:              currency,
+			ExpiresAt:             expiresAt,
+		}
+		return reservation, nil
+	})
 }
 
 // ReserveOperatorAction holds the tenant's window for one action a person takes in a turn they
@@ -356,64 +340,52 @@ func (ledger *BudgetLedger) ReserveOperatorAction(ctx context.Context, request d
 		return domain.BudgetReservation{}, fmt.Errorf("%w: currency %s does not match budget currency %s", domain.ErrValidation, currency, limits.Currency)
 	}
 	windowSeconds := durationSeconds(limits.Window)
-	tx, err := ledger.DB.BeginTx(ctx, budgetQueries)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.Value(ctx, txn.New(ledger.DB, budgetQueries, "reserve operator action"), func(tx keelport.TxQueryService) (domain.BudgetReservation, error) {
+		if _, err := tx.Query(ctx, qLockBudget, strconv.FormatInt(tenantID, 10)); err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: lock tenant: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qLockBudget, strconv.FormatInt(tenantID, 10)); err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: lock tenant: %w", err)
-	}
-	turnState, err := tx.Query(ctx, qGetTurnState, tenantID, requestID)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: find turn: %w", err)
-	}
-	if len(turnState.Rows) == 0 {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q does not exist", domain.ErrNotFound, requestID)
-	}
-	if common.AsBool(turnState.Rows[0][0]) {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q is terminal", domain.ErrConflict, requestID)
-	}
-	next, err := tx.Query(ctx, qOperatorAttempt, tenantID, requestID)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: number attempt: %w", err)
-	}
-	if len(next.Rows) == 0 {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: no attempt number")
-	}
-	reservationID, err := newReservationID()
-	if err != nil {
-		return domain.BudgetReservation{}, err
-	}
-	attempt := common.AsInt64(next.Rows[0][0])
-	result, err := tx.Query(ctx, qReserveBudget,
-		tenantID, reservationID, requestID, string(domain.PrincipalHuman), request.Principal.ID, attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
-		tenantID, windowSeconds, tokens, limits.WindowTokens,
-		tenantID, currency, windowSeconds, costMinorUnits, limits.WindowCostMinorUnits,
-	)
-	if err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: %w", err)
-	}
-	if len(result.Rows) == 0 {
-		return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of tenant %d is exhausted", domain.ErrBudgetExceeded, tenantID)
-	}
-	expiresAt, ok := common.AsTimeOK(result.Rows[0][1])
-	if !ok {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: invalid expires_at %q", common.AsString(result.Rows[0][1]))
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: commit: %w", err)
-	}
-	committed = true
-	return domain.BudgetReservation{
-		TenantID: tenantID, ReservationID: common.AsString(result.Rows[0][0]), RequestID: requestID, Attempt: attempt,
-		GrantedTokens: tokens, GrantedCostMinorUnits: costMinorUnits, Currency: currency, ExpiresAt: expiresAt,
-	}, nil
+		turnState, err := tx.Query(ctx, qGetTurnState, tenantID, requestID)
+		if err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: find turn: %w", err)
+		}
+		if len(turnState.Rows) == 0 {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q does not exist", domain.ErrNotFound, requestID)
+		}
+		if common.AsBool(turnState.Rows[0][0]) {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: turn request %q is terminal", domain.ErrConflict, requestID)
+		}
+		next, err := tx.Query(ctx, qOperatorAttempt, tenantID, requestID)
+		if err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: number attempt: %w", err)
+		}
+		if len(next.Rows) == 0 {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: no attempt number")
+		}
+		reservationID, err := newReservationID()
+		if err != nil {
+			return domain.BudgetReservation{}, err
+		}
+		attempt := common.AsInt64(next.Rows[0][0])
+		result, err := tx.Query(ctx, qReserveBudget,
+			tenantID, reservationID, requestID, string(domain.PrincipalHuman), request.Principal.ID, attempt, tokens, costMinorUnits, currency, durationSeconds(ledger.ttl()),
+			tenantID, windowSeconds, tokens, limits.WindowTokens,
+			tenantID, currency, windowSeconds, costMinorUnits, limits.WindowCostMinorUnits,
+		)
+		if err != nil {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: %w", err)
+		}
+		if len(result.Rows) == 0 {
+			return domain.BudgetReservation{}, fmt.Errorf("%w: the budget window of tenant %d is exhausted", domain.ErrBudgetExceeded, tenantID)
+		}
+		expiresAt, ok := common.AsTimeOK(result.Rows[0][1])
+		if !ok {
+			return domain.BudgetReservation{}, fmt.Errorf("reserve operator action: invalid expires_at %q", common.AsString(result.Rows[0][1]))
+		}
+		return domain.BudgetReservation{
+			TenantID: tenantID, ReservationID: common.AsString(result.Rows[0][0]), RequestID: requestID, Attempt: attempt,
+			GrantedTokens: tokens, GrantedCostMinorUnits: costMinorUnits, Currency: currency, ExpiresAt: expiresAt,
+		}, nil
+	})
 }
 
 // Commit settles actual usage, including an overrun, into the budget window.
@@ -491,25 +463,20 @@ func (ledger *BudgetLedger) transition(ctx context.Context, query string, reserv
 	if ledger.DB == nil {
 		return fmt.Errorf("budget ledger: database is required")
 	}
-	tx, err := ledger.DB.BeginTx(ctx, budgetQueries)
-	if err != nil {
-		return fmt.Errorf("budget reservation transition: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	var lapsed error
+	err := txn.New(ledger.DB, budgetQueries, "budget reservation transition").Run(ctx, func(tx keelport.TxQueryService) error {
+		err := applyTransition(ctx, tx, query, reservation, extra...)
+		// A lapsed hold is refused, and its expiry commits.
+		if errors.Is(err, errLapsed) {
+			lapsed = err
+			return nil
 		}
-	}()
-	transitionErr := applyTransition(ctx, tx, query, reservation, extra...)
-	if transitionErr != nil && !errors.Is(transitionErr, errLapsed) {
-		return transitionErr
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("budget reservation transition: commit: %w", err)
-	}
-	committed = true
-	return transitionErr
+	return lapsed
 }
 
 // applyTransition takes the tenant lock and moves one held reservation; a repeat of the same

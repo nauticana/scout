@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	keelmodel "github.com/nauticana/keel/model"
@@ -25,6 +26,9 @@ type restrictionTables struct {
 	auditErr  error
 	reads     int
 	savepoint *restrictionTables
+	// raced is the digest another first write of tenant 7 wins with; rollbackErr fails the rollback.
+	raced       string
+	rollbackErr error
 }
 
 type restrictionAudit struct {
@@ -73,7 +77,7 @@ func (tables *restrictionTables) Query(_ context.Context, name string, args ...a
 		return digestRow(tenant()), nil
 	case qPlatformCurrentInsert, qTenantCurrentInsert:
 		key := tenant()
-		if _, ok := tables.current[key]; !ok {
+		if _, ok := tables.current[key]; !ok && tables.raced == "" {
 			tables.current[key] = args[len(args)-1].(string)
 			return digestRow(key), nil
 		}
@@ -105,7 +109,10 @@ func (tables *restrictionTables) Rollback(context.Context) error {
 	if saved := tables.savepoint; saved != nil {
 		tables.layers, tables.current, tables.audits, tables.savepoint = saved.layers, saved.current, saved.audits, nil
 	}
-	return nil
+	if tables.raced != "" {
+		tables.current[7] = tables.raced
+	}
+	return tables.rollbackErr
 }
 
 type restrictionDB struct {
@@ -177,6 +184,24 @@ func TestReplaceTenantSwapsByDigestAndAuditsOnlyChanges(t *testing.T) {
 	layers, err := store.Layers(ctx, 7)
 	if err != nil || layers.Tenant.Digest != second || len(layers.Tenant.Denials) != 1 || layers.Platform.Digest != "" {
 		t.Fatalf("own write must be visible at once: %+v, %v", layers, err)
+	}
+}
+
+func TestReplaceTenantRollsBackARacedFirstWrite(t *testing.T) {
+	ctx := context.Background()
+	layer := domain.RestrictionLayer{Denials: []domain.PolicyStatement{denial("a")}}
+	tables, store := newRestrictions(t)
+	tables.raced = strings.Repeat("f", 64)
+	if current, err := store.ReplaceTenant(ctx, platformService, 7, layer, ""); !errors.Is(err, domain.ErrConflict) || current != tables.raced {
+		t.Fatalf("raced write = %q, %v", current, err)
+	}
+	if len(tables.layers) != 0 || len(tables.audits) != 0 {
+		t.Fatalf("a raced write stored layers %v, audits %v", tables.layers, tables.audits)
+	}
+	tables, store = newRestrictions(t)
+	tables.raced, tables.rollbackErr = strings.Repeat("f", 64), errors.New("connection lost")
+	if _, err := store.ReplaceTenant(ctx, platformService, 7, layer, ""); !errors.Is(err, tables.rollbackErr) {
+		t.Fatalf("failed rollback = %v", err)
 	}
 }
 

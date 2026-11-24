@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -155,40 +155,25 @@ func (store *TableRolloutStateStore) Transition(ctx context.Context, transition 
 	if err := store.init(ctx); err != nil {
 		return err
 	}
-	tx, err := store.DB.BeginTx(ctx, rolloutStateQueries)
-	if err != nil {
-		return fmt.Errorf("rollout transition: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(store.DB, rolloutStateQueries, "rollout transition").Run(ctx, func(tx keelport.TxQueryService) error {
+		updated, err := tx.Query(ctx, qRolloutCasState,
+			string(next.Stage), nullableString(next.Ring), next.TrafficPercentage,
+			next.Paused, nullableString(next.PauseReason), next.StageStartedAt, next.MinSamples, next.MinDuration.Milliseconds(),
+			next.ConsecutiveBreaches, next.ConsecutiveHealthy, nullableTime(next.LastBreachAt),
+			next.PlatformVersion, transition.FromGeneration, next.LeaseOwner, transition.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("rollout transition: update: %w", err)
 		}
-	}()
-	updated, err := tx.Query(ctx, qRolloutCasState,
-		string(next.Stage), nullableString(next.Ring), next.TrafficPercentage,
-		next.Paused, nullableString(next.PauseReason), next.StageStartedAt, next.MinSamples, next.MinDuration.Milliseconds(),
-		next.ConsecutiveBreaches, next.ConsecutiveHealthy, nullableTime(next.LastBreachAt),
-		next.PlatformVersion, transition.FromGeneration, next.LeaseOwner, transition.OccurredAt)
-	if err != nil {
-		return fmt.Errorf("rollout transition: update: %w", err)
-	}
-	if len(updated.Rows) == 0 {
-		return fmt.Errorf("%w: rollout %s generation %d is stale or lease lost", domain.ErrRevisionConflict, next.PlatformVersion, transition.FromGeneration)
-	}
-	if _, err = tx.Query(ctx, qRolloutInsertTransition,
-		transition.PlatformVersion, string(transition.From), string(transition.To), transition.FromGeneration,
-		transition.Actor, transition.Reason, transition.OccurredAt); err != nil {
-		return fmt.Errorf("rollout transition: record: %w", err)
-	}
-	if err = store.mirrorRing(ctx, tx, transition, next); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("rollout transition: commit: %w", err)
-	}
-	committed = true
-	return nil
+		if len(updated.Rows) == 0 {
+			return fmt.Errorf("%w: rollout %s generation %d is stale or lease lost", domain.ErrRevisionConflict, next.PlatformVersion, transition.FromGeneration)
+		}
+		if _, err := tx.Query(ctx, qRolloutInsertTransition,
+			transition.PlatformVersion, string(transition.From), string(transition.To), transition.FromGeneration,
+			transition.Actor, transition.Reason, transition.OccurredAt); err != nil {
+			return fmt.Errorf("rollout transition: record: %w", err)
+		}
+		return store.mirrorRing(ctx, tx, transition, next)
+	})
 }
 
 func (store *TableRolloutStateStore) mirrorRing(ctx context.Context, tx keelport.TxQueryService, transition domain.RolloutTransition, next domain.RolloutState) error {

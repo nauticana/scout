@@ -14,6 +14,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/jsonschema"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -99,52 +100,40 @@ func (registry *TableToolRegistry) Register(ctx context.Context, tenantID int64,
 	if err != nil {
 		return err
 	}
-	tx, err := registry.DB.BeginTx(ctx, toolRegistryQueries)
-	if err != nil {
-		return fmt.Errorf("begin tool registration: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	return txn.New(registry.DB, toolRegistryQueries, "tool registration").Run(ctx, func(tx port.TxQueryService) error {
+		if _, err := tx.Query(ctx, qToolProfileEnsure, tenantID, tool.ToolID, tool.DisplayName); err != nil {
+			return fmt.Errorf("ensure tool profile %q: %w", tool.ToolID, err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qToolProfileEnsure, tenantID, tool.ToolID, tool.DisplayName); err != nil {
-		return fmt.Errorf("ensure tool profile %q: %w", tool.ToolID, err)
-	}
-	profile, err := tx.Query(ctx, qToolProfileGet, tenantID, tool.ToolID)
-	if err != nil {
-		return fmt.Errorf("read tool profile %q: %w", tool.ToolID, err)
-	}
-	if len(profile.Rows) != 1 || common.AsString(profile.Rows[0][0]) != tool.DisplayName {
-		return fmt.Errorf("%w: tool %s is already registered with a different display name", domain.ErrConflict, tool.ToolID)
-	}
-	existing, err := tx.Query(ctx, qToolVersionGet, tenantID, tool.ToolID, tool.Version)
-	if err != nil {
-		return fmt.Errorf("read tool version %s@%s: %w", tool.ToolID, tool.Version, err)
-	}
-	if len(existing.Rows) > 0 {
-		if !sameToolContract(scanToolDefinition(existing.Rows[0]), tool) {
-			return fmt.Errorf("%w: tool %s@%s is already registered with different content", domain.ErrConflict, tool.ToolID, tool.Version)
+		profile, err := tx.Query(ctx, qToolProfileGet, tenantID, tool.ToolID)
+		if err != nil {
+			return fmt.Errorf("read tool profile %q: %w", tool.ToolID, err)
+		}
+		if len(profile.Rows) != 1 || common.AsString(profile.Rows[0][0]) != tool.DisplayName {
+			return fmt.Errorf("%w: tool %s is already registered with a different display name", domain.ErrConflict, tool.ToolID)
+		}
+		existing, err := tx.Query(ctx, qToolVersionGet, tenantID, tool.ToolID, tool.Version)
+		if err != nil {
+			return fmt.Errorf("read tool version %s@%s: %w", tool.ToolID, tool.Version, err)
+		}
+		if len(existing.Rows) > 0 {
+			if !sameToolContract(scanToolDefinition(existing.Rows[0]), tool) {
+				return fmt.Errorf("%w: tool %s@%s is already registered with different content", domain.ErrConflict, tool.ToolID, tool.Version)
+			}
+			return nil
+		}
+		if _, err := tx.Query(ctx, qToolVersionInsert, tenantID, tool.ToolID, tool.Version, tool.Endpoint,
+			string(tool.InputSchema), string(tool.OutputSchema), tool.Timeout.Milliseconds(), tool.MaxAttempts, tool.VerifyEffect, tool.RetryWhenEffectAbsent, tool.ReadOnly); err != nil {
+			return fmt.Errorf("insert tool version %s@%s: %w", tool.ToolID, tool.Version, err)
+		}
+		stored, err := tx.Query(ctx, qToolVersionGet, tenantID, tool.ToolID, tool.Version)
+		if err != nil {
+			return fmt.Errorf("read inserted tool version %s@%s: %w", tool.ToolID, tool.Version, err)
+		}
+		if len(stored.Rows) != 1 || !sameToolContract(scanToolDefinition(stored.Rows[0]), tool) {
+			return fmt.Errorf("%w: tool %s@%s was concurrently registered with different content", domain.ErrConflict, tool.ToolID, tool.Version)
 		}
 		return nil
-	}
-	if _, err = tx.Query(ctx, qToolVersionInsert, tenantID, tool.ToolID, tool.Version, tool.Endpoint,
-		string(tool.InputSchema), string(tool.OutputSchema), tool.Timeout.Milliseconds(), tool.MaxAttempts, tool.VerifyEffect, tool.RetryWhenEffectAbsent, tool.ReadOnly); err != nil {
-		return fmt.Errorf("insert tool version %s@%s: %w", tool.ToolID, tool.Version, err)
-	}
-	stored, err := tx.Query(ctx, qToolVersionGet, tenantID, tool.ToolID, tool.Version)
-	if err != nil {
-		return fmt.Errorf("read inserted tool version %s@%s: %w", tool.ToolID, tool.Version, err)
-	}
-	if len(stored.Rows) != 1 || !sameToolContract(scanToolDefinition(stored.Rows[0]), tool) {
-		return fmt.Errorf("%w: tool %s@%s was concurrently registered with different content", domain.ErrConflict, tool.ToolID, tool.Version)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tool registration: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }
 
 // Get returns one version owned by the tenant; another tenant's tool is ErrNotFound.
@@ -192,24 +181,9 @@ func (registry *TableToolRegistry) Bind(ctx context.Context, tenantID int64, age
 	if tenantID <= 0 || strings.TrimSpace(agentID) == "" || strings.TrimSpace(agentVersion) == "" || len(tools) == 0 {
 		return fmt.Errorf("%w: tenant, agent, agent version, and at least one tool are required", domain.ErrValidation)
 	}
-	tx, err := registry.DB.BeginTx(ctx, toolRegistryQueries)
-	if err != nil {
-		return fmt.Errorf("begin tool binding: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}
-	}()
-	if err = bindTools(ctx, tx, tenantID, agentID, agentVersion, tools); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tool binding: %w", err)
-	}
-	committed = true
-	return nil
+	return txn.New(registry.DB, toolRegistryQueries, "tool binding").Run(ctx, func(tx port.TxQueryService) error {
+		return bindTools(ctx, tx, tenantID, agentID, agentVersion, tools)
+	})
 }
 
 const toolRegistryCatalogID = "scout.toolgateway.registry"

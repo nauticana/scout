@@ -2,7 +2,6 @@ package dataplane
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/workingset"
 )
 
@@ -87,50 +87,36 @@ func (recorder *TableWorkingSetRecorder) RecordWorkingSet(ctx context.Context, o
 	if err := validRecord(set); err != nil {
 		return err
 	}
-	tx, err := recorder.DB.BeginTx(ctx, workingSetQueries)
-	if err != nil {
-		return fmt.Errorf("record working set: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(context.WithoutCancel(ctx)); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("record working set: rollback: %w", rollbackErr))
+	return txn.New(recorder.DB, workingSetQueries, "record working set").Run(ctx, func(tx port.TxQueryService) error {
+		marked, err := tx.Query(ctx, qWorkingSetMark, string(set.Assurance), owner.TenantID, owner.RequestID, owner.Fence)
+		if err != nil {
+			return fmt.Errorf("record working set: %w", err)
+		}
+		if len(marked.Rows) == 0 || len(marked.Rows[0]) < 2 {
+			return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+		}
+		turnNo, conversationID := common.AsInt64(marked.Rows[0][0]), common.AsString(marked.Rows[0][1])
+		if _, err := tx.Query(ctx, qWorkingSetClear, owner.TenantID, conversationID, turnNo); err != nil {
+			return fmt.Errorf("record working set: clear: %w", err)
+		}
+		insert := func(id string, selected bool) error {
+			if _, err := tx.Query(ctx, qWorkingSetItem, owner.TenantID, conversationID, turnNo, id, selected); err != nil {
+				return fmt.Errorf("record working set candidate %q: %w", id, err)
+			}
+			return nil
+		}
+		for _, item := range set.Selected {
+			if err := insert(item.ID, true); err != nil {
+				return err
 			}
 		}
-	}()
-	marked, err := tx.Query(ctx, qWorkingSetMark, string(set.Assurance), owner.TenantID, owner.RequestID, owner.Fence)
-	if err != nil {
-		return fmt.Errorf("record working set: %w", err)
-	}
-	if len(marked.Rows) == 0 || len(marked.Rows[0]) < 2 {
-		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
-	}
-	turnNo, conversationID := common.AsInt64(marked.Rows[0][0]), common.AsString(marked.Rows[0][1])
-	if _, err = tx.Query(ctx, qWorkingSetClear, owner.TenantID, conversationID, turnNo); err != nil {
-		return fmt.Errorf("record working set: clear: %w", err)
-	}
-	insert := func(id string, selected bool) error {
-		if _, err := tx.Query(ctx, qWorkingSetItem, owner.TenantID, conversationID, turnNo, id, selected); err != nil {
-			return fmt.Errorf("record working set candidate %q: %w", id, err)
+		for _, id := range set.Excluded {
+			if err := insert(id, false); err != nil {
+				return err
+			}
 		}
 		return nil
-	}
-	for _, item := range set.Selected {
-		if err = insert(item.ID, true); err != nil {
-			return err
-		}
-	}
-	for _, id := range set.Excluded {
-		if err = insert(id, false); err != nil {
-			return err
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("record working set: commit: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }
 
 // validRecord refuses an unknown assurance, a blank, overlong, or repeated id, and more ids than a compiler may offer.

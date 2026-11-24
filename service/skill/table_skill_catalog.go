@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -136,39 +137,27 @@ func (catalog *TableSkillCatalog) Register(ctx context.Context, skill domain.Ski
 	if err != nil {
 		return err
 	}
-	tx, err := catalog.DB.BeginTx(ctx, skillCatalogQueries)
-	if err != nil {
-		return fmt.Errorf("begin catalog skill registration: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}
-	}()
-	if err = ensureProfile(ctx, tx, qCatalogProfileEnsure, qCatalogProfileLock, skill.DisplayName, skill.SkillID); err != nil {
-		return err
-	}
-	existing, found, err := readCatalogVersion(ctx, tx, skill.SkillID, skill.Version)
-	if err != nil {
-		return err
-	}
-	if !found {
-		if err = insertCatalogVersion(ctx, tx, skill); err != nil {
+	return txn.New(catalog.DB, skillCatalogQueries, "catalog skill registration").Run(ctx, func(tx port.TxQueryService) error {
+		if err := ensureProfile(ctx, tx, qCatalogProfileEnsure, qCatalogProfileLock, skill.DisplayName, skill.SkillID); err != nil {
 			return err
 		}
-		if existing, found, err = readCatalogVersion(ctx, tx, skill.SkillID, skill.Version); err != nil {
+		existing, found, err := readCatalogVersion(ctx, tx, skill.SkillID, skill.Version)
+		if err != nil {
 			return err
 		}
-	}
-	if !found || !sameSkill(existing, skill) {
-		return fmt.Errorf("%w: catalog skill %s@%s is already registered with different content", domain.ErrConflict, skill.SkillID, skill.Version)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit catalog skill registration: %w", err)
-	}
-	committed = true
-	return nil
+		if !found {
+			if err := insertCatalogVersion(ctx, tx, skill); err != nil {
+				return err
+			}
+			if existing, found, err = readCatalogVersion(ctx, tx, skill.SkillID, skill.Version); err != nil {
+				return err
+			}
+		}
+		if !found || !sameSkill(existing, skill) {
+			return fmt.Errorf("%w: catalog skill %s@%s is already registered with different content", domain.ErrConflict, skill.SkillID, skill.Version)
+		}
+		return nil
+	})
 }
 
 // EnsureProfile creates a catalog skill profile before its first version, refusing an

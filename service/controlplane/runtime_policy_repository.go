@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -110,24 +111,9 @@ func (repository *TableTenantPolicyRepository) PublishRuntimePolicy(ctx context.
 		return err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := repository.DB.BeginTx(ctx, runtimePolicyQueries)
-	if err != nil {
-		return fmt.Errorf("begin runtime policy transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	if err = writeRuntimePolicy(ctx, tx, tenantID, version, qRuntimePolicyPoint); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit runtime policy: %w", err)
-	}
-	committed = true
-	return nil
+	return txn.New(repository.DB, runtimePolicyQueries, "runtime policy").Run(ctx, func(tx keelport.TxQueryService) error {
+		return writeRuntimePolicy(ctx, tx, tenantID, version, qRuntimePolicyPoint)
+	})
 }
 
 // writeRuntimePolicy inserts the immutable version and runs the given pointer statement inside the caller's transaction.

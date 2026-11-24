@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/observability"
 )
 
@@ -375,73 +376,69 @@ func (store *TableTurnRecordStore) Open(ctx context.Context, request domain.Turn
 		return 0, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := store.DB.BeginTx(ctx, store.queryMap())
-	if err != nil {
-		return 0, fmt.Errorf("open turn: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var turnNo int64
+	opened := false
+	if err := txn.New(store.DB, store.queryMap(), "open turn").Run(ctx, func(tx port.TxQueryService) error {
+		if _, err := tx.Query(ctx, qRecordLock, fmt.Sprintf("%d:%s", tenantID, request.ConversationID)); err != nil {
+			return fmt.Errorf("open turn: lock conversation: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qRecordLock, fmt.Sprintf("%d:%s", tenantID, request.ConversationID)); err != nil {
-		return 0, fmt.Errorf("open turn: lock conversation: %w", err)
-	}
-	if strings.TrimSpace(request.AgentID) != "" {
-		if err = admits(ctx, tx, request); err != nil {
-			return 0, err
-		}
-		pinned, pinErr := tx.Query(ctx, qRecordPinnedAgent, tenantID, request.ConversationID)
-		if pinErr != nil {
-			return 0, fmt.Errorf("open turn: read conversation pin: %w", pinErr)
-		}
-		if len(pinned.Rows) == 0 {
-			if pinned, err = store.pin(ctx, tx, request); err != nil {
-				return 0, err
+		if strings.TrimSpace(request.AgentID) != "" {
+			if err := admits(ctx, tx, request); err != nil {
+				return err
+			}
+			pinned, err := tx.Query(ctx, qRecordPinnedAgent, tenantID, request.ConversationID)
+			if err != nil {
+				return fmt.Errorf("open turn: read conversation pin: %w", err)
+			}
+			if len(pinned.Rows) == 0 {
+				if pinned, err = store.pin(ctx, tx, request); err != nil {
+					return err
+				}
+			}
+			if len(pinned.Rows) == 0 {
+				return fmt.Errorf("%w: agent %q has no deployed version to pin", domain.ErrNotReady, request.AgentID)
+			}
+			if pinnedAgent := common.AsString(pinned.Rows[0][0]); pinnedAgent != request.AgentID {
+				return fmt.Errorf("%w: conversation %q is pinned to agent %q, not %q", domain.ErrConflict, request.ConversationID, pinnedAgent, request.AgentID)
+			}
+			if person, opener := endUserRef(request), common.AsString(pinned.Rows[0][2]); person != nil && opener != "" && person != opener {
+				return fmt.Errorf("%w: conversation %q was opened for another person", domain.ErrForbidden, request.ConversationID)
+			}
+			pinnedVersion := strings.TrimSpace(common.AsString(pinned.Rows[0][1]))
+			if pinnedVersion == "" {
+				return fmt.Errorf("%w: conversation %q has no pinned agent version", domain.ErrNotReady, request.ConversationID)
+			}
+			if request.Release != "" && pinnedVersion != request.Release {
+				return fmt.Errorf("%w: conversation %q is pinned to release %q, not %q", domain.ErrConflict, request.ConversationID, pinnedVersion, request.Release)
+			}
+			if err = admitRate(ctx, tx, turnRateRequest{
+				TenantID: tenantID, ScopeID: request.TenantContext.ScopeID, AgentID: request.AgentID,
+				Release: pinnedVersion, RequestID: request.RequestID,
+			}); err != nil {
+				return err
 			}
 		}
-		if len(pinned.Rows) == 0 {
-			return 0, fmt.Errorf("%w: agent %q has no deployed version to pin", domain.ErrNotReady, request.AgentID)
+		inserted, err := tx.Query(ctx, qRecordOpen,
+			tenantID, request.ConversationID, request.RequestID, input.URI, input.Digest, nullableUsageField(request.WorkRef),
+			tenantID, request.ConversationID)
+		if err != nil {
+			return fmt.Errorf("open turn: insert: %w", err)
 		}
-		if pinnedAgent := common.AsString(pinned.Rows[0][0]); pinnedAgent != request.AgentID {
-			return 0, fmt.Errorf("%w: conversation %q is pinned to agent %q, not %q", domain.ErrConflict, request.ConversationID, pinnedAgent, request.AgentID)
+		if opened = len(inserted.Rows) > 0; opened {
+			turnNo = common.AsInt64(inserted.Rows[0][0])
 		}
-		if person, opener := endUserRef(request), common.AsString(pinned.Rows[0][2]); person != nil && opener != "" && person != opener {
-			return 0, fmt.Errorf("%w: conversation %q was opened for another person", domain.ErrForbidden, request.ConversationID)
+		if opened && store.TaskKind != "" && strings.TrimSpace(request.AgentID) != "" {
+			summary := common.TruncateRunes(common.RedactForStorage(string(request.Input)), 400)
+			if _, err := tx.Query(ctx, qRecordDetail, turnNo, store.TaskKind, summary, tenantID, request.ConversationID); err != nil {
+				return fmt.Errorf("open turn: history row: %w", err)
+			}
 		}
-		pinnedVersion := strings.TrimSpace(common.AsString(pinned.Rows[0][1]))
-		if pinnedVersion == "" {
-			return 0, fmt.Errorf("%w: conversation %q has no pinned agent version", domain.ErrNotReady, request.ConversationID)
-		}
-		if request.Release != "" && pinnedVersion != request.Release {
-			return 0, fmt.Errorf("%w: conversation %q is pinned to release %q, not %q", domain.ErrConflict, request.ConversationID, pinnedVersion, request.Release)
-		}
-		if err = admitRate(ctx, tx, turnRateRequest{
-			TenantID: tenantID, ScopeID: request.TenantContext.ScopeID, AgentID: request.AgentID,
-			Release: pinnedVersion, RequestID: request.RequestID,
-		}); err != nil {
-			return 0, err
-		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
-	inserted, err := tx.Query(ctx, qRecordOpen,
-		tenantID, request.ConversationID, request.RequestID, input.URI, input.Digest, nullableUsageField(request.WorkRef),
-		tenantID, request.ConversationID)
-	if err != nil {
-		return 0, fmt.Errorf("open turn: insert: %w", err)
-	}
-	if len(inserted.Rows) > 0 && store.TaskKind != "" && strings.TrimSpace(request.AgentID) != "" {
-		summary := common.TruncateRunes(common.RedactForStorage(string(request.Input)), 400)
-		if _, err = tx.Query(ctx, qRecordDetail, common.AsInt64(inserted.Rows[0][0]), store.TaskKind, summary, tenantID, request.ConversationID); err != nil {
-			return 0, fmt.Errorf("open turn: history row: %w", err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("open turn: commit: %w", err)
-	}
-	committed = true
-	if len(inserted.Rows) > 0 {
-		return common.AsInt64(inserted.Rows[0][0]), nil
+	if opened {
+		return turnNo, nil
 	}
 	existing, found, err := store.find(ctx, tenantID, request.RequestID)
 	if err != nil {
@@ -555,39 +552,31 @@ func (store *TableTurnRecordStore) Fail(ctx context.Context, owner domain.TurnOw
 		return fmt.Errorf("dehydrate turn failure: %w", err)
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := store.DB.BeginTx(ctx, store.queryMap())
-	if err != nil {
-		return fmt.Errorf("fail turn: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var unheld error
+	if err := txn.New(store.DB, store.queryMap(), "fail turn").Run(ctx, func(tx port.TxQueryService) error {
+		touched, err := tx.Query(ctx, qRecordOwnerTurn, owner.TenantID, owner.RequestID, owner.Fence)
+		if err != nil {
+			return fmt.Errorf("fail turn: guard turn owner: %w", err)
 		}
-	}()
-	touched, err := tx.Query(ctx, qRecordOwnerTurn, owner.TenantID, owner.RequestID, owner.Fence)
-	if err != nil {
-		return fmt.Errorf("fail turn: guard turn owner: %w", err)
-	}
-	if len(touched.Rows) == 0 || len(touched.Rows[0]) < 2 {
-		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
-	}
-	turnNo, conversationID := common.AsInt64(touched.Rows[0][0]), common.AsString(touched.Rows[0][1])
-	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, owner.RequestID, conversationID, turnNo, settlement)
-	if err != nil {
+		if len(touched.Rows) == 0 || len(touched.Rows[0]) < 2 {
+			return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+		}
+		turnNo, conversationID := common.AsInt64(touched.Rows[0][0]), common.AsString(touched.Rows[0][1])
+		unheld, err = store.Settlement.write(ctx, tx, owner.TenantID, owner.RequestID, conversationID, turnNo, settlement)
+		if err != nil {
+			return err
+		}
+		failed, err := tx.Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, owner.TenantID, owner.RequestID, owner.Fence, errorCode)
+		if err != nil {
+			return fmt.Errorf("fail turn: %w", err)
+		}
+		if len(failed.Rows) == 0 {
+			return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
-	failed, err := tx.Query(ctx, qRecordFail, string(status), ref.URI, ref.Digest, owner.TenantID, owner.RequestID, owner.Fence, errorCode)
-	if err != nil {
-		return fmt.Errorf("fail turn: %w", err)
-	}
-	if len(failed.Rows) == 0 {
-		return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, owner.RequestID, owner.Fence)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("fail turn: commit: %w", err)
-	}
-	committed = true
 	if unheld != nil {
 		return fmt.Errorf("%w: %w", domain.ErrBudgetUnsettled, unheld)
 	}

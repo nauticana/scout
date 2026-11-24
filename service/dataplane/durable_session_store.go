@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -221,50 +222,38 @@ func (store *DurableSessionStore) Checkpoint(ctx context.Context, owner domain.T
 
 func (store *DurableSessionStore) commitCheckpoint(ctx context.Context, owner domain.TurnOwner, expectedRevision int64, checkpoint domain.StepCheckpoint, ref domain.ObjectRef) error {
 	tenantID := owner.TenantID
-	tx, err := store.DB.BeginTx(ctx, durableSessionQueries)
-	if err != nil {
-		return fmt.Errorf("begin checkpoint: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(store.DB, durableSessionQueries, "checkpoint").Run(ctx, func(tx port.TxQueryService) error {
+		turnNo, err := guardOwnerTurn(ctx, tx, qSessionOwnerGuard, owner)
+		if err != nil {
+			return err
 		}
-	}()
-	turnNo, err := guardOwnerTurn(ctx, tx, qSessionOwnerGuard, owner)
-	if err != nil {
-		return err
-	}
-	if turnNo != checkpoint.TurnNo {
-		return fmt.Errorf("%w: the owner of turn %d cannot checkpoint turn %d", domain.ErrFenceLost, turnNo, checkpoint.TurnNo)
-	}
-	usage := checkpoint.Usage
-	if _, err = tx.Query(ctx, qSessionInsertCheckpoint,
-		tenantID, checkpoint.ConversationID, checkpoint.TurnNo, checkpoint.StepNo, checkpoint.ExecutionStepID,
-		checkpoint.IdempotencyKey, ref.URI, ref.Digest, checkpoint.Fingerprint,
-		usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.CostMinorUnits, usage.Currency); err != nil {
-		return fmt.Errorf("insert checkpoint: %w", err)
-	}
-	var advanced *keelmodel.QueryResult
-	if expectedRevision == 0 {
-		advanced, err = tx.Query(ctx, qSessionCreateSnapshot,
-			tenantID, checkpoint.ConversationID, checkpoint.TurnNo, checkpoint.StepNo, ref.URI, ref.Digest)
-	} else {
-		advanced, err = tx.Query(ctx, qSessionAdvanceSnapshot,
-			checkpoint.TurnNo, checkpoint.StepNo, ref.URI, ref.Digest,
-			tenantID, checkpoint.ConversationID, expectedRevision)
-	}
-	if err != nil {
-		return fmt.Errorf("advance snapshot: %w", err)
-	}
-	if len(advanced.Rows) == 0 {
-		return fmt.Errorf("%w: session %q is not at revision %d", domain.ErrRevisionConflict, checkpoint.ConversationID, expectedRevision)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit checkpoint: %w", err)
-	}
-	committed = true
-	return nil
+		if turnNo != checkpoint.TurnNo {
+			return fmt.Errorf("%w: the owner of turn %d cannot checkpoint turn %d", domain.ErrFenceLost, turnNo, checkpoint.TurnNo)
+		}
+		usage := checkpoint.Usage
+		if _, err := tx.Query(ctx, qSessionInsertCheckpoint,
+			tenantID, checkpoint.ConversationID, checkpoint.TurnNo, checkpoint.StepNo, checkpoint.ExecutionStepID,
+			checkpoint.IdempotencyKey, ref.URI, ref.Digest, checkpoint.Fingerprint,
+			usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.CostMinorUnits, usage.Currency); err != nil {
+			return fmt.Errorf("insert checkpoint: %w", err)
+		}
+		var advanced *keelmodel.QueryResult
+		if expectedRevision == 0 {
+			advanced, err = tx.Query(ctx, qSessionCreateSnapshot,
+				tenantID, checkpoint.ConversationID, checkpoint.TurnNo, checkpoint.StepNo, ref.URI, ref.Digest)
+		} else {
+			advanced, err = tx.Query(ctx, qSessionAdvanceSnapshot,
+				checkpoint.TurnNo, checkpoint.StepNo, ref.URI, ref.Digest,
+				tenantID, checkpoint.ConversationID, expectedRevision)
+		}
+		if err != nil {
+			return fmt.Errorf("advance snapshot: %w", err)
+		}
+		if len(advanced.Rows) == 0 {
+			return fmt.Errorf("%w: session %q is not at revision %d", domain.ErrRevisionConflict, checkpoint.ConversationID, expectedRevision)
+		}
+		return nil
+	})
 }
 
 // Complete stores the response and marks the owner's turn completed while it is the
@@ -316,43 +305,31 @@ func (store *DurableSessionStore) Complete(ctx context.Context, owner domain.Tur
 }
 
 func (store *DurableSessionStore) completeTx(ctx context.Context, owner domain.TurnOwner, conversationID string, turnNo, expectedRevision int64, ref domain.ObjectRef, kind, card string, settlement domain.TurnSettlement) error {
-	tx, err := store.DB.BeginTx(ctx, completionQueries)
-	if err != nil {
-		return fmt.Errorf("begin completion: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(store.DB, completionQueries, "completion").Run(ctx, func(tx port.TxQueryService) error {
+		guarded, err := guardOwnerTurn(ctx, tx, qSessionOwnerGuard, owner)
+		if err != nil {
+			return err
 		}
-	}()
-	guarded, err := guardOwnerTurn(ctx, tx, qSessionOwnerGuard, owner)
-	if err != nil {
-		return err
-	}
-	if guarded != turnNo {
-		return fmt.Errorf("%w: the owner of turn %d cannot complete turn %d", domain.ErrFenceLost, guarded, turnNo)
-	}
-	unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, owner.RequestID, conversationID, turnNo, settlement)
-	if err != nil {
-		return err
-	}
-	if unheld != nil {
-		return unheld
-	}
-	completed, err := tx.Query(ctx, qSessionCompleteTurn,
-		ref.URI, ref.Digest, owner.TenantID, conversationID, turnNo, owner.RequestID, owner.Fence, expectedRevision, kind, card)
-	if err != nil {
-		return fmt.Errorf("complete turn: %w", err)
-	}
-	if len(completed.Rows) == 0 {
-		return store.refusedCompletion(ctx, tx, owner, turnNo, conversationID)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit completion: %w", err)
-	}
-	committed = true
-	return nil
+		if guarded != turnNo {
+			return fmt.Errorf("%w: the owner of turn %d cannot complete turn %d", domain.ErrFenceLost, guarded, turnNo)
+		}
+		unheld, err := store.Settlement.write(ctx, tx, owner.TenantID, owner.RequestID, conversationID, turnNo, settlement)
+		if err != nil {
+			return err
+		}
+		if unheld != nil {
+			return unheld
+		}
+		completed, err := tx.Query(ctx, qSessionCompleteTurn,
+			ref.URI, ref.Digest, owner.TenantID, conversationID, turnNo, owner.RequestID, owner.Fence, expectedRevision, kind, card)
+		if err != nil {
+			return fmt.Errorf("complete turn: %w", err)
+		}
+		if len(completed.Rows) == 0 {
+			return store.refusedCompletion(ctx, tx, owner, turnNo, conversationID)
+		}
+		return nil
+	})
 }
 
 // refusedCompletion tells a lost fence apart from a snapshot that moved.

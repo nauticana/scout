@@ -20,6 +20,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -331,45 +332,33 @@ func insertID(ctx context.Context, qs keelport.QueryService, args []any) (int64,
 func (s *TableStore) insertNotified(ctx context.Context, draft domain.MCPConfirmationDraft, args []any) (int64, error) {
 	queries := maps.Clone(confirmationQueries)
 	maps.Copy(queries, outbox.WriteQueries())
-	tx, err := s.DB.BeginTx(ctx, queries)
-	if err != nil {
-		return 0, fmt.Errorf("record confirmation: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, queries, "record confirmation"), func(tx keelport.TxQueryService) (int64, error) {
+		id, err := insertID(ctx, tx, args)
+		if err != nil || id == 0 {
+			return 0, err
 		}
-	}()
-	id, err := insertID(ctx, tx, args)
-	if err != nil || id == 0 {
-		return 0, err
-	}
-	stored, err := tx.Query(ctx, qConfirmGet, draft.TenantID, id)
-	if err != nil {
-		return 0, fmt.Errorf("read the new confirmation: %w", err)
-	}
-	if len(stored.Rows) == 0 {
-		return 0, fmt.Errorf("%w: the new confirmation %d", domain.ErrNotFound, id)
-	}
-	payload, err := json.Marshal(pendingNotice{TenantID: draft.TenantID, ConfirmationID: id, Tool: draft.Tool,
-		MakerKind: string(draft.Maker.Kind), MakerID: draft.Maker.ID, ExpiresAt: scanConfirmation(stored.Rows[0]).ExpiresAt})
-	if err != nil {
-		return 0, fmt.Errorf("encode confirmation notice: %w", err)
-	}
-	eventID, err := outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: draft.TenantID, AggregateType: Aggregate,
-		AggregateID: strconv.FormatInt(id, 10), EventType: PendingEvent, Payload: string(payload)})
-	if err != nil {
-		return 0, fmt.Errorf("queue confirmation notice: %w", err)
-	}
-	if _, err = tx.Query(ctx, qConfirmNotified, eventID, draft.TenantID, id); err != nil {
-		return 0, fmt.Errorf("link confirmation notice: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("record confirmation: commit: %w", err)
-	}
-	committed = true
-	return id, nil
+		stored, err := tx.Query(ctx, qConfirmGet, draft.TenantID, id)
+		if err != nil {
+			return 0, fmt.Errorf("read the new confirmation: %w", err)
+		}
+		if len(stored.Rows) == 0 {
+			return 0, fmt.Errorf("%w: the new confirmation %d", domain.ErrNotFound, id)
+		}
+		payload, err := json.Marshal(pendingNotice{TenantID: draft.TenantID, ConfirmationID: id, Tool: draft.Tool,
+			MakerKind: string(draft.Maker.Kind), MakerID: draft.Maker.ID, ExpiresAt: scanConfirmation(stored.Rows[0]).ExpiresAt})
+		if err != nil {
+			return 0, fmt.Errorf("encode confirmation notice: %w", err)
+		}
+		eventID, err := outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: draft.TenantID, AggregateType: Aggregate,
+			AggregateID: strconv.FormatInt(id, 10), EventType: PendingEvent, Payload: string(payload)})
+		if err != nil {
+			return 0, fmt.Errorf("queue confirmation notice: %w", err)
+		}
+		if _, err := tx.Query(ctx, qConfirmNotified, eventID, draft.TenantID, id); err != nil {
+			return 0, fmt.Errorf("link confirmation notice: %w", err)
+		}
+		return id, nil
+	})
 }
 
 // Get reads one confirmation inside its tenant.
@@ -592,33 +581,21 @@ func (s *TableStore) Reconcile(ctx context.Context, key domain.MCPConfirmationKe
 		return err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := s.DB.BeginTx(ctx, confirmationQueries)
-	if err != nil {
-		return fmt.Errorf("reconcile confirmation %d: begin: %w", key.ID, err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(s.DB, confirmationQueries, fmt.Sprintf("reconcile confirmation %d", key.ID)).Run(ctx, func(tx keelport.TxQueryService) error {
+		updated, err := tx.Query(ctx, qConfirmReconcile, string(outcome), string(reconciler.Kind), reconciler.ID, note, key.TenantID, key.ID)
+		if err != nil {
+			return fmt.Errorf("reconcile confirmation %d: %w", key.ID, err)
 		}
-	}()
-	updated, err := tx.Query(ctx, qConfirmReconcile, string(outcome), string(reconciler.Kind), reconciler.ID, note, key.TenantID, key.ID)
-	if err != nil {
-		return fmt.Errorf("reconcile confirmation %d: %w", key.ID, err)
-	}
-	if len(updated.Rows) == 0 {
-		return fmt.Errorf("%w: cannot reconcile confirmation %d in its current state", domain.ErrConflict, key.ID)
-	}
-	if s.Calls != nil {
-		if err = s.Calls.ConfirmationReconciledTx(ctx, tx, key, outcome, reconciler); err != nil {
-			return err
+		if len(updated.Rows) == 0 {
+			return fmt.Errorf("%w: cannot reconcile confirmation %d in its current state", domain.ErrConflict, key.ID)
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("reconcile confirmation %d: commit: %w", key.ID, err)
-	}
-	committed = true
-	return nil
+		if s.Calls != nil {
+			if err := s.Calls.ConfirmationReconciledTx(ctx, tx, key, outcome, reconciler); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Purge drops the payload, preview, and result of a bounded batch of

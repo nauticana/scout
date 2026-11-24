@@ -15,6 +15,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/jsonschema"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/guardrail"
 )
 
@@ -160,40 +161,28 @@ func (g *StudioGuardrails) SaveGuardrails(ctx context.Context, actor domain.Stud
 		return domain.AgentGuardrails{}, err
 	}
 
-	tx, err := g.Studio.DB.BeginTx(ctx, studioGuardrailQueries)
-	if err != nil {
-		return domain.AgentGuardrails{}, fmt.Errorf("begin guardrail transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(g.Studio.DB, studioGuardrailQueries, "guardrail").Run(ctx, func(tx keelport.TxQueryService) error {
+		bumped, err := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision)
+		if err != nil {
+			return fmt.Errorf("bump draft revision: %w", err)
 		}
-	}()
-	bumped, err := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision)
-	if err != nil {
-		return domain.AgentGuardrails{}, fmt.Errorf("bump draft revision: %w", err)
-	}
-	if len(bumped.Rows) == 0 {
-		return domain.AgentGuardrails{}, domain.ErrRevisionConflict
-	}
-	detail := "removed"
-	if len(own) == 0 {
-		_, err = tx.Query(ctx, qGuardrailDraftDrop, actor.TenantID, change.AgentID)
-	} else {
-		detail = fmt.Sprintf("%d rules, digest %s", len(own), digest[:12])
-		_, err = tx.Query(ctx, qGuardrailDraftPut, actor.TenantID, change.AgentID, string(envelope), digest, actorUser(actor))
-	}
-	if err != nil {
-		return domain.AgentGuardrails{}, fmt.Errorf("store agent guardrails: %w", err)
-	}
-	if err = auditStudio(ctx, tx, actor, change.AgentID, "GUARDRAILS", detail); err != nil {
+		if len(bumped.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		detail := "removed"
+		if len(own) == 0 {
+			_, err = tx.Query(ctx, qGuardrailDraftDrop, actor.TenantID, change.AgentID)
+		} else {
+			detail = fmt.Sprintf("%d rules, digest %s", len(own), digest[:12])
+			_, err = tx.Query(ctx, qGuardrailDraftPut, actor.TenantID, change.AgentID, string(envelope), digest, actorUser(actor))
+		}
+		if err != nil {
+			return fmt.Errorf("store agent guardrails: %w", err)
+		}
+		return auditStudio(ctx, tx, actor, change.AgentID, "GUARDRAILS", detail)
+	}); err != nil {
 		return domain.AgentGuardrails{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentGuardrails{}, fmt.Errorf("commit agent guardrails: %w", err)
-	}
-	committed = true
 	return g.Guardrails(ctx, actor, change.AgentID)
 }
 

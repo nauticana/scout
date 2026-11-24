@@ -7,11 +7,11 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -83,50 +83,38 @@ func (aliaser *VersionAliaser) Swap(ctx context.Context, tenantID int64, knowled
 	if err := aliaser.init(ctx); err != nil {
 		return err
 	}
-	tx, err := aliaser.DB.BeginTx(ctx, aliasQueries)
-	if err != nil {
-		return fmt.Errorf("swap alias: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(aliaser.DB, aliasQueries, "swap alias").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qAliasLock, fmt.Sprintf("knowledge_alias|%d|%s", tenantID, knowledgeBaseID)); err != nil {
+			return fmt.Errorf("swap alias: lock: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qAliasLock, fmt.Sprintf("knowledge_alias|%d|%s", tenantID, knowledgeBaseID)); err != nil {
-		return fmt.Errorf("swap alias: lock: %w", err)
-	}
-	current, err := tx.Query(ctx, qAliasGet, tenantID, knowledgeBaseID)
-	if err != nil {
-		return fmt.Errorf("swap alias: find: %w", err)
-	}
-	switch {
-	case len(current.Rows) == 0 && expectedVersion == "":
-		if _, err = tx.Query(ctx, qAliasInsert, tenantID, knowledgeBaseID, newVersion); err != nil {
-			return fmt.Errorf("swap alias: insert: %w", err)
-		}
-	case len(current.Rows) == 0:
-		return fmt.Errorf("%w: knowledge base %q has no alias, expected version %q", domain.ErrConflict, knowledgeBaseID, expectedVersion)
-	default:
-		if active := common.AsString(current.Rows[0][0]); active != expectedVersion {
-			return fmt.Errorf("%w: knowledge base %q is at version %q, expected %q", domain.ErrConflict, knowledgeBaseID, active, expectedVersion)
-		}
-		swapped, err := tx.Query(ctx, qAliasSwap, newVersion, tenantID, knowledgeBaseID, expectedVersion)
+		current, err := tx.Query(ctx, qAliasGet, tenantID, knowledgeBaseID)
 		if err != nil {
-			return fmt.Errorf("swap alias: %w", err)
+			return fmt.Errorf("swap alias: find: %w", err)
 		}
-		if len(swapped.Rows) == 0 {
-			return fmt.Errorf("%w: knowledge base %q alias changed concurrently", domain.ErrConflict, knowledgeBaseID)
+		switch {
+		case len(current.Rows) == 0 && expectedVersion == "":
+			if _, err := tx.Query(ctx, qAliasInsert, tenantID, knowledgeBaseID, newVersion); err != nil {
+				return fmt.Errorf("swap alias: insert: %w", err)
+			}
+		case len(current.Rows) == 0:
+			return fmt.Errorf("%w: knowledge base %q has no alias, expected version %q", domain.ErrConflict, knowledgeBaseID, expectedVersion)
+		default:
+			if active := common.AsString(current.Rows[0][0]); active != expectedVersion {
+				return fmt.Errorf("%w: knowledge base %q is at version %q, expected %q", domain.ErrConflict, knowledgeBaseID, active, expectedVersion)
+			}
+			swapped, err := tx.Query(ctx, qAliasSwap, newVersion, tenantID, knowledgeBaseID, expectedVersion)
+			if err != nil {
+				return fmt.Errorf("swap alias: %w", err)
+			}
+			if len(swapped.Rows) == 0 {
+				return fmt.Errorf("%w: knowledge base %q alias changed concurrently", domain.ErrConflict, knowledgeBaseID)
+			}
 		}
-	}
-	if _, err = tx.Query(ctx, qAliasRepointManifest, newVersion, tenantID, knowledgeBaseID, newVersion, newVersion, newVersion); err != nil {
-		return fmt.Errorf("swap alias: repoint manifests: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("swap alias: commit: %w", err)
-	}
-	committed = true
-	return nil
+		if _, err := tx.Query(ctx, qAliasRepointManifest, newVersion, tenantID, knowledgeBaseID, newVersion, newVersion, newVersion); err != nil {
+			return fmt.Errorf("swap alias: repoint manifests: %w", err)
+		}
+		return nil
+	})
 }
 
 // Active returns the generation retrieval must read, or ErrNotFound before the first swap.

@@ -304,7 +304,7 @@ func TestIngestPipelineWritesRowsBeforeVectorsAndUnpublishesWhenIndexingFails(t 
 	harness := newPipelineHarness(sources)
 	harness.query.commitErr = errors.New("commit failed")
 	item := ingest(harness)
-	if item.Terminal || !strings.Contains(item.Failure, "commit failed") || harness.indexed.Load() != 0 || harness.query.rollbacks != 1 || harness.activate.Load() != 0 {
+	if item.Terminal || !strings.Contains(item.Failure, "commit failed") || harness.indexed.Load() != 0 || harness.query.rollbacks != 0 || harness.activate.Load() != 0 {
 		t.Fatalf("a failed row commit must not index: %+v indexed %d rollbacks %d", item, harness.indexed.Load(), harness.query.rollbacks)
 	}
 

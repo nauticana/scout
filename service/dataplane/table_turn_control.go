@@ -15,6 +15,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -186,38 +187,29 @@ func (control *TableTurnControl) Cancel(ctx context.Context, tenantID int64, req
 		return err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := control.DB.BeginTx(ctx, operationQueries)
-	if err != nil {
-		return fmt.Errorf("begin turn cancellation: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(control.DB, operationQueries, "turn cancellation").Run(ctx, func(tx keelport.TxQueryService) error {
+		requested, err := tx.Query(ctx, qControlCancelRequest, common.TruncateRunes(reason, maxCancelReason), tenantID, requestID)
+		if err != nil {
+			return fmt.Errorf("request turn cancellation: %w", err)
 		}
-	}()
-	requested, err := tx.Query(ctx, qControlCancelRequest, common.TruncateRunes(reason, maxCancelReason), tenantID, requestID)
-	if err != nil {
-		return fmt.Errorf("request turn cancellation: %w", err)
-	}
-	if len(requested.Rows) == 0 {
-		return fmt.Errorf("%w: no live turn for request %q", domain.ErrNotFound, requestID)
-	}
-	if _, err = tx.Query(ctx, qControlUnknown, tenantID, requestID); err != nil {
-		return fmt.Errorf("mark cancelled turn's open calls unknown: %w", err)
-	}
-	if status := domain.TurnStatus(common.AsString(requested.Rows[0][0])); status == domain.TurnSuspended || status == domain.TurnHeld || status == domain.TurnOperated {
-		if _, err = tx.Query(ctx, qControlWake, tenantID, requestID); err != nil {
-			return fmt.Errorf("wake parked turn: %w", err)
+		if len(requested.Rows) == 0 {
+			return fmt.Errorf("%w: no live turn for request %q", domain.ErrNotFound, requestID)
 		}
-		if _, err = tx.Query(ctx, qQueueRequeue, control.now().UTC(), tenantID, requestID); err != nil {
-			return fmt.Errorf("requeue parked turn: %w", err)
+		if _, err := tx.Query(ctx, qControlUnknown, tenantID, requestID); err != nil {
+			return fmt.Errorf("mark cancelled turn's open calls unknown: %w", err)
 		}
+		if status := domain.TurnStatus(common.AsString(requested.Rows[0][0])); status == domain.TurnSuspended || status == domain.TurnHeld || status == domain.TurnOperated {
+			if _, err := tx.Query(ctx, qControlWake, tenantID, requestID); err != nil {
+				return fmt.Errorf("wake parked turn: %w", err)
+			}
+			if _, err := tx.Query(ctx, qQueueRequeue, control.now().UTC(), tenantID, requestID); err != nil {
+				return fmt.Errorf("requeue parked turn: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit turn cancellation: %w", err)
-	}
-	committed = true
 	return control.wake(ctx, tenantID, requestID, "turn cancellation")
 }
 
@@ -349,31 +341,19 @@ func (control *TableTurnControl) Release(ctx context.Context, tenantID int64, re
 		return 0, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := control.DB.BeginTx(ctx, operationQueries)
-	if err != nil {
-		return 0, fmt.Errorf("begin turn release: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(control.DB, operationQueries, "turn release"), func(tx keelport.TxQueryService) (int64, error) {
+		released, err := tx.Query(ctx, qControlRelease, tenantID, requestID, expectedFence)
+		if err != nil {
+			return 0, fmt.Errorf("release turn: %w", err)
 		}
-	}()
-	released, err := tx.Query(ctx, qControlRelease, tenantID, requestID, expectedFence)
-	if err != nil {
-		return 0, fmt.Errorf("release turn: %w", err)
-	}
-	if len(released.Rows) == 0 {
-		return 0, fmt.Errorf("%w: turn %q is not held at fence %d, or a call of it has an open outcome", domain.ErrConflict, requestID, expectedFence)
-	}
-	if _, err = tx.Query(ctx, qQueueRequeue, control.now().UTC(), tenantID, requestID); err != nil {
-		return 0, fmt.Errorf("requeue released turn: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit turn release: %w", err)
-	}
-	committed = true
-	return common.AsInt64(released.Rows[0][0]), nil
+		if len(released.Rows) == 0 {
+			return 0, fmt.Errorf("%w: turn %q is not held at fence %d, or a call of it has an open outcome", domain.ErrConflict, requestID, expectedFence)
+		}
+		if _, err := tx.Query(ctx, qQueueRequeue, control.now().UTC(), tenantID, requestID); err != nil {
+			return 0, fmt.Errorf("requeue released turn: %w", err)
+		}
+		return common.AsInt64(released.Rows[0][0]), nil
+	})
 }
 
 // tableTurnWatch is one running turn's view of its control columns.

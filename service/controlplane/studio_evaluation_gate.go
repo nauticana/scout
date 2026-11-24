@@ -14,6 +14,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -659,71 +660,59 @@ func (g *StudioEvaluationGate) record(ctx context.Context, actor domain.StudioAc
 		return domain.EvaluationGateDecision{}, fmt.Errorf("encode evaluation gate: %w", err)
 	}
 	inputs := inputsDigest(decision)
-	tx, err := g.Studio.DB.BeginTx(ctx, gateQueries)
-	if err != nil {
-		return domain.EvaluationGateDecision{}, fmt.Errorf("begin gate decision transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	key := []any{actor.TenantID, decision.AgentID, decision.DefinitionDigest}
-	stored, err := tx.Query(ctx, qGateDecisionLocked, key...)
-	if err != nil {
-		return domain.EvaluationGateDecision{}, fmt.Errorf("load gate decision: %w", err)
-	}
-	if len(stored.Rows) > 0 {
-		existing, err := g.scanDecision(ctx, tx, actor.TenantID, decision.AgentID, decision.DefinitionDigest, stored.Rows[0])
+	return txn.Value(ctx, txn.New(g.Studio.DB, gateQueries, "gate decision"), func(tx keelport.TxQueryService) (domain.EvaluationGateDecision, error) {
+		key := []any{actor.TenantID, decision.AgentID, decision.DefinitionDigest}
+		stored, err := tx.Query(ctx, qGateDecisionLocked, key...)
 		if err != nil {
-			return domain.EvaluationGateDecision{}, err
+			return domain.EvaluationGateDecision{}, fmt.Errorf("load gate decision: %w", err)
 		}
-		keepOverride := existing.Verdict == domain.GateVerdictOverride && decision.Verdict == domain.GateVerdictFail && len(staleness(existing, current)) == 0
-		if keepOverride || strings.TrimSpace(common.AsString(stored.Rows[0][4])) == inputs {
-			return existing, nil
+		if len(stored.Rows) > 0 {
+			existing, err := g.scanDecision(ctx, tx, actor.TenantID, decision.AgentID, decision.DefinitionDigest, stored.Rows[0])
+			if err != nil {
+				return domain.EvaluationGateDecision{}, err
+			}
+			keepOverride := existing.Verdict == domain.GateVerdictOverride && decision.Verdict == domain.GateVerdictFail && len(staleness(existing, current)) == 0
+			if keepOverride || strings.TrimSpace(common.AsString(stored.Rows[0][4])) == inputs {
+				return existing, nil
+			}
 		}
-	}
-	for _, drop := range []string{qGateDropRuns, qGateDrop} {
-		if _, err = tx.Query(ctx, drop, key...); err != nil {
-			return domain.EvaluationGateDecision{}, fmt.Errorf("replace gate decision: %w", err)
+		for _, drop := range []string{qGateDropRuns, qGateDrop} {
+			if _, err := tx.Query(ctx, drop, key...); err != nil {
+				return domain.EvaluationGateDecision{}, fmt.Errorf("replace gate decision: %w", err)
+			}
 		}
-	}
-	var setID, setVersion any
-	if decision.SetVersion > 0 {
-		setID, setVersion = decision.GoldenSetID, decision.SetVersion
-	}
-	inserted, err := tx.Query(ctx, qGateInsert, actor.TenantID, decision.AgentID, decision.DefinitionDigest, string(decision.Verdict),
-		common.NullIfEmpty(decision.Reason), decision.PolicyDigest, string(policy), inputs, common.NullIfEmpty(decision.BaseVersion),
-		setID, setVersion, string(actor.Principal.Kind), actor.Principal.ID)
-	if err != nil {
-		return domain.EvaluationGateDecision{}, fmt.Errorf("insert gate decision: %w", err)
-	}
-	if len(inserted.Rows) == 0 {
-		return domain.EvaluationGateDecision{}, fmt.Errorf("%w: a gate decision for this digest was recorded concurrently; retry", domain.ErrConflict)
-	}
-	decision.DecidedAt = common.AsTime(inserted.Rows[0][0])
-	for _, run := range decision.Runs {
-		if _, err = tx.Query(ctx, qGateInsertRun, actor.TenantID, decision.AgentID, decision.DefinitionDigest, run.RunID,
-			string(run.Role), run.ScoreBP, run.Samples, run.Skipped, run.Criticals); err != nil {
-			return domain.EvaluationGateDecision{}, fmt.Errorf("insert gate decision run %d: %w", run.RunID, err)
+		var setID, setVersion any
+		if decision.SetVersion > 0 {
+			setID, setVersion = decision.GoldenSetID, decision.SetVersion
 		}
-	}
-	if _, err = tx.Query(ctx, qGateAudit, actor.TenantID, decision.AgentID, event, truncate(detail, maxGateReason),
-		string(actor.Principal.Kind), actor.Principal.ID); err != nil {
-		return domain.EvaluationGateDecision{}, fmt.Errorf("record studio audit: %w", err)
-	}
-	// The evidence is written before the commit; its key replays it if the commit must be retried.
-	if evidence != nil {
-		if err = g.Audit.Record(ctx, *evidence); err != nil {
-			return domain.EvaluationGateDecision{}, fmt.Errorf("audit evaluation gate override: %w", err)
+		inserted, err := tx.Query(ctx, qGateInsert, actor.TenantID, decision.AgentID, decision.DefinitionDigest, string(decision.Verdict),
+			common.NullIfEmpty(decision.Reason), decision.PolicyDigest, string(policy), inputs, common.NullIfEmpty(decision.BaseVersion),
+			setID, setVersion, string(actor.Principal.Kind), actor.Principal.ID)
+		if err != nil {
+			return domain.EvaluationGateDecision{}, fmt.Errorf("insert gate decision: %w", err)
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.EvaluationGateDecision{}, fmt.Errorf("commit gate decision: %w", err)
-	}
-	committed = true
-	return decision, nil
+		if len(inserted.Rows) == 0 {
+			return domain.EvaluationGateDecision{}, fmt.Errorf("%w: a gate decision for this digest was recorded concurrently; retry", domain.ErrConflict)
+		}
+		decision.DecidedAt = common.AsTime(inserted.Rows[0][0])
+		for _, run := range decision.Runs {
+			if _, err := tx.Query(ctx, qGateInsertRun, actor.TenantID, decision.AgentID, decision.DefinitionDigest, run.RunID,
+				string(run.Role), run.ScoreBP, run.Samples, run.Skipped, run.Criticals); err != nil {
+				return domain.EvaluationGateDecision{}, fmt.Errorf("insert gate decision run %d: %w", run.RunID, err)
+			}
+		}
+		if _, err := tx.Query(ctx, qGateAudit, actor.TenantID, decision.AgentID, event, truncate(detail, maxGateReason),
+			string(actor.Principal.Kind), actor.Principal.ID); err != nil {
+			return domain.EvaluationGateDecision{}, fmt.Errorf("record studio audit: %w", err)
+		}
+		// The evidence is written before the commit; its key replays it if the commit must be retried.
+		if evidence != nil {
+			if err := g.Audit.Record(ctx, *evidence); err != nil {
+				return domain.EvaluationGateDecision{}, fmt.Errorf("audit evaluation gate override: %w", err)
+			}
+		}
+		return decision, nil
+	})
 }
 
 // decision reads the decision recorded for digest; nil when there is none.

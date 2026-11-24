@@ -15,6 +15,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 // ErrNoReadyTurn is returned by Claim when nothing is claimable right now.
@@ -304,34 +305,22 @@ func (scheduler *QueueTurnScheduler) reclaim(ctx context.Context, now time.Time,
 }
 
 func (scheduler *QueueTurnScheduler) deadLetterExpired(ctx context.Context, now time.Time, from, to int) error {
-	tx, err := scheduler.DB.BeginTx(ctx, scheduler.queryMap())
-	if err != nil {
-		return fmt.Errorf("dead-letter expired turns: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	exhausted, err := tx.Query(ctx, qSchedExhausted, now, from, to, scheduler.MaxAttempts)
-	if err != nil {
-		return fmt.Errorf("list exhausted turns: %w", err)
-	}
-	for _, row := range exhausted.Rows {
-		message, err := scheduler.decodeMessage(ctx, row)
+	return txn.New(scheduler.DB, scheduler.queryMap(), "dead-letter expired turns").Run(ctx, func(tx port.TxQueryService) error {
+		exhausted, err := tx.Query(ctx, qSchedExhausted, now, from, to, scheduler.MaxAttempts)
 		if err != nil {
-			return err
+			return fmt.Errorf("list exhausted turns: %w", err)
 		}
-		if err := scheduler.deadLetterTx(ctx, tx, message, "lease expired after last attempt"); err != nil {
-			return err
+		for _, row := range exhausted.Rows {
+			message, err := scheduler.decodeMessage(ctx, row)
+			if err != nil {
+				return err
+			}
+			if err := scheduler.deadLetterTx(ctx, tx, message, "lease expired after last attempt"); err != nil {
+				return err
+			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("dead-letter expired turns: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 func (scheduler *QueueTurnScheduler) candidates(ctx context.Context, now time.Time, from, to int) ([]tenantCandidate, error) {
@@ -408,43 +397,31 @@ func (scheduler *QueueTurnScheduler) Nack(ctx context.Context, messageID, worker
 		return fmt.Errorf("%w: worker id and reason are required", domain.ErrValidation)
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := scheduler.DB.BeginTx(ctx, scheduler.queryMap())
-	if err != nil {
-		return fmt.Errorf("nack turn: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(scheduler.DB, scheduler.queryMap(), "nack turn").Run(ctx, func(tx port.TxQueryService) error {
+		locked, err := tx.Query(ctx, qSchedLockLeased, queueID, workerID, token)
+		if err != nil {
+			return fmt.Errorf("nack turn: lock: %w", err)
 		}
-	}()
-	locked, err := tx.Query(ctx, qSchedLockLeased, queueID, workerID, token)
-	if err != nil {
-		return fmt.Errorf("nack turn: lock: %w", err)
-	}
-	if len(locked.Rows) == 0 {
-		return fmt.Errorf("%w: lease on message %s is not held by this worker", domain.ErrConflict, messageID)
-	}
-	message, err := scheduler.decodeMessage(ctx, locked.Rows[0])
-	if err != nil {
-		return err
-	}
-	reason = common.TruncateRunes(common.RedactForStorage(reason), 500)
-	if message.Attempt >= scheduler.MaxAttempts {
-		if err = scheduler.deadLetterTx(ctx, tx, message, reason); err != nil {
+		if len(locked.Rows) == 0 {
+			return fmt.Errorf("%w: lease on message %s is not held by this worker", domain.ErrConflict, messageID)
+		}
+		message, err := scheduler.decodeMessage(ctx, locked.Rows[0])
+		if err != nil {
 			return err
 		}
-	} else {
-		retryAt := scheduler.now().Add(scheduler.backoff(message.Attempt))
-		if _, err = tx.Query(ctx, qSchedRetry, retryAt, reason, queueID); err != nil {
-			return fmt.Errorf("nack turn: retry: %w", err)
+		reason = common.TruncateRunes(common.RedactForStorage(reason), 500)
+		if message.Attempt >= scheduler.MaxAttempts {
+			if err := scheduler.deadLetterTx(ctx, tx, message, reason); err != nil {
+				return err
+			}
+		} else {
+			retryAt := scheduler.now().Add(scheduler.backoff(message.Attempt))
+			if _, err := tx.Query(ctx, qSchedRetry, retryAt, reason, queueID); err != nil {
+				return fmt.Errorf("nack turn: retry: %w", err)
+			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("nack turn: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // deadLetterTx marks the row dead and parks it; a queue without transactional

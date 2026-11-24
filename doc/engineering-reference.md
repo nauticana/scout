@@ -414,7 +414,7 @@ Use released module coordinates; never use a local `replace` or filesystem depen
 
 ```bash
 go get github.com/nauticana/scout@<version>
-go get github.com/nauticana/keel@v1.3.11
+go get github.com/nauticana/keel@v1.3.17
 ```
 
 Import Scout contracts and keel infrastructure directly:
@@ -672,7 +672,7 @@ go tool schemagen -dialect pgsql -input "${keel_in},${scout_in}" -seed "${keel_s
 go tool schemagen -dialect mysql -input "${keel_in},${scout_in}" -out build/scout_mysql.sql
 ```
 
-That full set is 49 selected keel tables and 157 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
+That full set is 50 selected keel tables and 157 Scout tables; keel's `tenant_management` needs the PostgreSQL `btree_gist` extension, which the generated DDL creates. Drop the modules the product does not use:
 
 | Downstream profile | Scout modules | Scout tables |
 |---|---|---:|

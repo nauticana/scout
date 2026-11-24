@@ -11,12 +11,12 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelmodel "github.com/nauticana/keel/model"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -233,31 +233,19 @@ func (index *PgVectorIndex) Index(ctx context.Context, items []domain.ChunkEmbed
 		}
 		rows = append(rows, args)
 	}
-	tx, err := index.DB.BeginTx(ctx, pgVectorQueries)
-	if err != nil {
-		return fmt.Errorf("pgvector index: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(index.DB, pgVectorQueries, "pgvector index").Run(ctx, func(tx keelport.TxQueryService) error {
+		for i, args := range rows {
+			result, err := tx.Query(ctx, qPgVectorUpsertChunk, args...)
+			if err != nil {
+				return fmt.Errorf("pgvector index item %d: %w", i, err)
+			}
+			if result == nil || len(result.Rows) == 0 {
+				chunk := items[i].Chunk
+				return fmt.Errorf("%w: chunk %s/%d of document %s already indexed with a different identity", domain.ErrConflict, chunk.KnowledgeVersion, chunk.ChunkNo, chunk.DocumentID)
+			}
 		}
-	}()
-	for i, args := range rows {
-		result, err := tx.Query(ctx, qPgVectorUpsertChunk, args...)
-		if err != nil {
-			return fmt.Errorf("pgvector index item %d: %w", i, err)
-		}
-		if result == nil || len(result.Rows) == 0 {
-			chunk := items[i].Chunk
-			return fmt.Errorf("%w: chunk %s/%d of document %s already indexed with a different identity", domain.ErrConflict, chunk.KnowledgeVersion, chunk.ChunkNo, chunk.DocumentID)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("pgvector index: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 func upsertArgs(item domain.ChunkEmbedding, textSearchConfig string) ([]any, error) {

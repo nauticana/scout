@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 
+	keelport "github.com/nauticana/keel/port"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 // RecordComparison renews the lease and stores one example's verdict and both arms, adding
@@ -37,61 +38,49 @@ func (store *AgentEvaluationStore) RecordComparison(ctx context.Context, lease d
 	if err != nil {
 		return fmt.Errorf("encode scores: %w", err)
 	}
-	tx, err := store.begin(ctx, "agent evaluation store", agentEvaluationQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(store.DB, agentEvaluationQueries, "agent evaluation store").Run(ctx, func(tx keelport.TxQueryService) error {
+		renewed, err := tx.Query(ctx, qAgentEvalRenew, int64(lease.TTL/time.Second), lease.TenantID, lease.RunID, lease.Token)
+		if err != nil {
+			return fmt.Errorf("renew evaluation lease: %w", err)
 		}
-	}()
-	renewed, err := tx.Query(ctx, qAgentEvalRenew, int64(lease.TTL/time.Second), lease.TenantID, lease.RunID, lease.Token)
-	if err != nil {
-		return fmt.Errorf("renew evaluation lease: %w", err)
-	}
-	if len(renewed.Rows) == 0 {
-		return fmt.Errorf("%w: run %d is no longer held by this lease", domain.ErrConflict, lease.RunID)
-	}
-	goldenSetID, setVersion := common.AsString(renewed.Rows[0][0]), common.AsInt64(renewed.Rows[0][1])
-	judge := comparison.EvaluatorUsage
-	inserted, err := tx.Query(ctx, qAgentEvalPutComparison, lease.RunID, lease.TenantID, goldenSetID, setVersion, comparison.ExampleID,
-		nullable(string(comparison.Verdict)), comparison.Confidence, nullable(comparison.Evaluator.Kind), nullable(truncate(comparison.Evaluator.Version, 400)),
-		nullable(comparison.InputDigest), nullable(truncate(comparison.Rationale, pairRationaleMaxRunes)),
-		judge.InputTokens, judge.OutputTokens, judge.CostMinorUnits, pricedCurrency(judge), nullable(truncate(comparison.Reason, 400)))
-	if err != nil {
-		return fmt.Errorf("insert evaluation comparison %q: %w", comparison.ExampleID, err)
-	}
-	if len(inserted.Rows) > 0 {
-		for _, arm := range []struct {
-			role   domain.EvaluationRole
-			result domain.EvaluationResult
-			scores []byte
-		}{{domain.RoleBaseline, comparison.A, scoresA}, {domain.RoleCandidate, comparison.B, scoresB}} {
-			usage := arm.result.Usage
-			if _, err = tx.Query(ctx, qAgentEvalPutArm, lease.RunID, lease.TenantID, goldenSetID, setVersion, comparison.ExampleID, string(arm.role),
-				string(arm.scores), arm.result.Latency.Milliseconds(), usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, pricedCurrency(usage),
-				nullable(arm.result.Output.URI), nullable(arm.result.Output.Digest),
-				nullable(arm.result.Trajectory.URI), nullable(arm.result.Trajectory.Digest)); err != nil {
-				return fmt.Errorf("insert %s arm of %q: %w", arm.role, comparison.ExampleID, err)
+		if len(renewed.Rows) == 0 {
+			return fmt.Errorf("%w: run %d is no longer held by this lease", domain.ErrConflict, lease.RunID)
+		}
+		goldenSetID, setVersion := common.AsString(renewed.Rows[0][0]), common.AsInt64(renewed.Rows[0][1])
+		judge := comparison.EvaluatorUsage
+		inserted, err := tx.Query(ctx, qAgentEvalPutComparison, lease.RunID, lease.TenantID, goldenSetID, setVersion, comparison.ExampleID,
+			nullable(string(comparison.Verdict)), comparison.Confidence, nullable(comparison.Evaluator.Kind), nullable(truncate(comparison.Evaluator.Version, 400)),
+			nullable(comparison.InputDigest), nullable(truncate(comparison.Rationale, pairRationaleMaxRunes)),
+			judge.InputTokens, judge.OutputTokens, judge.CostMinorUnits, pricedCurrency(judge), nullable(truncate(comparison.Reason, 400)))
+		if err != nil {
+			return fmt.Errorf("insert evaluation comparison %q: %w", comparison.ExampleID, err)
+		}
+		if len(inserted.Rows) > 0 {
+			for _, arm := range []struct {
+				role   domain.EvaluationRole
+				result domain.EvaluationResult
+				scores []byte
+			}{{domain.RoleBaseline, comparison.A, scoresA}, {domain.RoleCandidate, comparison.B, scoresB}} {
+				usage := arm.result.Usage
+				if _, err := tx.Query(ctx, qAgentEvalPutArm, lease.RunID, lease.TenantID, goldenSetID, setVersion, comparison.ExampleID, string(arm.role),
+					string(arm.scores), arm.result.Latency.Milliseconds(), usage.InputTokens, usage.OutputTokens, usage.CostMinorUnits, pricedCurrency(usage),
+					nullable(arm.result.Output.URI), nullable(arm.result.Output.Digest),
+					nullable(arm.result.Trajectory.URI), nullable(arm.result.Trajectory.Digest)); err != nil {
+					return fmt.Errorf("insert %s arm of %q: %w", arm.role, comparison.ExampleID, err)
+				}
+			}
+			currency := pricedCurrency(total)
+			totals, err := tx.Query(ctx, qAgentEvalAddTotals, total.InputTokens, total.OutputTokens, total.CostMinorUnits,
+				currency, lease.TenantID, lease.RunID, currency, currency)
+			if err != nil {
+				return fmt.Errorf("add evaluation totals: %w", err)
+			}
+			if len(totals.Rows) == 0 {
+				return fmt.Errorf("%w: comparison %q is priced in %s, unlike the run", domain.ErrValidation, comparison.ExampleID, total.Currency)
 			}
 		}
-		currency := pricedCurrency(total)
-		totals, err := tx.Query(ctx, qAgentEvalAddTotals, total.InputTokens, total.OutputTokens, total.CostMinorUnits,
-			currency, lease.TenantID, lease.RunID, currency, currency)
-		if err != nil {
-			return fmt.Errorf("add evaluation totals: %w", err)
-		}
-		if len(totals.Rows) == 0 {
-			return fmt.Errorf("%w: comparison %q is priced in %s, unlike the run", domain.ErrValidation, comparison.ExampleID, total.Currency)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit evaluation comparison: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // pricedCurrency is the currency a priced amount is stored with; a free one carries none.

@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/observability"
 )
 
@@ -255,6 +257,8 @@ func (store *TableRestrictionLayers) replace(ctx context.Context, actor domain.P
 	return current, err
 }
 
+var errLayerRaced = errors.New("restriction layer raced")
+
 // swap stores the version, moves the pointer when it still holds expectedDigest,
 // and records audit in the same transaction.
 func (store *TableRestrictionLayers) swap(ctx context.Context, tenantID int64, encoded encodedLayer, expectedDigest string, audit domain.DecisionRecord) (string, bool, error) {
@@ -265,64 +269,62 @@ func (store *TableRestrictionLayers) swap(ctx context.Context, tenantID int64, e
 		insertLayer, lock, insertCurrent, swap, read = qTenantLayerInsert, qTenantCurrentLock, qTenantCurrentInsert, qTenantCurrentSwap, qTenantCurrentRead
 		layerArgs, keyArgs = append([]any{tenantID}, layerArgs...), []any{tenantID}
 	}
-	tx, err := store.DB.BeginTx(ctx, restrictionQueries)
-	if err != nil {
-		return "", false, fmt.Errorf("begin restriction layer swap: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	current, moved := "", false
+	err := txn.New(store.DB, restrictionQueries, "restriction layer swap").Run(ctx, func(tx port.TxQueryService) error {
+		locked, err := tx.Query(ctx, lock, keyArgs...)
+		if err != nil {
+			return fmt.Errorf("lock restriction layer: %w", err)
 		}
-	}()
-	locked, err := tx.Query(ctx, lock, keyArgs...)
-	if err != nil {
-		return "", false, fmt.Errorf("lock restriction layer: %w", err)
+		if len(locked.Rows) > 0 {
+			current = common.AsString(locked.Rows[0][0])
+		}
+		if current == digest {
+			return nil
+		}
+		if current != expectedDigest {
+			return fmt.Errorf("%w: restriction layer is at %q, not %q", domain.ErrConflict, current, expectedDigest)
+		}
+		if _, err := tx.Query(ctx, insertLayer, layerArgs...); err != nil {
+			return fmt.Errorf("insert restriction layer: %w", err)
+		}
+		var result *keelmodel.QueryResult
+		if current == "" {
+			result, err = tx.Query(ctx, insertCurrent, append(keyArgs, digest)...)
+		} else {
+			result, err = tx.Query(ctx, swap, append([]any{digest}, append(keyArgs, current)...)...)
+		}
+		if err != nil {
+			return fmt.Errorf("move restriction layer: %w", err)
+		}
+		if len(result.Rows) == 0 {
+			// Only a first write races past the row lock; the swap rolls back and reports what won.
+			return errLayerRaced
+		}
+		if err := store.Audit.RecordTx(ctx, tx, audit); err != nil {
+			return fmt.Errorf("audit restriction layer change: %w", err)
+		}
+		current, moved = digest, true
+		return nil
+	})
+	if err == nil {
+		return current, moved, nil
 	}
-	current := ""
-	if len(locked.Rows) > 0 {
-		current = common.AsString(locked.Rows[0][0])
+	// An identity match: a raced swap whose rollback failed too is an error.
+	if err != errLayerRaced {
+		if !errors.Is(err, domain.ErrConflict) {
+			current = ""
+		}
+		return current, false, err
+	}
+	now, err := store.qs.Query(ctx, read, keyArgs...)
+	if err != nil {
+		return "", false, fmt.Errorf("read concurrently written restriction layer: %w", err)
+	}
+	if len(now.Rows) > 0 {
+		current = common.AsString(now.Rows[0][0])
 	}
 	if current == digest {
 		return current, false, nil
 	}
-	if current != expectedDigest {
-		return current, false, fmt.Errorf("%w: restriction layer is at %q, not %q", domain.ErrConflict, current, expectedDigest)
-	}
-	if _, err = tx.Query(ctx, insertLayer, layerArgs...); err != nil {
-		return "", false, fmt.Errorf("insert restriction layer: %w", err)
-	}
-	var moved *keelmodel.QueryResult
-	if current == "" {
-		moved, err = tx.Query(ctx, insertCurrent, append(keyArgs, digest)...)
-	} else {
-		moved, err = tx.Query(ctx, swap, append([]any{digest}, append(keyArgs, current)...)...)
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("move restriction layer: %w", err)
-	}
-	if len(moved.Rows) == 0 {
-		// Only a first write races past the row lock; report what won.
-		_ = tx.Rollback(ctx)
-		committed = true
-		now, err := store.qs.Query(ctx, read, keyArgs...)
-		if err != nil {
-			return "", false, fmt.Errorf("read concurrently written restriction layer: %w", err)
-		}
-		if len(now.Rows) > 0 {
-			current = common.AsString(now.Rows[0][0])
-		}
-		if current == digest {
-			return current, false, nil
-		}
-		return current, false, fmt.Errorf("%w: restriction layer was written concurrently", domain.ErrConflict)
-	}
-	if err = store.Audit.RecordTx(ctx, tx, audit); err != nil {
-		return "", false, fmt.Errorf("audit restriction layer change: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return "", false, fmt.Errorf("commit restriction layer swap: %w", err)
-	}
-	committed = true
-	return digest, true, nil
+	return current, false, fmt.Errorf("%w: restriction layer was written concurrently", domain.ErrConflict)
 }

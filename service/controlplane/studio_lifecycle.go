@@ -15,6 +15,7 @@ import (
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 // Create makes a disabled, unpublished agent of an existing type. The type row is
@@ -68,42 +69,35 @@ func (s *StudioService) create(ctx context.Context, actor domain.StudioActor, re
 	if err := s.init(ctx); err != nil {
 		return domain.AgentSummary{}, err
 	}
-	tx, err := s.DB.BeginTx(ctx, studioCreateQueries)
-	if err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("begin create transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var agentID string
+	if err := txn.New(s.DB, studioCreateQueries, "create agent").Run(ctx, func(tx keelport.TxQueryService) error {
+		locked, err := tx.Query(ctx, qStudioLockType, actor.TenantID, request.AgentTypeID)
+		if err != nil {
+			return fmt.Errorf("lock agent type: %w", err)
 		}
-	}()
-	locked, err := tx.Query(ctx, qStudioLockType, actor.TenantID, request.AgentTypeID)
-	if err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("lock agent type: %w", err)
-	}
-	if len(locked.Rows) == 0 {
-		return domain.AgentSummary{}, validationError("agent_type", "unknown agent type")
-	}
-	agentID, replayed, err := s.replayedCreate(ctx, tx, actor, request.IdempotencyKey, digest)
-	if err != nil {
-		return domain.AgentSummary{}, err
-	}
-	if !replayed {
-		var seed *agentSeed
-		if prepare != nil {
-			if seed, err = prepare(); err != nil {
-				return domain.AgentSummary{}, err
+		if len(locked.Rows) == 0 {
+			return validationError("agent_type", "unknown agent type")
+		}
+		var replayed bool
+		agentID, replayed, err = s.replayedCreate(ctx, tx, actor, request.IdempotencyKey, digest)
+		if err != nil {
+			return err
+		}
+		if !replayed {
+			var seed *agentSeed
+			if prepare != nil {
+				if seed, err = prepare(); err != nil {
+					return err
+				}
+			}
+			if agentID, err = s.createAgent(ctx, tx, actor, request, digest, seed); err != nil {
+				return err
 			}
 		}
-		if agentID, err = s.createAgent(ctx, tx, actor, request, digest, seed); err != nil {
-			return domain.AgentSummary{}, err
-		}
+		return nil
+	}); err != nil {
+		return domain.AgentSummary{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("commit create: %w", err)
-	}
-	committed = true
 	return s.summary(ctx, actor.TenantID, agentID)
 }
 
@@ -295,34 +289,19 @@ func (s *StudioService) Unarchive(ctx context.Context, actor domain.StudioActor,
 
 // transition bumps the draft revision, applies change, and records event in one transaction.
 func (s *StudioService) transition(ctx context.Context, actor domain.StudioActor, agentID string, expectedRevision int64, event, detail string, change func(keelport.TxQueryService) error) error {
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return fmt.Errorf("begin %s transaction: %w", strings.ToLower(event), err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(s.DB, studioQueries, strings.ToLower(event)).Run(ctx, func(tx keelport.TxQueryService) error {
+		bumped, err := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, agentID, expectedRevision)
+		if err != nil {
+			return fmt.Errorf("bump draft revision: %w", err)
 		}
-	}()
-	bumped, err := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, agentID, expectedRevision)
-	if err != nil {
-		return fmt.Errorf("bump draft revision: %w", err)
-	}
-	if len(bumped.Rows) == 0 {
-		return domain.ErrRevisionConflict
-	}
-	if err = change(tx); err != nil {
-		return fmt.Errorf("%s agent: %w", strings.ToLower(event), err)
-	}
-	if err = auditStudio(ctx, tx, actor, agentID, event, detail); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit %s: %w", strings.ToLower(event), err)
-	}
-	committed = true
-	return nil
+		if len(bumped.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		if err := change(tx); err != nil {
+			return fmt.Errorf("%s agent: %w", strings.ToLower(event), err)
+		}
+		return auditStudio(ctx, tx, actor, agentID, event, detail)
+	})
 }
 
 func (s *StudioService) refuseOpenDelegation(ctx context.Context, tenantID int64, agentID string) error {

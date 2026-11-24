@@ -11,12 +11,12 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	"github.com/nauticana/keel/extract"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -560,83 +560,47 @@ func (pipeline *IngestPipeline) publish(ctx context.Context, job *ingestJob) {
 
 func (pipeline *IngestPipeline) persist(ctx context.Context, job *ingestJob, refs []domain.ObjectRef) error {
 	document := job.document
-	tx, err := pipeline.DB.BeginTx(ctx, ingestQueries)
-	if err != nil {
-		return fmt.Errorf("publish document %q: begin: %w", document.DocumentID, err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(pipeline.DB, ingestQueries, fmt.Sprintf("publish document %q", document.DocumentID)).Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qIngestInsertDocument, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion,
+			document.DocumentID, document.SourceURI, document.ContentDigest, document.MediaType); err != nil {
+			return fmt.Errorf("publish document %q: %w", document.DocumentID, err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qIngestInsertDocument, document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion,
-		document.DocumentID, document.SourceURI, document.ContentDigest, document.MediaType); err != nil {
-		return fmt.Errorf("publish document %q: %w", document.DocumentID, err)
-	}
-	// vector_ref stays empty until the vectors are indexed; a whole-only ingest has none to wait for.
-	for i, chunk := range job.chunks {
-		vectorRef := ""
-		if pipeline.Index == nil {
-			vectorRef = chunk.ChunkID
+		// vector_ref stays empty until the vectors are indexed; a whole-only ingest has none to wait for.
+		for i, chunk := range job.chunks {
+			vectorRef := ""
+			if pipeline.Index == nil {
+				vectorRef = chunk.ChunkID
+			}
+			if _, err := tx.Query(ctx, qIngestInsertChunk, chunk.TenantContext.TenantID, chunk.KnowledgeBaseID, chunk.KnowledgeVersion, chunk.DocumentID,
+				chunk.ChunkNo, refs[i].URI, chunk.ContentDigest, vectorRef, chunk.TokenCount,
+				chunk.SourceVersion, chunk.StartOffset, chunk.EndOffset, string(chunk.Entitlements)); err != nil {
+				return fmt.Errorf("publish chunk %d of document %q: %w", chunk.ChunkNo, document.DocumentID, err)
+			}
 		}
-		if _, err = tx.Query(ctx, qIngestInsertChunk, chunk.TenantContext.TenantID, chunk.KnowledgeBaseID, chunk.KnowledgeVersion, chunk.DocumentID,
-			chunk.ChunkNo, refs[i].URI, chunk.ContentDigest, vectorRef, chunk.TokenCount,
-			chunk.SourceVersion, chunk.StartOffset, chunk.EndOffset, string(chunk.Entitlements)); err != nil {
-			return fmt.Errorf("publish chunk %d of document %q: %w", chunk.ChunkNo, document.DocumentID, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("publish document %q: commit: %w", document.DocumentID, err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 func (pipeline *IngestPipeline) markIndexed(ctx context.Context, chunks []domain.KnowledgeChunk) error {
-	tx, err := pipeline.DB.BeginTx(ctx, ingestQueries)
-	if err != nil {
-		return fmt.Errorf("mark chunks indexed: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(pipeline.DB, ingestQueries, "mark chunks indexed").Run(ctx, func(tx keelport.TxQueryService) error {
+		for _, chunk := range chunks {
+			if _, err := tx.Query(ctx, qIngestMarkIndexed, chunk.ChunkID, chunk.TenantContext.TenantID, chunk.KnowledgeBaseID,
+				chunk.KnowledgeVersion, chunk.DocumentID, chunk.ChunkNo); err != nil {
+				return fmt.Errorf("mark chunk %d of document %q indexed: %w", chunk.ChunkNo, chunk.DocumentID, err)
+			}
 		}
-	}()
-	for _, chunk := range chunks {
-		if _, err = tx.Query(ctx, qIngestMarkIndexed, chunk.ChunkID, chunk.TenantContext.TenantID, chunk.KnowledgeBaseID,
-			chunk.KnowledgeVersion, chunk.DocumentID, chunk.ChunkNo); err != nil {
-			return fmt.Errorf("mark chunk %d of document %q indexed: %w", chunk.ChunkNo, chunk.DocumentID, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("mark chunks indexed: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 func (pipeline *IngestPipeline) unpublish(ctx context.Context, document domain.KnowledgeDocument) error {
-	tx, err := pipeline.DB.BeginTx(ctx, ingestQueries)
-	if err != nil {
-		return fmt.Errorf("unpublish document %q: begin: %w", document.DocumentID, err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(pipeline.DB, ingestQueries, fmt.Sprintf("unpublish document %q", document.DocumentID)).Run(ctx, func(tx keelport.TxQueryService) error {
+		key := []any{document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID}
+		for _, name := range []string{qIngestDeleteChunks, qIngestDeleteDocument} {
+			if _, err := tx.Query(ctx, name, key...); err != nil {
+				return fmt.Errorf("unpublish document %q: %w", document.DocumentID, err)
+			}
 		}
-	}()
-	key := []any{document.TenantContext.TenantID, document.KnowledgeBaseID, document.KnowledgeVersion, document.DocumentID}
-	for _, name := range []string{qIngestDeleteChunks, qIngestDeleteDocument} {
-		if _, err = tx.Query(ctx, name, key...); err != nil {
-			return fmt.Errorf("unpublish document %q: %w", document.DocumentID, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("unpublish document %q: commit: %w", document.DocumentID, err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }

@@ -7,11 +7,11 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -70,48 +70,36 @@ func (publisher *VersionPublisher) EnsureVersion(ctx context.Context, version do
 	if err := publisher.init(ctx); err != nil {
 		return err
 	}
-	tx, err := publisher.DB.BeginTx(ctx, versionQueries)
-	if err != nil {
-		return fmt.Errorf("ensure knowledge version: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(publisher.DB, versionQueries, "ensure knowledge version").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qVersionLock, fmt.Sprintf("knowledge_base:%d:%s", tenantID, baseID)); err != nil {
+			return fmt.Errorf("ensure knowledge version: lock: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qVersionLock, fmt.Sprintf("knowledge_base:%d:%s", tenantID, baseID)); err != nil {
-		return fmt.Errorf("ensure knowledge version: lock: %w", err)
-	}
-	existing, err := tx.Query(ctx, qVersionGet, tenantID, baseID, versionID)
-	if err != nil {
-		return fmt.Errorf("ensure knowledge version: read: %w", err)
-	}
-	if len(existing.Rows) > 0 {
-		if common.AsString(existing.Rows[0][0]) != version.EmbeddingProvider || common.AsString(existing.Rows[0][1]) != version.EmbeddingModel {
-			return fmt.Errorf("%w: knowledge version %s@%s exists with another embedding", domain.ErrConflict, baseID, versionID)
+		existing, err := tx.Query(ctx, qVersionGet, tenantID, baseID, versionID)
+		if err != nil {
+			return fmt.Errorf("ensure knowledge version: read: %w", err)
+		}
+		if len(existing.Rows) > 0 {
+			if common.AsString(existing.Rows[0][0]) != version.EmbeddingProvider || common.AsString(existing.Rows[0][1]) != version.EmbeddingModel {
+				return fmt.Errorf("%w: knowledge version %s@%s exists with another embedding", domain.ErrConflict, baseID, versionID)
+			}
+			return nil
+		}
+		base, err := tx.Query(ctx, qVersionBaseGet, tenantID, baseID)
+		if err != nil {
+			return fmt.Errorf("ensure knowledge version: read base: %w", err)
+		}
+		if len(base.Rows) == 0 {
+			name := strings.TrimSpace(version.DisplayName)
+			if name == "" {
+				name = baseID
+			}
+			if _, err := tx.Query(ctx, qVersionBaseInsert, tenantID, baseID, name); err != nil {
+				return fmt.Errorf("ensure knowledge version: insert base: %w", err)
+			}
+		}
+		if _, err := tx.Query(ctx, qVersionInsert, tenantID, baseID, versionID, version.EmbeddingProvider, version.EmbeddingModel); err != nil {
+			return fmt.Errorf("ensure knowledge version: insert: %w", err)
 		}
 		return nil
-	}
-	base, err := tx.Query(ctx, qVersionBaseGet, tenantID, baseID)
-	if err != nil {
-		return fmt.Errorf("ensure knowledge version: read base: %w", err)
-	}
-	if len(base.Rows) == 0 {
-		name := strings.TrimSpace(version.DisplayName)
-		if name == "" {
-			name = baseID
-		}
-		if _, err = tx.Query(ctx, qVersionBaseInsert, tenantID, baseID, name); err != nil {
-			return fmt.Errorf("ensure knowledge version: insert base: %w", err)
-		}
-	}
-	if _, err = tx.Query(ctx, qVersionInsert, tenantID, baseID, versionID, version.EmbeddingProvider, version.EmbeddingModel); err != nil {
-		return fmt.Errorf("ensure knowledge version: insert: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("ensure knowledge version: commit: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }

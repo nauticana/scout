@@ -12,6 +12,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -93,24 +94,9 @@ func (repository *TableExecutionGraphRepository) Put(ctx context.Context, tenant
 	if err := repository.init(ctx); err != nil {
 		return err
 	}
-	tx, err := repository.DB.BeginTx(ctx, executionGraphQueries)
-	if err != nil {
-		return fmt.Errorf("begin graph publication: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}
-	}()
-	if err = putGraph(ctx, tx, tenantID, graph); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit graph publication: %w", err)
-	}
-	committed = true
-	return nil
+	return txn.New(repository.DB, executionGraphQueries, "graph publication").Run(ctx, func(tx keelport.TxQueryService) error {
+		return putGraph(ctx, tx, tenantID, graph)
+	})
 }
 
 // WriteRelease compiles and stores the graph of an executable definition inside

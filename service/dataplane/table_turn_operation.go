@@ -15,6 +15,7 @@ import (
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -273,30 +274,35 @@ func (control *TableTurnControl) TakeOver(ctx context.Context, takeover domain.T
 	return domain.OperatorHold{Lease: lease, HoldUntil: until}, nil
 }
 
-// operatorTx opens a transaction whose first statement is the holder's guarded touch, renewing the
-// lease, and reads where the turn stands; a lease that lapsed or a fence that moved is ErrFenceLost.
-func (control *TableTurnControl) operatorTx(ctx context.Context, lease domain.OperatorLease, settings domain.OperatorSettings) (keelport.TxQueryService, operatorPosition, error) {
-	tx, err := control.DB.BeginTx(ctx, operationQueries)
-	if err != nil {
-		return nil, operatorPosition{}, fmt.Errorf("begin turn operation: %w", err)
+var errLeaseRefused = errors.New("operator lease refused")
+
+// operate runs fn in a transaction whose first statement is the holder's guarded touch, renewing the
+// lease, with where the turn stands; a lease that lapsed or a fence that moved is ErrFenceLost.
+func (control *TableTurnControl) operate(ctx context.Context, lease domain.OperatorLease, settings domain.OperatorSettings, name string, fn func(tx keelport.TxQueryService, position operatorPosition) error) error {
+	err := txn.New(control.DB, operationQueries, name).Run(ctx, func(tx keelport.TxQueryService) error {
+		guarded, err := tx.Query(ctx, qOperatorGuard, leaseSeconds(settings.Lease),
+			lease.TenantID, lease.RequestID, lease.Fence, string(lease.Holder.Kind), lease.Holder.ID)
+		if err != nil {
+			return fmt.Errorf("guard operated turn: %w", err)
+		}
+		if len(guarded.Rows) == 0 {
+			return errLeaseRefused
+		}
+		position, err := readPosition(ctx, tx, lease)
+		if err != nil {
+			return err
+		}
+		position.turnNo, position.conversationID = common.AsInt64(guarded.Rows[0][0]), common.AsString(guarded.Rows[0][1])
+		return fn(tx, position)
+	})
+	if errors.Is(err, errLeaseRefused) {
+		refused := control.refusedLease(ctx, lease)
+		if err != errLeaseRefused {
+			return errors.Join(refused, err)
+		}
+		return refused
 	}
-	guarded, err := tx.Query(ctx, qOperatorGuard, leaseSeconds(settings.Lease),
-		lease.TenantID, lease.RequestID, lease.Fence, string(lease.Holder.Kind), lease.Holder.ID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, operatorPosition{}, fmt.Errorf("guard operated turn: %w", err)
-	}
-	if len(guarded.Rows) == 0 {
-		_ = tx.Rollback(ctx)
-		return nil, operatorPosition{}, control.refusedLease(ctx, lease)
-	}
-	position, err := readPosition(ctx, tx, lease)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, operatorPosition{}, err
-	}
-	position.turnNo, position.conversationID = common.AsInt64(guarded.Rows[0][0]), common.AsString(guarded.Rows[0][1])
-	return tx, position, nil
+	return err
 }
 
 // refusedLease says why a lease no longer holds its turn.
@@ -351,42 +357,34 @@ func (control *TableTurnControl) IntendCall(ctx context.Context, lease domain.Op
 		return domain.OperatorCallIntent{}, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, position, err := control.operatorTx(ctx, lease, settings)
-	if err != nil {
-		return domain.OperatorCallIntent{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var intent domain.OperatorCallIntent
+	if err := control.operate(ctx, lease, settings, "operator call intent", func(tx keelport.TxQueryService, position operatorPosition) error {
+		if err := position.admits(lease, settings); err != nil {
+			return err
 		}
-	}()
-	if err = position.admits(lease, settings); err != nil {
+		step := position.openStep
+		if step == 0 {
+			step = position.latestStep
+		}
+		if step == 0 {
+			return fmt.Errorf("%w: turn %q ran no step a call can be filed under", domain.ErrConflict, lease.RequestID)
+		}
+		entryNo := position.lastEntry + 1
+		intent = domain.OperatorCallIntent{
+			Key:            domain.CallOutcomeKey{TenantID: lease.TenantID, RequestID: lease.RequestID, ExecutionStepID: step, CallID: fmt.Sprintf("op:%d:%d", lease.Fence, entryNo)},
+			IdempotencyKey: operatorIdempotencyKey(lease, entryNo), EntryNo: entryNo, Tool: tool, Window: window,
+		}
+		inserted, err := tx.Query(ctx, qOperatorIntend, append(keyArgs(intent.Key), intent.IdempotencyKey, tool.ToolID, tool.Version, lease.Fence, seconds)...)
+		if err != nil {
+			return fmt.Errorf("record operator call intent: %w", err)
+		}
+		if len(inserted.Rows) == 0 {
+			return fmt.Errorf("%w: operator call %q of turn %q is already recorded", domain.ErrConflict, intent.Key.CallID, lease.RequestID)
+		}
+		return nil
+	}); err != nil {
 		return domain.OperatorCallIntent{}, err
 	}
-	step := position.openStep
-	if step == 0 {
-		step = position.latestStep
-	}
-	if step == 0 {
-		return domain.OperatorCallIntent{}, fmt.Errorf("%w: turn %q ran no step a call can be filed under", domain.ErrConflict, lease.RequestID)
-	}
-	entryNo := position.lastEntry + 1
-	intent := domain.OperatorCallIntent{
-		Key:            domain.CallOutcomeKey{TenantID: lease.TenantID, RequestID: lease.RequestID, ExecutionStepID: step, CallID: fmt.Sprintf("op:%d:%d", lease.Fence, entryNo)},
-		IdempotencyKey: operatorIdempotencyKey(lease, entryNo), EntryNo: entryNo, Tool: tool, Window: window,
-	}
-	inserted, err := tx.Query(ctx, qOperatorIntend, append(keyArgs(intent.Key), intent.IdempotencyKey, tool.ToolID, tool.Version, lease.Fence, seconds)...)
-	if err != nil {
-		return domain.OperatorCallIntent{}, fmt.Errorf("record operator call intent: %w", err)
-	}
-	if len(inserted.Rows) == 0 {
-		return domain.OperatorCallIntent{}, fmt.Errorf("%w: operator call %q of turn %q is already recorded", domain.ErrConflict, intent.Key.CallID, lease.RequestID)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.OperatorCallIntent{}, fmt.Errorf("commit operator call intent: %w", err)
-	}
-	committed = true
 	return intent, nil
 }
 
@@ -446,54 +444,45 @@ func (control *TableTurnControl) Act(ctx context.Context, act domain.OperatorAct
 			return domain.OperatorActed{}, err
 		}
 	}
-	tx, current, err := control.operatorTx(ctx, act.Lease, settings)
-	if err != nil {
-		return domain.OperatorActed{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
 	acted := domain.OperatorActed{}
-	if err = current.sameAs(position, entry); err != nil {
+	if err := control.operate(ctx, act.Lease, settings, "operator entry", func(tx keelport.TxQueryService, current operatorPosition) error {
+		if err := current.sameAs(position, entry); err != nil {
+			return err
+		}
+		if act.Call != nil {
+			if control.Settlement.Budget == nil {
+				return fmt.Errorf("%w: operator tool calls need a budget settler", domain.ErrNotReady)
+			}
+			if err := control.Settlement.Budget.SettleTurnTx(ctx, tx, act.Reservation, act.Usage, false); err != nil {
+				return fmt.Errorf("settle operator tool call spend: %w", err)
+			}
+			if err := settleOperatorCall(ctx, tx, act, record); err != nil {
+				return err
+			}
+			current.openCalls = 0
+		} else {
+			if err := current.admits(act.Lease, settings); err != nil {
+				return err
+			}
+		}
+		if err := insertEntry(ctx, tx, &entry); err != nil {
+			return err
+		}
+		if act.Call != nil && act.Settlement == nil {
+			held, err := tx.Query(ctx, qOperatorHoldUnknown, act.Lease.TenantID, act.Lease.RequestID, act.Lease.Fence)
+			if err != nil {
+				return fmt.Errorf("hold turn on an unknown operator call: %w", err)
+			}
+			if len(held.Rows) == 0 {
+				return fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, act.Lease.RequestID, act.Lease.Fence)
+			}
+			acted.HeldFence = common.AsInt64(held.Rows[0][0])
+		}
+		acted.Entry = entry
+		return nil
+	}); err != nil {
 		return domain.OperatorActed{}, err
 	}
-	if act.Call != nil {
-		if control.Settlement.Budget == nil {
-			return domain.OperatorActed{}, fmt.Errorf("%w: operator tool calls need a budget settler", domain.ErrNotReady)
-		}
-		if err = control.Settlement.Budget.SettleTurnTx(ctx, tx, act.Reservation, act.Usage, false); err != nil {
-			return domain.OperatorActed{}, fmt.Errorf("settle operator tool call spend: %w", err)
-		}
-		if err = settleOperatorCall(ctx, tx, act, record); err != nil {
-			return domain.OperatorActed{}, err
-		}
-		current.openCalls = 0
-	} else {
-		if err = current.admits(act.Lease, settings); err != nil {
-			return domain.OperatorActed{}, err
-		}
-	}
-	if err = insertEntry(ctx, tx, &entry); err != nil {
-		return domain.OperatorActed{}, err
-	}
-	if act.Call != nil && act.Settlement == nil {
-		held, err := tx.Query(ctx, qOperatorHoldUnknown, act.Lease.TenantID, act.Lease.RequestID, act.Lease.Fence)
-		if err != nil {
-			return domain.OperatorActed{}, fmt.Errorf("hold turn on an unknown operator call: %w", err)
-		}
-		if len(held.Rows) == 0 {
-			return domain.OperatorActed{}, fmt.Errorf("%w: turn %q moved past fence %d", domain.ErrFenceLost, act.Lease.RequestID, act.Lease.Fence)
-		}
-		acted.HeldFence = common.AsInt64(held.Rows[0][0])
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.OperatorActed{}, fmt.Errorf("commit operator entry: %w", err)
-	}
-	committed = true
-	acted.Entry = entry
 	return acted, nil
 }
 
@@ -690,42 +679,35 @@ func (control *TableTurnControl) HandBack(ctx context.Context, lease domain.Oper
 		}
 		entry = &built
 	}
-	tx, current, err := control.operatorTx(ctx, lease, settings)
-	if err != nil {
+	var fence int64
+	if err := control.operate(ctx, lease, settings, "turn handback", func(tx keelport.TxQueryService, current operatorPosition) error {
+		if entry != nil {
+			if err := current.sameAs(position, *entry); err != nil {
+				return err
+			}
+			if err := current.admits(lease, settings); err != nil {
+				return err
+			}
+			if err := insertEntry(ctx, tx, entry); err != nil {
+				return err
+			}
+		}
+		handed, err := tx.Query(ctx, qOperatorHandback, lease.TenantID, lease.RequestID, lease.Fence, string(lease.Holder.Kind), lease.Holder.ID)
+		if err != nil {
+			return fmt.Errorf("hand back turn: %w", err)
+		}
+		if len(handed.Rows) == 0 {
+			return fmt.Errorf("%w: a call of turn %q has an open outcome", domain.ErrConflict, lease.RequestID)
+		}
+		if _, err := tx.Query(ctx, qQueueRequeue, control.now().UTC(), lease.TenantID, lease.RequestID); err != nil {
+			return fmt.Errorf("requeue handed back turn: %w", err)
+		}
+		fence = common.AsInt64(handed.Rows[0][0])
+		return nil
+	}); err != nil {
 		return domain.OperatorHandedBack{}, err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	if entry != nil {
-		if err = current.sameAs(position, *entry); err != nil {
-			return domain.OperatorHandedBack{}, err
-		}
-		if err = current.admits(lease, settings); err != nil {
-			return domain.OperatorHandedBack{}, err
-		}
-		if err = insertEntry(ctx, tx, entry); err != nil {
-			return domain.OperatorHandedBack{}, err
-		}
-	}
-	handed, err := tx.Query(ctx, qOperatorHandback, lease.TenantID, lease.RequestID, lease.Fence, string(lease.Holder.Kind), lease.Holder.ID)
-	if err != nil {
-		return domain.OperatorHandedBack{}, fmt.Errorf("hand back turn: %w", err)
-	}
-	if len(handed.Rows) == 0 {
-		return domain.OperatorHandedBack{}, fmt.Errorf("%w: a call of turn %q has an open outcome", domain.ErrConflict, lease.RequestID)
-	}
-	if _, err = tx.Query(ctx, qQueueRequeue, control.now().UTC(), lease.TenantID, lease.RequestID); err != nil {
-		return domain.OperatorHandedBack{}, fmt.Errorf("requeue handed back turn: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.OperatorHandedBack{}, fmt.Errorf("commit turn handback: %w", err)
-	}
-	committed = true
-	return domain.OperatorHandedBack{Fence: common.AsInt64(handed.Rows[0][0]), Instruction: entry}, nil
+	return domain.OperatorHandedBack{Fence: fence, Instruction: entry}, nil
 }
 
 // Finish completes the operated turn with the holder's reply: the reply entry, the agent's and the
@@ -772,46 +754,37 @@ func (control *TableTurnControl) Finish(ctx context.Context, finish domain.Opera
 	if err != nil {
 		return domain.OperatorEntry{}, err
 	}
-	tx, current, err := control.operatorTx(ctx, lease, settings)
-	if err != nil {
-		return domain.OperatorEntry{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := control.operate(ctx, lease, settings, "operator finish", func(tx keelport.TxQueryService, current operatorPosition) error {
+		if err := current.sameAs(position, entry); err != nil {
+			return err
 		}
-	}()
-	if err = current.sameAs(position, entry); err != nil {
+		if err := current.admits(lease, settings); err != nil {
+			return err
+		}
+		if err := insertEntry(ctx, tx, &entry); err != nil {
+			return err
+		}
+		settlement := domain.TurnSettlement{Reservation: finish.Reservation, Usage: usage, SubjectRef: finish.SubjectRef, Attribution: finish.Attribution}
+		unheld, err := control.Settlement.write(ctx, tx, lease.TenantID, lease.RequestID, current.conversationID, current.turnNo, settlement)
+		if err != nil {
+			return err
+		}
+		if unheld != nil {
+			return unheld
+		}
+		kind, card := resultCard(frame.Payload, response, positiveOr(control.MaxResultCardBytes, defaultResultCardBytes))
+		finished, err := tx.Query(ctx, qOperatorFinish, response.URI, response.Digest,
+			lease.TenantID, lease.RequestID, lease.Fence, string(lease.Holder.Kind), lease.Holder.ID, kind, card)
+		if err != nil {
+			return fmt.Errorf("finish operated turn: %w", err)
+		}
+		if len(finished.Rows) == 0 {
+			return fmt.Errorf("%w: a call of turn %q has an open outcome, or an earlier turn of its conversation is live", domain.ErrConflict, lease.RequestID)
+		}
+		return nil
+	}); err != nil {
 		return domain.OperatorEntry{}, err
 	}
-	if err = current.admits(lease, settings); err != nil {
-		return domain.OperatorEntry{}, err
-	}
-	if err = insertEntry(ctx, tx, &entry); err != nil {
-		return domain.OperatorEntry{}, err
-	}
-	settlement := domain.TurnSettlement{Reservation: finish.Reservation, Usage: usage, SubjectRef: finish.SubjectRef, Attribution: finish.Attribution}
-	unheld, err := control.Settlement.write(ctx, tx, lease.TenantID, lease.RequestID, current.conversationID, current.turnNo, settlement)
-	if err != nil {
-		return domain.OperatorEntry{}, err
-	}
-	if unheld != nil {
-		return domain.OperatorEntry{}, unheld
-	}
-	kind, card := resultCard(frame.Payload, response, positiveOr(control.MaxResultCardBytes, defaultResultCardBytes))
-	finished, err := tx.Query(ctx, qOperatorFinish, response.URI, response.Digest,
-		lease.TenantID, lease.RequestID, lease.Fence, string(lease.Holder.Kind), lease.Holder.ID, kind, card)
-	if err != nil {
-		return domain.OperatorEntry{}, fmt.Errorf("finish operated turn: %w", err)
-	}
-	if len(finished.Rows) == 0 {
-		return domain.OperatorEntry{}, fmt.Errorf("%w: a call of turn %q has an open outcome, or an earlier turn of its conversation is live", domain.ErrConflict, lease.RequestID)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.OperatorEntry{}, fmt.Errorf("commit operator finish: %w", err)
-	}
-	committed = true
 	return entry, nil
 }
 

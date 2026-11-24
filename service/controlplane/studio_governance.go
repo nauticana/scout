@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -129,38 +130,28 @@ func (s *StudioGovernance) SaveGovernance(ctx context.Context, actor domain.Stud
 		return domain.AgentGovernanceView{}, fmt.Errorf("encode agent governance: %w", err)
 	}
 
-	tx, err := s.DB.BeginTx(ctx, governanceQueries)
-	if err != nil {
-		return domain.AgentGovernanceView{}, fmt.Errorf("begin governance transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var draftRevision int64
+	if err := txn.New(s.DB, governanceQueries, "governance").Run(ctx, func(tx keelport.TxQueryService) error {
+		bumped, err := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision)
+		if err != nil {
+			return fmt.Errorf("bump draft revision: %w", err)
 		}
-	}()
-	bumped, err := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, change.AgentID, change.ExpectedDraftRevision)
-	if err != nil {
-		return domain.AgentGovernanceView{}, fmt.Errorf("bump draft revision: %w", err)
-	}
-	if len(bumped.Rows) == 0 {
-		return domain.AgentGovernanceView{}, domain.ErrRevisionConflict
-	}
-	if _, err = tx.Query(ctx, qGovernancePut, actor.TenantID, change.AgentID, string(encoded), actorUser(actor)); err != nil {
-		return domain.AgentGovernanceView{}, fmt.Errorf("store agent governance: %w", err)
-	}
-	detail := "unchanged"
-	if len(changed) > 0 {
-		detail = "changed " + strings.Join(changed, ", ")
-	}
-	if err = auditStudio(ctx, tx, actor, change.AgentID, "GOVERNANCE", detail); err != nil {
+		if len(bumped.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		draftRevision = common.AsInt64(bumped.Rows[0][0])
+		if _, err := tx.Query(ctx, qGovernancePut, actor.TenantID, change.AgentID, string(encoded), actorUser(actor)); err != nil {
+			return fmt.Errorf("store agent governance: %w", err)
+		}
+		detail := "unchanged"
+		if len(changed) > 0 {
+			detail = "changed " + strings.Join(changed, ", ")
+		}
+		return auditStudio(ctx, tx, actor, change.AgentID, "GOVERNANCE", detail)
+	}); err != nil {
 		return domain.AgentGovernanceView{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentGovernanceView{}, fmt.Errorf("commit governance: %w", err)
-	}
-	committed = true
-	return s.view(change.AgentID, change.Governance, snapshot, common.AsInt64(bumped.Rows[0][0]))
+	return s.view(change.AgentID, change.Governance, snapshot, draftRevision)
 }
 
 // Name is the release section the governance freezes into.

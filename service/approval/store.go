@@ -21,6 +21,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -247,43 +248,31 @@ func (s *TableStore) Open(ctx context.Context, request domain.ApprovalRequest) (
 func (s *TableStore) openNotified(ctx context.Context, request domain.ApprovalRequest) error {
 	queries := maps.Clone(approvalQueries)
 	maps.Copy(queries, outbox.WriteQueries())
-	tx, err := s.DB.BeginTx(ctx, queries)
-	if err != nil {
-		return fmt.Errorf("open approval: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	id, err := insertRequest(ctx, tx, request)
-	if err != nil {
-		return err
-	}
-	if id > 0 && request.Approver.ID != "" {
-		payload, err := json.Marshal(approvalNotice{
-			TenantID: request.TenantID, RecipientKind: string(request.Approver.Kind), RecipientID: request.Approver.ID,
-			RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, Subject: request.Action,
-			RiskTier: string(request.RiskTier), DueAt: request.DeadlineAt,
-		})
+	return txn.New(s.DB, queries, "open approval").Run(ctx, func(tx keelport.TxQueryService) error {
+		id, err := insertRequest(ctx, tx, request)
 		if err != nil {
-			return fmt.Errorf("encode approval notice: %w", err)
+			return err
 		}
-		eventID, err := outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: request.TenantID, AggregateType: ApprovalAggregate,
-			AggregateID: strconv.FormatInt(id, 10), EventType: ApprovalRequestedEvent, Payload: string(payload)})
-		if err != nil {
-			return fmt.Errorf("queue approval notice: %w", err)
+		if id > 0 && request.Approver.ID != "" {
+			payload, err := json.Marshal(approvalNotice{
+				TenantID: request.TenantID, RecipientKind: string(request.Approver.Kind), RecipientID: request.Approver.ID,
+				RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, Subject: request.Action,
+				RiskTier: string(request.RiskTier), DueAt: request.DeadlineAt,
+			})
+			if err != nil {
+				return fmt.Errorf("encode approval notice: %w", err)
+			}
+			eventID, err := outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: request.TenantID, AggregateType: ApprovalAggregate,
+				AggregateID: strconv.FormatInt(id, 10), EventType: ApprovalRequestedEvent, Payload: string(payload)})
+			if err != nil {
+				return fmt.Errorf("queue approval notice: %w", err)
+			}
+			if _, err := tx.Query(ctx, qApprovalNotified, eventID, request.TenantID, id); err != nil {
+				return fmt.Errorf("link approval notice: %w", err)
+			}
 		}
-		if _, err = tx.Query(ctx, qApprovalNotified, eventID, request.TenantID, id); err != nil {
-			return fmt.Errorf("link approval notice: %w", err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("open approval: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // insertRequest returns the new request's id, or zero when the key already exists.
@@ -338,63 +327,57 @@ func (s *TableStore) Resolve(ctx context.Context, verdict domain.ApprovalVerdict
 		decidedAt = s.now()
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := s.DB.BeginTx(ctx, approvalQueries)
-	if err != nil {
-		return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
 	key := verdict.RequestKey
-	fence := verdict.Assignment
-	updated, err := tx.Query(ctx, qApprovalResolve, string(verdict.Status), decidedAt,
-		key.TenantID, key.RequestID, key.ExecutionStepID, verdict.ProposedDigest,
-		fence.Step, common.NullIfEmpty(string(fence.Approver.Kind)), common.NullIfEmpty(fence.Approver.ID))
-	if err != nil {
-		return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: %w", err)
-	}
-	if len(updated.Rows) == 0 {
-		existing, queryErr := tx.Query(ctx, qApprovalDecisionGet, key.TenantID, key.RequestID, key.ExecutionStepID)
-		if queryErr != nil {
-			return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: inspect existing verdict: %w", queryErr)
+	replayed := false
+	stored, err := txn.Value(ctx, txn.New(s.DB, approvalQueries, "resolve approval"), func(tx keelport.TxQueryService) (domain.ApprovalRequest, error) {
+		fence := verdict.Assignment
+		updated, err := tx.Query(ctx, qApprovalResolve, string(verdict.Status), decidedAt,
+			key.TenantID, key.RequestID, key.ExecutionStepID, verdict.ProposedDigest,
+			fence.Step, common.NullIfEmpty(string(fence.Approver.Kind)), common.NullIfEmpty(fence.Approver.ID))
+		if err != nil {
+			return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: %w", err)
 		}
-		if len(existing.Rows) == 0 || !sameVerdict(existing.Rows[0], verdict) {
-			return domain.ApprovalRequest{}, fmt.Errorf("%w: request %q step %d is not awaiting this proposal",
-				domain.ErrConflict, key.RequestID, key.ExecutionStepID)
+		if len(updated.Rows) == 0 {
+			existing, queryErr := tx.Query(ctx, qApprovalDecisionGet, key.TenantID, key.RequestID, key.ExecutionStepID)
+			if queryErr != nil {
+				return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: inspect existing verdict: %w", queryErr)
+			}
+			if len(existing.Rows) == 0 || !sameVerdict(existing.Rows[0], verdict) {
+				return domain.ApprovalRequest{}, fmt.Errorf("%w: request %q step %d is not awaiting this proposal",
+					domain.ErrConflict, key.RequestID, key.ExecutionStepID)
+			}
+			stored, queryErr := tx.Query(ctx, qApprovalGet, key.TenantID, key.RequestID, key.ExecutionStepID)
+			if queryErr != nil {
+				return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: load existing verdict: %w", queryErr)
+			}
+			if len(stored.Rows) == 0 {
+				return domain.ApprovalRequest{}, fmt.Errorf("%w: approval for request %q step %d",
+					domain.ErrNotFound, key.RequestID, key.ExecutionStepID)
+			}
+			replayed = true
+			return scanRequest(key.TenantID, stored.Rows[0]), nil
 		}
-		stored, queryErr := tx.Query(ctx, qApprovalGet, key.TenantID, key.RequestID, key.ExecutionStepID)
-		if queryErr != nil {
-			return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: load existing verdict: %w", queryErr)
+		id := common.AsInt64(updated.Rows[0][0])
+		var deciderUser, deciderAgent, deciderService any
+		switch verdict.Decider.Kind {
+		case domain.PrincipalHuman:
+			deciderUser, _ = strconv.ParseInt(verdict.Decider.ID, 10, 64)
+		case domain.PrincipalAgent:
+			deciderAgent = verdict.Decider.ID
+		case domain.PrincipalService:
+			deciderService = verdict.Decider.ID
 		}
-		if len(stored.Rows) == 0 {
-			return domain.ApprovalRequest{}, fmt.Errorf("%w: approval for request %q step %d",
-				domain.ErrNotFound, key.RequestID, key.ExecutionStepID)
+		if _, err := tx.Query(ctx, qApprovalDecision, id, key.TenantID, string(verdict.Status),
+			string(verdict.Decider.Kind), deciderUser, deciderAgent, deciderService, common.NullIfEmpty(verdict.Authority.GrantID),
+			verdict.ProposedDigest, common.NullIfEmpty(verdict.Reason), decidedAt,
+			common.NullIfEmpty(verdict.Revision.URI), common.NullIfEmpty(verdict.Revision.Digest)); err != nil {
+			return domain.ApprovalRequest{}, fmt.Errorf("record approval decision: %w", err)
 		}
-		return scanRequest(key.TenantID, stored.Rows[0]), nil
+		return domain.ApprovalRequest{}, nil
+	})
+	if err != nil || replayed {
+		return stored, err
 	}
-	id := common.AsInt64(updated.Rows[0][0])
-	var deciderUser, deciderAgent, deciderService any
-	switch verdict.Decider.Kind {
-	case domain.PrincipalHuman:
-		deciderUser, _ = strconv.ParseInt(verdict.Decider.ID, 10, 64)
-	case domain.PrincipalAgent:
-		deciderAgent = verdict.Decider.ID
-	case domain.PrincipalService:
-		deciderService = verdict.Decider.ID
-	}
-	if _, err = tx.Query(ctx, qApprovalDecision, id, key.TenantID, string(verdict.Status),
-		string(verdict.Decider.Kind), deciderUser, deciderAgent, deciderService, common.NullIfEmpty(verdict.Authority.GrantID),
-		verdict.ProposedDigest, common.NullIfEmpty(verdict.Reason), decidedAt,
-		common.NullIfEmpty(verdict.Revision.URI), common.NullIfEmpty(verdict.Revision.Digest)); err != nil {
-		return domain.ApprovalRequest{}, fmt.Errorf("record approval decision: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.ApprovalRequest{}, fmt.Errorf("resolve approval: commit: %w", err)
-	}
-	committed = true
 	return s.Get(ctx, key)
 }
 
@@ -598,41 +581,29 @@ func (s *TableStore) Reassign(ctx context.Context, request domain.ApprovalReques
 func (s *TableStore) reassignNotified(ctx context.Context, request domain.ApprovalRequest, backup domain.PrincipalRef, deadline any, args []any) error {
 	queries := maps.Clone(approvalQueries)
 	maps.Copy(queries, outbox.WriteQueries())
-	tx, err := s.DB.BeginTx(ctx, queries)
-	if err != nil {
-		return fmt.Errorf("escalate approval: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(s.DB, queries, "escalate approval").Run(ctx, func(tx keelport.TxQueryService) error {
+		updated, err := tx.Query(ctx, qApprovalEscalate, args...)
+		if err != nil {
+			return fmt.Errorf("escalate approval: %w", err)
 		}
-	}()
-	updated, err := tx.Query(ctx, qApprovalEscalate, args...)
-	if err != nil {
-		return fmt.Errorf("escalate approval: %w", err)
-	}
-	if len(updated.Rows) == 0 {
-		return fmt.Errorf("%w: approval %d is no longer assigned as read", domain.ErrConflict, request.ID)
-	}
-	due, _ := deadline.(time.Time)
-	payload, err := json.Marshal(approvalNotice{
-		TenantID: request.TenantID, RecipientKind: string(backup.Kind), RecipientID: backup.ID,
-		RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, Subject: request.Action,
-		RiskTier: string(request.RiskTier), DueAt: due,
+		if len(updated.Rows) == 0 {
+			return fmt.Errorf("%w: approval %d is no longer assigned as read", domain.ErrConflict, request.ID)
+		}
+		due, _ := deadline.(time.Time)
+		payload, err := json.Marshal(approvalNotice{
+			TenantID: request.TenantID, RecipientKind: string(backup.Kind), RecipientID: backup.ID,
+			RequestID: request.RequestID, ExecutionStepID: request.ExecutionStepID, Subject: request.Action,
+			RiskTier: string(request.RiskTier), DueAt: due,
+		})
+		if err != nil {
+			return fmt.Errorf("encode approval notice: %w", err)
+		}
+		if _, err = outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: request.TenantID, AggregateType: ApprovalAggregate,
+			AggregateID: strconv.FormatInt(request.ID, 10), EventType: ApprovalRequestedEvent, Payload: string(payload)}); err != nil {
+			return fmt.Errorf("queue approval notice: %w", err)
+		}
+		return nil
 	})
-	if err != nil {
-		return fmt.Errorf("encode approval notice: %w", err)
-	}
-	if _, err = outbox.EnqueueTx(ctx, tx, outbox.Event{PartnerID: request.TenantID, AggregateType: ApprovalAggregate,
-		AggregateID: strconv.FormatInt(request.ID, 10), EventType: ApprovalRequestedEvent, Payload: string(payload)}); err != nil {
-		return fmt.Errorf("queue approval notice: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("escalate approval: commit: %w", err)
-	}
-	committed = true
-	return nil
 }
 
 func validateReassign(request domain.ApprovalRequest, step domain.EscalationStep) error {

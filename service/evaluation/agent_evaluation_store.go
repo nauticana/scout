@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -303,82 +303,70 @@ func (store *AgentEvaluationStore) Enqueue(ctx context.Context, request domain.A
 		return domain.AgentEvaluationRun{}, err
 	}
 	candidate := domain.EvaluationArm{Subject: request.Subject, Draft: request.Draft, DraftSettings: request.DraftSettings}
-	tx, err := store.begin(ctx, "agent evaluation store", agentEvaluationQueries)
-	if err != nil {
-		return domain.AgentEvaluationRun{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
-		}
-	}()
-	set, err := tx.Query(ctx, qAgentEvalLockSet, request.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("lock agent golden set: %w", err)
-	}
-	if len(set.Rows) == 0 {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("%w: agent %q has no golden set", domain.ErrNotFound, request.AgentID)
-	}
-	run := domain.AgentEvaluationRun{
-		TenantID: request.TenantID, AgentID: request.AgentID, GoldenSetID: common.AsString(set.Rows[0][0]), SetVersion: request.SetVersion,
-		Scope: request.Scope, Subject: request.Subject, Status: domain.EvaluationQueued, RequestedBy: request.RequestedBy,
-	}
-	open, err := tx.Query(ctx, qAgentEvalOpenRuns, request.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("count open evaluations: %w", err)
-	}
-	if len(open.Rows) > 0 && common.AsInt64(open.Rows[0][0]) >= int64(request.MaxOpenRuns) {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("%w: agent %q already has %d open evaluations", domain.ErrRateLimited, request.AgentID, request.MaxOpenRuns)
-	}
-	examples, err := tx.Query(ctx, qAgentEvalVersion, string(request.Scope), string(request.Scope), request.TenantID, run.GoldenSetID, request.SetVersion)
-	if err != nil {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("load golden set version: %w", err)
-	}
-	if len(examples.Rows) == 0 {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("%w: golden set %q version %d", domain.ErrNotFound, run.GoldenSetID, request.SetVersion)
-	}
-	if common.AsInt64(examples.Rows[0][0]) == 0 {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("%w: golden set %q version %d has no examples in the %s scope", domain.ErrValidation, run.GoldenSetID, request.SetVersion, request.Scope)
-	}
-	if run.Subject, err = pinSubject(ctx, tx, request, candidate.Subject, run.GoldenSetID); err != nil {
-		return domain.AgentEvaluationRun{}, err
-	}
-	if request.Baseline != nil {
-		subject, err := pinSubject(ctx, tx, request, request.Baseline.Subject, run.GoldenSetID)
+	return txn.Value(ctx, txn.New(store.DB, agentEvaluationQueries, "agent evaluation store"), func(tx keelport.TxQueryService) (domain.AgentEvaluationRun, error) {
+		set, err := tx.Query(ctx, qAgentEvalLockSet, request.TenantID, request.AgentID)
 		if err != nil {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("lock agent golden set: %w", err)
+		}
+		if len(set.Rows) == 0 {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: agent %q has no golden set", domain.ErrNotFound, request.AgentID)
+		}
+		run := domain.AgentEvaluationRun{
+			TenantID: request.TenantID, AgentID: request.AgentID, GoldenSetID: common.AsString(set.Rows[0][0]), SetVersion: request.SetVersion,
+			Scope: request.Scope, Subject: request.Subject, Status: domain.EvaluationQueued, RequestedBy: request.RequestedBy,
+		}
+		open, err := tx.Query(ctx, qAgentEvalOpenRuns, request.TenantID, request.AgentID)
+		if err != nil {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("count open evaluations: %w", err)
+		}
+		if len(open.Rows) > 0 && common.AsInt64(open.Rows[0][0]) >= int64(request.MaxOpenRuns) {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: agent %q already has %d open evaluations", domain.ErrRateLimited, request.AgentID, request.MaxOpenRuns)
+		}
+		examples, err := tx.Query(ctx, qAgentEvalVersion, string(request.Scope), string(request.Scope), request.TenantID, run.GoldenSetID, request.SetVersion)
+		if err != nil {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("load golden set version: %w", err)
+		}
+		if len(examples.Rows) == 0 {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: golden set %q version %d", domain.ErrNotFound, run.GoldenSetID, request.SetVersion)
+		}
+		if common.AsInt64(examples.Rows[0][0]) == 0 {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: golden set %q version %d has no examples in the %s scope", domain.ErrValidation, run.GoldenSetID, request.SetVersion, request.Scope)
+		}
+		if run.Subject, err = pinSubject(ctx, tx, request, candidate.Subject, run.GoldenSetID); err != nil {
 			return domain.AgentEvaluationRun{}, err
 		}
-		if subject.DefinitionDigest != "" && subject.DefinitionDigest == run.Subject.DefinitionDigest && subject.OmittedSkill == run.Subject.OmittedSkill {
-			return domain.AgentEvaluationRun{}, fmt.Errorf("%w: arms a and b are the same definition", domain.ErrValidation)
+		if request.Baseline != nil {
+			subject, err := pinSubject(ctx, tx, request, request.Baseline.Subject, run.GoldenSetID)
+			if err != nil {
+				return domain.AgentEvaluationRun{}, err
+			}
+			if subject.DefinitionDigest != "" && subject.DefinitionDigest == run.Subject.DefinitionDigest && subject.OmittedSkill == run.Subject.OmittedSkill {
+				return domain.AgentEvaluationRun{}, fmt.Errorf("%w: arms a and b are the same definition", domain.ErrValidation)
+			}
+			run.Baseline = &subject
 		}
-		run.Baseline = &subject
-	}
-	run.RunID = tx.GenID()
-	kind, id := principalColumns(request.RequestedBy)
-	inserted, err := tx.Query(ctx, qAgentEvalInsertRun, run.RunID, run.TenantID, run.AgentID, run.GoldenSetID, run.SetVersion, string(run.Scope), kind, id)
-	if err != nil {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("queue evaluation run: %w", err)
-	}
-	if len(inserted.Rows) > 0 {
-		run.QueuedAt = common.AsTime(inserted.Rows[0][0])
-	}
-	candidate.Subject = run.Subject
-	if err = insertSubject(ctx, tx, run, domain.RoleCandidate, candidate); err != nil {
-		return domain.AgentEvaluationRun{}, err
-	}
-	if request.Baseline != nil {
-		baseline := *request.Baseline
-		baseline.Subject = *run.Baseline
-		if err = insertSubject(ctx, tx, run, domain.RoleBaseline, baseline); err != nil {
+		run.RunID = tx.GenID()
+		kind, id := principalColumns(request.RequestedBy)
+		inserted, err := tx.Query(ctx, qAgentEvalInsertRun, run.RunID, run.TenantID, run.AgentID, run.GoldenSetID, run.SetVersion, string(run.Scope), kind, id)
+		if err != nil {
+			return domain.AgentEvaluationRun{}, fmt.Errorf("queue evaluation run: %w", err)
+		}
+		if len(inserted.Rows) > 0 {
+			run.QueuedAt = common.AsTime(inserted.Rows[0][0])
+		}
+		candidate.Subject = run.Subject
+		if err := insertSubject(ctx, tx, run, domain.RoleCandidate, candidate); err != nil {
 			return domain.AgentEvaluationRun{}, err
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentEvaluationRun{}, fmt.Errorf("commit evaluation run: %w", err)
-	}
-	committed = true
-	return run, nil
+		if request.Baseline != nil {
+			baseline := *request.Baseline
+			baseline.Subject = *run.Baseline
+			if err := insertSubject(ctx, tx, run, domain.RoleBaseline, baseline); err != nil {
+				return domain.AgentEvaluationRun{}, err
+			}
+		}
+		return run, nil
+	})
 }
 
 // pinSubject resolves a release subject's digest and the skill it omits, and checks that a baseline subject answers
@@ -681,52 +669,40 @@ func (store *AgentEvaluationStore) Record(ctx context.Context, lease domain.Agen
 	if err != nil {
 		return fmt.Errorf("encode scores: %w", err)
 	}
-	tx, err := store.begin(ctx, "agent evaluation store", agentEvaluationQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
-		}
-	}()
-	renewed, err := tx.Query(ctx, qAgentEvalRenew, int64(lease.TTL/time.Second), lease.TenantID, lease.RunID, lease.Token)
-	if err != nil {
-		return fmt.Errorf("renew evaluation lease: %w", err)
-	}
-	if len(renewed.Rows) == 0 {
-		return fmt.Errorf("%w: run %d is no longer held by this lease", domain.ErrConflict, lease.RunID)
-	}
-	goldenSetID, setVersion := common.AsString(renewed.Rows[0][0]), common.AsInt64(renewed.Rows[0][1])
-	// A free result carries no currency, so it can never fix the run's currency.
-	var currency any
-	if total.CostMinorUnits > 0 {
-		currency = total.Currency
-	}
-	evaluator := result.EvaluatorUsage
-	inserted, err := tx.Query(ctx, qAgentEvalPutResult, lease.RunID, lease.TenantID, goldenSetID, setVersion, result.ExampleID, string(scores),
-		result.Latency.Milliseconds(), result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits, currency,
-		result.NeedsHumanReview, nullable(truncate(result.Reason, 400)), evaluator.InputTokens, evaluator.OutputTokens, evaluator.CostMinorUnits,
-		nullable(result.Trajectory.URI), nullable(result.Trajectory.Digest))
-	if err != nil {
-		return fmt.Errorf("insert evaluation result %q: %w", result.ExampleID, err)
-	}
-	if len(inserted.Rows) > 0 {
-		totals, err := tx.Query(ctx, qAgentEvalAddTotals, total.InputTokens, total.OutputTokens, total.CostMinorUnits,
-			currency, lease.TenantID, lease.RunID, currency, currency)
+	return txn.New(store.DB, agentEvaluationQueries, "agent evaluation store").Run(ctx, func(tx keelport.TxQueryService) error {
+		renewed, err := tx.Query(ctx, qAgentEvalRenew, int64(lease.TTL/time.Second), lease.TenantID, lease.RunID, lease.Token)
 		if err != nil {
-			return fmt.Errorf("add evaluation totals: %w", err)
+			return fmt.Errorf("renew evaluation lease: %w", err)
 		}
-		if len(totals.Rows) == 0 {
-			return fmt.Errorf("%w: result %q is priced in %s, unlike the run", domain.ErrValidation, result.ExampleID, total.Currency)
+		if len(renewed.Rows) == 0 {
+			return fmt.Errorf("%w: run %d is no longer held by this lease", domain.ErrConflict, lease.RunID)
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit evaluation result: %w", err)
-	}
-	committed = true
-	return nil
+		goldenSetID, setVersion := common.AsString(renewed.Rows[0][0]), common.AsInt64(renewed.Rows[0][1])
+		// A free result carries no currency, so it can never fix the run's currency.
+		var currency any
+		if total.CostMinorUnits > 0 {
+			currency = total.Currency
+		}
+		evaluator := result.EvaluatorUsage
+		inserted, err := tx.Query(ctx, qAgentEvalPutResult, lease.RunID, lease.TenantID, goldenSetID, setVersion, result.ExampleID, string(scores),
+			result.Latency.Milliseconds(), result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits, currency,
+			result.NeedsHumanReview, nullable(truncate(result.Reason, 400)), evaluator.InputTokens, evaluator.OutputTokens, evaluator.CostMinorUnits,
+			nullable(result.Trajectory.URI), nullable(result.Trajectory.Digest))
+		if err != nil {
+			return fmt.Errorf("insert evaluation result %q: %w", result.ExampleID, err)
+		}
+		if len(inserted.Rows) > 0 {
+			totals, err := tx.Query(ctx, qAgentEvalAddTotals, total.InputTokens, total.OutputTokens, total.CostMinorUnits,
+				currency, lease.TenantID, lease.RunID, currency, currency)
+			if err != nil {
+				return fmt.Errorf("add evaluation totals: %w", err)
+			}
+			if len(totals.Rows) == 0 {
+				return fmt.Errorf("%w: result %q is priced in %s, unlike the run", domain.ErrValidation, result.ExampleID, total.Currency)
+			}
+		}
+		return nil
+	})
 }
 
 // resultTotal is the subject's and the evaluators' spend together, as the run's totals

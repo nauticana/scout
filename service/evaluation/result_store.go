@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 
+	keelport "github.com/nauticana/keel/port"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -120,48 +121,36 @@ func (store *ResultStore) PutResults(ctx context.Context, tenantID int64, runID 
 	if len(results) == 0 {
 		return nil
 	}
-	tx, err := store.begin(ctx, "result store", resultQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
-		}
-	}()
-	set, err := tx.Query(ctx, qRunGetSet, tenantID, runID)
-	if err != nil {
-		return fmt.Errorf("resolve run golden set: %w", err)
-	}
-	if len(set.Rows) == 0 {
-		return fmt.Errorf("%w: evaluation run %d", domain.ErrNotFound, runID)
-	}
-	manifestID, goldenSetID, setVersion := common.AsString(set.Rows[0][0]), common.AsString(set.Rows[0][1]), common.AsInt64(set.Rows[0][2])
-	for _, result := range results {
-		if result.ManifestID != manifestID {
-			return fmt.Errorf("%w: result for %q belongs to manifest %q, run has %q", domain.ErrValidation, result.ExampleID, result.ManifestID, manifestID)
-		}
-		if !result.Role.Valid() {
-			return fmt.Errorf("%w: unknown role %q", domain.ErrValidation, result.Role)
-		}
-		scores, err := json.Marshal(result.Scores)
+	return txn.New(store.DB, resultQueries, "result store").Run(ctx, func(tx keelport.TxQueryService) error {
+		set, err := tx.Query(ctx, qRunGetSet, tenantID, runID)
 		if err != nil {
-			return fmt.Errorf("encode scores: %w", err)
+			return fmt.Errorf("resolve run golden set: %w", err)
 		}
-		if _, err := tx.Query(ctx, qResultInsert,
-			runID, tenantID, goldenSetID, setVersion, result.ExampleID, string(result.Role), string(scores), result.Latency.Milliseconds(),
-			result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits, nullable(result.Usage.Currency),
-			result.NeedsHumanReview, nullable(result.Reason),
-		); err != nil {
-			return fmt.Errorf("insert evaluation result %q/%s: %w", result.ExampleID, result.Role, err)
+		if len(set.Rows) == 0 {
+			return fmt.Errorf("%w: evaluation run %d", domain.ErrNotFound, runID)
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit evaluation results: %w", err)
-	}
-	committed = true
-	return nil
+		manifestID, goldenSetID, setVersion := common.AsString(set.Rows[0][0]), common.AsString(set.Rows[0][1]), common.AsInt64(set.Rows[0][2])
+		for _, result := range results {
+			if result.ManifestID != manifestID {
+				return fmt.Errorf("%w: result for %q belongs to manifest %q, run has %q", domain.ErrValidation, result.ExampleID, result.ManifestID, manifestID)
+			}
+			if !result.Role.Valid() {
+				return fmt.Errorf("%w: unknown role %q", domain.ErrValidation, result.Role)
+			}
+			scores, err := json.Marshal(result.Scores)
+			if err != nil {
+				return fmt.Errorf("encode scores: %w", err)
+			}
+			if _, err := tx.Query(ctx, qResultInsert,
+				runID, tenantID, goldenSetID, setVersion, result.ExampleID, string(result.Role), string(scores), result.Latency.Milliseconds(),
+				result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CostMinorUnits, nullable(result.Usage.Currency),
+				result.NeedsHumanReview, nullable(result.Reason),
+			); err != nil {
+				return fmt.Errorf("insert evaluation result %q/%s: %w", result.ExampleID, result.Role, err)
+			}
+		}
+		return nil
+	})
 }
 
 // ListResults returns every result of a run ordered by example and role.

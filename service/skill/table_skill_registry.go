@@ -14,6 +14,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/jsonschema"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -192,44 +193,32 @@ func (registry *TableSkillRegistry) Register(ctx context.Context, tenantID int64
 	if err != nil {
 		return err
 	}
-	tx, err := registry.DB.BeginTx(ctx, skillRegistryQueries)
-	if err != nil {
-		return fmt.Errorf("begin skill registration: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	return txn.New(registry.DB, skillRegistryQueries, "skill registration").Run(ctx, func(tx port.TxQueryService) error {
+		if err := ensureProfile(ctx, tx, qSkillProfileEnsure, qSkillProfileLock, skill.DisplayName, tenantID, skill.SkillID); err != nil {
+			return err
 		}
-	}()
-	if err = ensureProfile(ctx, tx, qSkillProfileEnsure, qSkillProfileLock, skill.DisplayName, tenantID, skill.SkillID); err != nil {
-		return err
-	}
-	existing, found, err := readVersion(ctx, tx, tenantID, skill.SkillID, skill.Version)
-	if err != nil {
-		return err
-	}
-	if found {
-		if !sameSkill(existing, skill) {
-			return fmt.Errorf("%w: skill %s@%s is already registered with different content", domain.ErrConflict, skill.SkillID, skill.Version)
+		existing, found, err := readVersion(ctx, tx, tenantID, skill.SkillID, skill.Version)
+		if err != nil {
+			return err
+		}
+		if found {
+			if !sameSkill(existing, skill) {
+				return fmt.Errorf("%w: skill %s@%s is already registered with different content", domain.ErrConflict, skill.SkillID, skill.Version)
+			}
+			return nil
+		}
+		if skill, err = insertVersion(ctx, tx, tenantID, skill); err != nil {
+			return err
+		}
+		stored, found, err := readVersion(ctx, tx, tenantID, skill.SkillID, skill.Version)
+		if err != nil {
+			return err
+		}
+		if !found || !sameSkill(stored, skill) {
+			return fmt.Errorf("%w: skill %s@%s was concurrently registered with different content", domain.ErrConflict, skill.SkillID, skill.Version)
 		}
 		return nil
-	}
-	if skill, err = insertVersion(ctx, tx, tenantID, skill); err != nil {
-		return err
-	}
-	stored, found, err := readVersion(ctx, tx, tenantID, skill.SkillID, skill.Version)
-	if err != nil {
-		return err
-	}
-	if !found || !sameSkill(stored, skill) {
-		return fmt.Errorf("%w: skill %s@%s was concurrently registered with different content", domain.ErrConflict, skill.SkillID, skill.Version)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit skill registration: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }
 
 // EnsureProfile creates a tenant skill profile before its first version, refusing an

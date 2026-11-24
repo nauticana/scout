@@ -15,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -89,40 +90,28 @@ func (s *ReleaseActivations) Cancel(ctx context.Context, actor domain.StudioActo
 	if len(request.Reason) > 400 {
 		return domain.ReleaseActivation{}, validationError("reason", "must be at most 400 characters")
 	}
-	tx, err := s.DB.BeginTx(ctx, activationQueries)
-	if err != nil {
-		return domain.ReleaseActivation{}, fmt.Errorf("begin activation cancel: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, activationQueries, "activation cancel"), func(tx keelport.TxQueryService) (domain.ReleaseActivation, error) {
+		res, err := tx.Query(ctx, qActivationCancel, string(actor.Principal.Kind), actor.Principal.ID,
+			common.NullIfEmpty(strings.TrimSpace(request.Reason)), actor.TenantID, request.AgentID, request.ActivationID)
+		if err != nil {
+			return domain.ReleaseActivation{}, fmt.Errorf("cancel release activation: %w", err)
 		}
-	}()
-	res, err := tx.Query(ctx, qActivationCancel, string(actor.Principal.Kind), actor.Principal.ID,
-		common.NullIfEmpty(strings.TrimSpace(request.Reason)), actor.TenantID, request.AgentID, request.ActivationID)
-	if err != nil {
-		return domain.ReleaseActivation{}, fmt.Errorf("cancel release activation: %w", err)
-	}
-	if len(res.Rows) == 0 {
-		current, getErr := tx.Query(ctx, qActivationGet, actor.TenantID, request.AgentID, request.ActivationID)
-		if getErr != nil {
-			return domain.ReleaseActivation{}, fmt.Errorf("load release activation: %w", getErr)
+		if len(res.Rows) == 0 {
+			current, getErr := tx.Query(ctx, qActivationGet, actor.TenantID, request.AgentID, request.ActivationID)
+			if getErr != nil {
+				return domain.ReleaseActivation{}, fmt.Errorf("load release activation: %w", getErr)
+			}
+			if len(current.Rows) == 0 {
+				return domain.ReleaseActivation{}, fmt.Errorf("%w: activation %d of agent %q", domain.ErrNotFound, request.ActivationID, request.AgentID)
+			}
+			return domain.ReleaseActivation{}, fmt.Errorf("%w: activation %d is %s", domain.ErrConflict, request.ActivationID, common.AsString(current.Rows[0][9]))
 		}
-		if len(current.Rows) == 0 {
-			return domain.ReleaseActivation{}, fmt.Errorf("%w: activation %d of agent %q", domain.ErrNotFound, request.ActivationID, request.AgentID)
+		activation := activationFromRow(res.Rows[0])
+		if err := auditStudio(ctx, tx, actor, request.AgentID, "ACTIVATION_CANCEL", fmt.Sprintf("activation %d of version %s", activation.ID, activation.Version)); err != nil {
+			return domain.ReleaseActivation{}, err
 		}
-		return domain.ReleaseActivation{}, fmt.Errorf("%w: activation %d is %s", domain.ErrConflict, request.ActivationID, common.AsString(current.Rows[0][9]))
-	}
-	activation := activationFromRow(res.Rows[0])
-	if err = auditStudio(ctx, tx, actor, request.AgentID, "ACTIVATION_CANCEL", fmt.Sprintf("activation %d of version %s", activation.ID, activation.Version)); err != nil {
-		return domain.ReleaseActivation{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.ReleaseActivation{}, fmt.Errorf("commit activation cancel: %w", err)
-	}
-	committed = true
-	return activation, nil
+		return activation, nil
+	})
 }
 
 // ActivateDue activates up to settings.Batch due activations, judged by the store clock.
@@ -192,33 +181,24 @@ func activationTimeout(settings domain.ReleaseActivationSettings) time.Duration 
 func (s *ReleaseActivations) claimAndSettle(parent context.Context, id int64, timeout time.Duration) (*domain.ReleaseActivation, domain.ReleaseActivationState, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	tx, err := s.DB.BeginTx(ctx, activationQueries)
-	if err != nil {
-		return nil, "", fmt.Errorf("begin activation %d: %w", id, err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	var activation *domain.ReleaseActivation
+	var state domain.ReleaseActivationState
+	if err := txn.New(s.DB, activationQueries, fmt.Sprintf("activation %d", id)).Run(ctx, func(tx keelport.TxQueryService) error {
+		claimed, err := tx.Query(ctx, qActivationClaim, id)
+		if err != nil {
+			return fmt.Errorf("claim activation %d: %w", id, err)
 		}
-	}()
-	claimed, err := tx.Query(ctx, qActivationClaim, id)
-	if err != nil {
-		return nil, "", fmt.Errorf("claim activation %d: %w", id, err)
+		if len(claimed.Rows) == 0 {
+			return nil
+		}
+		row := activationFromRow(claimed.Rows[0])
+		activation = &row
+		state, err = s.settle(ctx, tx, row)
+		return err
+	}); err != nil {
+		return activation, "", err
 	}
-	if len(claimed.Rows) == 0 {
-		return nil, "", nil
-	}
-	activation := activationFromRow(claimed.Rows[0])
-	state, err := s.settle(ctx, tx, activation)
-	if err != nil {
-		return &activation, "", err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return &activation, "", fmt.Errorf("commit activation %d: %w", id, err)
-	}
-	committed = true
-	return &activation, state, nil
+	return activation, state, nil
 }
 
 // settle runs every check and either activates or refuses inside the claim transaction;
@@ -392,36 +372,22 @@ func (s *ReleaseActivations) refuse(ctx context.Context, tx keelport.TxQueryServ
 func (s *ReleaseActivations) deferAttempt(ctx context.Context, activation domain.ReleaseActivation, settings domain.ReleaseActivationSettings, cause error) (domain.ReleaseActivationState, error) {
 	attempt := activation.Attempts + 1
 	cause = fmt.Errorf("activation %d attempt %d: %w", activation.ID, attempt, cause)
-	tx, err := s.DB.BeginTx(ctx, activationQueries)
-	if err != nil {
-		return "", errors.Join(cause, fmt.Errorf("begin activation %d deferral: %w", activation.ID, err))
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
 	state := domain.ActivationPending
-	if attempt >= settings.MaxAttempts {
-		state = domain.ActivationRefused
-		err = s.refuse(ctx, tx, schedulingActor(activation), activation, activationRefusal{reason: domain.ActivationAttemptsExhausted,
-			detail: fmt.Sprintf("%d attempts failed transiently", attempt)}, 1)
-	} else {
+	if err := txn.New(s.DB, activationQueries, "defer activation").Run(ctx, func(tx keelport.TxQueryService) error {
+		if attempt >= settings.MaxAttempts {
+			state = domain.ActivationRefused
+			return s.refuse(ctx, tx, schedulingActor(activation), activation, activationRefusal{reason: domain.ActivationAttemptsExhausted,
+				detail: fmt.Sprintf("%d attempts failed transiently", attempt)}, 1)
+		}
 		delay := int64(attempt) * int64(settings.PollPeriod/time.Second)
-		var res *keelmodel.QueryResult
-		res, err = tx.Query(ctx, qActivationDefer, max(delay, 1), fmt.Sprintf("attempt %d failed transiently; retrying", attempt), activation.ID)
+		res, err := tx.Query(ctx, qActivationDefer, max(delay, 1), fmt.Sprintf("attempt %d failed transiently; retrying", attempt), activation.ID)
 		if err == nil && len(res.Rows) == 0 {
 			err = fmt.Errorf("%w: activation %d is no longer pending", domain.ErrConflict, activation.ID)
 		}
-	}
-	if err == nil {
-		err = tx.Commit(ctx)
-	}
-	if err != nil {
+		return err
+	}); err != nil {
 		return "", errors.Join(cause, fmt.Errorf("record activation %d attempt: %w", activation.ID, err))
 	}
-	committed = true
 	return state, cause
 }
 

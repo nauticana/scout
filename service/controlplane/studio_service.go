@@ -19,6 +19,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/isolation"
 	"github.com/nauticana/scout/service/scope"
 )
@@ -420,52 +421,40 @@ func (s *StudioService) SaveDraft(ctx context.Context, actor domain.StudioActor,
 		return domain.AgentDraft{}, err
 	}
 
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("begin draft transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(s.DB, studioQueries, "save draft").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qStudioUpdateProfile, draft.DisplayName, agentState(draft.Active), actor.TenantID, draft.AgentID); err != nil {
+			return fmt.Errorf("update agent profile: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qStudioUpdateProfile, draft.DisplayName, agentState(draft.Active), actor.TenantID, draft.AgentID); err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("update agent profile: %w", err)
-	}
-	updated, err := tx.Query(ctx, qStudioUpdateDraft,
-		draft.Enabled,
-		modelProvider(draft.Models.Text), modelID(draft.Models.Text), modelProvider(draft.Models.Image), modelID(draft.Models.Image),
-		modelProvider(draft.Models.Video), modelID(draft.Models.Video), nullableJSON(draft.Extension), actorUser(actor),
-		actor.TenantID, draft.AgentID, draft.ExpectedDraftRevision)
-	if err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("update agent draft: %w", err)
-	}
-	if len(updated.Rows) == 0 {
-		return domain.AgentDraft{}, domain.ErrRevisionConflict
-	}
-	persisted, err := persistedPromptBindings(ctx, tx, actor.TenantID, scopes.AgentScopeID)
-	if err != nil {
+		updated, err := tx.Query(ctx, qStudioUpdateDraft,
+			draft.Enabled,
+			modelProvider(draft.Models.Text), modelID(draft.Models.Text), modelProvider(draft.Models.Image), modelID(draft.Models.Image),
+			modelProvider(draft.Models.Video), modelID(draft.Models.Video), nullableJSON(draft.Extension), actorUser(actor),
+			actor.TenantID, draft.AgentID, draft.ExpectedDraftRevision)
+		if err != nil {
+			return fmt.Errorf("update agent draft: %w", err)
+		}
+		if len(updated.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		persisted, err := persistedPromptBindings(ctx, tx, actor.TenantID, scopes.AgentScopeID)
+		if err != nil {
+			return err
+		}
+		if err := syncPromptBindings(ctx, tx, actor, scopes.AgentScopeID, desiredPromptBindings(draft, scopes.AgentScopeID), persisted); err != nil {
+			return err
+		}
+		changedDefaults, err := s.saveDefaults(ctx, tx, actor, draft, scopes.TypeScopeID)
+		if err != nil {
+			return err
+		}
+		detail := "agent"
+		if changedDefaults {
+			detail = "agent and tenant defaults"
+		}
+		return auditStudio(ctx, tx, actor, draft.AgentID, "DRAFT_SAVE", detail)
+	}); err != nil {
 		return domain.AgentDraft{}, err
 	}
-	if err = syncPromptBindings(ctx, tx, actor, scopes.AgentScopeID, desiredPromptBindings(draft, scopes.AgentScopeID), persisted); err != nil {
-		return domain.AgentDraft{}, err
-	}
-	changedDefaults, err := s.saveDefaults(ctx, tx, actor, draft, scopes.TypeScopeID)
-	if err != nil {
-		return domain.AgentDraft{}, err
-	}
-	detail := "agent"
-	if changedDefaults {
-		detail = "agent and tenant defaults"
-	}
-	if err = auditStudio(ctx, tx, actor, draft.AgentID, "DRAFT_SAVE", detail); err != nil {
-		return domain.AgentDraft{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("commit draft: %w", err)
-	}
-	committed = true
 	return s.draft(ctx, actor.TenantID, draft.AgentID)
 }
 
@@ -550,46 +539,34 @@ func (s *StudioService) Suspend(ctx context.Context, actor domain.StudioActor, a
 
 // setEnabled writes the kill switch at the expected draft revision, or at any revision.
 func (s *StudioService) setEnabled(ctx context.Context, actor domain.StudioActor, request domain.AgentSetEnabledRequest, anyRevision bool) (domain.AgentEnabledState, error) {
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return domain.AgentEnabledState{}, fmt.Errorf("begin enabled transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, studioQueries, "set agent enabled"), func(tx keelport.TxQueryService) (domain.AgentEnabledState, error) {
+		res, err := tx.Query(ctx, qStudioSetDraftEnabled, request.Enabled, actorUser(actor), actor.TenantID, request.AgentID, anyRevision, request.ExpectedDraftRevision)
+		if err != nil {
+			return domain.AgentEnabledState{}, fmt.Errorf("set draft enabled: %w", err)
 		}
-	}()
-	res, err := tx.Query(ctx, qStudioSetDraftEnabled, request.Enabled, actorUser(actor), actor.TenantID, request.AgentID, anyRevision, request.ExpectedDraftRevision)
-	if err != nil {
-		return domain.AgentEnabledState{}, fmt.Errorf("set draft enabled: %w", err)
-	}
-	if len(res.Rows) == 0 {
-		return domain.AgentEnabledState{}, domain.ErrRevisionConflict
-	}
-	reason := strings.TrimSpace(request.Reason)
-	if reason == "" {
-		reason = "kill_switch"
-	}
-	if len(reason) > 400 {
-		return domain.AgentEnabledState{}, validationError("reason", "must not exceed 400 characters")
-	}
-	if _, err = tx.Query(ctx, qStudioSetProfileActive, agentState(request.Enabled), reason,
-		actorRef(actor), actor.TenantID, request.AgentID); err != nil {
-		return domain.AgentEnabledState{}, fmt.Errorf("set profile state: %w", err)
-	}
-	event := "ENABLE"
-	if !request.Enabled {
-		event = "DISABLE"
-	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, event, reason); err != nil {
-		return domain.AgentEnabledState{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentEnabledState{}, fmt.Errorf("commit enabled state: %w", err)
-	}
-	committed = true
-	return domain.AgentEnabledState{Enabled: request.Enabled, DraftRevision: common.AsInt64(res.Rows[0][0])}, nil
+		if len(res.Rows) == 0 {
+			return domain.AgentEnabledState{}, domain.ErrRevisionConflict
+		}
+		reason := strings.TrimSpace(request.Reason)
+		if reason == "" {
+			reason = "kill_switch"
+		}
+		if len(reason) > 400 {
+			return domain.AgentEnabledState{}, validationError("reason", "must not exceed 400 characters")
+		}
+		if _, err := tx.Query(ctx, qStudioSetProfileActive, agentState(request.Enabled), reason,
+			actorRef(actor), actor.TenantID, request.AgentID); err != nil {
+			return domain.AgentEnabledState{}, fmt.Errorf("set profile state: %w", err)
+		}
+		event := "ENABLE"
+		if !request.Enabled {
+			event = "DISABLE"
+		}
+		if err := auditStudio(ctx, tx, actor, request.AgentID, event, reason); err != nil {
+			return domain.AgentEnabledState{}, err
+		}
+		return domain.AgentEnabledState{Enabled: request.Enabled, DraftRevision: common.AsInt64(res.Rows[0][0])}, nil
+	})
 }
 
 // TestDraft executes the current saved draft through the injected governed tester.
@@ -644,79 +621,68 @@ func (s *StudioService) Publish(ctx context.Context, actor domain.StudioActor, r
 		return domain.AgentRelease{}, err
 	}
 
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("begin publish transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var release domain.AgentRelease
+	if err := txn.New(s.DB, studioQueries, "publish agent").Run(ctx, func(tx keelport.TxQueryService) error {
+		lock, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, request.AgentID)
+		if err != nil {
+			return fmt.Errorf("lock publish draft: %w", err)
 		}
-	}()
-	lock, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("lock publish draft: %w", err)
-	}
-	if len(lock.Rows) == 0 {
-		return domain.AgentRelease{}, domain.ErrNotFound
-	}
-	if common.AsInt64(lock.Rows[0][0]) != request.ExpectedDraftRevision {
-		return domain.AgentRelease{}, domain.ErrRevisionConflict
-	}
-	alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("lock publish alias: %w", err)
-	}
-	aliasRevision := int64(0)
-	if len(alias.Rows) > 0 {
-		aliasRevision = common.AsInt64(alias.Rows[0][1])
-	}
-	if aliasRevision != request.ExpectedPromptProfileRevision {
-		return domain.AgentRelease{}, domain.ErrRevisionConflict
-	}
-	if err = s.checkGateInTx(ctx, tx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings}); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	definition.Version = version
-	definition.PublishedAt = s.now()
-	encoded, err := json.Marshal(definition)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("marshal agent definition: %w", err)
-	}
-	if _, err = tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
-		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
-		common.NullIfEmpty(definition.ChangeSummary), actorUser(actor), nil); err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("insert agent version: %w", err)
-	}
-	if err = storeSettings(ctx, tx, settings, version); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	for _, reference := range selectedModels(definition.Models) {
-		if _, err = tx.Query(ctx, qStudioGrantModel, actor.TenantID, reference.ProviderID, reference.ModelID); err != nil {
-			return domain.AgentRelease{}, fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
+		if len(lock.Rows) == 0 {
+			return domain.ErrNotFound
 		}
-	}
-	active, detail, activation, err := s.deployOrSchedule(ctx, tx, actor, definition, request)
-	if err != nil {
+		if common.AsInt64(lock.Rows[0][0]) != request.ExpectedDraftRevision {
+			return domain.ErrRevisionConflict
+		}
+		alias, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, draft.AgentTypeID)
+		if err != nil {
+			return fmt.Errorf("lock publish alias: %w", err)
+		}
+		aliasRevision := int64(0)
+		if len(alias.Rows) > 0 {
+			aliasRevision = common.AsInt64(alias.Rows[0][1])
+		}
+		if aliasRevision != request.ExpectedPromptProfileRevision {
+			return domain.ErrRevisionConflict
+		}
+		if err = s.checkGateInTx(ctx, tx, domain.PublishCandidate{Actor: actor, Definition: definition, Settings: settings}); err != nil {
+			return err
+		}
+		version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
+		if err != nil {
+			return err
+		}
+		definition.Version = version
+		definition.PublishedAt = s.now()
+		encoded, err := json.Marshal(definition)
+		if err != nil {
+			return fmt.Errorf("marshal agent definition: %w", err)
+		}
+		if _, err := tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
+			definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
+			common.NullIfEmpty(definition.ChangeSummary), actorUser(actor), nil); err != nil {
+			return fmt.Errorf("insert agent version: %w", err)
+		}
+		if err := storeSettings(ctx, tx, settings, version); err != nil {
+			return err
+		}
+		if err := s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
+			return err
+		}
+		for _, reference := range selectedModels(definition.Models) {
+			if _, err := tx.Query(ctx, qStudioGrantModel, actor.TenantID, reference.ProviderID, reference.ModelID); err != nil {
+				return fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
+			}
+		}
+		active, detail, activation, err := s.deployOrSchedule(ctx, tx, actor, definition, request)
+		if err != nil {
+			return err
+		}
+		release = releaseFromDefinition(definition, active)
+		release.Activation = activation
+		return auditStudio(ctx, tx, actor, request.AgentID, "PUBLISH", "version "+version+detail)
+	}); err != nil {
 		return domain.AgentRelease{}, err
 	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, "PUBLISH", "version "+version+detail); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("commit publish: %w", err)
-	}
-	committed = true
-	release := releaseFromDefinition(definition, active)
-	release.Activation = activation
 	return release, nil
 }
 
@@ -725,95 +691,83 @@ func (s *StudioService) Restore(ctx context.Context, actor domain.StudioActor, r
 	if _, err := s.editable(ctx, actor, domain.StudioRestore, request.AgentID); err != nil {
 		return domain.AgentRelease{}, err
 	}
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("begin restore transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, studioQueries, "restore"), func(tx keelport.TxQueryService) (domain.AgentRelease, error) {
+		lock, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, request.AgentID)
+		if err != nil {
+			return domain.AgentRelease{}, fmt.Errorf("lock restore draft: %w", err)
 		}
-	}()
-	lock, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("lock restore draft: %w", err)
-	}
-	if len(lock.Rows) == 0 {
-		return domain.AgentRelease{}, domain.ErrNotFound
-	}
-	source, err := tx.Query(ctx, qStudioGetVersion, actor.TenantID, request.AgentID, request.Version)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("load restore version: %w", err)
-	}
-	if len(source.Rows) == 0 {
-		return domain.AgentRelease{}, domain.ErrNotFound
-	}
-	definition, err := decodeDefinition(source.Rows[0][0])
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	sourceDigest := definition.DefinitionDigest
-	refrozen, err := s.refreezeSections(ctx, actor.TenantID, &definition, version)
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	restored := domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version, Version: version}
-	if err = s.guard(ctx, restored); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = s.checkGateInTx(ctx, tx, restored); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	settings, err := loadRestoredSettings(ctx, tx, actor.TenantID, request.AgentID, request.Version)
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = s.checkBudget(ctx, settings.Resources, definition); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if refrozen {
-		if definition.DefinitionDigest, err = s.Compiler.DefinitionDigest(definition); err != nil {
+		if len(lock.Rows) == 0 {
+			return domain.AgentRelease{}, domain.ErrNotFound
+		}
+		source, err := tx.Query(ctx, qStudioGetVersion, actor.TenantID, request.AgentID, request.Version)
+		if err != nil {
+			return domain.AgentRelease{}, fmt.Errorf("load restore version: %w", err)
+		}
+		if len(source.Rows) == 0 {
+			return domain.AgentRelease{}, domain.ErrNotFound
+		}
+		definition, err := decodeDefinition(source.Rows[0][0])
+		if err != nil {
 			return domain.AgentRelease{}, err
 		}
-	}
-	definition.Version = version
-	definition.RestoredFromVersion = request.Version
-	definition.RestoredFromDigest = sourceDigest
-	definition.ChangeSummary = "Restored from version " + request.Version
-	definition.PublishedBy = actorUserID(actor)
-	definition.PublishedAt = s.now()
-	encoded, err := json.Marshal(definition)
-	if err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("marshal restored definition: %w", err)
-	}
-	if _, err = tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
-		definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
-		definition.ChangeSummary, actorUser(actor), request.Version); err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("insert restored version: %w", err)
-	}
-	if err = storeSettings(ctx, tx, settings, version); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	active, _, err := deploy(ctx, tx, actor.TenantID, request.AgentID, version, 0)
-	if err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, "RESTORE", definition.ChangeSummary); err != nil {
-		return domain.AgentRelease{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentRelease{}, fmt.Errorf("commit restore: %w", err)
-	}
-	committed = true
-	return releaseFromDefinition(definition, active), nil
+		version, err := nextStudioVersion(ctx, tx, actor.TenantID, request.AgentID)
+		if err != nil {
+			return domain.AgentRelease{}, err
+		}
+		sourceDigest := definition.DefinitionDigest
+		refrozen, err := s.refreezeSections(ctx, actor.TenantID, &definition, version)
+		if err != nil {
+			return domain.AgentRelease{}, err
+		}
+		restored := domain.PublishCandidate{Actor: actor, Definition: definition, RestoredFrom: request.Version, Version: version}
+		if err := s.guard(ctx, restored); err != nil {
+			return domain.AgentRelease{}, err
+		}
+		if err := s.checkGateInTx(ctx, tx, restored); err != nil {
+			return domain.AgentRelease{}, err
+		}
+		settings, err := loadRestoredSettings(ctx, tx, actor.TenantID, request.AgentID, request.Version)
+		if err != nil {
+			return domain.AgentRelease{}, err
+		}
+		if err := s.checkBudget(ctx, settings.Resources, definition); err != nil {
+			return domain.AgentRelease{}, err
+		}
+		if refrozen {
+			if definition.DefinitionDigest, err = s.Compiler.DefinitionDigest(definition); err != nil {
+				return domain.AgentRelease{}, err
+			}
+		}
+		definition.Version = version
+		definition.RestoredFromVersion = request.Version
+		definition.RestoredFromDigest = sourceDigest
+		definition.ChangeSummary = "Restored from version " + request.Version
+		definition.PublishedBy = actorUserID(actor)
+		definition.PublishedAt = s.now()
+		encoded, err := json.Marshal(definition)
+		if err != nil {
+			return domain.AgentRelease{}, fmt.Errorf("marshal restored definition: %w", err)
+		}
+		if _, err := tx.Query(ctx, qStudioInsertVersion, actor.TenantID, request.AgentID, version, string(encoded),
+			definition.DefinitionDigest, definition.DraftRevision, definition.PromptProfileRevision,
+			definition.ChangeSummary, actorUser(actor), request.Version); err != nil {
+			return domain.AgentRelease{}, fmt.Errorf("insert restored version: %w", err)
+		}
+		if err := storeSettings(ctx, tx, settings, version); err != nil {
+			return domain.AgentRelease{}, err
+		}
+		if err := s.writeRelease(ctx, tx, actor.TenantID, definition); err != nil {
+			return domain.AgentRelease{}, err
+		}
+		active, _, err := deploy(ctx, tx, actor.TenantID, request.AgentID, version, 0)
+		if err != nil {
+			return domain.AgentRelease{}, err
+		}
+		if err := auditStudio(ctx, tx, actor, request.AgentID, "RESTORE", definition.ChangeSummary); err != nil {
+			return domain.AgentRelease{}, err
+		}
+		return releaseFromDefinition(definition, active), nil
+	})
 }
 
 // Reset removes selected editable prompt levels with revision checks.
@@ -831,47 +785,35 @@ func (s *StudioService) Reset(ctx context.Context, actor domain.StudioActor, req
 	if err != nil {
 		return domain.AgentDraft{}, err
 	}
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("begin reset transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(s.DB, studioQueries, "reset draft").Run(ctx, func(tx keelport.TxQueryService) error {
+		if resetAgent {
+			res, bumpErr := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
+			if bumpErr != nil {
+				return fmt.Errorf("bump draft revision: %w", bumpErr)
+			}
+			if len(res.Rows) == 0 {
+				return domain.ErrRevisionConflict
+			}
+			if err := resetPromptBindings(ctx, tx, actor.TenantID, scopes.AgentScopeID, request); err != nil {
+				return err
+			}
 		}
-	}()
-	if resetAgent {
-		res, bumpErr := tx.Query(ctx, qStudioBumpDraft, actorUser(actor), actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
-		if bumpErr != nil {
-			return domain.AgentDraft{}, fmt.Errorf("bump draft revision: %w", bumpErr)
+		if resetTenant {
+			res, bumpErr := tx.Query(ctx, qStudioBumpAlias, actorUser(actor), actor.TenantID, current.AgentTypeID, request.ExpectedPromptProfileRevision)
+			if bumpErr != nil {
+				return fmt.Errorf("bump prompt profile revision: %w", bumpErr)
+			}
+			if len(res.Rows) == 0 {
+				return domain.ErrRevisionConflict
+			}
+			if err := resetPromptBindings(ctx, tx, actor.TenantID, scopes.TypeScopeID, request); err != nil {
+				return err
+			}
 		}
-		if len(res.Rows) == 0 {
-			return domain.AgentDraft{}, domain.ErrRevisionConflict
-		}
-		if err = resetPromptBindings(ctx, tx, actor.TenantID, scopes.AgentScopeID, request); err != nil {
-			return domain.AgentDraft{}, err
-		}
-	}
-	if resetTenant {
-		res, bumpErr := tx.Query(ctx, qStudioBumpAlias, actorUser(actor), actor.TenantID, current.AgentTypeID, request.ExpectedPromptProfileRevision)
-		if bumpErr != nil {
-			return domain.AgentDraft{}, fmt.Errorf("bump prompt profile revision: %w", bumpErr)
-		}
-		if len(res.Rows) == 0 {
-			return domain.AgentDraft{}, domain.ErrRevisionConflict
-		}
-		if err = resetPromptBindings(ctx, tx, actor.TenantID, scopes.TypeScopeID, request); err != nil {
-			return domain.AgentDraft{}, err
-		}
-	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, "RESET", "scope "+string(request.Scope)); err != nil {
+		return auditStudio(ctx, tx, actor, request.AgentID, "RESET", "scope "+string(request.Scope))
+	}); err != nil {
 		return domain.AgentDraft{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentDraft{}, fmt.Errorf("commit reset: %w", err)
-	}
-	committed = true
 	return s.draft(ctx, actor.TenantID, request.AgentID)
 }
 
@@ -881,30 +823,18 @@ func (s *StudioService) SetDefault(ctx context.Context, actor domain.StudioActor
 	if err != nil {
 		return nil, err
 	}
-	tx, err := s.DB.BeginTx(ctx, studioQueries)
-	if err != nil {
-		return nil, fmt.Errorf("begin alias transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(s.DB, studioQueries, "set default agent").Run(ctx, func(tx keelport.TxQueryService) error {
+		res, err := tx.Query(ctx, qStudioSetAlias, request.AgentID, actorUser(actor), actor.TenantID, current.AgentTypeID, request.ExpectedAliasRevision)
+		if err != nil {
+			return fmt.Errorf("set agent alias: %w", err)
 		}
-	}()
-	res, err := tx.Query(ctx, qStudioSetAlias, request.AgentID, actorUser(actor), actor.TenantID, current.AgentTypeID, request.ExpectedAliasRevision)
-	if err != nil {
-		return nil, fmt.Errorf("set agent alias: %w", err)
-	}
-	if len(res.Rows) == 0 {
-		return nil, domain.ErrRevisionConflict
-	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, "SET_DEFAULT", ""); err != nil {
+		if len(res.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		return auditStudio(ctx, tx, actor, request.AgentID, "SET_DEFAULT", "")
+	}); err != nil {
 		return nil, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit alias: %w", err)
-	}
-	committed = true
 	return s.ListAgents(ctx, actor)
 }
 

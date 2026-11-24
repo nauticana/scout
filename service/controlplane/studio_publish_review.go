@@ -17,6 +17,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -294,63 +295,51 @@ func (r *StudioPublishReviews) Request(ctx context.Context, actor domain.StudioA
 	review.Evaluations, review.Status = evaluations, domain.PublishReviewRequested
 	review.RequestedBy, review.RequestNote, review.SodExceptionID = *requester, note, exception
 
-	tx, err := r.Studio.DB.BeginTx(ctx, r.queries())
-	if err != nil {
-		return domain.PublishReview{}, fmt.Errorf("begin review transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(r.Studio.DB, r.queries(), "request review"), func(tx keelport.TxQueryService) (domain.PublishReview, error) {
+		lock, err := tx.Query(ctx, qReviewLockDraft, actor.TenantID, request.AgentID)
+		if err != nil {
+			return domain.PublishReview{}, fmt.Errorf("lock reviewed draft: %w", err)
 		}
-	}()
-	lock, err := tx.Query(ctx, qReviewLockDraft, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.PublishReview{}, fmt.Errorf("lock reviewed draft: %w", err)
-	}
-	if len(lock.Rows) == 0 {
-		return domain.PublishReview{}, domain.ErrNotFound
-	}
-	// A restore reinstates a published version, so only a publish review is bound to the draft revision.
-	supersede, event, detail := qReviewSupersede, "PUBLISH_REVIEW_REQUEST", "of definition "+review.DefinitionDigest
-	if kind == domain.PublishReviewOfRestore {
-		supersede, event, detail = qReviewSupersedeRestore, "RESTORE_REVIEW_REQUEST", "restoring version "+review.RestoreVersion
-		if review.BaseVersion != "" {
-			detail += " over " + review.BaseVersion
+		if len(lock.Rows) == 0 {
+			return domain.PublishReview{}, domain.ErrNotFound
 		}
-	} else if common.AsInt64(lock.Rows[0][0]) != review.DraftRevision {
-		return domain.PublishReview{}, domain.ErrRevisionConflict
-	}
-	if _, err = tx.Query(ctx, supersede, actor.TenantID, request.AgentID); err != nil {
-		return domain.PublishReview{}, fmt.Errorf("supersede open reviews: %w", err)
-	}
-	inserted, err := tx.Query(ctx, qReviewInsert, actor.TenantID, request.AgentID, review.DefinitionDigest, review.DraftRevision,
-		review.PromptProfileRevision, common.NullIfEmpty(review.BaseVersion), common.NullIfEmpty(review.RestoreVersion), string(encodedDiff),
-		encodedEvaluations, *requester, common.NullIfEmpty(note))
-	if err != nil {
-		return domain.PublishReview{}, fmt.Errorf("insert publish review: %w", err)
-	}
-	if len(inserted.Rows) == 0 {
-		return domain.PublishReview{}, fmt.Errorf("insert publish review: no row returned")
-	}
-	review.ReviewID = common.AsInt64(inserted.Rows[0][0])
-	review.RequestedAt = common.AsTime(inserted.Rows[0][1])
-	detail = fmt.Sprintf("review %d %s", review.ReviewID, detail)
-	if exception != "" {
-		if _, err = tx.Query(ctx, qReviewExceptionPut, review.ReviewID, actor.TenantID, exceptionID[0]); err != nil {
-			return domain.PublishReview{}, fmt.Errorf("record separation exception %s: %w", exception, err)
+		// A restore reinstates a published version, so only a publish review is bound to the draft revision.
+		supersede, event, detail := qReviewSupersede, "PUBLISH_REVIEW_REQUEST", "of definition "+review.DefinitionDigest
+		if kind == domain.PublishReviewOfRestore {
+			supersede, event, detail = qReviewSupersedeRestore, "RESTORE_REVIEW_REQUEST", "restoring version "+review.RestoreVersion
+			if review.BaseVersion != "" {
+				detail += " over " + review.BaseVersion
+			}
+		} else if common.AsInt64(lock.Rows[0][0]) != review.DraftRevision {
+			return domain.PublishReview{}, domain.ErrRevisionConflict
 		}
-		detail += " naming separation exception " + exception
-	}
-	if _, err = tx.Query(ctx, qReviewAudit, actor.TenantID, request.AgentID, event, detail,
-		string(actor.Principal.Kind), actor.Principal.ID); err != nil {
-		return domain.PublishReview{}, fmt.Errorf("record studio audit: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.PublishReview{}, fmt.Errorf("commit publish review: %w", err)
-	}
-	committed = true
-	return review, nil
+		if _, err := tx.Query(ctx, supersede, actor.TenantID, request.AgentID); err != nil {
+			return domain.PublishReview{}, fmt.Errorf("supersede open reviews: %w", err)
+		}
+		inserted, err := tx.Query(ctx, qReviewInsert, actor.TenantID, request.AgentID, review.DefinitionDigest, review.DraftRevision,
+			review.PromptProfileRevision, common.NullIfEmpty(review.BaseVersion), common.NullIfEmpty(review.RestoreVersion), string(encodedDiff),
+			encodedEvaluations, *requester, common.NullIfEmpty(note))
+		if err != nil {
+			return domain.PublishReview{}, fmt.Errorf("insert publish review: %w", err)
+		}
+		if len(inserted.Rows) == 0 {
+			return domain.PublishReview{}, fmt.Errorf("insert publish review: no row returned")
+		}
+		review.ReviewID = common.AsInt64(inserted.Rows[0][0])
+		review.RequestedAt = common.AsTime(inserted.Rows[0][1])
+		detail = fmt.Sprintf("review %d %s", review.ReviewID, detail)
+		if exception != "" {
+			if _, err := tx.Query(ctx, qReviewExceptionPut, review.ReviewID, actor.TenantID, exceptionID[0]); err != nil {
+				return domain.PublishReview{}, fmt.Errorf("record separation exception %s: %w", exception, err)
+			}
+			detail += " naming separation exception " + exception
+		}
+		if _, err := tx.Query(ctx, qReviewAudit, actor.TenantID, request.AgentID, event, detail,
+			string(actor.Principal.Kind), actor.Principal.ID); err != nil {
+			return domain.PublishReview{}, fmt.Errorf("record studio audit: %w", err)
+		}
+		return review, nil
+	})
 }
 
 // Review returns the agent's latest review of kind (publish when empty): a publish review
@@ -484,39 +473,31 @@ func (r *StudioPublishReviews) decidable(ctx context.Context, actor domain.Studi
 
 func (r *StudioPublishReviews) decide(ctx context.Context, actor domain.StudioActor, review domain.PublishReview, status domain.PublishReviewStatus, note string) (domain.PublishReview, error) {
 	decider := *actorUserID(actor)
-	tx, err := r.Studio.DB.BeginTx(ctx, r.queries())
-	if err != nil {
-		return domain.PublishReview{}, fmt.Errorf("begin review decision: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	var decidedAt time.Time
+	if err := txn.New(r.Studio.DB, r.queries(), "review decision").Run(ctx, func(tx keelport.TxQueryService) error {
+		decided, err := tx.Query(ctx, qReviewDecide, string(status), decider, common.NullIfEmpty(note), actor.TenantID, review.AgentID, review.ReviewID, review.DefinitionDigest)
+		if err != nil {
+			return fmt.Errorf("decide publish review: %w", err)
 		}
-	}()
-	decided, err := tx.Query(ctx, qReviewDecide, string(status), decider, common.NullIfEmpty(note), actor.TenantID, review.AgentID, review.ReviewID, review.DefinitionDigest)
-	if err != nil {
-		return domain.PublishReview{}, fmt.Errorf("decide publish review: %w", err)
+		if len(decided.Rows) == 0 {
+			return fmt.Errorf("%w: publish review %d was decided or superseded concurrently", domain.ErrConflict, review.ReviewID)
+		}
+		decidedAt = common.AsTime(decided.Rows[0][0])
+		prefix, detail := "PUBLISH_REVIEW_", fmt.Sprintf("review %d", review.ReviewID)
+		if review.RestoreVersion != "" {
+			prefix = "RESTORE_REVIEW_"
+		}
+		event := prefix + "REJECT"
+		if status == domain.PublishReviewApproved {
+			event = prefix + "APPROVE"
+		}
+		if _, err := tx.Query(ctx, qReviewAudit, actor.TenantID, review.AgentID, event, detail, string(actor.Principal.Kind), actor.Principal.ID); err != nil {
+			return fmt.Errorf("record studio audit: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return domain.PublishReview{}, err
 	}
-	if len(decided.Rows) == 0 {
-		return domain.PublishReview{}, fmt.Errorf("%w: publish review %d was decided or superseded concurrently", domain.ErrConflict, review.ReviewID)
-	}
-	prefix, detail := "PUBLISH_REVIEW_", fmt.Sprintf("review %d", review.ReviewID)
-	if review.RestoreVersion != "" {
-		prefix = "RESTORE_REVIEW_"
-	}
-	event := prefix + "REJECT"
-	if status == domain.PublishReviewApproved {
-		event = prefix + "APPROVE"
-	}
-	if _, err = tx.Query(ctx, qReviewAudit, actor.TenantID, review.AgentID, event, detail, string(actor.Principal.Kind), actor.Principal.ID); err != nil {
-		return domain.PublishReview{}, fmt.Errorf("record studio audit: %w", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.PublishReview{}, fmt.Errorf("commit review decision: %w", err)
-	}
-	committed = true
-	decidedAt := common.AsTime(decided.Rows[0][0])
 	review.Status, review.DecidedBy, review.DecidedAt, review.DecisionNote = status, &decider, &decidedAt, note
 	return review, nil
 }

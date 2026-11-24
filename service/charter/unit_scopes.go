@@ -2,7 +2,6 @@ package charter
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -85,33 +85,16 @@ func (u *UnitScopes) Attach(ctx context.Context, tenantID int64, unit model.Ref,
 	if err != nil {
 		return err
 	}
-	tx, err := u.DB.BeginTx(ctx, unitScopeQueries)
-	if err != nil {
-		return fmt.Errorf("begin unit scope attachment: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(context.WithoutCancel(ctx)); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("rollback unit scope attachment: %w", rollbackErr))
-			}
+	return txn.New(u.DB, unitScopeQueries, "unit scope attachment").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qUnitScopePut, tenantID, unitID[0], scopeID); err != nil {
+			return fmt.Errorf("attach unit %s to scope %s: %w", unit.ID, scopeID, err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qUnitScopePut, tenantID, unitID[0], scopeID); err != nil {
-		return fmt.Errorf("attach unit %s to scope %s: %w", unit.ID, scopeID, err)
-	}
-	attached, err := u.attachments(ctx, tx, tenantID, namespace)
-	if err != nil {
-		return err
-	}
-	if err = u.descends(ctx, tenantID, namespace, attached); err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit unit scope attachment: %w", err)
-	}
-	committed = true
-	return nil
+		attached, err := u.attachments(ctx, tx, tenantID, namespace)
+		if err != nil {
+			return err
+		}
+		return u.descends(ctx, tenantID, namespace, attached)
+	})
 }
 
 // Detach removes the unit's attachment; its positions fall back to the nearest attached ancestor.

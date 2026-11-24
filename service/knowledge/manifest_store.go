@@ -7,11 +7,11 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -93,62 +93,46 @@ func (store *ManifestStore) Activate(ctx context.Context, manifest domain.Knowle
 	if err := store.init(ctx); err != nil {
 		return "", err
 	}
-	tx, err := store.DB.BeginTx(ctx, manifestQueries)
-	if err != nil {
-		return "", fmt.Errorf("activate manifest: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.Value(ctx, txn.New(store.DB, manifestQueries, "activate manifest"), func(tx keelport.TxQueryService) (string, error) {
+		if _, err := tx.Query(ctx, qManifestLock, manifestLockKey(manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID)); err != nil {
+			return "", fmt.Errorf("activate manifest: lock: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qManifestLock, manifestLockKey(manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID)); err != nil {
-		return "", fmt.Errorf("activate manifest: lock: %w", err)
-	}
-	current, err := tx.Query(ctx, qManifestGet, manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID)
-	if err != nil {
-		return "", fmt.Errorf("activate manifest: find: %w", err)
-	}
-	previous := ""
-	switch {
-	case len(current.Rows) == 0:
-		if _, err = tx.Query(ctx, qManifestInsert, manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID,
-			manifest.ActiveVersion, manifest.SourceVersion, manifest.ContentDigest, manifest.ChunkerVersion); err != nil {
-			return "", fmt.Errorf("activate manifest: insert: %w", err)
-		}
-	default:
-		existing, superseded, gcPending, err := decodeManifestRow(current.Rows[0])
+		current, err := tx.Query(ctx, qManifestGet, manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID)
 		if err != nil {
-			return "", fmt.Errorf("activate manifest: decode: %w", err)
+			return "", fmt.Errorf("activate manifest: find: %w", err)
 		}
-		if existing.ActiveVersion == manifest.ActiveVersion {
-			if existing.Tombstoned {
-				return "", fmt.Errorf("%w: document %q version %q is tombstoned and awaits garbage collection", domain.ErrConflict, manifest.DocumentID, manifest.ActiveVersion)
+		previous := ""
+		switch {
+		case len(current.Rows) == 0:
+			if _, err := tx.Query(ctx, qManifestInsert, manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID,
+				manifest.ActiveVersion, manifest.SourceVersion, manifest.ContentDigest, manifest.ChunkerVersion); err != nil {
+				return "", fmt.Errorf("activate manifest: insert: %w", err)
 			}
-			if existing.ContentDigest != manifest.ContentDigest {
-				return "", fmt.Errorf("%w: document %q is active in version %q with different content", domain.ErrConflict, manifest.DocumentID, manifest.ActiveVersion)
+		default:
+			existing, superseded, gcPending, err := decodeManifestRow(current.Rows[0])
+			if err != nil {
+				return "", fmt.Errorf("activate manifest: decode: %w", err)
 			}
-			if err = tx.Commit(ctx); err != nil {
-				return "", fmt.Errorf("activate manifest: commit replay: %w", err)
+			if existing.ActiveVersion == manifest.ActiveVersion {
+				if existing.Tombstoned {
+					return "", fmt.Errorf("%w: document %q version %q is tombstoned and awaits garbage collection", domain.ErrConflict, manifest.DocumentID, manifest.ActiveVersion)
+				}
+				if existing.ContentDigest != manifest.ContentDigest {
+					return "", fmt.Errorf("%w: document %q is active in version %q with different content", domain.ErrConflict, manifest.DocumentID, manifest.ActiveVersion)
+				}
+				return "", nil
 			}
-			committed = true
-			return "", nil
+			if gcPending && superseded != "" && superseded != manifest.ActiveVersion {
+				return "", fmt.Errorf("%w: document %q still has superseded version %q awaiting garbage collection", domain.ErrConflict, manifest.DocumentID, superseded)
+			}
+			if _, err := tx.Query(ctx, qManifestSwitch, manifest.ActiveVersion, manifest.SourceVersion, manifest.ContentDigest, manifest.ChunkerVersion,
+				manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID); err != nil {
+				return "", fmt.Errorf("activate manifest: switch: %w", err)
+			}
+			previous = existing.ActiveVersion
 		}
-		if gcPending && superseded != "" && superseded != manifest.ActiveVersion {
-			return "", fmt.Errorf("%w: document %q still has superseded version %q awaiting garbage collection", domain.ErrConflict, manifest.DocumentID, superseded)
-		}
-		if _, err = tx.Query(ctx, qManifestSwitch, manifest.ActiveVersion, manifest.SourceVersion, manifest.ContentDigest, manifest.ChunkerVersion,
-			manifest.TenantID, manifest.KnowledgeBaseID, manifest.DocumentID); err != nil {
-			return "", fmt.Errorf("activate manifest: switch: %w", err)
-		}
-		previous = existing.ActiveVersion
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("activate manifest: commit: %w", err)
-	}
-	committed = true
-	return previous, nil
+		return previous, nil
+	})
 }
 
 // Tombstone marks the document deleted; retrieval excludes it immediately and GC reclaims its chunks later. Idempotent.

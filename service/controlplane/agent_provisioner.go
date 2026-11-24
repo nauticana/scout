@@ -11,6 +11,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -104,80 +105,68 @@ func (p *AgentProvisioner) Provision(ctx context.Context, tenantID int64, identi
 	if layout == nil {
 		layout = BasePromptScopeLayout{}
 	}
-	tx, err := p.DB.BeginTx(ctx, provisionQueries)
-	if err != nil {
-		return fmt.Errorf("begin provisioning transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(p.DB, provisionQueries, "provisioning").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qProvisionTenant, tenantID, identity.TenantKey, identity.HomeRegion); err != nil {
+			return fmt.Errorf("register agent tenant: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qProvisionTenant, tenantID, identity.TenantKey, identity.HomeRegion); err != nil {
-		return fmt.Errorf("register agent tenant: %w", err)
-	}
-	if identity.DefaultPolicy != nil {
-		if err = writeRuntimePolicy(ctx, tx, tenantID, *identity.DefaultPolicy, qRuntimePolicyDefault); err != nil {
-			return err
-		}
-	}
-	if _, err = tx.Query(ctx, qProvisionScope, tenantID, RootPromptScopeID, nil, "tenant", identity.TenantKey); err != nil {
-		return fmt.Errorf("seed tenant root scope: %w", err)
-	}
-	for _, seed := range seeds {
-		scopes, scopeErr := layout.Scopes(ctx, tenantID, seed.AgentID, seed.AgentTypeID)
-		if scopeErr != nil {
-			return scopeErr
-		}
-		if _, err = tx.Query(ctx, qProvisionScope, tenantID, scopes.TypeScopeID, RootPromptScopeID, "agent_type", seed.AgentTypeID); err != nil {
-			return fmt.Errorf("seed prompt scope of type %q: %w", seed.AgentTypeID, err)
-		}
-		if _, err = tx.Query(ctx, qProvisionScope, tenantID, scopes.AgentScopeID, scopes.TypeScopeID, "agent", seed.DisplayName); err != nil {
-			return fmt.Errorf("seed prompt scope of agent %q: %w", seed.AgentID, err)
-		}
-		if _, err = tx.Query(ctx, qProvisionType, tenantID, seed.AgentTypeID, seed.DisplayName); err != nil {
-			return fmt.Errorf("seed agent type %q: %w", seed.AgentTypeID, err)
-		}
-		if _, err = tx.Query(ctx, qProvisionProfile, tenantID, seed.AgentID, seed.AgentTypeID, seed.DisplayName, string(domain.AgentStateActive)); err != nil {
-			return fmt.Errorf("seed agent profile %q: %w", seed.AgentID, err)
-		}
-		if _, err = tx.Query(ctx, qProvisionDraft, tenantID, seed.AgentID, seed.Enabled,
-			modelProvider(seed.Models.Text), modelID(seed.Models.Text),
-			modelProvider(seed.Models.Image), modelID(seed.Models.Image),
-			modelProvider(seed.Models.Video), modelID(seed.Models.Video)); err != nil {
-			return fmt.Errorf("seed agent draft %q: %w", seed.AgentID, err)
-		}
-		if seed.Autonomy != "" {
-			value, valueErr := scope.CanonicalValue(domain.ResourceAutonomy, []byte(`{"mode":"`+string(seed.Autonomy)+`"}`))
-			if valueErr != nil {
-				return valueErr
-			}
-			sum := sha256.Sum256(value)
-			digest := hex.EncodeToString(sum[:])
-			if _, err = tx.Query(ctx, qProvisionAutonomy, tenantID, scopes.AgentScopeID, digest[:12], string(value), digest,
-				tenantID, scopes.AgentScopeID); err != nil {
-				return fmt.Errorf("seed operating mode of %q: %w", seed.AgentID, err)
+		if identity.DefaultPolicy != nil {
+			if err := writeRuntimePolicy(ctx, tx, tenantID, *identity.DefaultPolicy, qRuntimePolicyDefault); err != nil {
+				return err
 			}
 		}
-		// Routing reads tenant_model_access, so a model a definition names must be granted with it.
-		for _, reference := range selectedModels(seed.Models) {
-			if _, err = tx.Query(ctx, qProvisionAccess, tenantID, reference.ProviderID, reference.ModelID); err != nil {
-				return fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
+		if _, err := tx.Query(ctx, qProvisionScope, tenantID, RootPromptScopeID, nil, "tenant", identity.TenantKey); err != nil {
+			return fmt.Errorf("seed tenant root scope: %w", err)
+		}
+		for _, seed := range seeds {
+			scopes, scopeErr := layout.Scopes(ctx, tenantID, seed.AgentID, seed.AgentTypeID)
+			if scopeErr != nil {
+				return scopeErr
+			}
+			if _, err := tx.Query(ctx, qProvisionScope, tenantID, scopes.TypeScopeID, RootPromptScopeID, "agent_type", seed.AgentTypeID); err != nil {
+				return fmt.Errorf("seed prompt scope of type %q: %w", seed.AgentTypeID, err)
+			}
+			if _, err := tx.Query(ctx, qProvisionScope, tenantID, scopes.AgentScopeID, scopes.TypeScopeID, "agent", seed.DisplayName); err != nil {
+				return fmt.Errorf("seed prompt scope of agent %q: %w", seed.AgentID, err)
+			}
+			if _, err := tx.Query(ctx, qProvisionType, tenantID, seed.AgentTypeID, seed.DisplayName); err != nil {
+				return fmt.Errorf("seed agent type %q: %w", seed.AgentTypeID, err)
+			}
+			if _, err := tx.Query(ctx, qProvisionProfile, tenantID, seed.AgentID, seed.AgentTypeID, seed.DisplayName, string(domain.AgentStateActive)); err != nil {
+				return fmt.Errorf("seed agent profile %q: %w", seed.AgentID, err)
+			}
+			if _, err := tx.Query(ctx, qProvisionDraft, tenantID, seed.AgentID, seed.Enabled,
+				modelProvider(seed.Models.Text), modelID(seed.Models.Text),
+				modelProvider(seed.Models.Image), modelID(seed.Models.Image),
+				modelProvider(seed.Models.Video), modelID(seed.Models.Video)); err != nil {
+				return fmt.Errorf("seed agent draft %q: %w", seed.AgentID, err)
+			}
+			if seed.Autonomy != "" {
+				value, valueErr := scope.CanonicalValue(domain.ResourceAutonomy, []byte(`{"mode":"`+string(seed.Autonomy)+`"}`))
+				if valueErr != nil {
+					return valueErr
+				}
+				sum := sha256.Sum256(value)
+				digest := hex.EncodeToString(sum[:])
+				if _, err := tx.Query(ctx, qProvisionAutonomy, tenantID, scopes.AgentScopeID, digest[:12], string(value), digest,
+					tenantID, scopes.AgentScopeID); err != nil {
+					return fmt.Errorf("seed operating mode of %q: %w", seed.AgentID, err)
+				}
+			}
+			// Routing reads tenant_model_access, so a model a definition names must be granted with it.
+			for _, reference := range selectedModels(seed.Models) {
+				if _, err := tx.Query(ctx, qProvisionAccess, tenantID, reference.ProviderID, reference.ModelID); err != nil {
+					return fmt.Errorf("grant model %s/%s: %w", reference.ProviderID, reference.ModelID, err)
+				}
+			}
+			if seed.AliasID == "" {
+				continue
+			}
+			if _, err := tx.Query(ctx, qProvisionAlias, tenantID, seed.AliasID, seed.AgentTypeID, seed.AgentID); err != nil {
+				return fmt.Errorf("seed agent alias %q: %w", seed.AliasID, err)
 			}
 		}
-		if seed.AliasID == "" {
-			continue
-		}
-		if _, err = tx.Query(ctx, qProvisionAlias, tenantID, seed.AliasID, seed.AgentTypeID, seed.AgentID); err != nil {
-			return fmt.Errorf("seed agent alias %q: %w", seed.AliasID, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit provisioning: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 func selectedModels(models domain.AgentModelSelection) []domain.ModelReference {

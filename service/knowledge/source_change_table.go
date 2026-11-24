@@ -7,11 +7,11 @@ import (
 	"sync"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -142,24 +142,12 @@ func (source *TableSourceChangeSource) Ack(ctx context.Context, events []domain.
 	if err := source.init(ctx); err != nil {
 		return err
 	}
-	tx, err := source.DB.BeginTx(ctx, sourceEventQueries)
-	if err != nil {
-		return fmt.Errorf("ack source changes: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(source.DB, sourceEventQueries, "ack source changes").Run(ctx, func(tx keelport.TxQueryService) error {
+		for _, event := range events {
+			if _, err := tx.Query(ctx, qSourceEventAck, event.TenantID, event.KnowledgeBaseID, event.ObjectID, event.SourceVersion, string(event.Op)); err != nil {
+				return fmt.Errorf("ack source change for %q: %w", event.ObjectID, err)
+			}
 		}
-	}()
-	for _, event := range events {
-		if _, err = tx.Query(ctx, qSourceEventAck, event.TenantID, event.KnowledgeBaseID, event.ObjectID, event.SourceVersion, string(event.Op)); err != nil {
-			return fmt.Errorf("ack source change for %q: %w", event.ObjectID, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("ack source changes: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }

@@ -13,8 +13,10 @@ import (
 
 	"github.com/nauticana/keel/common"
 
+	keelport "github.com/nauticana/keel/port"
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 	"github.com/nauticana/scout/service/scope"
 )
 
@@ -212,76 +214,64 @@ func (p *StudioPortability) replace(ctx context.Context, actor domain.StudioActo
 	}
 	scopes := full.PromptScopes
 
-	tx, err := studio.DB.BeginTx(ctx, studioCreateQueries)
-	if err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("begin import transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(studio.DB, studioCreateQueries, "import agent").Run(ctx, func(tx keelport.TxQueryService) error {
+		locked, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, request.AgentID)
+		if err != nil {
+			return fmt.Errorf("lock import draft: %w", err)
 		}
-	}()
-	locked, err := tx.Query(ctx, qStudioLockDraft, actor.TenantID, request.AgentID)
-	if err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("lock import draft: %w", err)
-	}
-	if len(locked.Rows) == 0 {
-		return domain.AgentSummary{}, domain.ErrNotFound
-	}
-	if common.AsInt64(locked.Rows[0][0]) != request.ExpectedDraftRevision {
-		return domain.AgentSummary{}, domain.ErrRevisionConflict
-	}
-	if _, err = tx.Query(ctx, qStudioLockAlias, actor.TenantID, current.AgentTypeID); err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("lock import type: %w", err)
-	}
-	product, err := tx.Query(ctx, qSeedNonPlatformAtScope, actor.TenantID, scopes.AgentScopeID, platformKinds())
-	if err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("count product bindings: %w", err)
-	}
-	if len(product.Rows) > 0 && common.AsInt64(product.Rows[0][0]) > 0 {
-		return domain.AgentSummary{}, fmt.Errorf("%w: agent %q binds product kinds an import would drop", domain.ErrConflict, request.AgentID)
-	}
-	if err = studio.checkSeed(ctx, actor, request.AgentID, scopes, seed); err != nil {
-		return domain.AgentSummary{}, err
-	}
-	placed := slices.Clone(seed.bindings)
-	for index := range placed {
-		placed[index].ScopeID = scopes.AgentScopeID
-	}
-	loosening, err := studio.checkGateChange(ctx, actor, request.AgentID, scopes.AgentScopeID,
-		seededScopes{ScopeRepository: studio.scopeRepository(), scopeID: scopes.AgentScopeID, bindings: placed})
-	if err != nil {
-		return domain.AgentSummary{}, err
-	}
-	updated, err := tx.Query(ctx, qStudioUpdateDraft, current.Enabled,
-		modelProvider(seed.models.Text), modelID(seed.models.Text), modelProvider(seed.models.Image), modelID(seed.models.Image),
-		modelProvider(seed.models.Video), modelID(seed.models.Video), nullableJSON(seed.extension), actorUser(actor),
-		actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
-	if err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("update import draft: %w", err)
-	}
-	if len(updated.Rows) == 0 {
-		return domain.AgentSummary{}, domain.ErrRevisionConflict
-	}
-	for _, query := range []string{qSeedDropScope, qSeedEndScope} {
-		if _, err = tx.Query(ctx, query, actor.TenantID, scopes.AgentScopeID); err != nil {
-			return domain.AgentSummary{}, fmt.Errorf("end agent bindings: %w", err)
+		if len(locked.Rows) == 0 {
+			return domain.ErrNotFound
 		}
-	}
-	if err = studio.plantSeed(ctx, tx, actor, request.AgentID, scopes.AgentScopeID, seed); err != nil {
+		if common.AsInt64(locked.Rows[0][0]) != request.ExpectedDraftRevision {
+			return domain.ErrRevisionConflict
+		}
+		if _, err := tx.Query(ctx, qStudioLockAlias, actor.TenantID, current.AgentTypeID); err != nil {
+			return fmt.Errorf("lock import type: %w", err)
+		}
+		product, err := tx.Query(ctx, qSeedNonPlatformAtScope, actor.TenantID, scopes.AgentScopeID, platformKinds())
+		if err != nil {
+			return fmt.Errorf("count product bindings: %w", err)
+		}
+		if len(product.Rows) > 0 && common.AsInt64(product.Rows[0][0]) > 0 {
+			return fmt.Errorf("%w: agent %q binds product kinds an import would drop", domain.ErrConflict, request.AgentID)
+		}
+		if err := studio.checkSeed(ctx, actor, request.AgentID, scopes, seed); err != nil {
+			return err
+		}
+		placed := slices.Clone(seed.bindings)
+		for index := range placed {
+			placed[index].ScopeID = scopes.AgentScopeID
+		}
+		loosening, err := studio.checkGateChange(ctx, actor, request.AgentID, scopes.AgentScopeID,
+			seededScopes{ScopeRepository: studio.scopeRepository(), scopeID: scopes.AgentScopeID, bindings: placed})
+		if err != nil {
+			return err
+		}
+		updated, err := tx.Query(ctx, qStudioUpdateDraft, current.Enabled,
+			modelProvider(seed.models.Text), modelID(seed.models.Text), modelProvider(seed.models.Image), modelID(seed.models.Image),
+			modelProvider(seed.models.Video), modelID(seed.models.Video), nullableJSON(seed.extension), actorUser(actor),
+			actor.TenantID, request.AgentID, request.ExpectedDraftRevision)
+		if err != nil {
+			return fmt.Errorf("update import draft: %w", err)
+		}
+		if len(updated.Rows) == 0 {
+			return domain.ErrRevisionConflict
+		}
+		for _, query := range []string{qSeedDropScope, qSeedEndScope} {
+			if _, err := tx.Query(ctx, query, actor.TenantID, scopes.AgentScopeID); err != nil {
+				return fmt.Errorf("end agent bindings: %w", err)
+			}
+		}
+		if err := studio.plantSeed(ctx, tx, actor, request.AgentID, scopes.AgentScopeID, seed); err != nil {
+			return err
+		}
+		if err := auditStudio(ctx, tx, actor, request.AgentID, seed.event, clipDetail(seed.detail)); err != nil {
+			return err
+		}
+		return studio.recordGateLoosening(ctx, tx, actor, loosening)
+	}); err != nil {
 		return domain.AgentSummary{}, err
 	}
-	if err = auditStudio(ctx, tx, actor, request.AgentID, seed.event, clipDetail(seed.detail)); err != nil {
-		return domain.AgentSummary{}, err
-	}
-	if err = studio.recordGateLoosening(ctx, tx, actor, loosening); err != nil {
-		return domain.AgentSummary{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentSummary{}, fmt.Errorf("commit import: %w", err)
-	}
-	committed = true
 	return studio.summary(ctx, actor.TenantID, request.AgentID)
 }
 

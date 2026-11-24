@@ -155,7 +155,7 @@ func TestEvaluateGatePassesAndRecordsTheRunsItRead(t *testing.T) {
 	// The same inputs replay the stored decision without writing.
 	query.rows[qGateDecision] = [][]any{decisionRow(domain.GateVerdictPass, nil, policyDigest(t, devGate), inputsDigest(*decision), nil, int64(3))}
 	query.queries = nil
-	if _, err = gate.EvaluateGate(context.Background(), humanActor(8, 10), "writer-a"); err != nil || slices.Contains(query.queries, qGateInsert) || query.commits != 1 {
+	if _, err = gate.EvaluateGate(context.Background(), humanActor(8, 10), "writer-a"); err != nil || slices.Contains(query.queries, qGateInsert) || slices.Contains(query.queries, qGateAudit) {
 		t.Fatalf("replay = %v, queries %v, commits %d", err, query.queries, query.commits)
 	}
 }

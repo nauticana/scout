@@ -3,7 +3,6 @@ package release
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -195,29 +195,15 @@ func (store *TableVersionPinStore) putAssignmentPin(ctx context.Context, pin dom
 	if err != nil {
 		return 0, err
 	}
-	tx, err := store.DB.BeginTx(ctx, versionPinQueries)
-	if err != nil {
-		return 0, fmt.Errorf("begin assignment pin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(context.WithoutCancel(ctx)); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("rollback assignment pin: %w", rollbackErr))
-			}
+	return txn.Value(ctx, txn.New(store.DB, versionPinQueries, "assignment pin"), func(tx keelport.TxQueryService) (int64, error) {
+		if id, err = insertPin(ctx, tx, args); err != nil {
+			return 0, err
 		}
-	}()
-	if id, err = insertPin(ctx, tx, args); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Query(ctx, qPinAssign, id, pin.TenantID, assignment[0]); err != nil {
-		return 0, fmt.Errorf("bind pin to assignment %s: %w", pin.AssignmentRef, err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit assignment pin: %w", err)
-	}
-	committed = true
-	return id, nil
+		if _, err := tx.Query(ctx, qPinAssign, id, pin.TenantID, assignment[0]); err != nil {
+			return 0, fmt.Errorf("bind pin to assignment %s: %w", pin.AssignmentRef, err)
+		}
+		return id, nil
+	})
 }
 
 func (store *TableVersionPinStore) Active(ctx context.Context, tenantID int64, agentID string, at time.Time) ([]domain.VersionPin, error) {

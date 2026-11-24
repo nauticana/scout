@@ -13,6 +13,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -131,62 +132,53 @@ func (s *StudioPilots) Add(ctx context.Context, actor domain.StudioActor, change
 	if err != nil {
 		return domain.PilotMember{}, err
 	}
-	tx, err := s.begin(ctx, actor, change.AgentID)
-	if err != nil {
-		return domain.PilotMember{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, studioPilotQueries, "pilot change"), func(tx keelport.TxQueryService) (domain.PilotMember, error) {
+		if err := lockPilots(ctx, tx, actor, change.AgentID); err != nil {
+			return domain.PilotMember{}, err
 		}
-	}()
-	if err = pilotReleasable(ctx, tx, actor.TenantID, change); err != nil {
-		return domain.PilotMember{}, err
-	}
-	open, err := tx.Query(ctx, qPilotOpen, actor.TenantID, change.AgentID, string(change.Subject.Kind), change.Subject.ID)
-	if err != nil {
-		return domain.PilotMember{}, fmt.Errorf("read open pilot membership: %w", err)
-	}
-	if len(open.Rows) > 0 {
-		existing := pilotMember(actor.TenantID, change.AgentID, open.Rows[0])
-		if existing.Version != change.Version {
-			return domain.PilotMember{}, fmt.Errorf("%w: %s %s already pilots version %s of agent %q; remove it first",
-				domain.ErrConflict, change.Subject.Kind, change.Subject.ID, existing.Version, change.AgentID)
+		if err := pilotReleasable(ctx, tx, actor.TenantID, change); err != nil {
+			return domain.PilotMember{}, err
 		}
-		return existing, nil
-	}
-	census, err := tx.Query(ctx, qPilotCount, actor.TenantID, change.AgentID)
-	if err != nil {
-		return domain.PilotMember{}, fmt.Errorf("count pilot memberships: %w", err)
-	}
-	if len(census.Rows) == 0 {
-		return domain.PilotMember{}, fmt.Errorf("count pilot memberships: no row")
-	}
-	if count := common.AsInt64(census.Rows[0][0]); count >= int64(s.MaxMembers) {
-		return domain.PilotMember{}, fmt.Errorf("%w: agent %q holds %d open pilot memberships, the most allowed is %d",
-			domain.ErrConflict, change.AgentID, count, s.MaxMembers)
-	}
-	inserted, err := tx.Query(ctx, qPilotInsert, actor.TenantID, change.AgentID, string(change.Subject.Kind), change.Subject.ID,
-		change.Version, change.Reason, string(actor.Principal.Kind), actor.Principal.ID)
-	if err != nil {
-		return domain.PilotMember{}, fmt.Errorf("add pilot membership: %w", err)
-	}
-	if len(inserted.Rows) == 0 {
-		return domain.PilotMember{}, fmt.Errorf("add pilot membership: no begda returned")
-	}
-	member := domain.PilotMember{
-		TenantID: actor.TenantID, AgentID: change.AgentID, Version: change.Version, Subject: change.Subject,
-		Reason: change.Reason, AddedBy: actor.Principal, ValidFrom: common.AsTime(inserted.Rows[0][0]),
-	}
-	if err = recordPilotEvent(ctx, tx, actor, "PILOT_ADD", change); err != nil {
-		return domain.PilotMember{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.PilotMember{}, fmt.Errorf("commit pilot membership: %w", err)
-	}
-	committed = true
-	return member, nil
+		open, err := tx.Query(ctx, qPilotOpen, actor.TenantID, change.AgentID, string(change.Subject.Kind), change.Subject.ID)
+		if err != nil {
+			return domain.PilotMember{}, fmt.Errorf("read open pilot membership: %w", err)
+		}
+		if len(open.Rows) > 0 {
+			existing := pilotMember(actor.TenantID, change.AgentID, open.Rows[0])
+			if existing.Version != change.Version {
+				return domain.PilotMember{}, fmt.Errorf("%w: %s %s already pilots version %s of agent %q; remove it first",
+					domain.ErrConflict, change.Subject.Kind, change.Subject.ID, existing.Version, change.AgentID)
+			}
+			return existing, nil
+		}
+		census, err := tx.Query(ctx, qPilotCount, actor.TenantID, change.AgentID)
+		if err != nil {
+			return domain.PilotMember{}, fmt.Errorf("count pilot memberships: %w", err)
+		}
+		if len(census.Rows) == 0 {
+			return domain.PilotMember{}, fmt.Errorf("count pilot memberships: no row")
+		}
+		if count := common.AsInt64(census.Rows[0][0]); count >= int64(s.MaxMembers) {
+			return domain.PilotMember{}, fmt.Errorf("%w: agent %q holds %d open pilot memberships, the most allowed is %d",
+				domain.ErrConflict, change.AgentID, count, s.MaxMembers)
+		}
+		inserted, err := tx.Query(ctx, qPilotInsert, actor.TenantID, change.AgentID, string(change.Subject.Kind), change.Subject.ID,
+			change.Version, change.Reason, string(actor.Principal.Kind), actor.Principal.ID)
+		if err != nil {
+			return domain.PilotMember{}, fmt.Errorf("add pilot membership: %w", err)
+		}
+		if len(inserted.Rows) == 0 {
+			return domain.PilotMember{}, fmt.Errorf("add pilot membership: no begda returned")
+		}
+		member := domain.PilotMember{
+			TenantID: actor.TenantID, AgentID: change.AgentID, Version: change.Version, Subject: change.Subject,
+			Reason: change.Reason, AddedBy: actor.Principal, ValidFrom: common.AsTime(inserted.Rows[0][0]),
+		}
+		if err := recordPilotEvent(ctx, tx, actor, "PILOT_ADD", change); err != nil {
+			return domain.PilotMember{}, err
+		}
+		return member, nil
+	})
 }
 
 // Remove ends the subject's open membership of change.Version.
@@ -195,39 +187,30 @@ func (s *StudioPilots) Remove(ctx context.Context, actor domain.StudioActor, cha
 	if err != nil {
 		return domain.PilotMember{}, err
 	}
-	tx, err := s.begin(ctx, actor, change.AgentID)
-	if err != nil {
-		return domain.PilotMember{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, studioPilotQueries, "pilot change"), func(tx keelport.TxQueryService) (domain.PilotMember, error) {
+		if err := lockPilots(ctx, tx, actor, change.AgentID); err != nil {
+			return domain.PilotMember{}, err
 		}
-	}()
-	key := []any{actor.TenantID, change.AgentID, string(change.Subject.Kind), change.Subject.ID, change.Version}
-	removed, err := tx.Query(ctx, qPilotDrop, key...)
-	if err != nil {
-		return domain.PilotMember{}, fmt.Errorf("drop pilot membership: %w", err)
-	}
-	if len(removed.Rows) == 0 {
-		if removed, err = tx.Query(ctx, qPilotEnd, key...); err != nil {
-			return domain.PilotMember{}, fmt.Errorf("end pilot membership: %w", err)
+		key := []any{actor.TenantID, change.AgentID, string(change.Subject.Kind), change.Subject.ID, change.Version}
+		removed, err := tx.Query(ctx, qPilotDrop, key...)
+		if err != nil {
+			return domain.PilotMember{}, fmt.Errorf("drop pilot membership: %w", err)
 		}
-	}
-	if len(removed.Rows) == 0 {
-		return domain.PilotMember{}, fmt.Errorf("%w: %s %s has no open pilot membership of version %s of agent %q",
-			domain.ErrNotFound, change.Subject.Kind, change.Subject.ID, change.Version, change.AgentID)
-	}
-	member := pilotMember(actor.TenantID, change.AgentID, removed.Rows[0])
-	if err = recordPilotEvent(ctx, tx, actor, "PILOT_REMOVE", change); err != nil {
-		return domain.PilotMember{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.PilotMember{}, fmt.Errorf("commit pilot removal: %w", err)
-	}
-	committed = true
-	return member, nil
+		if len(removed.Rows) == 0 {
+			if removed, err = tx.Query(ctx, qPilotEnd, key...); err != nil {
+				return domain.PilotMember{}, fmt.Errorf("end pilot membership: %w", err)
+			}
+		}
+		if len(removed.Rows) == 0 {
+			return domain.PilotMember{}, fmt.Errorf("%w: %s %s has no open pilot membership of version %s of agent %q",
+				domain.ErrNotFound, change.Subject.Kind, change.Subject.ID, change.Version, change.AgentID)
+		}
+		member := pilotMember(actor.TenantID, change.AgentID, removed.Rows[0])
+		if err := recordPilotEvent(ctx, tx, actor, "PILOT_REMOVE", change); err != nil {
+			return domain.PilotMember{}, err
+		}
+		return member, nil
+	})
 }
 
 // prepare validates a change and authorizes PUBLISH on its agent before anything is read.
@@ -246,18 +229,13 @@ func (s *StudioPilots) prepare(ctx context.Context, actor domain.StudioActor, ch
 	return change, nil
 }
 
-// begin opens the change's transaction under a per-agent lock, so the open-membership check,
-// the cap, and the write cannot race another change of the same agent.
-func (s *StudioPilots) begin(ctx context.Context, actor domain.StudioActor, agentID string) (keelport.TxQueryService, error) {
-	tx, err := s.DB.BeginTx(ctx, studioPilotQueries)
-	if err != nil {
-		return nil, fmt.Errorf("begin pilot change: %w", err)
+// lockPilots serializes one agent's pilot changes, so the open-membership check, the cap, and
+// the write cannot race another change of the same agent.
+func lockPilots(ctx context.Context, tx keelport.TxQueryService, actor domain.StudioActor, agentID string) error {
+	if _, err := tx.Query(ctx, qPilotLock, fmt.Sprintf("agent_pilot:%d:%s", actor.TenantID, agentID)); err != nil {
+		return fmt.Errorf("lock agent pilots: %w", err)
 	}
-	if _, err = tx.Query(ctx, qPilotLock, fmt.Sprintf("agent_pilot:%d:%s", actor.TenantID, agentID)); err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("lock agent pilots: %w", err)
-	}
-	return tx, nil
+	return nil
 }
 
 // pilotReleasable refuses a version the tenant's agent never published and one that is quarantined.

@@ -11,13 +11,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/nauticana/keel/common"
-	keeldata "github.com/nauticana/keel/data"
 	keelport "github.com/nauticana/keel/port"
 	"github.com/nauticana/keel/storage"
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -268,39 +268,27 @@ func (store *GoldenCaseStore) Associate(ctx context.Context, association domain.
 	if err != nil {
 		return err
 	}
-	tx, err := store.begin(ctx, "golden case store", caseQueries)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.New(store.DB, caseQueries, "golden case store").Run(ctx, func(tx keelport.TxQueryService) error {
+		agent, err := tx.Query(ctx, qCaseAgentExists, tenantID, agentID)
+		if err != nil {
+			return fmt.Errorf("load agent: %w", err)
 		}
-	}()
-	agent, err := tx.Query(ctx, qCaseAgentExists, tenantID, agentID)
-	if err != nil {
-		return fmt.Errorf("load agent: %w", err)
-	}
-	if len(agent.Rows) == 0 {
-		return fmt.Errorf("%w: agent %q", domain.ErrNotFound, agentID)
-	}
-	if err = ensureSet(ctx, tx, tenantID, goldenSetID, name, association.Owner); err != nil {
-		return err
-	}
-	kind, id := principalColumns(association.By)
-	result, err := tx.Query(ctx, qCaseAssociate, goldenSetID, kind, id, store.now(), tenantID, agentID)
-	if err != nil {
-		return fmt.Errorf("associate golden set: %w", err)
-	}
-	if len(result.Rows) == 0 {
-		return fmt.Errorf("%w: agent %q", domain.ErrNotFound, agentID)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit golden set association: %w", err)
-	}
-	committed = true
-	return nil
+		if len(agent.Rows) == 0 {
+			return fmt.Errorf("%w: agent %q", domain.ErrNotFound, agentID)
+		}
+		if err := ensureSet(ctx, tx, tenantID, goldenSetID, name, association.Owner); err != nil {
+			return err
+		}
+		kind, id := principalColumns(association.By)
+		result, err := tx.Query(ctx, qCaseAssociate, goldenSetID, kind, id, store.now(), tenantID, agentID)
+		if err != nil {
+			return fmt.Errorf("associate golden set: %w", err)
+		}
+		if len(result.Rows) == 0 {
+			return fmt.Errorf("%w: agent %q", domain.ErrNotFound, agentID)
+		}
+		return nil
+	})
 }
 
 func setName(goldenSetID, name string) (string, error) {
@@ -708,28 +696,16 @@ func (store *GoldenCaseStore) change(ctx context.Context, tenantID int64, golden
 	if expectedRevision < 0 {
 		return 0, fmt.Errorf("%w: expected revision cannot be negative", domain.ErrValidation)
 	}
-	tx, err := store.begin(ctx, "golden case store", caseQueries)
-	if err != nil {
-		return 0, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
+	return txn.Value(ctx, txn.New(store.DB, caseQueries, "golden case store"), func(tx keelport.TxQueryService) (int64, error) {
+		revision, err := bumpRevision(ctx, tx, tenantID, goldenSetID, expectedRevision)
+		if err != nil {
+			return 0, err
 		}
-	}()
-	revision, err := bumpRevision(ctx, tx, tenantID, goldenSetID, expectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	if err = apply(tx); err != nil {
-		return 0, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit golden case change: %w", err)
-	}
-	committed = true
-	return revision, nil
+		if err := apply(tx); err != nil {
+			return 0, err
+		}
+		return revision, nil
+	})
 }
 
 func bumpRevision(ctx context.Context, tx keelport.TxQueryService, tenantID int64, goldenSetID string, expectedRevision int64) (int64, error) {
@@ -795,53 +771,47 @@ func (store *GoldenCaseStore) Freeze(ctx context.Context, tenantID int64, golden
 			return domain.GoldenSetVersion{}, 0, err
 		}
 	}
-	tx, err := store.begin(ctx, "golden case store", caseQueries)
-	if err != nil {
+	var version domain.GoldenSetVersion
+	var revision int64
+	if err := txn.New(store.DB, caseQueries, "golden case store").Run(ctx, func(tx keelport.TxQueryService) error {
+		var err error
+		revision, err = bumpRevision(ctx, tx, tenantID, goldenSetID, expectedRevision)
+		if err != nil {
+			return err
+		}
+		next, err := tx.Query(ctx, qCaseNextVersion, tenantID, goldenSetID)
+		if err != nil || len(next.Rows) == 0 {
+			return fmt.Errorf("next golden set version: %w", errors.Join(err, errNoRow))
+		}
+		version = domain.GoldenSetVersion{TenantID: tenantID, GoldenSetID: goldenSetID, SetVersion: common.AsInt64(next.Rows[0][0]), ExampleCount: len(cases), FrozenAt: store.now()}
+		examples := make([]domain.GoldenExample, len(cases))
+		for i, goldenCase := range cases {
+			examples[i] = domain.GoldenExample{
+				TenantID: tenantID, GoldenSetID: goldenSetID, SetVersion: version.SetVersion, ExampleID: goldenCase.CaseID,
+				Provenance: GoldenCaseProvenance, ConsentClass: GoldenCaseConsent, RetentionClass: GoldenCaseRetention,
+				RiskTier: goldenCase.RiskTier, Language: goldenCase.Language, RubricRef: goldenCase.RubricRef,
+				ExpectedBehavior: goldenCase.ExpectedBehavior, Payload: payloads[i], Hidden: goldenCase.Hidden, Script: scripts[i],
+				Assurance: goldenCase.Assurance,
+			}
+		}
+		version.DatasetRevision = DatasetRevision(examples)
+		if _, err := tx.Query(ctx, qCaseVersionInsert, tenantID, goldenSetID, version.SetVersion, version.DatasetRevision, version.ExampleCount, version.FrozenAt); err != nil {
+			return fmt.Errorf("insert golden set version: %w", err)
+		}
+		for _, example := range examples {
+			if _, err = tx.Query(ctx, qCaseExampleInsert, append([]any{
+				tenantID, goldenSetID, version.SetVersion, example.ExampleID, string(scopeOf(example.Hidden)),
+				example.Provenance, example.ConsentClass, example.RetentionClass, example.RiskTier, nil, nullable(example.Language),
+				nullable(example.RubricRef), nullable(string(example.ExpectedBehavior)), example.Payload.URI, example.Payload.Digest, "[]",
+				nullable(example.Script.URI), nullable(example.Script.Digest),
+			}, assuranceColumns(example.Assurance)...)...); err != nil {
+				return fmt.Errorf("insert golden example %q: %w", example.ExampleID, err)
+			}
+		}
+		return nil
+	}); err != nil {
 		return domain.GoldenSetVersion{}, 0, err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = keeldata.RollbackDetached(tx)
-		}
-	}()
-	revision, err := bumpRevision(ctx, tx, tenantID, goldenSetID, expectedRevision)
-	if err != nil {
-		return domain.GoldenSetVersion{}, 0, err
-	}
-	next, err := tx.Query(ctx, qCaseNextVersion, tenantID, goldenSetID)
-	if err != nil || len(next.Rows) == 0 {
-		return domain.GoldenSetVersion{}, 0, fmt.Errorf("next golden set version: %w", errors.Join(err, errNoRow))
-	}
-	version := domain.GoldenSetVersion{TenantID: tenantID, GoldenSetID: goldenSetID, SetVersion: common.AsInt64(next.Rows[0][0]), ExampleCount: len(cases), FrozenAt: store.now()}
-	examples := make([]domain.GoldenExample, len(cases))
-	for i, goldenCase := range cases {
-		examples[i] = domain.GoldenExample{
-			TenantID: tenantID, GoldenSetID: goldenSetID, SetVersion: version.SetVersion, ExampleID: goldenCase.CaseID,
-			Provenance: GoldenCaseProvenance, ConsentClass: GoldenCaseConsent, RetentionClass: GoldenCaseRetention,
-			RiskTier: goldenCase.RiskTier, Language: goldenCase.Language, RubricRef: goldenCase.RubricRef,
-			ExpectedBehavior: goldenCase.ExpectedBehavior, Payload: payloads[i], Hidden: goldenCase.Hidden, Script: scripts[i],
-			Assurance: goldenCase.Assurance,
-		}
-	}
-	version.DatasetRevision = DatasetRevision(examples)
-	if _, err = tx.Query(ctx, qCaseVersionInsert, tenantID, goldenSetID, version.SetVersion, version.DatasetRevision, version.ExampleCount, version.FrozenAt); err != nil {
-		return domain.GoldenSetVersion{}, 0, fmt.Errorf("insert golden set version: %w", err)
-	}
-	for _, example := range examples {
-		if _, err = tx.Query(ctx, qCaseExampleInsert, append([]any{
-			tenantID, goldenSetID, version.SetVersion, example.ExampleID, string(scopeOf(example.Hidden)),
-			example.Provenance, example.ConsentClass, example.RetentionClass, example.RiskTier, nil, nullable(example.Language),
-			nullable(example.RubricRef), nullable(string(example.ExpectedBehavior)), example.Payload.URI, example.Payload.Digest, "[]",
-			nullable(example.Script.URI), nullable(example.Script.Digest),
-		}, assuranceColumns(example.Assurance)...)...); err != nil {
-			return domain.GoldenSetVersion{}, 0, fmt.Errorf("insert golden example %q: %w", example.ExampleID, err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.GoldenSetVersion{}, 0, fmt.Errorf("commit golden set freeze: %w", err)
-	}
-	committed = true
 	return version, revision, nil
 }
 

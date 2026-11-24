@@ -17,6 +17,7 @@ import (
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
 	"github.com/nauticana/scout/internal/clk"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 const (
@@ -233,31 +234,19 @@ func (s *AgentTypeStore) Publish(ctx context.Context, version domain.AgentTypeVe
 	}
 	digest := TypeVersionDigest(version)
 	ctx = context.WithoutCancel(ctx)
-	tx, err := s.DB.BeginTx(ctx, agentTypeQueries)
-	if err != nil {
-		return fmt.Errorf("publish type: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(s.DB, agentTypeQueries, "publish type").Run(ctx, func(tx keelport.TxQueryService) error {
+		if _, err := tx.Query(ctx, qTypePublish, version.TenantID, version.AgentTypeID, version.TypeVersion,
+			string(definition), digest, nullableText(version.Change), nullableUser(version.PublishedBy)); err != nil {
+			return fmt.Errorf("publish type version: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qTypePublish, version.TenantID, version.AgentTypeID, version.TypeVersion,
-		string(definition), digest, nullableText(version.Change), nullableUser(version.PublishedBy)); err != nil {
-		return fmt.Errorf("publish type version: %w", err)
-	}
-	for _, pkg := range version.Packages {
-		if _, err = tx.Query(ctx, qTypeCapability, version.TenantID, version.AgentTypeID, version.TypeVersion,
-			pkg.PackageID, pkg.PackageVersion, pkg.Required); err != nil {
-			return fmt.Errorf("bind capability %q: %w", pkg.PackageID, err)
+		for _, pkg := range version.Packages {
+			if _, err := tx.Query(ctx, qTypeCapability, version.TenantID, version.AgentTypeID, version.TypeVersion,
+				pkg.PackageID, pkg.PackageVersion, pkg.Required); err != nil {
+				return fmt.Errorf("bind capability %q: %w", pkg.PackageID, err)
+			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("publish type: commit: %w", err)
-	}
-	committed = true
-	return nil
+		return nil
+	})
 }
 
 // Get returns one published type version with its capability requirements.
@@ -357,33 +346,21 @@ func (s *AgentTypeStore) Instantiate(ctx context.Context, request domain.Instant
 	}
 
 	ctx = context.WithoutCancel(ctx)
-	tx, err := s.DB.BeginTx(ctx, agentTypeQueries)
-	if err != nil {
-		return domain.AgentTypeRef{}, fmt.Errorf("instantiate: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.Value(ctx, txn.New(s.DB, agentTypeQueries, "instantiate"), func(tx keelport.TxQueryService) (domain.AgentTypeRef, error) {
+		if _, err := tx.Query(ctx, qInstanceProfile, request.TenantID, request.AgentID, request.Type.AgentTypeID,
+			request.Type.TypeVersion, request.DisplayName); err != nil {
+			return domain.AgentTypeRef{}, fmt.Errorf("create instance profile: %w", err)
 		}
-	}()
-	if _, err = tx.Query(ctx, qInstanceProfile, request.TenantID, request.AgentID, request.Type.AgentTypeID,
-		request.Type.TypeVersion, request.DisplayName); err != nil {
-		return domain.AgentTypeRef{}, fmt.Errorf("create instance profile: %w", err)
-	}
-	for _, binding := range bindings {
-		if _, err = tx.Query(ctx, qInstanceBinding, request.TenantID, request.ScopeID,
-			string(binding.ResourceKind), binding.ResourceID, binding.ResourceVersion,
-			string(mergeModeOrReplace(binding.MergeMode)), binding.Sealed,
-			string(binding.Value), valueDigest(binding.Value), nullableUser(request.CreatedBy)); err != nil {
-			return domain.AgentTypeRef{}, fmt.Errorf("bind %s %q: %w", binding.ResourceKind, binding.ResourceID, err)
+		for _, binding := range bindings {
+			if _, err := tx.Query(ctx, qInstanceBinding, request.TenantID, request.ScopeID,
+				string(binding.ResourceKind), binding.ResourceID, binding.ResourceVersion,
+				string(mergeModeOrReplace(binding.MergeMode)), binding.Sealed,
+				string(binding.Value), valueDigest(binding.Value), nullableUser(request.CreatedBy)); err != nil {
+				return domain.AgentTypeRef{}, fmt.Errorf("bind %s %q: %w", binding.ResourceKind, binding.ResourceID, err)
+			}
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.AgentTypeRef{}, fmt.Errorf("instantiate: commit: %w", err)
-	}
-	committed = true
-	return request.Type, nil
+		return request.Type, nil
+	})
 }
 
 func (s *AgentTypeStore) expand(ctx context.Context, tenantID int64, version domain.AgentTypeVersion) ([]domain.ScopedBinding, error) {

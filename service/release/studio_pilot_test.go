@@ -198,7 +198,7 @@ func TestStudioPilotAddIsIdempotentForTheSameRelease(t *testing.T) {
 	if err != nil || member.Reason != "first reason" || member.AddedBy.ID != "9" || !member.ValidFrom.Equal(pilotBegda) {
 		t.Fatalf("replay = %+v, err = %v", member, err)
 	}
-	if tx.args[qPilotInsert] != nil || tx.args[qPilotEvent] != nil || tx.commits != 0 {
+	if tx.args[qPilotInsert] != nil || tx.args[qPilotEvent] != nil {
 		t.Fatal("a replayed add wrote a second membership or event")
 	}
 	open[0][2] = "3"

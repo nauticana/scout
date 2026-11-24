@@ -18,6 +18,7 @@ import (
 
 	"github.com/nauticana/scout/contract"
 	"github.com/nauticana/scout/domain"
+	"github.com/nauticana/scout/internal/txn"
 )
 
 // Turn-ledger sentinels; consumers map them to their transport statuses.
@@ -655,61 +656,53 @@ func (l *TurnLedger) Begin(ctx context.Context, tenantID int64, endUserRef, requ
 		}
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, l.queryMap())
-	if err != nil {
-		return TurnState{}, false, fmt.Errorf("begin turn: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	created := false
+	if err := txn.New(l.DB, l.queryMap(), "begin turn").Run(ctx, func(tx port.TxQueryService) error {
+		candidateID := fmt.Sprintf("%s-%d", l.Namespace, l.queries(ctx).GenID())
+		workspaceLock := fmt.Sprintf("%s:%d:%s:%s:%s", l.Namespace, tenantID, endUserRef, release.AgentID, release.Version)
+		if _, err := tx.Query(ctx, qLedgerLock, workspaceLock); err != nil {
+			return fmt.Errorf("lock workspace conversation: %w", err)
 		}
-	}()
-	candidateID := fmt.Sprintf("%s-%d", l.Namespace, l.queries(ctx).GenID())
-	workspaceLock := fmt.Sprintf("%s:%d:%s:%s:%s", l.Namespace, tenantID, endUserRef, release.AgentID, release.Version)
-	if _, err = tx.Query(ctx, qLedgerLock, workspaceLock); err != nil {
-		return TurnState{}, false, fmt.Errorf("lock workspace conversation: %w", err)
-	}
-	if _, err = tx.Query(ctx, qLedgerEnsureConversation,
-		tenantID, candidateID, release.AgentID, release.Version, endUserRef,
-		tenantID, endUserRef, release.AgentID, release.Version); err != nil {
-		return TurnState{}, false, fmt.Errorf("ensure conversation: %w", err)
-	}
-	conversation, err := tx.Query(ctx, qLedgerGetConversation, tenantID, endUserRef, release.AgentID, release.Version)
-	if err != nil {
-		return TurnState{}, false, fmt.Errorf("load conversation: %w", err)
-	}
-	if len(conversation.Rows) == 0 {
-		return TurnState{}, false, errors.New("load conversation: row missing after insert")
-	}
-	conversationID := common.AsString(conversation.Rows[0][0])
-	if _, err = tx.Query(ctx, qLedgerLock, fmt.Sprintf("%d:%s", tenantID, conversationID)); err != nil {
-		return TurnState{}, false, fmt.Errorf("lock conversation: %w", err)
-	}
-	if err = admitRate(ctx, tx, turnRateRequest{
-		TenantID: tenantID, AgentID: release.AgentID, Release: release.Version, RequestID: requestID,
+		if _, err := tx.Query(ctx, qLedgerEnsureConversation,
+			tenantID, candidateID, release.AgentID, release.Version, endUserRef,
+			tenantID, endUserRef, release.AgentID, release.Version); err != nil {
+			return fmt.Errorf("ensure conversation: %w", err)
+		}
+		conversation, err := tx.Query(ctx, qLedgerGetConversation, tenantID, endUserRef, release.AgentID, release.Version)
+		if err != nil {
+			return fmt.Errorf("load conversation: %w", err)
+		}
+		if len(conversation.Rows) == 0 {
+			return errors.New("load conversation: row missing after insert")
+		}
+		conversationID := common.AsString(conversation.Rows[0][0])
+		if _, err := tx.Query(ctx, qLedgerLock, fmt.Sprintf("%d:%s", tenantID, conversationID)); err != nil {
+			return fmt.Errorf("lock conversation: %w", err)
+		}
+		if err = admitRate(ctx, tx, turnRateRequest{
+			TenantID: tenantID, AgentID: release.AgentID, Release: release.Version, RequestID: requestID,
+		}); err != nil {
+			return err
+		}
+		inserted, err := tx.Query(ctx, qLedgerInsertTurn,
+			tenantID, conversationID, requestID, string(status), l.inputURI(requestID), inputDigest, string(status),
+			tenantID, conversationID)
+		if err != nil {
+			return fmt.Errorf("insert turn: %w", err)
+		}
+		created = len(inserted.Rows) > 0
+		if created {
+			turnNo := common.AsInt64(inserted.Rows[0][0])
+			if _, err := tx.Query(ctx, qLedgerInsertDetail,
+				tenantID, conversationID, turnNo, taskKind,
+				common.TruncateRunes(common.RedactForStorage(inputSummary), 400), release.Digest); err != nil {
+				return fmt.Errorf("insert turn detail: %w", err)
+			}
+		}
+		return nil
 	}); err != nil {
 		return TurnState{}, false, err
 	}
-	inserted, err := tx.Query(ctx, qLedgerInsertTurn,
-		tenantID, conversationID, requestID, string(status), l.inputURI(requestID), inputDigest, string(status),
-		tenantID, conversationID)
-	if err != nil {
-		return TurnState{}, false, fmt.Errorf("insert turn: %w", err)
-	}
-	created := len(inserted.Rows) > 0
-	if created {
-		turnNo := common.AsInt64(inserted.Rows[0][0])
-		if _, err = tx.Query(ctx, qLedgerInsertDetail,
-			tenantID, conversationID, turnNo, taskKind,
-			common.TruncateRunes(common.RedactForStorage(inputSummary), 400), release.Digest); err != nil {
-			return TurnState{}, false, fmt.Errorf("insert turn detail: %w", err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return TurnState{}, false, fmt.Errorf("commit turn: %w", err)
-	}
-	committed = true
 	state, found, err := l.findTurn(ctx, tenantID, requestID)
 	if err != nil {
 		return TurnState{}, false, err
@@ -836,36 +829,27 @@ func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecutio
 		return TurnState{}, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, l.queryMap())
-	if err != nil {
-		return TurnState{}, fmt.Errorf("begin result staging: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	if err := txn.New(l.DB, l.queryMap(), "result staging").Run(ctx, func(tx port.TxQueryService) error {
+		staged, err := tx.Query(ctx, qLedgerStageSuccess,
+			resultKind, string(raw), usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries,
+			usage.CostMinorUnits, usage.Currency, models,
+			execution.Turn.TenantID, execution.Turn.ConversationID, execution.Turn.TurnNo,
+			execution.Reservation.ReservationID)
+		if err != nil {
+			return fmt.Errorf("stage result: %w", err)
 		}
-	}()
-	staged, err := tx.Query(ctx, qLedgerStageSuccess,
-		resultKind, string(raw), usage.InputTokens, usage.OutputTokens, usage.ToolCalls, usage.SearchQueries,
-		usage.CostMinorUnits, usage.Currency, models,
-		execution.Turn.TenantID, execution.Turn.ConversationID, execution.Turn.TurnNo,
-		execution.Reservation.ReservationID)
-	if err != nil {
-		return TurnState{}, fmt.Errorf("stage result: %w", err)
-	}
-	if len(staged.Rows) == 0 {
-		return TurnState{}, ErrTurnFenced
-	}
-	if persist != nil {
-		if err = persist(ctx, tx); err != nil {
-			return TurnState{}, err
+		if len(staged.Rows) == 0 {
+			return ErrTurnFenced
 		}
+		if persist != nil {
+			if err := persist(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return TurnState{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return TurnState{}, fmt.Errorf("commit result staging: %w", err)
-	}
-	committed = true
 	state := execution.Turn
 	state.ResultKind = resultKind
 	state.ResultPayload = string(raw)
@@ -883,55 +867,41 @@ func (l *TurnLedger) stageSuccessful(ctx context.Context, execution TurnExecutio
 
 func (l *TurnLedger) finishSuccessful(ctx context.Context, state TurnState, reservation domain.BudgetReservation) error {
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, l.queryMap())
-	if err != nil {
-		return fmt.Errorf("begin finalization: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(l.DB, l.queryMap(), "finalization").Run(ctx, func(tx port.TxQueryService) error {
+		responseDigest := DigestStrings(state.ResultPayload)
+		finished, err := tx.Query(ctx, qLedgerFinishSuccess,
+			l.resultURI(state.RequestID), responseDigest,
+			state.TenantID, state.ConversationID, state.TurnNo, reservation.ReservationID)
+		if err != nil {
+			return fmt.Errorf("finish turn: %w", err)
 		}
-	}()
-	responseDigest := DigestStrings(state.ResultPayload)
-	finished, err := tx.Query(ctx, qLedgerFinishSuccess,
-		l.resultURI(state.RequestID), responseDigest,
-		state.TenantID, state.ConversationID, state.TurnNo, reservation.ReservationID)
-	if err != nil {
-		return fmt.Errorf("finish turn: %w", err)
-	}
-	if len(finished.Rows) == 0 {
-		current, found, findErr := l.findTurn(ctx, state.TenantID, state.RequestID)
-		if findErr != nil {
-			return findErr
+		if len(finished.Rows) == 0 {
+			current, found, findErr := l.findTurn(ctx, state.TenantID, state.RequestID)
+			if findErr != nil {
+				return findErr
+			}
+			if !found || current.Status != domain.TurnCompleted || current.ResponseDigest != responseDigest {
+				return ErrTurnFenced
+			}
+			return nil
 		}
-		if !found || current.Status != domain.TurnCompleted || current.ResponseDigest != responseDigest {
-			return ErrTurnFenced
+		usage, err := stagedUsage(state)
+		if err != nil {
+			return err
 		}
-		_ = tx.Rollback(ctx)
-		committed = true
+		subject := state.AgentID + "@" + state.AgentVersion
+		inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject,
+			domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
+		if err != nil {
+			return err
+		}
+		if inserted && l.OnSettled != nil {
+			if err := l.OnSettled(ctx, tx, state, usage); err != nil {
+				return fmt.Errorf("settle hook: %w", err)
+			}
+		}
 		return nil
-	}
-	usage, err := stagedUsage(state)
-	if err != nil {
-		return err
-	}
-	subject := state.AgentID + "@" + state.AgentVersion
-	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, subject,
-		domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
-	if err != nil {
-		return err
-	}
-	if inserted && l.OnSettled != nil {
-		if err = l.OnSettled(ctx, tx, state, usage); err != nil {
-			return fmt.Errorf("settle hook: %w", err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit finalization: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }
 
 // Complete stages the result, settles the reservation, and finalizes the turn. A
@@ -1057,49 +1027,37 @@ func (l *TurnLedger) FailWithUsage(ctx context.Context, execution TurnExecution,
 
 func (l *TurnLedger) finishBilledFailure(ctx context.Context, state TurnState, reservationID string) error {
 	ctx = context.WithoutCancel(ctx)
-	tx, err := l.DB.BeginTx(ctx, l.queryMap())
-	if err != nil {
-		return fmt.Errorf("begin billed failure: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	return txn.New(l.DB, l.queryMap(), "billed failure").Run(ctx, func(tx port.TxQueryService) error {
+		finished, err := tx.Query(ctx, qLedgerFinishBilledFailure, state.TenantID, state.ConversationID, state.TurnNo, reservationID)
+		if err != nil {
+			return fmt.Errorf("finish billed failure: %w", err)
 		}
-	}()
-	finished, err := tx.Query(ctx, qLedgerFinishBilledFailure, state.TenantID, state.ConversationID, state.TurnNo, reservationID)
-	if err != nil {
-		return fmt.Errorf("finish billed failure: %w", err)
-	}
-	if len(finished.Rows) == 0 {
-		current, found, findErr := l.findTurn(ctx, state.TenantID, state.RequestID)
-		if findErr != nil {
-			return findErr
+		if len(finished.Rows) == 0 {
+			current, found, findErr := l.findTurn(ctx, state.TenantID, state.RequestID)
+			if findErr != nil {
+				return findErr
+			}
+			if !found || current.Status != domain.TurnFailed {
+				return ErrTurnFenced
+			}
+			return nil
 		}
-		if !found || current.Status != domain.TurnFailed {
-			return ErrTurnFenced
+		usage, err := stagedUsage(state)
+		if err != nil {
+			return err
+		}
+		inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, state.AgentID+"@"+state.AgentVersion,
+			domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
+		if err != nil {
+			return err
+		}
+		if inserted && l.OnSettled != nil {
+			if err := l.OnSettled(ctx, tx, state, usage); err != nil {
+				return fmt.Errorf("settle hook: %w", err)
+			}
 		}
 		return nil
-	}
-	usage, err := stagedUsage(state)
-	if err != nil {
-		return err
-	}
-	inserted, err := l.InsertUsageEvent(ctx, tx, state.TenantID, state.ConversationID, state.TurnNo, state.AgentID+"@"+state.AgentVersion,
-		domain.UsageAttribution{Principal: domain.PrincipalRef{Kind: domain.PrincipalAgent, ID: state.AgentID}}, usage)
-	if err != nil {
-		return err
-	}
-	if inserted && l.OnSettled != nil {
-		if err = l.OnSettled(ctx, tx, state, usage); err != nil {
-			return fmt.Errorf("settle hook: %w", err)
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit billed failure: %w", err)
-	}
-	committed = true
-	return nil
+	})
 }
 
 // FailUnreserved fails a turn that never acquired a reservation.
