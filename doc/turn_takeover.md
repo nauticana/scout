@@ -78,7 +78,7 @@ Every non-read-only call of the tool loop has a `turn_call_outcome` row written 
 | `PREEMPT` | Hold now (fences out a running worker) |
 | `RECONCILE` | Attest an unknown outcome |
 
-Default grants: `AGENT_OPER` gets VIEW and OPERATE; `AGENT_ADMIN` gets all four. None of these is implied by authoring actions (EDIT, PUBLISH), which keeps operation separate from authoring. Every `turn_control` call also needs `AGENT_STUDIO` `VIEW` on the agent, and an agent the actor cannot view reads as not found. OPERATE also covers an outcome lookup. A preempting hold needs OPERATE and PREEMPT.
+Default grants: `AGENT_OPER` gets VIEW and OPERATE; `AGENT_ADMIN` and `SUPER` get all four. None of these is implied by authoring actions (EDIT, PUBLISH), which keeps operation separate from authoring. Every `turn_control` call also needs `AGENT_STUDIO` `VIEW` on the agent, and an agent the actor cannot view reads as not found. OPERATE also covers an outcome lookup. A preempting hold needs OPERATE and PREEMPT.
 
 **Separation.** `contract.OperationSeparation`, in the same style as `PublishSeparation`, decides who may attest. `Required` reports whether the call needs a second authorized person, as a high-risk tool's always does; `Permit` refuses a person the tenant separates from attesting, such as an author of the running release. Attestation fails closed: without a composed policy, or when either method errors, nothing is attested.
 

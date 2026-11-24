@@ -241,7 +241,7 @@ Operating a live turn is its own authority, apart from authoring. `AGENT_OPERATI
 `VIEW` lists an agent's live turns and reads one with its call outcomes and operator entries; `OPERATE` holds,
 releases, takes over, acts in, hands back, and finishes them and looks up a call's outcome; `PREEMPT` holds a running turn at once, fencing out its worker; and `RECONCILE` attests
 an unknown call outcome. No authoring action (`EDIT`, `PUBLISH`) implies any of them, and every call also needs
-`AGENT_STUDIO` `VIEW`, so an agent the actor cannot view reads as not found. `AGENT_ADMIN` holds all four at `*`;
+`AGENT_STUDIO` `VIEW`, so an agent the actor cannot view reads as not found. `AGENT_ADMIN` and `SUPER` hold all four at `*`;
 `AGENT_OPER` holds `VIEW` and `OPERATE`.
 
 A hold stops a turn at a durable point under a new [fence](persistence.md#turn-fence): a queued or parked turn

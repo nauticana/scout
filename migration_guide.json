@@ -9,6 +9,16 @@
   },
   "migrations": [
     {
+      "version": "v1.3.14",
+      "title": "keel 1.3.18, SUPER holds Scout's actions",
+      "tags": [
+        "breaking",
+        "schema"
+      ],
+      "summary": "Adopts keel v1.3.18. The SUPER role is seeded with Scout's actions, except the two no seeded role holds. Scout's API and tables are unchanged.",
+      "body_markdown": "Apply keel's v1.3.18 steps before deploying: configuration loading fails without its two new flags. Scout uses no keel API that changed, and its own tables are unchanged.\n\n## Seeds\n\nkeel's `SUPER` role is seeded with every Scout action at `*`, except `AGENT_STUDIO` `TEMPLATE_PUBLISH` and `OVERRIDE_GATE`, which no seeded role holds. keel's v1.3.18 statement granting `SUPER` every action also grants those two and, run on a live database, every other Scout action. After it, remove the two unless `SUPER` should hold them:\n\n```sql\nDELETE FROM authorization_role_permission\n WHERE role_id = 'SUPER'\n   AND authorization_object_id = 'AGENT_STUDIO'\n   AND action IN ('TEMPLATE_PUBLISH', 'OVERRIDE_GATE')\n   AND low_limit = '*';\n```"
+    },
+    {
       "version": "v1.3.13",
       "title": "keel 1.3.17, charter 1.10.2, Go 1.27.4",
       "tags": [

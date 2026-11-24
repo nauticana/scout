@@ -45,7 +45,8 @@ The consequence matters more than the table: because both kinds resolve to the s
 and limits, "a delegated grant may convey no more than its grantor holds" is a subset comparison in
 one lattice rather than a translation between two models.
 
-Scout's own objects are scoped by value. `AGENT_STUDIO` actions are checked at `agent:<id>` —
+Scout's own objects are scoped by value. Keel's `SUPER` role is seeded with every Scout action at `*`
+except the two seeded to no role, `TEMPLATE_PUBLISH` and `OVERRIDE_GATE`. `AGENT_STUDIO` actions are checked at `agent:<id>` —
 `CREATE` and `TEMPLATE` at `agent_type:<id>` — and `AGENT_CONVERSATION` `USE` and `PIN_RELEASE` at
 `agent:<id>`, so a role holds every agent of its tenant with `*` or named agents only; Studio lists
 only the agents its actor may view. `AGENT_STUDIO` `APPROVE_PUBLISH`, deciding another person's
@@ -54,10 +55,10 @@ template with other tenants, at `template_audience:all` or `template_audience:te
 it by default. `OVERRIDE_GATE`, publishing or restoring a draft its [evaluation gate](governance.md#evaluation-gate)
 does not admit and removing or loosening that gate, is checked at `agent:<id>` and seeded to no role.
 `REVIEW`, reading, grading, and dismissing an agent's sampled and low-rated production turns, is
-checked at `agent:<id>` and seeded to `AGENT_ADMIN`. `AGENT_OPERATION` `VIEW` (an agent's live turns, their call
+checked at `agent:<id>` and seeded to `AGENT_ADMIN` and `SUPER`. `AGENT_OPERATION` `VIEW` (an agent's live turns, their call
 outcomes, and operator entries), `OPERATE` (holding, releasing, taking over, acting in, handing back, and
 finishing them and looking up a call's outcome; only a person operates a turn), `PREEMPT` (holding a running
-turn at once), and `RECONCILE` (attesting an unknown call outcome) are checked at `agent:<id>`; `AGENT_ADMIN` holds
+turn at once), and `RECONCILE` (attesting an unknown call outcome) are checked at `agent:<id>`; `AGENT_ADMIN` and `SUPER` hold
 all four and `AGENT_OPER` `VIEW` and `OPERATE`. An attestation also passes `contract.OperationSeparation`, which
 fails closed and requires a second person for a high-risk call. No authoring action implies them, which keeps operating a running agent apart from changing it (see
 [live turn operation](governance.md#live-turn-operation)). `AGENT_RESTRICTION` `VIEW` and `REPLACE_TENANT` govern the restriction

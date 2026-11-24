@@ -96,6 +96,12 @@ seeds:
       - [AGENT_ADMIN, AGENT_OPERATION, RECONCILE, "*"]
       - [AGENT_OPER, AGENT_OPERATION, VIEW, "*"]
       - [AGENT_OPER, AGENT_OPERATION, OPERATE, "*"]
+      - [SUPER, AGENT_CONVERSATION, USE, "*"]
+      - [SUPER, AGENT_CONVERSATION, PIN_RELEASE, "*"]
+      - [SUPER, AGENT_OPERATION, VIEW, "*"]
+      - [SUPER, AGENT_OPERATION, OPERATE, "*"]
+      - [SUPER, AGENT_OPERATION, PREEMPT, "*"]
+      - [SUPER, AGENT_OPERATION, RECONCILE, "*"]
   - table: column_display_attribute
     columns: [table_name, column_name, currency_path]
     rows:

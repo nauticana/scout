@@ -1221,3 +1221,48 @@ func splitFields(list string, n int) []string {
 	}
 	return fields
 }
+
+// TestSuperHoldsEveryActionButTheUnseeded keeps SUPER complete as actions are added and the two opt-in actions ungranted.
+func TestSuperHoldsEveryActionButTheUnseeded(t *testing.T) {
+	seedDirs, err := filepath.Glob("schema/seed/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions [][2]any
+	granted, super := map[[2]any]bool{}, map[[2]any]bool{}
+	for _, dir := range seedDirs {
+		files, err := keelschema.ParseSeedPath(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range files {
+			for _, seed := range file.Seeds {
+				for _, row := range seed.Rows {
+					switch seed.Table {
+					case "authorization_object_action":
+						actions = append(actions, [2]any{row[0], row[1]})
+					case "authorization_role_permission":
+						key := [2]any{row[1], row[2]}
+						granted[key] = true
+						if row[0] == "SUPER" && row[3] == "*" {
+							super[key] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(actions) == 0 {
+		t.Fatal("no seeded actions found")
+	}
+	unseeded := map[[2]any]bool{{"AGENT_STUDIO", "TEMPLATE_PUBLISH"}: true, {"AGENT_STUDIO", "OVERRIDE_GATE"}: true}
+	for _, action := range actions {
+		if unseeded[action] {
+			if granted[action] {
+				t.Errorf("%v is granted to a seeded role", action)
+			}
+		} else if !super[action] {
+			t.Errorf("SUPER lacks %v", action)
+		}
+	}
+}
