@@ -26,8 +26,17 @@ Structural kinds are deterministic and implemented here: `max_input_bytes`, `max
 ranges, maxItems, maxProperties), `tool_allowlist`, `tool_denylist`, `destination_allowlist`, `exact_phrase`,
 `regex` (bounded by a required `max_match_bytes`), `untrusted_content_marker`, and
 `irreversible_tool_approval`. Classifier kinds (`pii`, `toxicity`, `malware`, `prompt_injection`,
-`jailbreak`) delegate to injected `contract.ClassifierProvider`s; a rule whose provider is missing
-fails closed with `domain.ErrDegraded` — never silently skipped.
+`jailbreak`) delegate to injected `contract.ClassifierProvider`s, which receive the inspection's
+`GuardrailSubject` beside the kind and content; a rule whose provider is missing fails closed with
+`domain.ErrDegraded` — never silently skipped.
+
+`guardrail.ModelClassifier` serves all five kinds with one pinned model through the model gateway. Each
+call runs as the subject's tenant and principal under its own request id derived from the subject's, so
+the composed gateway admits and attributes it, and budgets it as a call of its own beside the turn's hold.
+The model is told the content is data, answers against a schema of a score and verbatim excerpts, and
+each excerpt becomes a redaction span at every place it occurs. A verdict off the schema, or an excerpt
+not in the content, is `domain.ErrInvalidModelOutput`; a subject without tenant, principal, or request
+is `domain.ErrForbidden`. The `agent_guardrail_classifier_*` flags pin its model.
 
 Every rule hit produces a `domain.SafetyEvent` through `contract.SafetyEventSink` and, optionally,
 `contract.AuditSink`: rule ids, layer, action, severity, policy and release version, acting principal,

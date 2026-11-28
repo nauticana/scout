@@ -231,6 +231,11 @@ seeds:
       - [agent_hold_lapse_period, int, true, "30", "Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30"]
       - [agent_working_set_max_candidates, int, true, "64", "Candidates one turn's working set source may offer; more fails the turn (1..1024); 0 takes 64"]
       - [agent_working_set_retrieval_top_k, int, true, "8", "Matches one retrieval binding offers a turn's working set (1..256); 0 takes 8"]
+      - [agent_model_endpoint_allowlist, string, true, "", "Comma-separated host names (public addresses only), IPs, and CIDRs a registered model endpoint may reach; empty refuses every endpoint"]
+      - [agent_model_endpoint_max_bytes, int, true, "16777216", "Bytes of one registered model endpoint response (1..1073741824); 0 takes 16777216"]
+      - [agent_guardrail_classifier_provider, string, true, "", "Provider of the guardrail classifier model; empty together with the model composes none"]
+      - [agent_guardrail_classifier_model, string, true, "", "Model of the guardrail classifier; set together with its provider"]
+      - [agent_guardrail_classifier_max_tokens, int, true, "1024", "Output tokens of one guardrail classifier verdict (1..65536); 0 takes 1024"]
       - [agent_working_set_max_tokens, int, true, "8000", "Token budget of one turn's working set; required context beyond it fails the turn (1..1048576); 0 takes 8000"]
   - table: authorization_object
     columns: [id, caption]

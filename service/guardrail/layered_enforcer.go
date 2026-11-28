@@ -469,7 +469,7 @@ func (enforcer *LayeredEnforcer) classify(ctx context.Context, rule *compiledRul
 	if provider == nil {
 		return nil, false, fmt.Errorf("%w: rule %q needs a %s classifier provider", domain.ErrDegraded, rule.rule.ID, rule.rule.Kind)
 	}
-	classification, err := provider.Classify(ctx, rule.rule.Kind, in.content)
+	classification, err := provider.Classify(ctx, in.subject, rule.rule.Kind, in.content)
 	if err != nil {
 		return nil, false, fmt.Errorf("classifier %s: %w", rule.rule.Kind, err)
 	}

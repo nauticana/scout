@@ -210,7 +210,7 @@ func TestCompilerRejectsUnsafeRules(t *testing.T) {
 }
 
 func TestRedactionMasksSpansAndCounts(t *testing.T) {
-	pii := fake.ClassifierProviderFunc(func(_ context.Context, _ domain.GuardrailRuleKind, content []byte) (domain.Classification, error) {
+	pii := fake.ClassifierProviderFunc(func(_ context.Context, _ domain.GuardrailSubject, _ domain.GuardrailRuleKind, content []byte) (domain.Classification, error) {
 		index := strings.Index(string(content), "555-1234")
 		if index < 0 {
 			return domain.Classification{}, nil

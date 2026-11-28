@@ -601,8 +601,10 @@ erDiagram
     model_provider {
         varchar provider_id PK
         varchar display_name
+        char protocol_code
         text endpoint_uri
         text credential_ref
+        integer max_concurrency
         boolean is_active
     }
     model_definition {

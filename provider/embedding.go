@@ -77,7 +77,7 @@ func (p *OpenAI) Embed(ctx context.Context, selection domain.ModelSelection, req
 	}
 	resp, err := client.Embeddings.New(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("openai Embeddings: %w", err)
+		return nil, fmt.Errorf("%s Embeddings: %w", p.id(), err)
 	}
 	return openAIEmbeddings(resp, request.Inputs)
 }
@@ -149,7 +149,7 @@ func googleEmbeddings(resp *genai.EmbedContentResponse, inputs [][]byte) ([]doma
 }
 
 // BuildEmbedder constructs the embedding adapter for one model reference.
-// Anthropic publishes no embedding endpoint, so it has no adapter.
+// Anthropic, Perplexity, and xAI publish no embedding endpoint; any other id is a registered endpoint.
 func (factory *Factory) BuildEmbedder(ctx context.Context, reference domain.ModelReference) (contract.EmbeddingProvider, error) {
 	if factory == nil {
 		return nil, fmt.Errorf("provider factory is required")
@@ -168,8 +168,10 @@ func (factory *Factory) BuildEmbedder(ctx context.Context, reference domain.Mode
 		return &OpenAI{APIKey: apiKey}, nil
 	case GoogleProviderID:
 		return factory.googleAdapter(ctx, nil)
-	default:
+	case AnthropicProviderID, PerplexityProviderID, XAIProviderID:
 		return nil, fmt.Errorf("%w: %s publishes no embedding endpoint", domain.ErrCapabilityUnsupported, reference.ProviderID)
+	default:
+		return factory.endpointAdapter(ctx, reference.ProviderID, nil)
 	}
 }
 

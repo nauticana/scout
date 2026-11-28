@@ -35,6 +35,10 @@ from these flags; a rate and its burst must be both zero (that lane off) or both
 |---|---|---|---|---|---|
 | `agent_max_tokens` | int | 8192 | 1 | — | Output tokens one agent model completion may produce, passed as `BaseDataPlane.MaxOutputTokens`; the data plane refuses to compose without a positive value. |
 | `agent_temperature` | float | `""` | 0.0 | 2.0 | Sampling temperature `provider.Factory` sends only to models whose catalog entry has the `SM` (sampling) capability; empty sends none and lets each model use its own default. |
+| `agent_model_endpoint_allowlist` | string | `""` | — | — | Comma-separated host names, IPs, and CIDRs a registered model endpoint may reach (`FactoryConfig.EndpointAllowlist`); a host name reaches public addresses only, so a private address needs its IP or CIDR; empty refuses every endpoint. |
+| `agent_model_endpoint_max_bytes` | int | 16777216 | 0 | 1073741824 | Bytes of one registered endpoint response (`FactoryConfig.EndpointMaxResponseBytes`); a larger one fails the call; 0 takes the default. |
+| `agent_guardrail_classifier_provider`, `agent_guardrail_classifier_model` | string | `""` | — | — | Model `guardrail.ModelClassifier` classifies with (`ScoutConfig.GuardrailClassifierModel()`); set both or neither; empty composes no model classifier. |
+| `agent_guardrail_classifier_max_tokens` | int | 1024 | 0 | 65536 | Output tokens of one classifier verdict (`ModelClassifier.MaxOutputTokens`); 0 takes the default. |
 | `agent_model_region` | string | `""` | — | — | Residency region `TableCandidateCatalog` stamps on a candidate model that has no `model_route` row of its own; empty leaves that model's region unknown. |
 | `agent_turn_rate` | float | 2 | 0 | — | Turns per second one tenant may start (token-bucket refill); 0 turns the per-tenant turn lane off and needs `agent_turn_burst` 0. |
 | `agent_turn_burst` | int | 10 | 0 | — | Turns one tenant may start at once above `agent_turn_rate`; 0 only together with a 0 rate. |

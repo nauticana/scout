@@ -29,6 +29,11 @@ type AgentProviderFactory interface {
 	Build(ctx context.Context, reference domain.ModelReference) (ModelProvider, MediaProvider, error)
 }
 
+// ModelEndpointSource returns the active registered endpoint of a provider, ErrNotFound when none is.
+type ModelEndpointSource interface {
+	ModelEndpoint(ctx context.Context, providerID string) (domain.ModelEndpoint, error)
+}
+
 // EmbeddingProviderFactory is the embedding half of AgentProviderFactory,
 // declared separately because a vendor may adapt one and not the other.
 type EmbeddingProviderFactory interface {

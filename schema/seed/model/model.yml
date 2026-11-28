@@ -5,9 +5,12 @@ seeds:
     columns: [id, caption]
     rows:
       - [model_capability, Model Capability]
+      - [model_protocol, Model Protocol]
   - table: constant_value
     columns: [constant_id, value, caption]
     rows:
+      - [model_protocol, N, Native]
+      - [model_protocol, O, OpenAI Compatible]
       - [model_capability, TX, Text Generation]
       - [model_capability, IM, Image Generation]
       - [model_capability, VD, Video Generation]
@@ -21,14 +24,15 @@ seeds:
     columns: [constant_id, table_name, column_name]
     rows:
       - [model_capability, model_capability, capability_code]
+      - [model_protocol, model_provider, protocol_code]
   - table: model_provider
-    columns: [provider_id, display_name, endpoint_uri, credential_ref, is_active]
+    columns: [provider_id, display_name, protocol_code, endpoint_uri, credential_ref, max_concurrency, is_active]
     rows:
-      - [google, Google Vertex AI / Gemini, "https://generativelanguage.googleapis.com", google_api_key, true]
-      - [openai, OpenAI, "https://api.openai.com", openai_api_key, true]
-      - [anthropic, Anthropic, "https://api.anthropic.com", anthropic_api_key, true]
-      - [perplexity, Perplexity, "https://api.perplexity.ai", perplexity_api_key, true]
-      - [xai, xAI, "https://api.x.ai/v1", xai_api_key, true]
+      - [google, Google Vertex AI / Gemini, N, "https://generativelanguage.googleapis.com", google_api_key, null, true]
+      - [openai, OpenAI, N, "https://api.openai.com", openai_api_key, null, true]
+      - [anthropic, Anthropic, N, "https://api.anthropic.com", anthropic_api_key, null, true]
+      - [perplexity, Perplexity, N, "https://api.perplexity.ai", perplexity_api_key, null, true]
+      - [xai, xAI, N, "https://api.x.ai/v1", xai_api_key, null, true]
   - table: rest_api_header
     columns: [id, master_table]
     rows:

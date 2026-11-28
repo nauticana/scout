@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,9 @@ type OpenAI struct {
 	ProviderID string
 	// BaseURL is a compatible vendor's API root; empty is OpenAI's.
 	BaseURL string
+	// HTTPClient, set for a registered endpoint, enforces its egress and concurrency bounds;
+	// such an endpoint may run without APIKey.
+	HTTPClient *http.Client
 }
 
 var (
@@ -43,12 +47,18 @@ func (p *OpenAI) id() string {
 }
 
 func (p *OpenAI) client() (openai.Client, error) {
-	if p.APIKey == "" {
+	if p.APIKey == "" && p.HTTPClient == nil {
 		return openai.Client{}, fmt.Errorf("%w: %s API key is not set", domain.ErrNotReady, p.id())
 	}
 	options := []option.RequestOption{option.WithAPIKey(p.APIKey)}
+	if p.APIKey == "" {
+		options = append(options, option.WithHeaderDel("authorization"))
+	}
 	if p.BaseURL != "" {
 		options = append(options, option.WithBaseURL(p.BaseURL))
+	}
+	if p.HTTPClient != nil {
+		options = append(options, option.WithHTTPClient(p.HTTPClient))
 	}
 	return openai.NewClient(options...), nil
 }

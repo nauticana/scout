@@ -195,6 +195,11 @@ const (
 	agent_working_set_max_candidates      = "agent_working_set_max_candidates"
 	agent_working_set_max_tokens          = "agent_working_set_max_tokens"
 	agent_working_set_retrieval_top_k     = "agent_working_set_retrieval_top_k"
+	agent_model_endpoint_allowlist        = "agent_model_endpoint_allowlist"
+	agent_model_endpoint_max_bytes        = "agent_model_endpoint_max_bytes"
+	agent_guardrail_classifier_provider   = "agent_guardrail_classifier_provider"
+	agent_guardrail_classifier_model      = "agent_guardrail_classifier_model"
+	agent_guardrail_classifier_max_tokens = "agent_guardrail_classifier_max_tokens"
 )
 
 var _ keelconfig.ApplicationConfig = (*ScoutConfig)(nil)
@@ -373,33 +378,63 @@ type ScoutConfig struct {
 	AgentEvaluationMaxBaselines     int // agent_evaluation_max_baselines 20 Human baselines one golden set version may hold; 0 uses Scout's default
 	AgentEvaluationComparePageBytes int // agent_evaluation_compare_page_bytes 1048576 Bytes of stored answers one comparison page returns; 0 uses Scout's default
 
-	AgentHealthPeriod                 int // agent_health_period 60 Seconds between health evaluator passes (1..86400); 0 takes 60
-	AgentHealthBatch                  int // agent_health_batch 100 Active agents one page of a health pass reads (1..10000); 0 takes 100
-	AgentHealthWindow                 int // agent_health_window 60 Minutes a health measure covers when the policy names no window (1..10080); 0 takes 60
-	AgentHealthStalePeriods           int // agent_health_stale_periods 3 Evaluator periods an agent may go unevaluated before its telemetry is stale (1..1000); 0 takes 3
-	AgentAlertPageSize                int // agent_alert_page_size 50 Alerts one Studio page returns when the caller names no limit (0..agent_alert_max_page_size); 0 takes 50
-	AgentAlertMaxPageSize             int // agent_alert_max_page_size 200 Largest alert page a Studio caller may ask for (1..1000); 0 takes 200
-	AgentEvaluationCaseMaxTurns       int // agent_evaluation_case_max_turns 10 Turns one golden case scripts, its input included (1..100); 0 uses Scout's default
-	AgentEvaluationCaseMaxLabels      int // agent_evaluation_case_max_labels 50 Ids one golden case labels in each evidence role (1..1000); 0 uses Scout's default
-	AgentEvaluationCaseMaxTools       int // agent_evaluation_case_max_tools 20 Sandboxed tool responses one golden case scripts (1..200); 0 uses Scout's default
-	AgentEvaluationCaseToolMaxBytes   int // agent_evaluation_case_tool_max_bytes 16384 Bytes of one scripted tool output (2..1048576); 0 uses Scout's default
-	AgentEvaluationTrajectoryMaxBytes int // agent_evaluation_trajectory_max_bytes 1048576 Bytes of one stored case trajectory (1024..16777216); 0 uses Scout's default
-	AgentRunTraceMaxEvents            int // agent_run_trace_max_events 500 Events one Studio run trace returns before it is truncated (1..5000); 0 takes 500
-	AgentRunTraceMaxJournalEntries    int // agent_run_trace_max_journal_entries 1000 Loop journal entries one run trace reads (1..10000); 0 takes 1000
-	AgentRunTraceMaxJournalBytes      int // agent_run_trace_max_journal_bytes 4194304 Cumulative loop journal payload bytes one run trace classifies (1024..67108864); 0 takes 4194304
-	AgentLiveTurnPageSize             int // agent_live_turn_page_size 50 Live turns one Studio page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50
-	AgentLiveTurnMaxPageSize          int // agent_live_turn_max_page_size 200 Largest live turn page a Studio caller may ask for (1..1000); 0 takes 200
-	AgentTurnHistoryPageSize          int // agent_turn_history_page_size 50 Turns one conversation history page returns when the caller names no limit (0..agent_turn_history_max_page_size); 0 takes 50
-	AgentTurnHistoryMaxPageSize       int // agent_turn_history_max_page_size 200 Largest conversation history page a caller may ask for (1..1000); 0 takes 200
-	AgentOutcomeAttestGrace           int // agent_outcome_attest_grace 60 Seconds added to a non-read-only tool call's dispatch window for its outcome deadline (1..86400); 0 takes 60
-	AgentTakeoverLease                int // agent_takeover_lease 900 Seconds an operator's lease on a turn they took over lasts from their latest act (1..86400); 0 takes 900
-	AgentOperatorEntryMaxBytes        int // agent_operator_entry_max_bytes 16384 Encoded bytes of one operator entry (1..1048576); 0 takes 16384
-	AgentOperatorMaxEntries           int // agent_operator_max_entries 64 Operator entries one turn may hold (1..4096); 0 takes 64
-	AgentHoldLapseBatch               int // agent_hold_lapse_batch 100 Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100
-	AgentHoldLapsePeriod              int // agent_hold_lapse_period 30 Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30
-	AgentWorkingSetMaxCandidates      int // agent_working_set_max_candidates 64 Candidates one turn's working set source may offer (1..1024); 0 takes 64
-	AgentWorkingSetMaxTokens          int // agent_working_set_max_tokens 8000 Token budget of one turn's working set (1..1048576); 0 takes 8000
-	AgentWorkingSetRetrievalTopK      int // agent_working_set_retrieval_top_k 8 Matches one retrieval binding offers a turn's working set (1..256); 0 takes 8
+	AgentHealthPeriod                 int      // agent_health_period 60 Seconds between health evaluator passes (1..86400); 0 takes 60
+	AgentHealthBatch                  int      // agent_health_batch 100 Active agents one page of a health pass reads (1..10000); 0 takes 100
+	AgentHealthWindow                 int      // agent_health_window 60 Minutes a health measure covers when the policy names no window (1..10080); 0 takes 60
+	AgentHealthStalePeriods           int      // agent_health_stale_periods 3 Evaluator periods an agent may go unevaluated before its telemetry is stale (1..1000); 0 takes 3
+	AgentAlertPageSize                int      // agent_alert_page_size 50 Alerts one Studio page returns when the caller names no limit (0..agent_alert_max_page_size); 0 takes 50
+	AgentAlertMaxPageSize             int      // agent_alert_max_page_size 200 Largest alert page a Studio caller may ask for (1..1000); 0 takes 200
+	AgentEvaluationCaseMaxTurns       int      // agent_evaluation_case_max_turns 10 Turns one golden case scripts, its input included (1..100); 0 uses Scout's default
+	AgentEvaluationCaseMaxLabels      int      // agent_evaluation_case_max_labels 50 Ids one golden case labels in each evidence role (1..1000); 0 uses Scout's default
+	AgentEvaluationCaseMaxTools       int      // agent_evaluation_case_max_tools 20 Sandboxed tool responses one golden case scripts (1..200); 0 uses Scout's default
+	AgentEvaluationCaseToolMaxBytes   int      // agent_evaluation_case_tool_max_bytes 16384 Bytes of one scripted tool output (2..1048576); 0 uses Scout's default
+	AgentEvaluationTrajectoryMaxBytes int      // agent_evaluation_trajectory_max_bytes 1048576 Bytes of one stored case trajectory (1024..16777216); 0 uses Scout's default
+	AgentRunTraceMaxEvents            int      // agent_run_trace_max_events 500 Events one Studio run trace returns before it is truncated (1..5000); 0 takes 500
+	AgentRunTraceMaxJournalEntries    int      // agent_run_trace_max_journal_entries 1000 Loop journal entries one run trace reads (1..10000); 0 takes 1000
+	AgentRunTraceMaxJournalBytes      int      // agent_run_trace_max_journal_bytes 4194304 Cumulative loop journal payload bytes one run trace classifies (1024..67108864); 0 takes 4194304
+	AgentLiveTurnPageSize             int      // agent_live_turn_page_size 50 Live turns one Studio page returns when the caller names no limit (0..agent_live_turn_max_page_size); 0 takes 50
+	AgentLiveTurnMaxPageSize          int      // agent_live_turn_max_page_size 200 Largest live turn page a Studio caller may ask for (1..1000); 0 takes 200
+	AgentTurnHistoryPageSize          int      // agent_turn_history_page_size 50 Turns one conversation history page returns when the caller names no limit (0..agent_turn_history_max_page_size); 0 takes 50
+	AgentTurnHistoryMaxPageSize       int      // agent_turn_history_max_page_size 200 Largest conversation history page a caller may ask for (1..1000); 0 takes 200
+	AgentOutcomeAttestGrace           int      // agent_outcome_attest_grace 60 Seconds added to a non-read-only tool call's dispatch window for its outcome deadline (1..86400); 0 takes 60
+	AgentTakeoverLease                int      // agent_takeover_lease 900 Seconds an operator's lease on a turn they took over lasts from their latest act (1..86400); 0 takes 900
+	AgentOperatorEntryMaxBytes        int      // agent_operator_entry_max_bytes 16384 Encoded bytes of one operator entry (1..1048576); 0 takes 16384
+	AgentOperatorMaxEntries           int      // agent_operator_max_entries 64 Operator entries one turn may hold (1..4096); 0 takes 64
+	AgentHoldLapseBatch               int      // agent_hold_lapse_batch 100 Lapsed operator leases one sweeper statement holds again (1..10000); 0 takes 100
+	AgentHoldLapsePeriod              int      // agent_hold_lapse_period 30 Seconds between passes of the operator lease sweeper (1..3600); 0 takes 30
+	AgentWorkingSetMaxCandidates      int      // agent_working_set_max_candidates 64 Candidates one turn's working set source may offer (1..1024); 0 takes 64
+	AgentWorkingSetMaxTokens          int      // agent_working_set_max_tokens 8000 Token budget of one turn's working set (1..1048576); 0 takes 8000
+	AgentWorkingSetRetrievalTopK      int      // agent_working_set_retrieval_top_k 8 Matches one retrieval binding offers a turn's working set (1..256); 0 takes 8
+	AgentModelEndpointAllowlist       []string // agent_model_endpoint_allowlist (none) Host names, IPs, and CIDRs a registered model endpoint may reach; empty refuses every endpoint
+	AgentModelEndpointMaxBytes        int      // agent_model_endpoint_max_bytes 16777216 Bytes of one registered endpoint response (1..1073741824); 0 takes 16777216
+	AgentGuardrailClassifierProvider  string   // agent_guardrail_classifier_provider (none) Provider of the guardrail classifier model; empty with the model composes none
+	AgentGuardrailClassifierModel     string   // agent_guardrail_classifier_model (none) Model of the guardrail classifier
+	AgentGuardrailClassifierMaxTokens int      // agent_guardrail_classifier_max_tokens 1024 Output tokens of one classifier verdict (1..65536); 0 takes 1024
+}
+
+// maxModelEndpointBytes bounds agent_model_endpoint_max_bytes: 1 GiB.
+const maxModelEndpointBytes = 1 << 30
+
+// GuardrailClassifierModel is the model the agent_guardrail_classifier_* flags pin for
+// guardrail.ModelClassifier; a zero selection composes none.
+func (c *ScoutConfig) GuardrailClassifierModel() domain.ModelSelection {
+	return domain.ModelSelection{Provider: c.AgentGuardrailClassifierProvider, Model: c.AgentGuardrailClassifierModel}
+}
+
+// modelFlagErrors refuses an endpoint response or classifier token bound outside its range and
+// a classifier provider without its model or the reverse.
+func (c *ScoutConfig) modelFlagErrors() error {
+	var errs []error
+	if c.AgentModelEndpointMaxBytes < 0 || c.AgentModelEndpointMaxBytes > maxModelEndpointBytes {
+		errs = append(errs, fmt.Errorf("%s: %d is outside 0..%d; 0 takes the default", agent_model_endpoint_max_bytes, c.AgentModelEndpointMaxBytes, maxModelEndpointBytes))
+	}
+	if c.AgentGuardrailClassifierMaxTokens < 0 || c.AgentGuardrailClassifierMaxTokens > 65536 {
+		errs = append(errs, fmt.Errorf("%s: %d is outside 0..65536; 0 takes the default", agent_guardrail_classifier_max_tokens, c.AgentGuardrailClassifierMaxTokens))
+	}
+	if (c.AgentGuardrailClassifierProvider == "") != (c.AgentGuardrailClassifierModel == "") {
+		errs = append(errs, fmt.Errorf("%s and %s are set together or not at all", agent_guardrail_classifier_provider, agent_guardrail_classifier_model))
+	}
+	return errors.Join(errs...)
 }
 
 // ApprovalRoutingLimits is what the agent_approval_*route* flags configure for StudioService;
@@ -659,6 +694,16 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 	c.AgentWorkingSetMaxCandidates = c.Int(rows, agent_working_set_max_candidates)
 	c.AgentWorkingSetMaxTokens = c.Int(rows, agent_working_set_max_tokens)
 	c.AgentWorkingSetRetrievalTopK = c.Int(rows, agent_working_set_retrieval_top_k)
+	c.AgentModelEndpointAllowlist = nil
+	for entry := range strings.SplitSeq(c.String(rows, agent_model_endpoint_allowlist), ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			c.AgentModelEndpointAllowlist = append(c.AgentModelEndpointAllowlist, entry)
+		}
+	}
+	c.AgentModelEndpointMaxBytes = c.Int(rows, agent_model_endpoint_max_bytes)
+	c.AgentGuardrailClassifierProvider = strings.TrimSpace(c.String(rows, agent_guardrail_classifier_provider))
+	c.AgentGuardrailClassifierModel = strings.TrimSpace(c.String(rows, agent_guardrail_classifier_model))
+	c.AgentGuardrailClassifierMaxTokens = c.Int(rows, agent_guardrail_classifier_max_tokens)
 	limitErr := c.limitFlagErrors()
 	required, err := governanceFields(c.String(rows, agent_governance_required_fields))
 	c.AgentGovernanceRequiredFields = required
@@ -668,7 +713,7 @@ func (c *ScoutConfig) Apply(rows keelconfig.ConfigRows) error {
 			judgeErr = fmt.Errorf("agent_evaluation_judge_*: %w", judgeErr)
 		}
 	}
-	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors(), c.operatorFlagErrors(), c.workingSetFlagErrors())
+	return errors.Join(c.ParseErr(), err, judgeErr, runtimeErr, c.approvalAndConfirmationRanges(), limitErr, c.defaultTextErrors(), c.reviewFlagErrors(), c.healthFlagErrors(), c.caseScriptFlagErrors(), c.runTraceFlagErrors(), c.liveTurnFlagErrors(), c.operatorFlagErrors(), c.workingSetFlagErrors(), c.modelFlagErrors())
 }
 
 // WorkingSetLimits is what the agent_working_set_* flags configure for workingset.Compiler.

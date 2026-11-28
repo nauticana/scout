@@ -79,6 +79,31 @@ const (
 	CapabilityPromptCache ModelCapability = "PC"
 )
 
+// ModelProtocol is the wire protocol Scout speaks to a model provider.
+type ModelProtocol string
+
+const (
+	// ModelProtocolNative is a vendor Scout adapts by provider id.
+	ModelProtocolNative ModelProtocol = "N"
+	// ModelProtocolOpenAI is an OpenAI-compatible endpoint, such as a self-hosted inference server.
+	ModelProtocolOpenAI ModelProtocol = "O"
+)
+
+// Valid reports whether the protocol is a seeded model_protocol code.
+func (protocol ModelProtocol) Valid() bool {
+	return protocol == ModelProtocolNative || protocol == ModelProtocolOpenAI
+}
+
+// ModelEndpoint is an operator-registered model provider row. CredentialRef is empty for an
+// endpoint without a key; MaxConcurrency zero leaves calls unbounded.
+type ModelEndpoint struct {
+	ProviderID     string
+	Protocol       ModelProtocol
+	BaseURL        string
+	CredentialRef  string
+	MaxConcurrency int
+}
+
 // Valid reports whether the capability is a seeded model_capability code.
 func (capability ModelCapability) Valid() bool {
 	switch capability {

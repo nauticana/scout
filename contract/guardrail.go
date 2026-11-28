@@ -41,9 +41,10 @@ type GuardrailOutputSession interface {
 	Close() error
 }
 
-// ClassifierProvider scores content for one or more classifier rule kinds.
+// ClassifierProvider scores content for one or more classifier rule kinds; subject is the
+// inspection's tenant, principal, and request, so a model-backed classifier charges its call to them.
 type ClassifierProvider interface {
-	Classify(ctx context.Context, kind domain.GuardrailRuleKind, content []byte) (domain.Classification, error)
+	Classify(ctx context.Context, subject domain.GuardrailSubject, kind domain.GuardrailRuleKind, content []byte) (domain.Classification, error)
 }
 
 // GuardrailRuleCompiler validates a rule envelope at publication time.

@@ -9,6 +9,17 @@
   },
   "migrations": [
     {
+      "version": "v1.3.15",
+      "title": "Subject-aware classifiers, model classifier, registered model endpoints",
+      "tags": [
+        "breaking",
+        "additive",
+        "schema"
+      ],
+      "summary": "ClassifierProvider.Classify takes the guardrail subject, and guardrail.ModelClassifier classifies through the model gateway. provider.Factory serves OpenAI-compatible endpoints registered in model_provider, such as self-hosted inference servers, behind an egress allowlist.",
+      "body_markdown": "## Classifiers\n\n`contract.ClassifierProvider.Classify` takes the inspection's subject: `Classify(ctx, subject domain.GuardrailSubject, kind, content)`. Add the parameter to every implementation; `fake.ClassifierProviderFunc` takes it too.\n\n`guardrail.ModelClassifier{Gateway, Model}` serves `prompt_injection`, `jailbreak`, `toxicity`, `malware`, and `pii` through the model gateway as the subject's tenant and principal, each call under its own request id. `ScoutConfig.GuardrailClassifierModel()` returns the model the new `agent_guardrail_classifier_provider` and `agent_guardrail_classifier_model` flags pin, and `agent_guardrail_classifier_max_tokens` bounds a verdict; compose it into `EnforcerConfig.Classifiers` when set.\n\n## Registered model endpoints\n\n`model_provider` gains `protocol_code CHAR(1) NOT NULL DEFAULT 'N'` (`N` native, `O` OpenAI compatible, keel constant `model_protocol`) and `max_concurrency INTEGER` (nullable, positive); `credential_ref` becomes nullable. On a live database:\n\n```sql\nALTER TABLE model_provider ADD COLUMN protocol_code CHAR(1) NOT NULL DEFAULT 'N';\nALTER TABLE model_provider ADD COLUMN max_concurrency INTEGER;\nALTER TABLE model_provider ALTER COLUMN credential_ref DROP NOT NULL;\nALTER TABLE model_provider ADD CONSTRAINT model_provider_protocol_ck CHECK (protocol_code IN ('N', 'O'));\nALTER TABLE model_provider ADD CONSTRAINT model_provider_concurrency_ck CHECK (max_concurrency > 0);\n```\n\nThen load the seed for the `model_protocol` constant and the five new flags.\n\n`provider.FactoryConfig` gains `Endpoints` (`contract.ModelEndpointSource`, normally `modelgateway.TableEndpointSource{DB}`), `EndpointAllowlist` (`ScoutConfig.AgentModelEndpointAllowlist`), and `EndpointMaxResponseBytes` (`AgentModelEndpointMaxBytes`). With them, `Build`, `BuildEmbedder`, and `ListModels` serve any `O` row through `provider.OpenAI` with an optional key, an egress allowlist checked at every dial, no redirects, a response bound, and the row's concurrency bound. Without `Endpoints`, an unknown provider id stays `ErrNotFound`. `provider.OpenAI` gains `HTTPClient`; an adapter with one may have no `APIKey`.\n"
+    },
+    {
       "version": "v1.3.14",
       "title": "keel 1.3.18, SUPER holds Scout's actions",
       "tags": [

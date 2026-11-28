@@ -358,6 +358,11 @@ func scoutConfigRows() keelconfig.ConfigRows {
 		agent_working_set_max_candidates:      "64",
 		agent_working_set_max_tokens:          "8000",
 		agent_working_set_retrieval_top_k:     "8",
+		agent_model_endpoint_allowlist:        "",
+		agent_model_endpoint_max_bytes:        "16777216",
+		agent_guardrail_classifier_provider:   "",
+		agent_guardrail_classifier_model:      "",
+		agent_guardrail_classifier_max_tokens: "1024",
 	}
 	rows := make(keelconfig.ConfigRows, len(defaults))
 	for id, value := range defaults {
@@ -1263,6 +1268,32 @@ func TestSuperHoldsEveryActionButTheUnseeded(t *testing.T) {
 			}
 		} else if !super[action] {
 			t.Errorf("SUPER lacks %v", action)
+		}
+	}
+}
+
+// The model endpoint and guardrail classifier flags reach their consumers; an out-of-range bound
+// or a half-configured classifier is refused naming the flag.
+func TestModelFlagsParseAndRefuseInvalid(t *testing.T) {
+	rows := scoutConfigRows()
+	rows[agent_model_endpoint_allowlist] = keelconfig.ConfigRow{Value: " gpu.internal , 10.0.0.0/8,"}
+	rows[agent_guardrail_classifier_provider] = keelconfig.ConfigRow{Value: "local"}
+	rows[agent_guardrail_classifier_model] = keelconfig.ConfigRow{Value: "guard"}
+	cfg := &ScoutConfig{}
+	if err := cfg.Apply(rows); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.AgentModelEndpointAllowlist, []string{"gpu.internal", "10.0.0.0/8"}) || cfg.AgentModelEndpointMaxBytes != 16777216 {
+		t.Fatalf("endpoint flags = %q %d", cfg.AgentModelEndpointAllowlist, cfg.AgentModelEndpointMaxBytes)
+	}
+	if got := cfg.GuardrailClassifierModel(); got != (domain.ModelSelection{Provider: "local", Model: "guard"}) {
+		t.Fatalf("classifier model = %+v", got)
+	}
+	for flag, value := range map[string]string{agent_model_endpoint_max_bytes: "1073741825", agent_guardrail_classifier_model: "only", agent_guardrail_classifier_max_tokens: "65537"} {
+		rows := scoutConfigRows()
+		rows[flag] = keelconfig.ConfigRow{Value: value}
+		if err := (&ScoutConfig{}).Apply(rows); err == nil || !strings.Contains(err.Error(), flag) {
+			t.Fatalf("%s=%s: Apply error = %v, want a refusal naming the flag", flag, value, err)
 		}
 	}
 }

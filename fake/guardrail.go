@@ -46,11 +46,11 @@ func (enforcer *GuardrailEnforcer) AfterTool(ctx context.Context, config domain.
 var _ contract.GuardrailEnforcer = (*GuardrailEnforcer)(nil)
 
 // ClassifierProviderFunc adapts a function to contract.ClassifierProvider.
-type ClassifierProviderFunc func(context.Context, domain.GuardrailRuleKind, []byte) (domain.Classification, error)
+type ClassifierProviderFunc func(context.Context, domain.GuardrailSubject, domain.GuardrailRuleKind, []byte) (domain.Classification, error)
 
 // Classify invokes the configured function.
-func (function ClassifierProviderFunc) Classify(ctx context.Context, kind domain.GuardrailRuleKind, content []byte) (domain.Classification, error) {
-	return function(ctx, kind, content)
+func (function ClassifierProviderFunc) Classify(ctx context.Context, subject domain.GuardrailSubject, kind domain.GuardrailRuleKind, content []byte) (domain.Classification, error) {
+	return function(ctx, subject, kind, content)
 }
 
 // SafetyEventSink records every event in memory; RecordFunc, when set, runs first and may fail.

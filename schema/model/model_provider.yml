@@ -5,11 +5,23 @@ columns:
     type: VARCHAR(80)
   - name: display_name
     type: VARCHAR(200)
+  - name: protocol_code
+    type: CHAR(1)
+    default: N
   - name: endpoint_uri
     type: TEXT
   - name: credential_ref
     type: TEXT
+    nullable: true
+  - name: max_concurrency
+    type: INTEGER
+    nullable: true
   - name: is_active
     type: BOOLEAN
     default: TRUE
 primary_key: [provider_id]
+checks:
+  - name: model_provider_protocol_ck
+    expression: protocol_code IN ('N', 'O')
+  - name: model_provider_concurrency_ck
+    expression: max_concurrency > 0

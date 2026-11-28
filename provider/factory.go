@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/nauticana/keel/secret"
 
@@ -25,13 +26,28 @@ type FactoryConfig struct {
 	// Sampling says which models accept sampling parameters. Without it none do,
 	// because a model that rejects them fails every call.
 	Sampling contract.SamplingSupport
+	// Endpoints resolves a provider id Scout does not adapt natively to a registered
+	// OpenAI-compatible endpoint, such as a self-hosted inference server; nil registers none.
+	Endpoints contract.ModelEndpointSource
+	// EndpointAllowlist holds the host names (public addresses only) and IPs or CIDRs a
+	// registered endpoint may reach; empty refuses every endpoint.
+	EndpointAllowlist []string
+	// EndpointMaxResponseBytes bounds one endpoint response; zero is DefaultEndpointMaxResponseBytes.
+	EndpointMaxResponseBytes int64
 }
+
+// DefaultEndpointMaxResponseBytes bounds a registered endpoint's response when the config sets none.
+const DefaultEndpointMaxResponseBytes int64 = 16 << 20
 
 // Factory builds Scout's concrete adapters from injected deployment settings
 // and credentials.
 type Factory struct {
 	credentials secret.SecretProvider
 	config      FactoryConfig
+
+	// slots bound each registered endpoint's calls across adapter rebuilds.
+	mu    sync.Mutex
+	slots map[string]chan struct{}
 }
 
 var (
@@ -43,6 +59,7 @@ var (
 // provider composition.
 func NewFactory(credentials secret.SecretProvider, config FactoryConfig) *Factory {
 	config.CredentialRefs = cloneCredentialRefs(config.CredentialRefs)
+	config.EndpointAllowlist = append([]string(nil), config.EndpointAllowlist...)
 	return &Factory{credentials: credentials, config: config}
 }
 
@@ -72,8 +89,8 @@ var compatibleVendors = map[string]OpenAI{
 	XAIProviderID:        {ProviderID: XAIProviderID, BaseURL: "https://api.x.ai/v1"},
 }
 
-// build constructs the adapters of one provider; a compatible vendor's media
-// endpoints are not OpenAI's, so it has no media adapter.
+// build constructs the adapters of one provider; a compatible vendor's or a registered
+// endpoint's media endpoints are not OpenAI's, so it has no media adapter.
 func (factory *Factory) build(ctx context.Context, providerID string, temperature *float64) (contract.ModelProvider, contract.MediaProvider, error) {
 	switch providerID {
 	case GoogleProviderID:
@@ -91,7 +108,11 @@ func (factory *Factory) build(ctx context.Context, providerID string, temperatur
 	}
 	vendor, compatible := compatibleVendors[providerID]
 	if !compatible && providerID != OpenAIProviderID {
-		return nil, nil, fmt.Errorf("%w: model provider %q", domain.ErrNotFound, providerID)
+		adapter, err := factory.endpointAdapter(ctx, providerID, temperature)
+		if err != nil {
+			return nil, nil, err
+		}
+		return adapter, nil, nil
 	}
 	apiKey, err := factory.apiKey(ctx, providerID)
 	if err != nil {
@@ -182,13 +203,68 @@ func (factory *Factory) googleAdapter(ctx context.Context, temperature *float64)
 	}, nil
 }
 
-func (factory *Factory) apiKey(ctx context.Context, providerID string) (string, error) {
-	if factory.credentials == nil {
-		return "", fmt.Errorf("%w: credential provider is required for %s", domain.ErrNotReady, providerID)
+// endpointAdapter builds the OpenAI-compatible adapter of a registered endpoint behind its
+// egress allowlist, response bound, and concurrency bound; its key is optional.
+func (factory *Factory) endpointAdapter(ctx context.Context, providerID string, temperature *float64) (*OpenAI, error) {
+	if factory.config.Endpoints == nil {
+		return nil, fmt.Errorf("%w: model provider %q", domain.ErrNotFound, providerID)
 	}
+	endpoint, err := factory.config.Endpoints.ModelEndpoint(ctx, providerID)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint.Protocol != domain.ModelProtocolOpenAI || endpoint.MaxConcurrency < 0 {
+		return nil, fmt.Errorf("%w: model provider %q is not a valid OpenAI-compatible endpoint", domain.ErrValidation, providerID)
+	}
+	allowlist, err := newEndpointAllowlist(factory.config.EndpointAllowlist)
+	if err != nil {
+		return nil, err
+	}
+	maxBytes := factory.config.EndpointMaxResponseBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultEndpointMaxResponseBytes
+	}
+	client, err := allowlist.client(endpoint.BaseURL, &endpointTransport{slots: factory.endpointSlots(providerID, endpoint.MaxConcurrency), maxBytes: maxBytes})
+	if err != nil {
+		return nil, fmt.Errorf("model provider %q: %w", providerID, err)
+	}
+	apiKey := ""
+	if endpoint.CredentialRef != "" {
+		if apiKey, err = factory.secret(ctx, providerID, endpoint.CredentialRef); err != nil {
+			return nil, err
+		}
+	}
+	return &OpenAI{ProviderID: providerID, BaseURL: endpoint.BaseURL, APIKey: apiKey, Temperature: temperature, HTTPClient: client}, nil
+}
+
+// endpointSlots returns the provider's shared semaphore, replaced when its bound changes.
+func (factory *Factory) endpointSlots(providerID string, bound int) chan struct{} {
+	if bound == 0 {
+		return nil
+	}
+	factory.mu.Lock()
+	defer factory.mu.Unlock()
+	if slots := factory.slots[providerID]; cap(slots) == bound {
+		return slots
+	}
+	if factory.slots == nil {
+		factory.slots = make(map[string]chan struct{})
+	}
+	factory.slots[providerID] = make(chan struct{}, bound)
+	return factory.slots[providerID]
+}
+
+func (factory *Factory) apiKey(ctx context.Context, providerID string) (string, error) {
 	reference := factory.config.CredentialRefs[providerID]
 	if reference == "" {
 		reference = providerID + "_api_key"
+	}
+	return factory.secret(ctx, providerID, reference)
+}
+
+func (factory *Factory) secret(ctx context.Context, providerID, reference string) (string, error) {
+	if factory.credentials == nil {
+		return "", fmt.Errorf("%w: credential provider is required for %s", domain.ErrNotReady, providerID)
 	}
 	apiKey, err := factory.credentials.GetSecret(ctx, reference)
 	if err != nil {
